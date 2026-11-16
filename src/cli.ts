@@ -30,7 +30,8 @@ const usage = `usage: office <command> [--office <dir>]
                                guide resumable onboarding (explicit consent to create a host identity)
                                --install-deps authorizes host mise/SOPS/age (and gh) installs and
                                updates, using exact stable releases at least 3d old. office.yaml's
-                               git block declares the commit identity and GitHub (credentials: gh)
+                               git block declares the commit identity and GitHub (credentials: gh),
+                               and executor.tokens the services that get their own Executor key
   executor credentials [--password-only]
                                deliberately reveal the stored encrypted owner login, even offline
   sync [--references]          clone and update, refresh the tool's plugins, scaffold missing

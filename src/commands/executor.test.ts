@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadOffice } from "../office.ts";
-import { bootstrapExecutor, validExecutorToken } from "./executor.ts";
+import { bootstrapExecutor, executorKeys, keyOrganization } from "./executor.ts";
 
 const state = mkdtempSync(join(tmpdir(), "office-executor-"));
 const tokenFile = join(state, "opencode-executor.env");
@@ -49,7 +49,7 @@ test("healthy setup rerun reuses its local token without owner credentials or au
 
 test("an auth denial allows recovery but a service failure must not trigger replacement", async () => {
   status = 403;
-  expect(await validExecutorToken(office)).toBe(false);
+  expect(await keyOrganization(executorKeys(office)[0])).toBeUndefined();
 
   status = 503;
   requests.length = 0;

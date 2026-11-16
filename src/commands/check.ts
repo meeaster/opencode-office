@@ -15,6 +15,7 @@ import { version } from "../tool.ts";
 import { changes, defaultPins, describeMove, executorImage, isTested, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
 import { appFolders, deployedFrameworks } from "./apps.ts";
 import { compose, officeImage, ports, runningPins } from "./compose.ts";
+import { executorKeys, keyOrganization } from "./executor.ts";
 
 /** Prints one check; "warn" is shown but doesn't fail `office check`. */
 type Report = (ok: boolean | "warn", name: string, detail: string) => void;
@@ -156,6 +157,7 @@ async function runtime(office: Office, report: Report): Promise<void> {
   if (!running.includes("opencode") && !running.includes("executor")) {
     report(true, "containers", `not running (start them with office up)`);
     gitChecks(office, report, false);
+    await serviceTokens(office, report, false);
 
     return;
   }
@@ -175,6 +177,7 @@ async function runtime(office: Office, report: Report): Promise<void> {
   ).catch(String);
 
   report(health === 200, "Executor", health === 200 ? "ready" : `not ready (${health})`);
+  await serviceTokens(office, report, health === 200);
 
   const password = readEnvFile(join(office.state, "secrets.env")).OPENCODE_PASSWORD;
   const auth = { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}` };
@@ -225,6 +228,30 @@ async function runtime(office: Office, report: Report): Promise<void> {
   if (hasToken && health === 200) await appFrameworks(office, report);
 
   cron(office, report, running);
+}
+
+/** Each service key office.yaml lists under `executor.tokens`: saved, and when Executor is up, whether it works. */
+async function serviceTokens(office: Office, report: Report, reachable: boolean): Promise<void> {
+  for (const key of executorKeys(office).filter((item) => item.service)) {
+    const name = `Executor token ${key.name}`;
+    const saved = readEnvFile(key.path);
+
+    if (saved.EXECUTOR_TOKEN === undefined || saved.EXECUTOR_TOKEN === "") {
+      report(false, name, `${key.path} has no EXECUTOR_TOKEN; office setup creates it`);
+    } else if (!reachable) {
+      report(true, name, `saved in ${key.path}; not tried, Executor isn't running`);
+    } else {
+      try {
+        const organization = await keyOrganization(key);
+
+        if (organization === undefined) report(false, name, `Executor refuses the token in ${key.path}; office setup replaces it`);
+        else if (saved.EXECUTOR_ORGANIZATION !== organization) report(false, name, `works, but ${key.path} doesn't name its organization as EXECUTOR_ORGANIZATION; office setup saves it`);
+        else report(true, name, `works, saved in ${key.path}`);
+      } catch (error) {
+        report(false, name, error instanceof Error ? error.message : String(error));
+      }
+    }
+  }
 }
 
 /** The versions office.yaml pins, whether office.lock matches, the tested range, and what is pending. */

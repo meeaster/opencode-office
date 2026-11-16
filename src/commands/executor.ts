@@ -16,7 +16,22 @@ const id = v.pipe(v.string(), v.nonEmpty());
 const contextSchema = v.object({ organization: id });
 const configurationSchema = v.object({ setup: v.boolean() });
 const organizationsSchema = v.array(v.object({ id, name: v.string() }));
-const tokenSchema = v.object({ key: id });
+const tokenSchema = v.object({ id, key: id });
+const keyListSchema = v.object({ apiKeys: v.array(v.object({ id, name: v.nullable(v.string()), createdAt: v.string(), lastRequest: v.nullable(v.string()) })) });
+
+/**
+ * An Executor key `office setup` keeps in the state folder, created as an organization-bound key
+ * named `name`: OpenCode's own, which holds only `EXECUTOR_TOKEN`, or one for a service office.yaml
+ * lists under `executor.tokens`, which also holds `EXECUTOR_ORGANIZATION`.
+ */
+export type ExecutorKey = { name: string; path: string; service: boolean };
+
+export function executorKeys(office: Office): ExecutorKey[] {
+  return [
+    { name: "opencode", path: join(office.state, "opencode-executor.env"), service: false },
+    ...office.executorTokens.map((name) => ({ name, path: join(office.state, `${name}-executor.env`), service: true })),
+  ];
+}
 
 /** Auth responses and errors are never logged: they can contain passwords, keys and cookies. */
 async function request(path: string, method = "GET", body?: string, cookie = ""): Promise<Response> {
@@ -40,43 +55,69 @@ async function successful(path: string, method = "GET", body?: string, cookie = 
   return response;
 }
 
-export async function validExecutorToken(office: Office): Promise<boolean> {
-  const token = readEnvFile(join(office.state, "opencode-executor.env")).EXECUTOR_TOKEN;
+/**
+ * The organization the key's saved token works for, or undefined when the file holds none or
+ * Executor refuses it. Any other answer throws: a failing Executor must never lead to a new key.
+ */
+export async function keyOrganization(key: ExecutorKey): Promise<string | undefined> {
+  const token = readEnvFile(key.path).EXECUTOR_TOKEN;
 
-  if (token === undefined || token === "") return false;
+  if (token === undefined || token === "") return undefined;
 
   const response = await fetch(`${executorUrl()}/api/context`, {
     headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000),
   });
 
-  if (response.status === 401 || response.status === 403) return false;
+  if (response.status === 401 || response.status === 403) return undefined;
 
-  if (!response.ok) throw new OfficeError(`Executor token check: HTTP ${response.status}; not creating a replacement token`);
+  if (!response.ok) throw new OfficeError(`Executor ${key.name} token check: HTTP ${response.status}; not creating a replacement token`);
 
-  parsed(contextSchema, await response.text(), "Executor context");
-
-  return true;
+  return parsed(contextSchema, await response.text(), "Executor context").organization;
 }
 
-/** Stored owner is written and round-trip decrypted BEFORE the setup POST, making retries safe. */
-export async function bootstrapExecutor(office: Office, email?: string): Promise<void> {
-  if (await validExecutorToken(office)) {
-    console.log("Executor: reusing the working local opencode token");
+/** A service's file keeps any other lines' values; OpenCode's holds only its token, as it always has. */
+function saveKey(key: ExecutorKey, token: string, organization: string): void {
+  const values = key.service ? { ...readEnvFile(key.path), EXECUTOR_TOKEN: token, EXECUTOR_ORGANIZATION: organization } : { EXECUTOR_TOKEN: token };
 
-    return;
+  atomicWrite(key.path, Object.entries(values).map(([name, value]) => `${name}=${value}\n`).join(""));
+}
+
+/**
+ * Keeps every key in `executorKeys` working: a working token is reused, and only missing or refused
+ * ones are created, signed in as the stored owner. Stored owner is written and round-trip decrypted
+ * BEFORE the setup POST, making retries safe.
+ */
+export async function bootstrapExecutor(office: Office, email?: string): Promise<void> {
+  const missing: ExecutorKey[] = [];
+
+  for (const key of executorKeys(office)) {
+    const organization = await keyOrganization(key);
+    const saved = readEnvFile(key.path);
+
+    if (organization === undefined) {
+      missing.push(key);
+    } else if (key.service && saved.EXECUTOR_ORGANIZATION !== organization) {
+      saveKey(key, saved.EXECUTOR_TOKEN, organization);
+      console.log(`Executor: reusing the working ${key.name} token and saved its organization`);
+    } else {
+      console.log(`Executor: reusing the working local ${key.name} token`);
+    }
   }
 
+  if (missing.length === 0) return;
+
+  const files = missing.map((key) => key.path).join(", ");
   const configuration = parsed(configurationSchema, await (await successful("/api/auth/self-host/config")).text(), "Executor configuration");
   const file = office.secrets?.executor_owner;
 
-  if (file === undefined) throw new OfficeError("Executor needs authentication. Set secrets.executor_owner: secrets/executor-owner.enc.json in office.yaml and configure .sops.yaml; use sops to store the existing owner's email, password, name and organization in that record, then rerun office setup. Alternatively save an existing organization-bound EXECUTOR_TOKEN in the local opencode-executor.env. Existing accounts were not reset");
+  if (file === undefined) throw new OfficeError(`Executor needs authentication to create a token for ${files}. Set secrets.executor_owner: secrets/executor-owner.enc.json in office.yaml and configure .sops.yaml; use sops to store the existing owner's email, password, name and organization in that record, then rerun office setup. Alternatively save an existing organization-bound EXECUTOR_TOKEN in each of those files. Existing accounts were not reset`);
 
   let owner;
 
   if (existsSync(source(office, file))) {
     owner = ownerRecord(office);
   } else {
-    if (!configuration.setup) throw new OfficeError(`Executor already has accounts. Preserve them: use sops to create ${file} with the existing owner's email, password, name and organization, or save an existing organization-bound EXECUTOR_TOKEN in the local opencode-executor.env. No account was reset`);
+    if (!configuration.setup) throw new OfficeError(`Executor already has accounts. Preserve them: use sops to create ${file} with the existing owner's email, password, name and organization, or save an existing organization-bound EXECUTOR_TOKEN in ${files}. No account was reset`);
 
     const checkedEmail = v.safeParse(v.pipe(v.string(), v.email()), email);
 
@@ -110,11 +151,31 @@ export async function bootstrapExecutor(office: Office, email?: string): Promise
 
   if (organization === undefined) throw new OfficeError("stored owner's organization was not found; correct the encrypted owner record before retrying");
 
-  const response = await successful("/api/auth/api-key/create", "POST", JSON.stringify({ name: "opencode", metadata: { organization: organization.id } }), cookie);
-  const { key } = parsed(tokenSchema, await response.text(), "Executor token");
+  const created = new Set<string>();
 
-  atomicWrite(join(office.state, "opencode-executor.env"), `EXECUTOR_TOKEN=${key}\n`);
-  console.log("Executor: saved the instance-local opencode token");
+  for (const key of missing) {
+    const response = await successful("/api/auth/api-key/create", "POST", JSON.stringify({ name: key.name, metadata: { organization: organization.id } }), cookie);
+    const token = parsed(tokenSchema, await response.text(), "Executor token");
+
+    saveKey(key, token.key, organization.id);
+    created.add(token.id);
+    console.log(`Executor: saved the instance-local ${key.name} token`);
+  }
+
+  // A refused key is already gone (Executor deletes revoked and expired keys), so any other key with
+  // a replaced key's name still works, and may be in use: a service still running with the old token,
+  // or one made by hand. Name them, never delete them.
+  const keys = parsed(keyListSchema, await (await successful("/api/auth/api-key/list", "GET", undefined, cookie)).text(), "Executor keys");
+
+  for (const key of missing) {
+    const others = keys.apiKeys.filter((item) => item.name === key.name && !created.has(item.id));
+
+    if (others.length > 0) {
+      const described = others.map((item) => `created ${item.createdAt}, last used ${item.lastRequest ?? "never"}`).join("; ");
+
+      console.log(`Executor: ${others.length} older key(s) named ${key.name} still work (${described}). office deletes none, since something may still use one; once nothing does, delete it under Tokens in Executor's dashboard (${executorUrl()}/account/tokens)`);
+    }
+  }
 }
 
 export function credentials(office: Office, passwordOnly: boolean): void {

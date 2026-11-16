@@ -39,6 +39,8 @@ export type Office = {
   opencode: OpencodeMode;
   /** The commit identity and HTTPS credentials office.yaml sets; undefined leaves git's own config. */
   git: OfficeConfig["git"];
+  /** The office's services that get their own Executor key, `executor.tokens` in office.yaml. */
+  executorTokens: string[];
   secrets?: OfficeConfig["secrets"];
   claude?: OfficeConfig["claude"];
   /** The versions office.yaml pins; undefined when it has no `versions` block (the tool's defaults apply). */
@@ -113,6 +115,7 @@ export function loadOffice(dir: string): Office {
     state: config.state === undefined ? join(homedir(), ".local/share/office", config.name) : resolve(dir, expandHome(config.state)),
     opencode: opencodeMode(config.opencode, dir),
     git: config.git,
+    executorTokens: config.executor.tokens,
     secrets: config.secrets,
     claude: config.claude,
     versions: config.versions,

@@ -76,7 +76,7 @@ pre-commit install
 | Command | Does |
 |---|---|
 | `office init <dir> [--name <name>]` | Creates an office from `template/`: root files, a starter `office.yaml` at this tool's versions with its `office.lock`, one example desk, and a git repository on branch `main` |
-| `office setup [--owner-email <email>] [--generate-age-key] [--install-deps]` | Resumes onboarding after init or clone: checks prerequisites and secrets, the office's commit identity and GitHub, reads every source, syncs, starts Executor, bootstraps its owner and organization-bound local token, then starts OpenCode, deploys apps and checks. Human provider logins remain separate. `--generate-age-key` consents to creating a host identity/public recipient config. `--install-deps` authorizes host mise, SOPS and age (and gh) installs or updates. The identity and GitHub come from `office.yaml`'s `git` block; see "Git and GitHub" |
+| `office setup [--owner-email <email>] [--generate-age-key] [--install-deps]` | Resumes onboarding after init or clone: checks prerequisites and secrets, the office's commit identity and GitHub, reads every source, syncs, starts Executor, bootstraps its owner and organization-bound local tokens (OpenCode's and one per service under `executor.tokens`; see "Executor keys for the office's services"), then starts OpenCode and the office's services, deploys apps and checks. Human provider logins remain separate. `--generate-age-key` consents to creating a host identity/public recipient config. `--install-deps` authorizes host mise, SOPS and age (and gh) installs or updates. The identity and GitHub come from `office.yaml`'s `git` block; see "Git and GitHub" |
 | `office executor credentials [--password-only]` | Deliberately decrypts and reveals the stored owner login on the host, even with Executor stopped. Password-only writes exact password bytes, without a newline, for a clipboard pipe; it does not verify the live password |
 | `office sync [--references]` | Clones and updates references and desk repositories, refreshes the office's copies of the tool's plugins (saying what it replaced), scaffolds declared desks that are missing, copies declared skills into `skills/` (recording the commit in `.source.json`), links enabled skills into each `.opencode/skills/`, clones declared plugins. It never writes to `AGENTS.md` or other hand-written files |
 | `office check` | Reports drift between `office.yaml` and the folders, and plugin copies that differ from the tool's; the versions and whether `office.lock` matches, a warning for versions outside the range this tool was tested with and for a pending upgrade; when the containers run, also whether they run the applied versions, Executor's health, whether the container's `office` is the host's (`office --version`), whether every app is deployed for the `apps` framework Executor serves; for the root and each desk, on the mode's OpenCode server, its agents, its skills (expected loaded, the rest not) and its Executor connection; and the cron runner (supercronic in the container, or the host's timers) |
@@ -127,6 +127,7 @@ The state folder holds:
 |---|---|
 | `secrets.env` | `OPENCODE_PASSWORD` for the OpenCode server. In container mode `office up` creates it; in host mode it is the host server's password, which you put there (see "Host mode") |
 | `opencode-executor.env` | `EXECUTOR_TOKEN`, OpenCode's own Executor token. `office apps deploy` uses it from the host too |
+| `<service>-executor.env` | `EXECUTOR_TOKEN` and `EXECUTOR_ORGANIZATION` for each service `office.yaml` lists under `executor.tokens`, which `office setup` keeps (mode 600); the office's own `compose.yaml` passes it to the service |
 | `opencode-home/` | The container user's home: sessions, provider sign-ins, the Claude Code login, mise's tools |
 | `cron-gitconfig` | Host mode with a `git` identity: the global git config the cron timers run with (yours, included, then the office's identity) |
 | `applied.json` | The versions `office up` last applied, and the highest OpenCode and Executor the office has run |
@@ -261,6 +262,39 @@ Review and commit `.sops.yaml`, `office.yaml` and encrypted credentials yourself
 `office setup` deploys apps and runs checks. It makes no model request and does not verify a provider's billing or model access. `office pair` prints the next-step link for the desktop app or a browser.
 
 OpenCode's API picks a session's folder from the `x-opencode-directory` header or the `location[directory]` query parameter; it ignores `?directory=` and falls back to its start folder.
+
+## Executor keys for the office's services
+
+A service in the office's own `compose.yaml`, such as a dashboard's API, can get an Executor key of its own. List it in `office.yaml` (offices without the block are unchanged):
+
+```yaml
+executor:
+  tokens: [api]
+```
+
+Names are lowercase letters, digits and dashes, at most 63 characters, and not `opencode`, which is the `opencode` container's key every office has.
+
+For each name, `office setup` keeps `<state>/<name>-executor.env` (mode 600) holding a working `EXECUTOR_TOKEN` and the organization's ID as `EXECUTOR_ORGANIZATION`, the same way as OpenCode's own key:
+
+- A working token is reused; a healthy rerun creates nothing. A file whose token works but lacks the organization, such as one made by hand, gets `EXECUTOR_ORGANIZATION` added, keeping its other lines.
+- When the file is missing or Executor refuses its token, setup signs in as the stored owner and creates an organization-bound API key named `<name>`. That needs the encrypted owner record and an age identity that decrypts it; without them setup stops with what to do, before creating any key. The `opencode` key is never touched for another key's sake.
+- A key Executor refuses is already gone: Executor deletes revoked keys, and expired ones when they are next used. Setup lists any other key with a replaced key's name that still works (one made by hand, or one a running service still holds after its file was lost), and deletes none of them, since something may still use one; delete it in the dashboard under Tokens once nothing does.
+
+The office's `compose.yaml` passes the file to its service; `office` never edits that file:
+
+```yaml
+services:
+  api:
+    env_file:
+      - path: ${OFFICE_STATE}/api-executor.env
+        required: false
+```
+
+Setup writes the files before `office up` starts the office's services, so one run is enough, and Compose recreates a running service whose env file changed, so a replaced key reaches it in the same run. `office check` reports each listed key: whether it is saved, and while Executor runs, whether it works and names its organization.
+
+Separate keys let you revoke or rotate one service's access without touching OpenCode's or another service's. They are not a permission boundary: every key is the owner's, with full authority in the organization. Executor's API keys can be pinned to an organization but not narrowed further.
+
+To move an office's hand-made key under setup's care, list its name under `executor.tokens` and run `office setup`: a working file named `<name>-executor.env` is kept, and only its organization is added.
 
 ## Portable secrets and the Claude gateway
 
