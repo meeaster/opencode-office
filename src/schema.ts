@@ -122,28 +122,12 @@ const git = v.optional(
   ),
 );
 
-// The office's own services that each get an Executor key of their own, which `office setup` keeps
-// in `<state>/<name>-executor.env`. `opencode` is the opencode container's key, which every office has.
-const executor = v.nullish(
-  v.strictObject(
-    {
-      tokens: v.pipe(
-        v.nullish(v.array(v.pipe(name, v.maxLength(63, "must be at most 63 characters"), v.check((value) => value !== "opencode", "is OpenCode's own key, which every office has")), "must be a list"), []),
-        v.check((items) => new Set(items).size === items.length, "lists a name twice"),
-      ),
-    },
-    "must be a mapping of tokens",
-  ),
-  { tokens: [] },
-);
-
 export const officeSchema = v.strictObject(
   {
     name,
     state: v.optional(text),
     opencode,
     git,
-    executor,
     secrets: v.optional(v.strictObject({ executor_owner: v.optional(text) })),
     claude: v.optional(v.strictObject({ credential: text, settings: text })),
     versions,
@@ -153,7 +137,7 @@ export const officeSchema = v.strictObject(
     skills,
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
   },
-  "must be a mapping of name, state, opencode, git, executor, secrets, claude, versions, upgrades, references, desks, skills and plugins",
+  "must be a mapping of name, state, opencode, git, secrets, claude, versions, upgrades, references, desks, skills and plugins",
 );
 
 export type OfficeConfig = v.InferOutput<typeof officeSchema>;

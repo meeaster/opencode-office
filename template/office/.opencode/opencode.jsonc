@@ -3,8 +3,8 @@
   "mcp": {
     "servers": {
       // The office's Executor, which holds every service account. In the container,
-      // OFFICE_EXECUTOR_URL is http://executor:4400 and OFFICE_EXECUTOR_TOKEN is OpenCode's own
-      // token. In host mode the server has neither, so `office up` writes the address and token
+      // OFFICE_EXECUTOR_URL is http://executor:4400 and OFFICE_EXECUTOR_TOKEN is the office's
+      // key. In host mode the server has neither, so `office up` writes the address and token
       // to the gitignored office-executor.url and office-executor.token beside this file instead;
       // each value is the variable's or the file's, whichever exists. Browser elicitation turns
       // approvals into links for the user.

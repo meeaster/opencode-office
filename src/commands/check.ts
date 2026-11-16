@@ -9,13 +9,13 @@ import { timerStates } from "../cron/host.ts";
 import { ghConfigDir, ghLogin, ghPin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
 import { installedTool } from "../host-tools.ts";
 import { clones, library, pluginDrift, skillSelections } from "../layout.ts";
-import { type Office, readEnvFile } from "../office.ts";
+import { executorEnvFile, type Office, readEnvFile } from "../office.ts";
 import { pinnedTools } from "../schema.ts";
 import { version } from "../tool.ts";
 import { changes, defaultPins, describeMove, executorImage, isTested, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
 import { appFolders, deployedFrameworks } from "./apps.ts";
 import { compose, officeImage, ports, runningPins } from "./compose.ts";
-import { executorKeys, keyOrganization } from "./executor.ts";
+import { keyOrganization } from "./executor.ts";
 
 /** Prints one check; "warn" is shown but doesn't fail `office check`. */
 type Report = (ok: boolean | "warn", name: string, detail: string) => void;
@@ -157,7 +157,6 @@ async function runtime(office: Office, report: Report): Promise<void> {
   if (!running.includes("opencode") && !running.includes("executor")) {
     report(true, "containers", `not running (start them with office up)`);
     gitChecks(office, report, false);
-    await serviceTokens(office, report, false);
 
     return;
   }
@@ -177,13 +176,14 @@ async function runtime(office: Office, report: Report): Promise<void> {
   ).catch(String);
 
   report(health === 200, "Executor", health === 200 ? "ready" : `not ready (${health})`);
-  await serviceTokens(office, report, health === 200);
+
+  if (health === 200) await executorKey(office, report);
 
   const password = readEnvFile(join(office.state, "secrets.env")).OPENCODE_PASSWORD;
   const auth = { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}` };
   const opencode = office.opencode.url ?? `http://127.0.0.1:${port.opencode}`;
   const base = office.opencode.directory;
-  const hasToken = readEnvFile(join(office.state, "opencode-executor.env")).EXECUTOR_TOKEN !== undefined;
+  const hasToken = readEnvFile(executorEnvFile(office)).EXECUTOR_TOKEN !== undefined;
 
   for (const desk of [undefined, ...office.desks.map((entry) => entry.name)]) {
     const where = desk ?? "root";
@@ -216,7 +216,7 @@ async function runtime(office: Office, report: Report): Promise<void> {
       report(
         status === "connected" || !hasToken,
         `${where}: office-executor MCP`,
-        hasToken ? `${status}${executor?.status.error === undefined ? "" : ` ${executor.status.error}`}` : `no token yet: put EXECUTOR_TOKEN in ${join(office.state, "opencode-executor.env")}`,
+        hasToken ? `${status}${executor?.status.error === undefined ? "" : ` ${executor.status.error}`}` : `no token yet: office setup saves one in ${executorEnvFile(office)}`,
       );
     } catch (error) {
       report(false, `${where}: OpenCode`, String(error));
@@ -230,27 +230,14 @@ async function runtime(office: Office, report: Report): Promise<void> {
   cron(office, report, running);
 }
 
-/** Each service key office.yaml lists under `executor.tokens`: saved, and when Executor is up, whether it works. */
-async function serviceTokens(office: Office, report: Report, reachable: boolean): Promise<void> {
-  for (const key of executorKeys(office).filter((item) => item.service)) {
-    const name = `Executor token ${key.name}`;
-    const saved = readEnvFile(key.path);
+/** Whether Executor accepts the office's key, which OpenCode and the office's services use. */
+async function executorKey(office: Office, report: Report): Promise<void> {
+  try {
+    const organization = await keyOrganization(office);
 
-    if (saved.EXECUTOR_TOKEN === undefined || saved.EXECUTOR_TOKEN === "") {
-      report(false, name, `${key.path} has no EXECUTOR_TOKEN; office setup creates it`);
-    } else if (!reachable) {
-      report(true, name, `saved in ${key.path}; not tried, Executor isn't running`);
-    } else {
-      try {
-        const organization = await keyOrganization(key);
-
-        if (organization === undefined) report(false, name, `Executor refuses the token in ${key.path}; office setup replaces it`);
-        else if (saved.EXECUTOR_ORGANIZATION !== organization) report(false, name, `works, but ${key.path} doesn't name its organization as EXECUTOR_ORGANIZATION; office setup saves it`);
-        else report(true, name, `works, saved in ${key.path}`);
-      } catch (error) {
-        report(false, name, error instanceof Error ? error.message : String(error));
-      }
-    }
+    report(organization !== undefined, "Executor key", organization === undefined ? `Executor accepts no key in ${executorEnvFile(office)}; office setup creates one` : `works, saved in ${executorEnvFile(office)}`);
+  } catch (error) {
+    report(false, "Executor key", error instanceof Error ? error.message : String(error));
   }
 }
 

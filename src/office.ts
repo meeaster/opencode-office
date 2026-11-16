@@ -39,8 +39,6 @@ export type Office = {
   opencode: OpencodeMode;
   /** The commit identity and HTTPS credentials office.yaml sets; undefined leaves git's own config. */
   git: OfficeConfig["git"];
-  /** The office's services that get their own Executor key, `executor.tokens` in office.yaml. */
-  executorTokens: string[];
   secrets?: OfficeConfig["secrets"];
   claude?: OfficeConfig["claude"];
   /** The versions office.yaml pins; undefined when it has no `versions` block (the tool's defaults apply). */
@@ -115,7 +113,6 @@ export function loadOffice(dir: string): Office {
     state: config.state === undefined ? join(homedir(), ".local/share/office", config.name) : resolve(dir, expandHome(config.state)),
     opencode: opencodeMode(config.opencode, dir),
     git: config.git,
-    executorTokens: config.executor.tokens,
     secrets: config.secrets,
     claude: config.claude,
     versions: config.versions,
@@ -197,6 +194,20 @@ export function currentOffice(flags: { office?: string }): Office {
 /** The `.opencode/skills/` folder of the root (`desk` undefined) or of one desk. */
 export function skillsFolder(office: Office, desk: string | undefined): string {
   return desk === undefined ? join(office.dir, ".opencode/skills") : join(office.dir, desk, ".opencode/skills");
+}
+
+/**
+ * The office's one Executor key, `EXECUTOR_TOKEN` and `EXECUTOR_ORGANIZATION`, which OpenCode, `office
+ * apps deploy` and the office's own services use. Offices before it kept OpenCode's key as
+ * opencode-executor.env; the first command that needs the key renames that file, in one step.
+ */
+export function executorEnvFile(office: Office): string {
+  const path = join(office.state, "office-executor.env");
+  const legacy = join(office.state, "opencode-executor.env");
+
+  if (!existsSync(path) && existsSync(legacy)) renameSync(legacy, path);
+
+  return path;
 }
 
 /** Reads KEY=value lines from a state file such as secrets.env; missing file → empty. */

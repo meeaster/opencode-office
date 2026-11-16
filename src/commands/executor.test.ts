@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadOffice } from "../office.ts";
-import { bootstrapExecutor, executorKeys, keyOrganization } from "./executor.ts";
+import { bootstrapExecutor, keyOrganization } from "./executor.ts";
 
 const state = mkdtempSync(join(tmpdir(), "office-executor-"));
-const tokenFile = join(state, "opencode-executor.env");
+const tokenFile = join(state, "office-executor.env");
 
 writeFileSync(join(state, "office.yaml"), `name: proof\nstate: .\n`);
 
@@ -38,18 +38,18 @@ afterAll(() => {
   server.stop(true);
 });
 
-test("healthy setup rerun reuses its local token without owner credentials or auth mutations", async () => {
+test("healthy setup rerun reuses its local key, saving its organization, without owner credentials or auth mutations", async () => {
   writeFileSync(tokenFile, "EXECUTOR_TOKEN=fake-instance-token\n", { mode: 0o600 });
   requests.length = 0;
   status = 200;
   await bootstrapExecutor(office);
   expect(requests).toEqual(["GET /api/context"]);
-  expect(readFileSync(tokenFile, "utf8")).toBe("EXECUTOR_TOKEN=fake-instance-token\n");
+  expect(readFileSync(tokenFile, "utf8")).toBe("EXECUTOR_TOKEN=fake-instance-token\nEXECUTOR_ORGANIZATION=fake-organization\n");
 });
 
 test("an auth denial allows recovery but a service failure must not trigger replacement", async () => {
   status = 403;
-  expect(await keyOrganization(executorKeys(office)[0])).toBeUndefined();
+  expect(await keyOrganization(office)).toBeUndefined();
 
   status = 503;
   requests.length = 0;

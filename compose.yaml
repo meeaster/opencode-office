@@ -35,8 +35,9 @@ services:
     env_file:
       # OPENCODE_PASSWORD for the server.
       - ${OFFICE_STATE:?run this through office up}/secrets.env
-      # EXECUTOR_TOKEN, OpenCode's own Executor token. Only this container gets it.
-      - path: ${OFFICE_STATE}/opencode-executor.env
+      # EXECUTOR_TOKEN and EXECUTOR_ORGANIZATION: the office's one Executor key, which the office's
+      # own services may read the same way.
+      - path: ${OFFICE_STATE}/office-executor.env
         required: false
     environment:
       OFFICE_NAME: ${OFFICE_NAME}

@@ -27,7 +27,7 @@ Portable owner credentials are SOPS-encrypted in `secrets/executor-owner.enc.jso
 | `cron/` | `crontab` and the scripts it runs, for jobs that need the file system: in the container, or as systemd user timers in host mode. A job missed while the computer was off runs at the next start. `upgrade-tools.sh` commits daily bumps of the `mise.toml` pins as the office's git identity, else `office cron`; revert such a commit to undo it |
 | `references/` | Read-only clones, gitignored |
 | `<desk>/` | A desk: `AGENTS.md`, `.opencode/`, `mise.toml`, its Executor app in `executor/apps/<desk>/`, and gitignored `repos/` and `scratch/` |
-| `Dockerfile`, `compose.yaml` | Optional: system packages on top of the base image, and extra services `office up` starts. A service that calls Executor gets its own key: list it under `executor.tokens` in `office.yaml`, read `${OFFICE_STATE}/<name>-executor.env` with `env_file` (`required: false`), and run `office setup` |
+| `Dockerfile`, `compose.yaml` | Optional: system packages on top of the base image, and extra services `office up` starts. A service reaches Executor with the office's key: `env_file: [{ path: "${OFFICE_STATE}/office-executor.env", required: false }]` gives it `EXECUTOR_TOKEN` and `EXECUTOR_ORGANIZATION`, and Executor is at `http://executor:4400` |
 | `.pre-commit-config.yaml` | The gitleaks hook, which blocks commits that contain secrets |
 
 ## Conventions

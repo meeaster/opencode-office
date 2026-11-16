@@ -8,7 +8,7 @@ import * as v from "valibot";
 import { git } from "../git.ts";
 import { githubStep, planGithub, unreachableSources } from "../github.ts";
 import { hostTool, onboardHostTools } from "../host-tools.ts";
-import { type Office, OfficeError, readEnvFile, updateConfig } from "../office.ts";
+import { executorEnvFile, type Office, OfficeError, readEnvFile, updateConfig } from "../office.ts";
 import { decrypt, encrypt, initializeIdentity, parsed, prepareSecrets, requireTool } from "../secrets.ts";
 import { deploy } from "./apps.ts";
 import { check } from "./check.ts";
@@ -54,7 +54,7 @@ export async function setup(initial: Office, options: SetupOptions): Promise<voi
 
   // Legacy offices with a token need no new secrets configuration. Bootstrap does need portable
   // owner persistence; opt in without replacing unrelated YAML or any existing source.
-  const hasToken = readEnvFile(join(office.state, "opencode-executor.env")).EXECUTOR_TOKEN;
+  const hasToken = readEnvFile(executorEnvFile(office)).EXECUTOR_TOKEN;
 
   if (office.secrets?.executor_owner === undefined && !hasToken) {
     if (!existsSync(join(office.dir, ".sops.yaml"))) {

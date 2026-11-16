@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
-import { type Office, OfficeError, readEnvFile } from "../office.ts";
+import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
 import { ports } from "./compose.ts";
 
 /** An app as Executor's API lists it, with only the fields the office reads. */
@@ -75,15 +75,15 @@ export type Connection = { url: string; token: string };
 
 /**
  * Executor's address and a token. In the container, OFFICE_EXECUTOR_URL and EXECUTOR_TOKEN are
- * set; on the host, Executor is on its published port and the token is OpenCode's, from the
- * office's state.
+ * set; on the host, Executor is on its published port and the token is the office's key, from its
+ * state.
  */
 export function connection(office: Office): Connection {
-  const token = process.env.EXECUTOR_TOKEN ?? readEnvFile(join(office.state, "opencode-executor.env")).EXECUTOR_TOKEN;
+  const token = process.env.EXECUTOR_TOKEN ?? readEnvFile(executorEnvFile(office)).EXECUTOR_TOKEN;
 
   if (token === undefined) {
     // In the container the token comes from the environment, which the state file feeds.
-    throw new OfficeError(`no Executor token: create one in the Executor dashboard and save it as EXECUTOR_TOKEN in the office state's opencode-executor.env${process.env.OFFICE_EXECUTOR_URL === undefined ? ` (${join(office.state, "opencode-executor.env")})` : ", then restart the container"}`);
+    throw new OfficeError(`no Executor token: office setup saves the office's key in ${process.env.OFFICE_EXECUTOR_URL === undefined ? executorEnvFile(office) : "the office state's office-executor.env; then restart the container"}`);
   }
 
   return { url: process.env.OFFICE_EXECUTOR_URL ?? `http://localhost:${ports().executor}`, token };

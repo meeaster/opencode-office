@@ -23,13 +23,6 @@ opencode: container
 #   email: you@example.com
 #   credentials: gh
 
-# Optional: the office's own services (in its compose.yaml) that get an Executor key of their own.
-# For each name, `office setup` keeps a working EXECUTOR_TOKEN and EXECUTOR_ORGANIZATION in
-# <state>/<name>-executor.env; the service reads it with
-# `env_file: [{ path: "${OFFICE_STATE}/<name>-executor.env", required: false }]`.
-# executor:
-#   tokens: [api]
-
 # The versions this office runs in its containers. office.lock (written by `office pin`; don't
 # edit it) holds their checksums: run `office pin` after changing a version by hand. The daily
 # upgrade-tools job bumps them; `office up --upgrade` applies a bump, `office up` never does. In

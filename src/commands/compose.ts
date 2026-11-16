@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { installTimers, removeTimers } from "../cron/host.ts";
 import { ghConfigDir, ghHosts } from "../github.ts";
 import { hostTool } from "../host-tools.ts";
-import { type Office, OfficeError, readEnvFile } from "../office.ts";
+import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
 import type { Lock } from "../schema.ts";
 import { prepareSecrets } from "../secrets.ts";
 import { placeExecutable, toolPath, unpackedImage } from "../tool.ts";
@@ -119,6 +119,9 @@ function composeArguments(office: Office, args: string[]): string[] {
  */
 function prepareState(office: Office): void {
   const secrets = join(office.state, "secrets.env");
+
+  // Compose reads the office's key under its current name; this moves one saved under the old name.
+  executorEnvFile(office);
 
   if (office.opencode.mode === "host") {
     if (readEnvFile(secrets).OPENCODE_PASSWORD === undefined) {
