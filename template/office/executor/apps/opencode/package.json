@@ -1,0 +1,11 @@
+{
+  "name": "opencode",
+  "private": true,
+  "type": "module",
+  "executor": {
+    "title": "OpenCode"
+  },
+  "dependencies": {
+    "apps": "0.0.1-beta.138"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // The image pins the OpenCode version; rebuild the image to upgrade.
+  "update": "disable",
+  // Written by the entrypoint at start: where the agent is running. Everything about the office
+  // itself comes from the office's own config, instructions and plugins.
+  "instructions": ["/etc/opencode/machine.md"],
+}

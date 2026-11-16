@@ -1,0 +1,6 @@
+/references/
+/*/repos/
+/*/scratch/
+node_modules/
+# The office-executor MCP server's address and token in host mode, written by `office up`.
+/.opencode/office-executor.*

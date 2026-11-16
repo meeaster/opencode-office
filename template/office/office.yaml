@@ -1,0 +1,38 @@
+# The office's declarations: only what OpenCode can't do itself. MCP servers, agents and
+# published plugins go in .opencode/opencode.jsonc. Run `office sync` after changing this file.
+name: __OFFICE__
+
+# Optional: where this office's runtime state (passwords, tokens, the container's home) lives on
+# this machine. The default is ~/.local/share/office/<name>.
+# state: ~/.local/share/office/__OFFICE__
+
+# Where OpenCode runs: `container` (the default), the office's opencode container, or `host`, an
+# OpenCode server already running on this machine, which the office never starts or stops.
+# Executor and the office's other services always run in containers.
+opencode: container
+# opencode:
+#   mode: host
+#   url: http://127.0.0.1:4096
+
+# Read-only clones under references/, listed for every session.
+references: []
+#  - name: opencode
+#    url: https://github.com/anomalyco/opencode.git
+#    ref: dev
+#    description: OpenCode's source and docs
+
+desks:
+  example:
+    description: An example desk. Rename it, or add desks beside it.
+    repos: []
+    skills: []
+
+skills:
+  # Library skills (skills/<id>/) linked into the root's .opencode/skills/, so every desk gets them.
+  enabled: [office]
+  # Skills copied into skills/ from another repository. Delete the copy and sync to refresh it.
+  copied: []
+  #  - { name: ..., repo: https://github.com/..., ref: main, path: skills/... }
+
+# OpenCode plugins developed in another repository, cloned into .opencode/plugins/<name>/.
+plugins: []

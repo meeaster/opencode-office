@@ -1,0 +1,54 @@
+# An office's two core services. Run it through `office up`, which names the project
+# office-<name>, sets the OFFICE_* variables below and adds the office's own compose.yaml.
+#
+# Every port is published on loopback only. Services reach each other by name on the compose
+# network: OpenCode reaches Executor at http://executor:4400 and Executor's apps reach OpenCode at
+# http://opencode:4096. In host mode (office.yaml's `opencode:`) the opencode service's profile
+# stays off, and containers reach the host's server through host.docker.internal instead.
+
+services:
+  executor:
+    image: ghcr.io/usefulsoftwareco/executor-selfhost:2.0.0-beta.49@sha256:cc693691db13635ad5abb456fa132634816ec7acc73f04bd6b8932e0a8c45038
+    restart: unless-stopped
+    init: true
+    environment:
+      # Must match the address the browser opens exactly, or sign-in is rejected.
+      BETTER_AUTH_URL: http://localhost:${EXECUTOR_PORT:-41440}
+      # App code may reach private addresses, so desk apps can start sessions on the opencode
+      # container or the host's server. Every app in this Executor shares that network position.
+      EXECUTOR_APPS_ALLOW_PRIVATE_FETCH: "true"
+    volumes:
+      # Embedded database, generated session and encryption keys, and traces.
+      - executor-data:/app/data
+      - executor-traces:/app/motel-data
+    ports:
+      - "127.0.0.1:${EXECUTOR_PORT:-41440}:4400"
+
+  opencode:
+    # Container mode only: `office up` enables this profile unless OpenCode runs on the host.
+    profiles: [container]
+    # The base image, or the office's own image on top of it; `office up` builds both.
+    image: ${OFFICE_OPENCODE_IMAGE:?run this through office up}
+    restart: unless-stopped
+    init: true
+    env_file:
+      # OPENCODE_PASSWORD for the server.
+      - ${OFFICE_STATE:?run this through office up}/secrets.env
+      # EXECUTOR_TOKEN, OpenCode's own Executor token. Only this container gets it.
+      - path: ${OFFICE_STATE}/opencode-executor.env
+        required: false
+    environment:
+      OFFICE_NAME: ${OFFICE_NAME}
+      OFFICE_EXECUTOR_URL: http://executor:4400
+      OFFICE_EXECUTOR_DASHBOARD: http://localhost:${EXECUTOR_PORT:-41440}
+    volumes:
+      # Sessions, provider sign-ins, the Claude Code login and mise's tools.
+      - ${OFFICE_STATE}/opencode-home:/home/assistant
+      # The office itself, where every session starts.
+      - ${OFFICE_DIR:?run this through office up}:/home/assistant/workspace
+    ports:
+      - "127.0.0.1:${OPENCODE_PORT:-41497}:4096"
+
+volumes:
+  executor-data:
+  executor-traces:

@@ -1,0 +1,3 @@
+# Tools every desk gets. The container installs them at start (in host mode, `office up` does); a desk's own mise.toml adds more.
+[tools]
+node = "26.13.1"
