@@ -37,6 +37,8 @@ export type Office = {
   name: string;
   state: string;
   opencode: OpencodeMode;
+  secrets?: OfficeConfig["secrets"];
+  claude?: OfficeConfig["claude"];
   /** The versions office.yaml pins; undefined when it has no `versions` block (the tool's defaults apply). */
   versions: Partial<Record<PinnedTool, string>> | undefined;
   /** `upgrades` from office.yaml: `minimum_release_age` and per-tool ages. */
@@ -108,6 +110,8 @@ export function loadOffice(dir: string): Office {
     name: config.name,
     state: config.state === undefined ? join(homedir(), ".local/share/office", config.name) : resolve(dir, expandHome(config.state)),
     opencode: opencodeMode(config.opencode, dir),
+    secrets: config.secrets,
+    claude: config.claude,
     versions: config.versions,
     upgrades: config.upgrades,
     references: config.references,

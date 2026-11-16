@@ -50,6 +50,8 @@ RUN groupadd -g 1000 assistant && useradd -m -u 1000 -g assistant -s /bin/bash a
 # Managed settings. The entrypoint writes the machine note beside them at start.
 COPY --chown=assistant:assistant config/ /etc/opencode/
 COPY --chmod=755 entrypoint.sh /usr/local/bin/office-entrypoint
+RUN mkdir -p /usr/local/lib/office && mv /usr/local/bin/claude /usr/local/lib/office/claude
+COPY --chmod=755 claude.sh /usr/local/bin/claude
 
 # The office CLI, compiled with Bun into one file that needs no runtime. Last, as it changes most.
 COPY --chmod=755 office /usr/local/bin/office

@@ -2,6 +2,10 @@
 
 An office is a source-controlled folder of desks for OpenCode. The folder a session starts in decides what the agent knows and can do. It is run with the `office` command; `office --help` lists its commands.
 
+After init or clone, run `office setup` to resume onboarding. It guides host prerequisites, SOPS/age enrollment and owner email, creates Executor's owner/token without browser copying, starts OpenCode, deploys apps and checks. Review `cron/crontab` first: missed jobs run at container startup. Provider sign-in remains human-controlled; use `office pair` for the app.
+
+Portable owner credentials are SOPS-encrypted in `secrets/executor-owner.enc.json`, selected by `secrets.executor_owner` in `office.yaml`. Commit encrypted records and public `.sops.yaml` recipients yourself; keep age private identities and runtime state outside this repository. `office executor credentials` deliberately reveals the stored owner login, even offline; `--password-only` is suitable for a clipboard pipe. Never put its output in logs or agent transcripts.
+
 ## Layout
 
 | Path | Holds |

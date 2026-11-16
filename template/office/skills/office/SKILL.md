@@ -1,17 +1,17 @@
 ---
 name: office
-description: Change this office's structure - desks, references, desk repositories, skills, plugins, Executor apps or cron jobs - with office.yaml and the office command.
+description: Configure or onboard this office with office.yaml and office setup; change desks, references, skills, plugins, Executor apps or cron jobs.
 ---
 
 # Working on the office
 
-The office's structure is declared in `office.yaml` at its root and applied with the `office` command (from any folder inside the office).
+Use `office` from any folder inside the office; `office.yaml` declares its structure. For onboarding after init/clone, run `office setup`. Credential display is human-only: let the human run `office executor credentials` in their terminal, keeping passwords out of agent transcripts. Private age identities and runtime state belong outside the repo; commit only public recipients and SOPS-encrypted records.
 
 | To | Do |
 |---|---|
 | Add a desk | Add it under `desks:` with a description, then `office sync`. Sync scaffolds `<desk>/` with `AGENTS.md`, `.opencode/opencode.jsonc`, `mise.toml` and a starter Executor app. Deploy the app with `office apps deploy` |
-| Clone a repository for a desk | Add `{ name, url, description }` under `desks.<desk>.repos`, then `office sync`. It lands in `<desk>/repos/<name>/` |
-| Add a reference | Add `{ name, url, ref?, description }` under `references:`, then `office sync`. It lands in `references/<name>/`, read-only |
+| Clone a repository for a desk | Add `{ name, url, description }` under `desks.<desk>.repos`, then `office sync` |
+| Add a reference | Add `{ name, url, ref?, description }` under `references:`, then `office sync` |
 | Add a skill | Create `skills/<id>/SKILL.md`, enable it under `skills.enabled` (every desk) or `desks.<desk>.skills` (one desk), then `office sync` to link it |
 | Copy a skill from another repository | Add `{ name, repo, ref, path }` under `skills.copied`, enable it, then `office sync`. Commit the copy |
 | Add a plugin | A local plugin goes in `.opencode/plugins/<name>/`; `office` and `knowledge` there belong to the tool, and `office sync` replaces edits to them. A published one is one line in `.opencode/opencode.jsonc` `plugins`. One developed in another repository goes under `plugins:` in `office.yaml` |

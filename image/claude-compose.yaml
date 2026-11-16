@@ -1,0 +1,13 @@
+services:
+  opencode:
+    environment:
+      OFFICE_CLAUDE_GATEWAY: "1"
+      OPENCODE_CLAUDE_PATH: /usr/local/bin/claude
+    volumes:
+      # Only this selected runtime directory; never owner credentials or age identities.
+      - type: bind
+        source: ${OFFICE_STATE}/runtime/claude
+        target: /run/office-claude
+        read_only: true
+        bind:
+          create_host_path: false

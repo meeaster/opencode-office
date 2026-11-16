@@ -111,6 +111,8 @@ export const officeSchema = v.strictObject(
     name,
     state: v.optional(text),
     opencode,
+    secrets: v.optional(v.strictObject({ executor_owner: v.optional(text) })),
+    claude: v.optional(v.strictObject({ credential: text, settings: text })),
     versions,
     upgrades,
     references: repositories,
@@ -118,7 +120,7 @@ export const officeSchema = v.strictObject(
     skills,
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
   },
-  "must be a mapping of name, state, opencode, versions, upgrades, references, desks, skills and plugins",
+  "must be a mapping of name, state, opencode, secrets, claude, versions, upgrades, references, desks, skills and plugins",
 );
 
 export type OfficeConfig = v.InferOutput<typeof officeSchema>;

@@ -90,7 +90,7 @@ function rootText(office: OfficeInfo, apps: string[]): string {
     "",
     "- Each desk is a top-level folder. A session started in a desk loads the root's instructions, config and skills plus the desk's own; desks never load each other's. Do a desk's work in a session started there.",
     "- `office.yaml` declares the desks, their repositories, the references, which skills from `skills/` are enabled where, and cloned plugins. After changing it, run `office sync`.",
-    "- Executor holds every service account: reach services through the `office-executor` MCP server. Each desk has an Executor app at `<desk>/executor/apps/<desk>/` with `reports.*`, `notifications.*` and `agent.ask`. After changing an app, run `office apps deploy`.",
+    "- Reach services through the `office-executor` MCP server. Each desk has an Executor app at `<desk>/executor/apps/<desk>/` with `reports.*`, `notifications.*` and `agent.ask`; after changing it, run `office apps deploy`. For onboarding use `office setup`. Owner credentials are human-only: let the human run `office executor credentials` in their terminal, never capture its output in an agent transcript. Keep private age identities and decrypted runtime state outside the office repository.",
     "- `knowledge/` holds articles every session sees listed; `cron/crontab` runs file-system jobs in the container.",
     "",
     "## Desks",

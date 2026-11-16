@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { installTimers, removeTimers } from "../cron/host.ts";
 import { type Office, OfficeError, readEnvFile } from "../office.ts";
 import type { Lock } from "../schema.ts";
+import { prepareSecrets } from "../secrets.ts";
 import { placeExecutable, toolPath, unpackedImage } from "../tool.ts";
 import { baseImage, changes, compareVersions, defaultPins, describeMove, executorImage, readApplied, wantedPins, writeApplied } from "../versions.ts";
 import { connection, deploy } from "./apps.ts";
@@ -69,6 +70,8 @@ type ComposeOptions = { capture?: boolean; profiles?: string; pins?: Lock };
  */
 export function compose(office: Office, args: string[], { capture = false, profiles = office.opencode.mode, pins = runningPins(office) }: ComposeOptions = {}): string {
   const files = ["-f", join(unpackedImage(), "compose.yaml")];
+
+  if (office.claude !== undefined && office.opencode.mode === "container") files.push("-f", join(unpackedImage(), "claude-compose.yaml"));
 
   if (existsSync(join(office.dir, "compose.yaml"))) files.push("-f", join(office.dir, "compose.yaml"));
 
@@ -276,6 +279,8 @@ function choosePins(office: Office, upgrade: boolean) {
 }
 
 export async function up(office: Office, { upgrade = false } = {}): Promise<void> {
+  prepareSecrets(office);
+  assertGatewayMode(office);
   prepareState(office);
 
   const { pins, moved } = choosePins(office, upgrade);
@@ -323,6 +328,26 @@ export async function up(office: Office, { upgrade = false } = {}): Promise<void
 
     await deploy(office);
   }
+}
+
+export function assertGatewayMode(office: Office): void {
+  if (office.claude !== undefined && office.opencode.mode === "host") {
+    throw new OfficeError("Claude gateway in host mode requires a dedicated host OpenCode process with a Claude launcher selected through OPENCODE_CLAUDE_PATH. office will not change a shared host server's environment or credentials. Use container mode for managed gateway delivery; host gateway setup is not complete");
+  }
+}
+
+/** Setup starts only Executor until its local token exists; OpenCode then starts once. */
+export async function startExecutor(office: Office): Promise<void> {
+  prepareSecrets(office, { allowMissingOwner: true });
+  assertGatewayMode(office);
+  prepareState(office);
+
+  const { pins } = choosePins(office, false);
+
+  guardDowngrade(office, pins);
+  compose(office, ["up", "-d", "executor"], { pins });
+
+  if (!(await waitForExecutor())) throw new OfficeError("Executor didn't become ready; fix its startup and rerun office setup");
 }
 
 /** Stops the office's containers, whichever mode started them, and in host mode its timers. */

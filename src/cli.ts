@@ -9,9 +9,11 @@ import { officeInstructions } from "../plugins/office/instructions.ts";
 import { deploy } from "./commands/apps.ts";
 import { check } from "./commands/check.ts";
 import { down, up } from "./commands/compose.ts";
+import { credentials } from "./commands/executor.ts";
 import { init } from "./commands/init.ts";
 import { pair } from "./commands/pair.ts";
 import { pin } from "./commands/pin.ts";
+import { setup } from "./commands/setup.ts";
 import { sync } from "./commands/sync.ts";
 import { update } from "./commands/update.ts";
 import { upgradeTools } from "./commands/upgrade.ts";
@@ -23,6 +25,10 @@ import { version } from "./tool.ts";
 const usage = `usage: office <command> [--office <dir>]
 
   init <dir> [--name <name>]   create an office from the template, with one example desk
+  setup [--owner-email <email>] [--generate-age-key]
+                               guide resumable onboarding (explicit consent to create a host identity)
+  executor credentials [--password-only]
+                               deliberately reveal the stored encrypted owner login, even offline
   sync [--references]          clone and update, refresh the tool's plugins, scaffold missing
                                desks, copy and link skills
   check                        report drift from office.yaml and the tool, and the running
@@ -96,6 +102,9 @@ async function main(): Promise<void> {
     options: {
       office: { type: "string" },
       name: { type: "string" },
+      "owner-email": { type: "string" },
+      "generate-age-key": { type: "boolean" },
+      "password-only": { type: "boolean" },
       references: { type: "boolean" },
       upgrade: { type: "boolean" },
       origin: { type: "string" },
@@ -143,6 +152,10 @@ async function main(): Promise<void> {
     if (!(await check(currentOffice(flags)))) process.exitCode = 1;
   } else if (command === "up") {
     await up(currentOffice(flags), { upgrade: flags.upgrade === true });
+  } else if (command === "setup") {
+    await setup(currentOffice(flags), { ownerEmail: flags["owner-email"], generateAgeKey: flags["generate-age-key"] === true });
+  } else if (command === "executor" && rest[0] === "credentials") {
+    credentials(currentOffice(flags), flags["password-only"] === true);
   } else if (command === "pin") {
     for (const line of await pin(currentOffice(flags))) console.log(line);
   } else if (command === "pair") {

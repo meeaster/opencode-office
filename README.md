@@ -21,7 +21,7 @@ An office keeps its own content: desks, skills, plugins, Executor apps, cron job
 
 ## Install
 
-`office` is one executable that carries everything it needs: the template, the plugins (bundled) and the image files. Put it on your PATH, such as at `~/.local/bin/office`; Docker is the only other requirement. `office --version` prints the version and the commit it was built from.
+`office` is one executable carrying the template, bundled plugins and image files. Put it on your PATH, such as at `~/.local/bin/office`. Docker with Compose and Buildx, and Git, are host prerequisites. Portable encrypted secrets also need host SOPS and age; no Node/npm runtime is needed. `office --version` prints its version and build commit.
 
 Every commit to `main` publishes a pre-release named `0.1.0-<UTC date and time>` on the [releases page](https://github.com/meeaster/opencode-office/releases), for Linux x64; the newest ten are kept. To install one:
 
@@ -67,7 +67,7 @@ Before your first commit, install the gitleaks hook once per clone; it blocks co
 pre-commit install
 ```
 
-`pnpm run build` only builds `target/office`. `bin/office` runs the CLI from the checkout with Bun, without building. `pnpm run typecheck` checks the CLI and the plugins; `pnpm test` runs the tests.
+`pnpm run build` only builds `target/office`. `bin/office` runs the CLI from the checkout with Bun, without building. `pnpm run typecheck` checks the CLI and the plugins; `pnpm test` runs the tests (launcher behavior tests also use host `jq`, already included in the container).
 
 ## Commands
 
@@ -76,6 +76,8 @@ pre-commit install
 | Command | Does |
 |---|---|
 | `office init <dir> [--name <name>]` | Creates an office from `template/`: root files, a starter `office.yaml` at this tool's versions with its `office.lock`, one example desk, and a git repository on branch `main` |
+| `office setup [--owner-email <email>] [--generate-age-key]` | Resumes onboarding after init or clone: checks prerequisites and secrets, syncs, starts Executor, bootstraps its owner and organization-bound local token, then starts OpenCode, deploys apps and checks. Human provider logins remain separate. `--generate-age-key` explicitly consents to creating a host identity/public recipient config |
+| `office executor credentials [--password-only]` | Deliberately decrypts and reveals the stored owner login on the host, even with Executor stopped. Password-only writes exact password bytes, without a newline, for a clipboard pipe; it does not verify the live password |
 | `office sync [--references]` | Clones and updates references and desk repositories, refreshes the office's copies of the tool's plugins (saying what it replaced), scaffolds declared desks that are missing, copies declared skills into `skills/` (recording the commit in `.source.json`), links enabled skills into each `.opencode/skills/`, clones declared plugins. It never writes to `AGENTS.md` or other hand-written files |
 | `office check` | Reports drift between `office.yaml` and the folders, and plugin copies that differ from the tool's; the versions and whether `office.lock` matches, a warning for versions outside the range this tool was tested with and for a pending upgrade; when the containers run, also whether they run the applied versions, Executor's health, whether the container's `office` is the host's (`office --version`), whether every app is deployed for the `apps` framework Executor serves; for the root and each desk, on the mode's OpenCode server, its agents, its skills (expected loaded, the rest not) and its Executor connection; and the cron runner (supercronic in the container, or the host's timers) |
 | `office instructions [folder]` | Prints the guidance the office plugin gives a session started in that folder, from the same code |
@@ -195,20 +197,23 @@ The template ships two jobs:
 ```sh
 office init ~/my-office --name mine
 cd ~/my-office
-office up
+office setup
 ```
 
-Then:
+Setup asks before creating an age identity and asks for your Executor owner email; it never invents an email. For unattended setup, install the prerequisites first, supply `--owner-email <email>`, and explicitly consent with `--generate-age-key` if needed. Missing required input stops with guidance instead of waiting on stdin. Cron activation follows the existing `up` behavior without another approval prompt: starting a template office runs its missed jobs, including jobs never run, which can update references and commit tool pin changes. `init` still creates files only; `up` still starts services only.
 
-0. **The secrets hook.** `pre-commit install`, once per clone (the office's `mise.toml` pins pre-commit, and the container installs it too).
-1. **Executor.** Open `http://localhost:41440` and finish the first-run setup. Create a token under **Account settings → Tokens**, named `opencode`, save it, and restart:
+Setup preserves existing accounts and working instance-local tokens. Before creating an owner it proves SOPS encryption/recovery and saves the generated strong password encrypted in `secrets/executor-owner.enc.json`. The owner name is `<office name> owner`, and the organization name is the office name. Interrupted account creation resumes with that same record, never a new password. A different fresh Executor can reuse this encrypted owner record, but gets its own local API token. Existing instances without a valid token need the existing owner's encrypted login or an existing organization-bound token; setup never resets them.
 
-   ```sh
-   (umask 077; echo "EXECUTOR_TOKEN=<token>" > ~/.local/share/office/mine/opencode-executor.env)
-   office up
-   ```
+In an interactive terminal the newly generated password is deliberately displayed once. Redirected/noninteractive setup output withholds it. Retrieve it explicitly later:
 
-2. **A model.** Log Claude Code in, then connect OpenCode's Claude Agent provider to that login (or connect another provider in OpenCode's settings):
+```sh
+office executor credentials
+office executor credentials --password-only | <clipboard-command>
+```
+
+Review and commit `.sops.yaml`, `office.yaml` and encrypted credentials yourself; setup never commits or pushes. Back up the age identity separately. Also run `pre-commit install` once per clone.
+
+**Model authentication remains human-controlled.** With the optional Claude gateway below, setup connects Claude Agent without subscription login. Otherwise log Claude Code in, then connect Claude Agent in OpenCode (or use `/connect` and `/models` for another provider):
 
    ```sh
    docker exec -it office-mine-opencode-1 claude auth login
@@ -218,11 +223,58 @@ Then:
      http://127.0.0.1:41497/api/integration/claude-agent/connect/external
    ```
 
-3. **Apps.** `office apps deploy`. It creates the OpenCode account in Executor from `secrets.env` and links it to every app that needs it.
-4. **Check.** `office check`.
-5. **The desktop app.** `office pair` prints a link that connects the OpenCode app or a browser.
+`office setup` deploys apps and runs checks. It makes no model request and does not verify a provider's billing or model access. `office pair` prints the next-step link for the desktop app or a browser.
 
 OpenCode's API picks a session's folder from the `x-opencode-directory` header or the `location[directory]` query parameter; it ignores `?directory=` and falls back to its start folder.
+
+## Portable secrets and the Claude gateway
+
+Install [SOPS](https://getsops.io/docs/installation/) and [age](https://github.com/FiloSottile/age/releases) on the host PATH using their standalone releases and published integrity checks, or your package manager. Tested releases are SOPS **3.13.3** (2026-07-23) and age **1.3.2** (2026-08-29), both stable and older than a day. With mise already installed, `mise use --global sops@3.13.3 age@1.3.2` installs those exact versions. Office does not install tools silently.
+
+Optional sources in `office.yaml` (existing offices without these stay unchanged):
+
+```yaml
+secrets:
+  executor_owner: secrets/executor-owner.enc.json
+claude:
+  credential: secrets/claude.enc.json
+  settings: claude/settings.json
+```
+
+Sources are relative to the office root, independent of the current desk or nested repository. The encrypted Claude JSON contains `{"token":"<gateway credential>"}`. Create/edit it with `sops secrets/claude.enc.json`; keep plaintext out of shell history. The separate, non-secret `claude/settings.json` is an office adapter configuration, **not an automatically loaded Claude settings file**:
+
+```json
+{
+  "baseUrl": "https://gateway.example.com",
+  "models": {
+    "sonnet": "claude-sonnet-4-6",
+    "opus": "claude-opus-4-6",
+    "haiku": "claude-haiku-4-5"
+  }
+}
+```
+
+`models` is optional. Only `baseUrl` and these model aliases are supported; arbitrary Claude settings, environment, hooks and permissions are deliberately outside this adapter. The launcher delivers model aliases through Claude's supported `ANTHROPIC_DEFAULT_*_MODEL` environment variables, even when OpenCode disables settings discovery. Caller arguments (including model and policy flags) pass through unchanged.
+
+The host identity normally lives at `~/.config/sops/age/keys.txt` (`$XDG_CONFIG_HOME` is honored). Standard SOPS identity selection, including `SOPS_AGE_KEY_FILE`, also works. `office setup --generate-age-key` creates a missing identity only with explicit consent, shows **only its public recipient**, and preserves any existing `.sops.yaml`. Multiple recipients are supported by normal SOPS rules:
+
+```yaml
+creation_rules:
+  - path_regex: secrets/.*\.enc\.json$
+    age: >-
+      age1<first-public-recipient>,
+      age1<second-public-recipient>
+```
+
+On a new computer, a newly generated identity **cannot** decrypt an existing office. Send its public recipient to an already-authorized host. There, add it to `.sops.yaml`, run `sops updatekeys secrets/claude.enc.json` and `sops updatekeys secrets/executor-owner.enc.json` for the sources in use, review/commit those encrypted files, and sync them to the new host. Use ordinary `sops <file>` for later edits; `updatekeys` changes enrollment, not the secret values. Keep authorized recovery identities backed up.
+
+`office up` decrypts and validates all configured sources **before changing services**, never falling back to old runtime plaintext on failure. It atomically replaces `state/runtime/claude/gateway.json`. The host-only `runtime/` parent is mode 0700; its selected `claude/` child is 0755 and the runtime file 0444 so container uid 1000 can read it even when the host has another uid. Host users cannot traverse the private parent. Only that selected child directory is mounted read-only at `/run/office-claude`; mounting the directory rather than a single file makes atomic rotation visible. Keep state outside the repository and do not weaken the parent permissions.
+
+No age key or SOPS executable enters the image or mounts. Executor owner plaintext stays in host memory and is never mounted. The Claude launcher sets the token/base URL only for its Claude child, then execs the real binary, preserving signals and exit status. Both direct `claude` and OpenCode's non-secret `OPENCODE_CLAUDE_PATH` use it; no token is put in global OpenCode environment, image layers or build arguments. Missing/malformed mounted credentials fail before Claude starts. Without `claude:` the launcher passes through to ordinary Claude login behavior.
+
+After rotating with SOPS, run `office up`. Fresh Claude processes read the new credential; replace already-running Claude processes to rotate those too. The container remains the trust boundary: unrestricted agents able to read the selected mount can read its token. OpenCode provider plugins keep their own independent login configuration; this adapter does not wire or share their credentials.
+
+Managed gateway delivery currently requires container mode. In host mode office refuses a configured gateway before changing services, rather than altering a shared host server. A host gateway needs a dedicated OpenCode process configured by its operator with `OPENCODE_CLAUDE_PATH` pointing at a host launcher; this release does not generate or validate that host adapter. Ordinary host-mode offices remain supported.
 
 ## Not yet
 
