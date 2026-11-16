@@ -8,6 +8,7 @@
   "scripts": {
     "build": "bun src/build.ts",
     "install-office": "bun src/build.ts --install",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

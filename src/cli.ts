@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
+import * as v from "valibot";
+
 import { officeInstructions } from "../plugins/office/instructions.ts";
 import { deploy } from "./commands/apps.ts";
 import { check } from "./commands/check.ts";
@@ -11,9 +13,11 @@ import { init } from "./commands/init.ts";
 import { pair } from "./commands/pair.ts";
 import { pin } from "./commands/pin.ts";
 import { sync } from "./commands/sync.ts";
+import { update } from "./commands/update.ts";
 import { upgradeTools } from "./commands/upgrade.ts";
 import { catchUp, runJob, wrappedCrontab } from "./cron/container.ts";
 import { currentOffice, findOffice, OfficeError } from "./office.ts";
+import { age } from "./schema.ts";
 import { version } from "./tool.ts";
 
 const usage = `usage: office <command> [--office <dir>]
@@ -31,28 +35,75 @@ const usage = `usage: office <command> [--office <dir>]
   apps deploy                  deploy every Executor app in the office from its files
   upgrade-tools                bump exact pins in mise.toml files and office.yaml's versions,
                                and commit them
+  update [--check] [--minimum-release-age <age> | --version <release>]
+                               replace this office executable with the newest release at least
+                               1d old (or <age>), or exactly <release>; --check only reports.
+                               Offices pick it up with office sync and office up; it never
+                               changes office.yaml's versions
   cron crontab | catch-up | run <command>
                                the container's cron runner: print the wrapped crontab, run
                                jobs missed since their last success, or run one job and stamp it
 
   --version                    print the version and the commit this office was built from
 
-Commands other than init act on the office in the current folder or above it, or --office.`;
+Commands other than init and update act on the office in the current folder or above it, or
+--office.`;
 
-const { values: flags, positionals } = parseArgs({
-  allowPositionals: true,
-  options: {
-    office: { type: "string" },
-    name: { type: "string" },
-    references: { type: "boolean" },
-    upgrade: { type: "boolean" },
-    origin: { type: "string" },
-    version: { type: "boolean" },
-    help: { type: "boolean", short: "h" },
-  },
-});
+const updateUsage = "usage: office update [--check] [--minimum-release-age <age> | --version <release>]";
+
+/** `office update`'s own options: its --version names a release, unlike the global --version. */
+async function updateCommand(args: string[]): Promise<void> {
+  let flags;
+
+  try {
+    ({ values: flags } = parseArgs({
+      args,
+      options: { check: { type: "boolean" }, "minimum-release-age": { type: "string" }, version: { type: "string" }, help: { type: "boolean", short: "h" } },
+    }));
+  } catch (error) {
+    throw new OfficeError(`${error instanceof Error ? error.message : String(error)}\n${updateUsage}`);
+  }
+
+  if (flags.help) {
+    console.log(updateUsage);
+
+    return;
+  }
+
+  const minimumAge = flags["minimum-release-age"] ?? "1d";
+
+  if (flags.version !== undefined && flags["minimum-release-age"] !== undefined) {
+    throw new OfficeError(`--version installs that exact release, whatever its age, so it takes no --minimum-release-age\n${updateUsage}`);
+  }
+
+  if (!v.is(age, minimumAge)) throw new OfficeError(`--minimum-release-age must be an age such as 36h, 1d or 2w, not ${minimumAge}`);
+
+  await update({ check: flags.check === true, age: minimumAge, version: flags.version });
+}
 
 async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+
+  if (args[0] === "update") {
+    await updateCommand(args.slice(1));
+
+    return;
+  }
+
+  const { values: flags, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      office: { type: "string" },
+      name: { type: "string" },
+      references: { type: "boolean" },
+      upgrade: { type: "boolean" },
+      origin: { type: "string" },
+      version: { type: "boolean" },
+      help: { type: "boolean", short: "h" },
+    },
+  });
+
   const [command, ...rest] = positionals;
 
   if (flags.version) {

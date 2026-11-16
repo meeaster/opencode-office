@@ -33,6 +33,26 @@ install -m 755 office-linux-x64 ~/.local/bin/office
 office --version
 ```
 
+### Updating
+
+`office update` replaces the `office` you run with a newer release, from any folder:
+
+```sh
+office update --check                        # report the newest eligible release, change nothing
+office update                                # install the newest release at least a day old
+office update --minimum-release-age 7d       # or at least this old (hours, days or weeks)
+office update --version 0.1.0-20261116T163238Z   # exactly this release, whatever its age
+```
+
+- It reads the releases page without a login and only considers releases that publish this machine's executable (`office-<platform>-<arch>`) and a `SHA256SUMS` for it. The age comes from the option, not from any `office.yaml`, because one executable serves every office. `--check` prints the command that installs what it found, including the age it used, and the `--version` command for exactly that release.
+- Without `--version` it never installs an older release than the one it runs. A build from a checkout isn't a release: it compares against the release built from the same commit, and a build of an unreleased commit, or one with uncommitted changes, is left alone (`--version` replaces it deliberately). `--version` can also go back to an older release.
+- It downloads beside the executable, checks the file against the release's `SHA256SUMS`, runs it once to confirm it reports the release's version and commit, and only then renames it over the old one. Any failure leaves the old executable as it was. When `office` is a symlink, it replaces the file the link points to. It needs write access to that folder and never uses sudo.
+- `office` run from a checkout (`bin/office`) refuses: update the checkout instead.
+
+Updating `office` changes no office. Each office picks the new one up when you run, in it, `office sync` (refreshes the plugin copies, which you then commit), `office up` (in container mode, rebuilds the `opencode` image with the new `office`) and `office check` (confirms the container runs the host's `office`). `office up` keeps the OpenCode, Claude Code, Executor and mise versions the office last applied; only `office up --upgrade` applies newer ones from `office.yaml` (see "Versions"). In host mode the cron timers run the executable itself, so they use the new `office` straight away.
+
+### Building from source
+
 To build it from this checkout, with Bun, pnpm and pre-commit from `mise.toml`:
 
 ```sh
@@ -47,11 +67,11 @@ Before your first commit, install the gitleaks hook once per clone; it blocks co
 pre-commit install
 ```
 
-`pnpm run build` only builds `target/office`. `bin/office` runs the CLI from the checkout with Bun, without building. `pnpm run typecheck` checks the CLI and the plugins.
+`pnpm run build` only builds `target/office`. `bin/office` runs the CLI from the checkout with Bun, without building. `pnpm run typecheck` checks the CLI and the plugins; `pnpm test` runs the tests.
 
 ## Commands
 
-`office --help` lists them. Every command except `init` acts on the office in the current folder or above it, or on `--office <dir>`.
+`office --help` lists them. Every command except `init` and `update` acts on the office in the current folder or above it, or on `--office <dir>`.
 
 | Command | Does |
 |---|---|
@@ -64,6 +84,7 @@ pre-commit install
 | `office pair [--origin <url>]` | Prints a one-time link that connects the OpenCode desktop app or a browser to the office's OpenCode server. It works once, within five minutes; the app stays signed in until the password changes. `--origin` replaces the address in the link |
 | `office apps deploy` | Deploys every app in `executor/apps/*` and `<desk>/executor/apps/*` from its files, creating apps that don't exist, and links the OpenCode account to each app that declares one. It first type-checks every app against the `apps` framework Executor serves (with this executable acting as Bun) and sets each app's `apps` dependency to that version, deploying nothing if one fails. Each app's `office.ts` is replaced by one for the office's mode |
 | `office upgrade-tools` | Bumps each exact pin in the office's own `mise.toml` files (root and desks), and the versions in `office.yaml`, to the newest release at least the office's minimum release age old, and commits the changed files alone as `office cron`. See "Cron" |
+| `office update [--check] [--minimum-release-age <age> \| --version <release>]` | Replaces this `office` executable with a release from GitHub: the newest at least a day (or `<age>`) old and newer than this one, or exactly `<release>`. `--check` only reports. It changes no office; see "Updating" |
 | `office cron crontab \| catch-up \| run <command>` | The cron runner the container and the host's timers call; see "Cron" |
 
 ## Layout
@@ -120,7 +141,7 @@ The office's `.opencode/opencode.jsonc` connects sessions to Executor as the `of
 
 ## Versions
 
-`office.yaml` pins what runs in the office's containers; this tool only supplies the versions a new office starts at and the range it was tested with.
+`office.yaml` pins what runs in the office's containers; this tool only supplies the versions a new office starts at and the range it was tested with. These are separate from the `office` executable's own version, which `office update` changes (see "Updating").
 
 ```yaml
 versions:

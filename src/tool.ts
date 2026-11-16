@@ -86,12 +86,20 @@ export function checkoutCommit(): string {
   return `${git(["rev-parse", "--short=12", "HEAD"])}${git(["status", "--porcelain"]) === "" ? "" : "+uncommitted"}`;
 }
 
+/** What an `office` was built from: its version, the commit's 12-character hash, and whether the tree had changes. */
+export type Build = { version: string; commit: string; dirty: boolean };
+
+export function build(): Build {
+  const [commit = "", dirty] = (Bun.isStandaloneExecutable ? OFFICE_COMMIT : checkoutCommit()).split("+");
+
+  return { version: Bun.isStandaloneExecutable ? OFFICE_VERSION : manifest.version, commit, dirty: dirty !== undefined };
+}
+
 /** `office --version`: the version and the commit it was built from. */
 export function version(): string {
-  const commit = Bun.isStandaloneExecutable ? OFFICE_COMMIT : checkoutCommit();
-  const [hash, dirty] = commit.split("+");
+  const { version: built, commit, dirty } = build();
 
-  return `office ${Bun.isStandaloneExecutable ? OFFICE_VERSION : manifest.version} (commit ${hash}${dirty === undefined ? "" : ", built with uncommitted changes"})`;
+  return `office ${built} (commit ${commit}${dirty ? ", built with uncommitted changes" : ""})`;
 }
 
 /** How a systemd unit runs this office command: the executable itself, or the checkout's launcher. */
