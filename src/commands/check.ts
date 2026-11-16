@@ -2,17 +2,20 @@
 // containers are running, whether Executor is ready, each desk loads what it should on the OpenCode
 // server of the office's mode, the container runs the host's `office`, and the cron jobs are
 // scheduled (supercronic, or the host's timers).
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { timerStates } from "../cron/host.ts";
 import { clones, library, pluginDrift, skillSelections } from "../layout.ts";
 import { type Office, readEnvFile } from "../office.ts";
+import { pinnedTools } from "../schema.ts";
 import { version } from "../tool.ts";
-import { appFolders } from "./apps.ts";
-import { compose, ports } from "./compose.ts";
+import { changes, defaultPins, describeMove, executorImage, isTested, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
+import { appFolders, deployedFrameworks } from "./apps.ts";
+import { compose, officeImage, ports, runningPins } from "./compose.ts";
 
-type Report = (ok: boolean, name: string, detail: string) => void;
+/** Prints one check; "warn" is shown but doesn't fail `office check`. */
+type Report = (ok: boolean | "warn", name: string, detail: string) => void;
 
 const pluginProblems = {
   missing: "is missing",
@@ -20,7 +23,7 @@ const pluginProblems = {
   extra: "is not in the tool's copy",
 };
 
-function drift(office: Office): string[] {
+async function drift(office: Office): Promise<string[]> {
   const problems: string[] = [];
   const libraryIds = library(office);
   const declared = new Set(office.desks.map((desk) => desk.name));
@@ -43,7 +46,7 @@ function drift(office: Office): string[] {
   }
 
   // A hand edit, or an office last synced by an older `office`; `office sync` restores the copy.
-  for (const file of pluginDrift(office)) problems.push(`${file.path} ${pluginProblems[file.state]} (office sync restores it)`);
+  for (const file of await pluginDrift(office)) problems.push(`${file.path} ${pluginProblems[file.state]} (office sync restores it)`);
 
   for (const skill of office.skills.copied) {
     if (!libraryIds.includes(skill.name)) problems.push(`copied skill skills/${skill.name} is missing`);
@@ -158,6 +161,8 @@ async function runtime(office: Office, report: Report): Promise<void> {
 
   if (office.opencode.mode === "container" && running.includes("opencode")) officeVersions(office, report);
 
+  runningImages(office, report);
+
   const port = ports();
 
   const health = await settle(
@@ -211,7 +216,104 @@ async function runtime(office: Office, report: Report): Promise<void> {
     }
   }
 
+  await opencodeVersion(office, report, auth, opencode);
+
+  if (hasToken && health === 200) await appFrameworks(office, report);
+
   cron(office, report, running);
+}
+
+/** The versions office.yaml pins, whether office.lock matches, the tested range, and what is pending. */
+function versionChecks(office: Office, report: Report): void {
+  const tools = toolsFor(office);
+  const list = (pins: typeof defaultPins) => tools.map((tool) => `${tool} ${pins[tool].version}`).join(", ");
+  let wanted;
+
+  try {
+    wanted = wantedPins(office);
+  } catch (error) {
+    report(false, "versions", error instanceof Error ? error.message : String(error));
+
+    return;
+  }
+
+  report(true, "versions", office.versions === undefined ? `office.yaml has no versions block, so the tool's defaults apply: ${list(wanted)}` : `${list(wanted)}, matching office.lock`);
+
+  const untested = tools.filter((tool) => !isTested(tool, wanted[tool].version));
+
+  if (untested.length > 0) {
+    report("warn", "tested versions", `${untested.map((tool) => `${tool} ${wanted[tool].version} is outside ${tested[tool].from}–${tested[tool].to}`).join("; ")}, the range this office tool was tested with`);
+  }
+
+  const applied = readApplied(office);
+  const pending = applied === undefined ? [] : changes(office, applied.pins, wanted);
+
+  if (pending.length > 0) report("warn", "pending upgrade", `${pending.map((move) => describeMove(office, move)).join(", ")}; office up --upgrade applies it`);
+}
+
+/** Whether the running containers use the images of the applied versions. */
+function runningImages(office: Office, report: Report): void {
+  const pins = runningPins(office);
+
+  const images = new Map(
+    compose(office, ["ps", "--status", "running", "--format", "{{.Service}}\t{{.Image}}"], { capture: true, profiles: "container" })
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => [line.slice(0, line.indexOf("\t")), line.slice(line.indexOf("\t") + 1)]),
+  );
+
+  const expected = new Map([["executor", executorImage(pins.executor)], ...(office.opencode.mode === "container" ? [["opencode", officeImage(office, pins)] as const] : [])]);
+  const behind = [...expected].filter(([service, image]) => images.has(service) && images.get(service) !== image);
+
+  report(
+    behind.length === 0,
+    "running versions",
+    behind.length === 0 ? `the containers run the applied versions (${toolsFor(office).map((tool) => `${tool} ${pins[tool].version}`).join(", ")})` : `${behind.map(([service, image]) => (images.get(service)?.startsWith("sha256:") ? `${service} runs an older build of ${image}` : `${service} runs ${images.get(service)}, not ${image}`)).join("; ")}; run office up`,
+  );
+}
+
+/** OpenCode's own version: the applied one in the container, within the tested range on the host. */
+async function opencodeVersion(office: Office, report: Report, auth: Record<string, string>, url: string): Promise<void> {
+  let info;
+
+  try {
+    info = await getJson<{ version: string }>(`${url}/api/info`, auth);
+  } catch (error) {
+    report(false, "OpenCode version", String(error));
+
+    return;
+  }
+
+  if (office.opencode.mode === "host") {
+    report(isTested("opencode", info.version) ? true : "warn", "OpenCode version", `the host's server runs ${info.version}${isTested("opencode", info.version) ? "" : `, outside ${tested.opencode.from}–${tested.opencode.to}, the range this office tool was tested with`}`);
+
+    return;
+  }
+
+  const applied = runningPins(office).opencode.version;
+
+  report(info.version === applied, "OpenCode version", info.version === applied ? `${info.version}` : `the server runs ${info.version}, not the applied ${applied}; run office up`);
+}
+
+/** Every app in the office, in its folder and as deployed, must name the apps framework Executor serves. */
+async function appFrameworks(office: Office, report: Report): Promise<void> {
+  try {
+    const { version: served, apps } = await deployedFrameworks(office);
+    const folders = appFolders(office);
+    const local = folders.filter((folder) => JSON.parse(readFileSync(join(folder.dir, "package.json"), "utf8")).dependencies?.apps !== served);
+    const deployed = apps.filter((app) => app.apps !== served);
+    const missing = folders.filter((folder) => !apps.some((app) => app.slug === folder.slug));
+
+    const problems = [
+      ...local.map((folder) => `${relative(office.dir, folder.dir)} names another apps version`),
+      ...deployed.map((app) => `${app.slug} is deployed with apps@${app.apps ?? "?"}`),
+      ...missing.map((folder) => `${folder.slug} isn't deployed`),
+    ];
+
+    report(problems.length === 0, "app frameworks", problems.length === 0 ? `every app is deployed for apps@${served}` : `Executor serves apps@${served}: ${problems.join("; ")}; run office apps deploy`);
+  } catch (error) {
+    report(false, "app frameworks", error instanceof Error ? error.message : String(error));
+  }
 }
 
 /** Prints each check; returns whether all passed. */
@@ -219,11 +321,11 @@ export async function check(office: Office): Promise<boolean> {
   let passed = true;
 
   const report: Report = (ok, name, detail) => {
-    console.log(`${ok ? "ok  " : "FAIL"} ${name}: ${detail}`);
-    passed &&= ok;
+    console.log(`${ok === "warn" ? "WARN" : ok ? "ok  " : "FAIL"} ${name}: ${detail}`);
+    passed &&= ok !== false;
   };
 
-  const problems = drift(office);
+  const problems = await drift(office);
 
   report(problems.length === 0, "office.yaml and folders", problems.length === 0 ? "in sync" : `${problems.length} problems`);
 
@@ -233,6 +335,7 @@ export async function check(office: Office): Promise<boolean> {
 
   report(apps.length > 0, "Executor apps", apps.map((app) => relative(office.dir, app.dir)).join(", ") || "none");
 
+  versionChecks(office, report);
   await runtime(office, report);
 
   return passed;

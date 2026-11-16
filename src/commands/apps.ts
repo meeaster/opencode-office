@@ -1,6 +1,8 @@
 // `office apps deploy`: deploys the office's Executor apps from their folders through Executor's
 // HTTP API with a token, then links the OpenCode account to every app that needs one.
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 import { type Office, OfficeError, readEnvFile } from "../office.ts";
@@ -168,17 +170,90 @@ async function linkOpencode(office: Office, call: Call, org: string, apps: Execu
   return lines;
 }
 
+/** The TypeScript the apps are checked with, as the template's apps are. */
+const typescriptVersion = "7.0.2";
+
+/** Runs the Bun CLI: this executable acting as Bun, or Bun itself when run from a checkout. */
+function bun(args: string[], cwd: string): void {
+  execFileSync(process.execPath, args, { cwd, env: { ...process.env, BUN_BE_BUN: "1" }, stdio: ["ignore", "inherit", "inherit"] });
+}
+
+/**
+ * Type-checks each app against the `apps` framework version Executor serves, with the packages
+ * installed once per version under ~/.cache/office/. Throws, naming the app, on the first error,
+ * before any app's package.json is changed.
+ */
+function typecheck(office: Office, folders: AppFolder[], version: string): void {
+  const cache = join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "office", `apps-${version}`);
+  const tsc = join(cache, "node_modules/typescript/bin/tsc");
+
+  if (!existsSync(tsc)) {
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(join(cache, "package.json"), `${JSON.stringify({ private: true, dependencies: { apps: version, typescript: typescriptVersion } }, null, 2)}\n`);
+    bun(["install", "--silent"], cache);
+  }
+
+  for (const folder of folders) {
+    const copy = mkdtempSync(join(tmpdir(), "office-app-"));
+
+    try {
+      cpSync(folder.dir, copy, { recursive: true, filter: (source) => !relative(folder.dir, source).split("/").includes("node_modules") });
+      symlinkSync(join(cache, "node_modules"), join(copy, "node_modules"));
+      bun([tsc, "--ignoreConfig", "--noEmit", "--strict", "--skipLibCheck", "--module", "nodenext", "--moduleResolution", "nodenext", "--target", "es2022", "index.ts"], copy);
+    } catch {
+      throw new OfficeError(`${relative(office.dir, folder.dir)} doesn't type-check against apps@${version}; nothing was deployed`);
+    } finally {
+      rmSync(copy, { recursive: true, force: true });
+    }
+  }
+}
+
+/** Sets each app's `apps` dependency to the version Executor serves, editing only that value. */
+function matchFramework(office: Office, folders: AppFolder[], version: string): void {
+  for (const folder of folders) {
+    const path = join(folder.dir, "package.json");
+    const before = readManifest(folder.dir).dependencies?.apps;
+
+    if (before === version) continue;
+
+    writeFileSync(path, readFileSync(path, "utf8").replace(/("apps"\s*:\s*")[^"]*(")/, `$1${version}$2`));
+    console.log(`updated ${relative(office.dir, path)}: apps ${before ?? "(none)"} → ${version}`);
+  }
+}
+
+/** The `apps` version each deployed app's source names, by slug, for `office check`. */
+export async function deployedFrameworks(office: Office): Promise<{ version: string; apps: { slug: string; apps: string | undefined }[] }> {
+  const call = client(connection(office));
+  const { organization } = await call<{ organization: string }>("GET", "/api/context");
+  const { version } = await call<{ version: string }>("GET", `/api/organizations/${organization}/framework/release`);
+  const apps = await call<ExecutorApp[]>("GET", `/api/organizations/${organization}/apps`);
+  const slugs = new Set(appFolders(office).map((folder) => folder.slug));
+  const deployed = [];
+
+  for (const app of apps.filter((entry) => slugs.has(entry.slug))) {
+    const source = await call<{ files: { path: string; content?: string }[] }>("GET", `/api/organizations/${organization}/apps/${app.id}/workspace`);
+    const manifest = source.files.find((file) => file.path === "package.json")?.content;
+    const parsed: AppManifest = manifest === undefined ? {} : JSON.parse(manifest);
+
+    deployed.push({ slug: app.slug, apps: parsed.dependencies?.apps });
+  }
+
+  return { version, apps: deployed };
+}
+
+/**
+ * Deploys every app in the office. Each app's `apps` dependency is first set to the framework
+ * version Executor serves (after an Executor upgrade it moves) and every app is type-checked
+ * against it, so nothing is deployed if any app would break.
+ */
 export async function deploy(office: Office): Promise<void> {
   const call = client(connection(office));
   const { organization } = await call<{ organization: string }>("GET", "/api/context");
   const { version } = await call<{ version: string }>("GET", `/api/organizations/${organization}/framework/release`);
   const folders = appFolders(office);
 
-  const stale = folders.filter((folder) => readManifest(folder.dir).dependencies?.apps !== version);
-
-  if (stale.length > 0) {
-    throw new OfficeError(`Executor runs apps@${version}; set dependencies.apps to exactly that in ${stale.map((folder) => relative(office.dir, join(folder.dir, "package.json"))).join(", ")}`);
-  }
+  typecheck(office, folders, version);
+  matchFramework(office, folders, version);
 
   const existing = await call<ExecutorApp[]>("GET", `/api/organizations/${organization}/apps`);
   const deployed: ExecutorApp[] = [];

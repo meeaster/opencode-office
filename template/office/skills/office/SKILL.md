@@ -18,5 +18,6 @@ The office's structure is declared in `office.yaml` at its root and applied with
 | Change a desk's Executor app | Edit `<desk>/executor/apps/<desk>/`, then `office apps deploy` |
 | Add a file-system job | Add a script to `cron/` and a line to `cron/crontab`: a five-field cron expression (UTC) or `@daily`, then the command, run from the office root. Restart the container with `office up`. A job that exits 0 is stamped; one missed while the container was down runs at its next start |
 | Pin a tool | Exact versions in the root's or a desk's `mise.toml`. The daily `upgrade-tools` job bumps them and commits as `office cron`; it skips a file with uncommitted changes |
+| Change the OpenCode, Claude Code, Executor or mise version | Edit `versions:` in `office.yaml`, run `office pin`, commit `office.yaml` and `office.lock`, then `office up --upgrade`. The daily job bumps them too, waiting the ages under `upgrades:`; it never restarts anything. Never set an older OpenCode or Executor than the office has run |
 
 `office check` reports drift between `office.yaml` and the folders. `office instructions [folder]` prints the guidance the office plugin gives a session in that folder.

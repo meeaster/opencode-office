@@ -23,7 +23,44 @@ export function toolPath(path: string): string {
 }
 
 /** The asset folders `src/build.ts` embeds, each a path relative to the repository root. */
-export const assets = ["template", "plugins", "image", "compose.yaml"];
+export const assets = ["template", "target/plugins", "image", "compose.yaml"];
+
+/**
+ * A tool plugin bundled into one `index.js` with what it imports (the shared office.yaml schema
+ * and its library), so an office's copy needs no packages. The header says where it comes from.
+ */
+export async function bundlePlugin(plugin: string): Promise<string> {
+  // Bun names each bundled module in a comment, relative to the current folder; building from the
+  // repository keeps the bundle the same wherever `office` runs, and free of the machine's paths.
+  const previous = process.cwd();
+
+  process.chdir(root);
+
+  const result = await Bun.build({
+    entrypoints: [toolPath(`plugins/${plugin}/index.ts`)],
+    target: "bun",
+    banner: `// The office tool's ${plugin} plugin, bundled from its plugins/${plugin}/. \`office sync\` replaces this copy; change the tool's.`,
+  }).finally(() => process.chdir(previous));
+
+  const [output] = result.outputs;
+
+  if (!result.success || output === undefined) throw new AggregateError(result.logs, `bundling the ${plugin} plugin failed`);
+
+  return output.text();
+}
+
+/**
+ * The files an office's copy of a tool plugin holds, by name: embedded in the executable by
+ * `src/build.ts`, or bundled now when run from a checkout.
+ */
+export async function pluginFiles(plugin: string): Promise<Map<string, string>> {
+  if (Bun.isStandaloneExecutable) {
+    // Bun embeds an asset folder under its own name, so target/plugins/ is plugins/ in the executable.
+    return new Map(toolFiles(`plugins/${plugin}`).map((name) => [name, readFileSync(toolPath(`plugins/${plugin}/${name}`), "utf8")]));
+  }
+
+  return new Map([["index.js", await bundlePlugin(plugin)]]);
+}
 
 /**
  * Writes a tool file to `target`. Embedded files lose their mode, so scripts are recognised by

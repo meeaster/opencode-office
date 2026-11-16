@@ -8,7 +8,8 @@
 
 services:
   executor:
-    image: ghcr.io/usefulsoftwareco/executor-selfhost:2.0.0-beta.49@sha256:cc693691db13635ad5abb456fa132634816ec7acc73f04bd6b8932e0a8c45038
+    # The version office.yaml pins, by the digest in office.lock.
+    image: ${OFFICE_EXECUTOR_IMAGE:?run this through office up}
     restart: unless-stopped
     init: true
     environment:

@@ -1,17 +1,27 @@
 // `office upgrade-tools`: bumps each exact pin in the office's own mise.toml files (the root's and
-// each desk's) to the newest version released at least a day ago, installs it, and commits the
-// changed files alone under the "office cron" identity. Files with uncommitted changes are left
-// for the user. A failed install keeps the old pin. Never pushes.
+// each desk's), and the four versions office.yaml pins, to the newest release at least the
+// office's minimum release age old, and commits the changed files alone under the "office cron"
+// identity. mise.toml pins are looked up and installed through mise; the four versions on GitHub
+// (and Executor's image on its registry), and only recorded: `office up --upgrade` applies them.
+// Files with uncommitted changes are left for the user. A failed install or lookup keeps the old
+// pin. Never pushes.
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 import { git } from "../git.ts";
 import { notify } from "../notify.ts";
-import type { Office } from "../office.ts";
+import { isScalar, parseDocument } from "yaml";
 
-/** The cutoff passed to `mise latest`: the user's rule is nothing released less than a day ago. */
-const minimumReleaseAge = "1d";
+import type { Office } from "../office.ts";
+import { newestRelease, pinFor } from "../releases.ts";
+import { pinnedTools } from "../schema.ts";
+import { compareVersions as compareSemver, lockFile, wantedPins, writeLock } from "../versions.ts";
+
+/** How old a tool's release must be: its own age in office.yaml's `upgrades`, else the default there, else a day. */
+function ageFor(office: Office, tool: string): string {
+  return office.upgrades[tool] ?? office.upgrades.minimum_release_age ?? "1d";
+}
 
 /** Commits made by the job carry this identity, set for that commit only. */
 const identity = ["-c", "user.name=office cron", "-c", "user.email=office-cron@localhost", "-c", "commit.gpgsign=false"];
@@ -63,7 +73,7 @@ function compareVersions(left: string, right: string): number {
  * Upgrades one mise.toml. Returns the moves made and the failures. A pin counts as exact when
  * mise resolves it to itself, so ranges such as "26" or "latest" are left as they are.
  */
-function upgradeFile(path: string) {
+function upgradeFile(office: Office, path: string) {
   const dir = dirname(path);
   const lines = readFileSync(path, "utf8").split("\n");
   const moves: Move[] = [];
@@ -74,7 +84,7 @@ function upgradeFile(path: string) {
 
     if (!exact.ok || exact.out !== pin.version) continue;
 
-    const newest = mise(["latest", pin.tool, "--minimum-release-age", minimumReleaseAge], dir);
+    const newest = mise(["latest", pin.tool, "--minimum-release-age", ageFor(office, pin.tool)], dir);
 
     if (!newest.ok || newest.out === "") {
       failures.push(`${pin.tool}: couldn't find the newest version (${newest.error})`);
@@ -100,6 +110,86 @@ function upgradeFile(path: string) {
 }
 
 /** Runs the upgrade over the office; returns whether everything that was tried succeeded. */
+/**
+ * Rewrites only the text of each moved version in office.yaml, so every comment and the layout
+ * stay as the user wrote them. A tool the block doesn't list yet is added at its end.
+ */
+function setVersions(text: string, moves: Move[]): string {
+  const document = parseDocument(text, { keepSourceTokens: true });
+  const edits: { start: number; end: number; value: string }[] = [];
+  const added: string[] = [];
+
+  for (const move of moves) {
+    const node = document.getIn(["versions", move.tool], true);
+
+    if (isScalar(node) && node.range !== undefined && node.range !== null) edits.push({ start: node.range[0], end: node.range[1], value: move.to });
+    else added.push(`  ${move.tool}: ${move.to}`);
+  }
+
+  let result = text;
+
+  for (const edit of edits.sort((left, right) => right.start - left.start)) result = `${result.slice(0, edit.start)}${edit.value}${result.slice(edit.end)}`;
+
+  if (added.length > 0) result = result.replace(/^versions:[^\n]*\n((?:[ \t]+[^\n]*\n)*)/m, (block) => `${block}${added.join("\n")}\n`);
+
+  return result;
+}
+
+/**
+ * Bumps the four versions office.yaml pins to the highest release of each line at least its age
+ * old, rewriting office.yaml (keeping its comments and layout) and office.lock. A lookup that
+ * fails (GitHub's rate limit, no network) skips that tool and is reported.
+ */
+async function upgradeVersions(office: Office): Promise<{ moves: Move[]; failures: string[]; changed: string[] }> {
+  const none = { moves: [], failures: [], changed: [] };
+
+  if (office.versions === undefined) {
+    console.log("skipped the office's versions: office.yaml has no versions block, so the tool's defaults apply");
+
+    return none;
+  }
+
+  if (git(["status", "--porcelain", "--", "office.yaml", lockFile], office.dir) !== "") {
+    console.log(`skipped office.yaml's versions: office.yaml or ${lockFile} has uncommitted changes`);
+
+    return none;
+  }
+
+  let lock;
+
+  try {
+    lock = wantedPins(office);
+  } catch (error) {
+    return { ...none, failures: [`office.yaml's versions: ${error instanceof Error ? error.message : String(error)}`] };
+  }
+
+  const moves: Move[] = [];
+  const failures: string[] = [];
+  const next = { ...lock };
+
+  for (const tool of pinnedTools) {
+    try {
+      const { chosen } = await newestRelease(tool, ageFor(office, tool));
+
+      if (chosen === undefined || compareSemver(chosen.version, lock[tool].version) <= 0) continue;
+
+      next[tool] = await pinFor(tool, chosen.version, chosen.release);
+      moves.push({ tool, from: lock[tool].version, to: chosen.version });
+    } catch (error) {
+      failures.push(`${tool}: skipped, its release lookup failed (${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
+
+  if (moves.length === 0) return { ...none, failures };
+
+  const path = join(office.dir, "office.yaml");
+
+  writeFileSync(path, setVersions(readFileSync(path, "utf8"), moves));
+  writeLock(office.dir, next);
+
+  return { moves, failures, changed: ["office.yaml", lockFile] };
+}
+
 export async function upgradeTools(office: Office): Promise<boolean> {
   // The office's own files only: never one inside a desk's repos or under references/.
   const files = ["mise.toml", ...office.desks.map((desk) => join(desk.name, "mise.toml"))]
@@ -120,7 +210,7 @@ export async function upgradeTools(office: Office): Promise<boolean> {
       continue;
     }
 
-    const result = upgradeFile(path);
+    const result = upgradeFile(office, path);
 
     for (const failure of result.failures) failures.push(`${name}: ${failure}`);
 
@@ -139,8 +229,15 @@ export async function upgradeTools(office: Office): Promise<boolean> {
     report.push(...result.moves.map((move) => ({ ...move, file: name })));
   }
 
+  const versions = await upgradeVersions(office);
+
+  for (const failure of versions.failures) failures.push(failure);
+
+  changed.push(...versions.changed);
+  report.push(...versions.moves.map((move) => ({ ...move, file: "office.yaml" })));
+
   if (report.length > 0) {
-    const where = (move: { file: string }) => (move.file === "mise.toml" ? "" : ` in ${dirname(move.file)}`);
+    const where = (move: { file: string }) => (move.file === "mise.toml" || move.file === "office.yaml" ? "" : ` in ${dirname(move.file)}`);
     const subject = `chore: bump ${report.map((move) => `${move.tool} ${move.from} → ${move.to}${where(move)}`).join(", ")}`;
     const body = report.map((move) => `- ${move.file}: ${move.tool} ${move.from} → ${move.to}`).join("\n");
 
@@ -160,7 +257,7 @@ export async function upgradeTools(office: Office): Promise<boolean> {
 
   await notify(office, {
     title: failures.length === 0 ? "Tools upgraded" : "Tool upgrade needs attention",
-    body: `${lines.join("\n")}${report.length > 0 ? "\nCommitted locally as office cron; revert the commit to undo." : ""}`,
+    body: `${lines.join("\n")}${report.length > 0 ? "\nCommitted locally as office cron; revert the commit to undo." : ""}${versions.moves.length > 0 ? "\nNothing restarted: `office up --upgrade` applies the new versions in office.yaml." : ""}`,
   });
 
   return failures.length === 0;

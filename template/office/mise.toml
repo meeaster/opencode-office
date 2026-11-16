@@ -1,3 +1,5 @@
 # Tools every desk gets. The container installs them at start (in host mode, `office up` does); a desk's own mise.toml adds more.
 [tools]
 node = "26.13.1"
+# Runs the gitleaks hook in .pre-commit-config.yaml, on the host and in the container.
+pre-commit = "4.7.0"

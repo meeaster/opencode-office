@@ -14,6 +14,23 @@ opencode: container
 #   mode: host
 #   url: http://127.0.0.1:4096
 
+# The versions this office runs in its containers. office.lock (written by `office pin`; don't
+# edit it) holds their checksums: run `office pin` after changing a version by hand. The daily
+# upgrade-tools job bumps them; `office up --upgrade` applies a bump, `office up` never does. In
+# host mode only Executor's applies.
+versions:
+  opencode: __OPENCODE_VERSION__
+  claude: __CLAUDE_VERSION__
+  executor: __EXECUTOR_VERSION__
+  mise: __MISE_VERSION__
+
+# How old a release must be before the upgrade-tools job moves to it: one default, and per-tool
+# ages for the versions above or any tool in a mise.toml. Executor publishes a beta almost daily,
+# and each upgrade means a backup, a restart and redeploying every app, so it waits longer.
+upgrades:
+  minimum_release_age: 1d
+  executor: 7d
+
 # Read-only clones under references/, listed for every session.
 references: []
 #  - name: opencode

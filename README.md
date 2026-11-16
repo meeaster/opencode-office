@@ -17,11 +17,11 @@ This repository holds the `office` command, the template `office init` copies, t
     url: http://127.0.0.1:49374
   ```
 
-An office keeps its own content: desks, skills, plugins, Executor apps, cron jobs and any extra services.
+An office keeps its own content: desks, skills, plugins, Executor apps, cron jobs and any extra services. It also pins the versions of what runs in its containers (OpenCode, Claude Code, Executor and mise); see "Versions".
 
 ## Install
 
-`office` is one executable that carries everything it needs: the template, the plugins and the image files. Put it on your PATH, such as at `~/.local/bin/office`; Docker is the only other requirement. `office --version` prints the version and the commit it was built from.
+`office` is one executable that carries everything it needs: the template, the plugins (bundled) and the image files. Put it on your PATH, such as at `~/.local/bin/office`; Docker is the only other requirement. `office --version` prints the version and the commit it was built from.
 
 Every commit to `main` publishes a pre-release named `0.1.0-<UTC date and time>` on the [releases page](https://github.com/meeaster/opencode-office/releases), for Linux x64; the newest ten are kept. To install one:
 
@@ -55,30 +55,32 @@ pre-commit install
 
 | Command | Does |
 |---|---|
-| `office init <dir> [--name <name>]` | Creates an office from `template/`: root files, a starter `office.yaml`, one example desk, `git init` |
+| `office init <dir> [--name <name>]` | Creates an office from `template/`: root files, a starter `office.yaml` at this tool's versions with its `office.lock`, one example desk, and a git repository on branch `main` |
 | `office sync [--references]` | Clones and updates references and desk repositories, refreshes the office's copies of the tool's plugins (saying what it replaced), scaffolds declared desks that are missing, copies declared skills into `skills/` (recording the commit in `.source.json`), links enabled skills into each `.opencode/skills/`, clones declared plugins. It never writes to `AGENTS.md` or other hand-written files |
-| `office check` | Reports drift between `office.yaml` and the folders, and plugin copies that differ from the tool's; when the containers run, also Executor's health, whether the container's `office` is the host's (`office --version`); for the root and each desk, on the mode's OpenCode server, its agents, its skills (expected loaded, the rest not) and its Executor connection; and the cron runner (supercronic in the container, or the host's timers) |
+| `office check` | Reports drift between `office.yaml` and the folders, and plugin copies that differ from the tool's; the versions and whether `office.lock` matches, a warning for versions outside the range this tool was tested with and for a pending upgrade; when the containers run, also whether they run the applied versions, Executor's health, whether the container's `office` is the host's (`office --version`), whether every app is deployed for the `apps` framework Executor serves; for the root and each desk, on the mode's OpenCode server, its agents, its skills (expected loaded, the rest not) and its Executor connection; and the cron runner (supercronic in the container, or the host's timers) |
 | `office instructions [folder]` | Prints the guidance the office plugin gives a session started in that folder, from the same code |
-| `office up` / `office down` | Starts or stops the compose project `office-<name>`: `executor`, `opencode` (container mode only) and the office's own `compose.yaml`. In container mode `up` builds the base image with this `office` inside it, and the office's `Dockerfile` on top of it when there is one. In host mode `up` also installs the office's `mise.toml` tools with the host's mise and the cron timers; `down` removes the timers. See "Host mode" |
-| `office apps deploy` | Deploys every app in `executor/apps/*` and `<desk>/executor/apps/*` from its files, creating apps that don't exist, and links the OpenCode account to each app that declares one. Each app's `office.ts` is replaced by one for the office's mode |
-| `office upgrade-tools` | Bumps each exact pin in the office's own `mise.toml` files (root and desks) to the newest version released at least a day ago, installs it, and commits the changed files alone as `office cron`. See "Cron" |
+| `office up [--upgrade]` / `office down` | Starts or stops the compose project `office-<name>`: `executor`, `opencode` (container mode only) and the office's own `compose.yaml`. `up` runs the versions it last applied and prints what `office.yaml` has moved to since; `--upgrade` applies those (see "Versions"). In container mode `up` builds the base image with this `office` inside it, and the office's `Dockerfile` on top of it when there is one. In host mode `up` also installs the office's `mise.toml` tools with the host's mise and the cron timers; `down` removes the timers. See "Host mode" |
+| `office pin` | Writes `office.lock` for the versions `office.yaml` pins, looking up any it doesn't already hold on GitHub or Executor's registry |
+| `office pair [--origin <url>]` | Prints a one-time link that connects the OpenCode desktop app or a browser to the office's OpenCode server. It works once, within five minutes; the app stays signed in until the password changes. `--origin` replaces the address in the link |
+| `office apps deploy` | Deploys every app in `executor/apps/*` and `<desk>/executor/apps/*` from its files, creating apps that don't exist, and links the OpenCode account to each app that declares one. It first type-checks every app against the `apps` framework Executor serves (with this executable acting as Bun) and sets each app's `apps` dependency to that version, deploying nothing if one fails. Each app's `office.ts` is replaced by one for the office's mode |
+| `office upgrade-tools` | Bumps each exact pin in the office's own `mise.toml` files (root and desks), and the versions in `office.yaml`, to the newest release at least the office's minimum release age old, and commits the changed files alone as `office cron`. See "Cron" |
 | `office cron crontab \| catch-up \| run <command>` | The cron runner the container and the host's timers call; see "Cron" |
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `src/` | The CLI in TypeScript on Bun: `cli.ts` (arguments), `office.ts` (reads `office.yaml`), `layout.ts` (what the folders should hold), `tool.ts` (the tool's own files, its version, the image's build folder), `build.ts` (compiles the executable), `commands/` and `cron/` (`container.ts` for supercronic, `host.ts` for systemd timers). Its one runtime dependency is `yaml` |
+| `src/` | The CLI in TypeScript on Bun: `cli.ts` (arguments), `schema.ts` (the shape of `office.yaml` and `office.lock`, shared with the office plugin), `office.ts` (reads `office.yaml`), `versions.ts` (pins, the lock, what was applied), `releases.ts` (release lookups on GitHub and the registry), `layout.ts` (what the folders should hold), `tool.ts` (the tool's own files, its version, the plugin bundles, the image's build folder), `build.ts` (compiles the executable), `commands/` and `cron/` (`container.ts` for supercronic, `host.ts` for systemd timers). Runtime dependencies: `yaml` and `valibot` |
 | `bin/office` | Runs the CLI from the checkout with Bun |
-| `plugins/` | The `office` plugin (the guidance for a session's folder, from `instructions.ts`, which `office instructions` also runs) and the `knowledge` plugin. `office sync` copies them into each office's `.opencode/plugins/`, where they stay committed so a clone works in the container |
-| `template/office/` | What `office init` copies once: `AGENTS.md`, `README.md`, `office.yaml`, `.opencode/opencode.jsonc`, `skills/office/`, `executor/apps/opencode/`, `cron/`, `knowledge/`, `mise.toml`, `.gitignore` |
+| `plugins/` | The `office` plugin (the guidance for a session's folder, from `instructions.ts`, which `office instructions` also runs) and the `knowledge` plugin. Each is bundled with what it imports into one `index.js`, which `office sync` copies into each office's `.opencode/plugins/<name>/`, where it stays committed so a clone works in the container with nothing installed |
+| `template/office/` | What `office init` copies once: `AGENTS.md`, `README.md`, `office.yaml`, `.opencode/opencode.jsonc`, `skills/office/`, `executor/apps/opencode/`, `cron/`, `knowledge/`, `mise.toml` (with pre-commit), `.pre-commit-config.yaml` (gitleaks), `.gitignore` |
 | `template/desk/` | What `office sync` scaffolds for a new desk, including its starter Executor app |
-| `image/Dockerfile` | The base image: Debian 13 with OpenCode, Claude Code, mise and supercronic from checksum-pinned releases, build tools and the compiled `office`. User `assistant`, uid 1000 |
+| `image/Dockerfile` | The base image: Debian 13 with OpenCode, Claude Code and mise at the office's versions and checksums (build arguments), supercronic pinned by the tool, build tools and the compiled `office`. User `assistant`, uid 1000 |
 | `image/entrypoint.sh` | Writes the machine note to `/etc/opencode/machine.md`, installs the tools the office's `mise.toml` files declare, runs missed cron jobs and starts supercronic, then runs OpenCode |
 | `image/config/opencode.jsonc` | The container's managed settings: no self-update, and the machine note as an instruction |
-| `compose.yaml` | `executor` and `opencode` (in the `container` profile, which `office up` enables in container mode). Ports are on `127.0.0.1` only |
+| `compose.yaml` | `executor` (its image from the office's versions) and `opencode` (in the `container` profile, which `office up` enables in container mode). Ports are on `127.0.0.1` only |
 
-The executable embeds `template/`, `plugins/`, `image/` and `compose.yaml`. Docker can't read files inside it, so `office` unpacks `image/` and `compose.yaml` into `~/.cache/office/image-<hash of their content>/` and runs Docker from there; `office up` puts a copy of the executable in that folder for the image.
+The executable embeds `template/`, the plugin bundles, `image/` and `compose.yaml`. Docker can't read files inside it, so `office` unpacks `image/` and `compose.yaml` into `~/.cache/office/image-<hash of their content>/` and runs Docker from there; `office up` puts a copy of the executable in that folder for the image.
 
 ## Runtime
 
@@ -89,7 +91,8 @@ The executable embeds `template/`, `plugins/`, `image/` and `compose.yaml`. Dock
 | `OFFICE_DIR` | The office, bind-mounted at `/home/assistant/workspace` |
 | `OFFICE_STATE` | The office's runtime state: `office.yaml`'s `state`, else `~/.local/share/office/<name>` |
 | `OFFICE_DESKS` | The desk names, for services such as a dashboard |
-| `OFFICE_OPENCODE_IMAGE` | `office-opencode:<OpenCode version>`, or `office-<name>-opencode` when the office has a `Dockerfile` |
+| `OFFICE_OPENCODE_IMAGE` | `office-opencode:<opencode>-claude<claude>-mise<mise>`, or `office-<name>-opencode:<the same>` when the office has a `Dockerfile`. The versions in the name keep offices on different versions from sharing an image |
+| `OFFICE_EXECUTOR_IMAGE` | `ghcr.io/usefulsoftwareco/executor-selfhost:<version>@<digest>` |
 | `OFFICE_OPENCODE_URL` | OpenCode as containers reach it: `http://opencode:4096`, or in host mode the configured URL with a loopback host replaced by `host.docker.internal`. The office's own services (a dashboard API) use it |
 
 The state folder holds:
@@ -99,6 +102,8 @@ The state folder holds:
 | `secrets.env` | `OPENCODE_PASSWORD` for the OpenCode server. In container mode `office up` creates it; in host mode it is the host server's password, which you put there (see "Host mode") |
 | `opencode-executor.env` | `EXECUTOR_TOKEN`, OpenCode's own Executor token. `office apps deploy` uses it from the host too |
 | `opencode-home/` | The container user's home: sessions, provider sign-ins, the Claude Code login, mise's tools |
+| `applied.json` | The versions `office up` last applied, and the highest OpenCode and Executor the office has run |
+| `backups/` | What `office up --upgrade` saved before an upgrade: `<time>-executor-<version>.tar.gz` (Executor's data volume) and `<time>-opencode-<version>/` (OpenCode's database files) |
 
 Executor keeps its database and keys in the `office-<name>_executor-data` volume.
 
@@ -112,6 +117,27 @@ Override the ports with `EXECUTOR_PORT` and `OPENCODE_PORT`. Executor runs with 
 Executor apps reach OpenCode through `opencode.ts`, which reads the server's address, its credential host and the office's folder as the server sees it from the app's `office.ts`. The committed `office.ts` holds container mode's values; `office apps deploy` sends one for the current mode instead. The OpenCode account's label records the host it was connected for (`OpenCode (<name> office at <host>)`), because Executor sends the password only to the hosts an account was connected with; when the mode changes the host, `office apps deploy` connects a new account and links it to every app.
 
 The office's `.opencode/opencode.jsonc` connects sessions to Executor as the `office-executor` MCP server. Each value is `{env:...}` followed by `{file:...}`, so it comes from whichever exists: the container sets `OFFICE_EXECUTOR_URL` and `OFFICE_EXECUTOR_TOKEN`; in host mode `office up` writes the gitignored `.opencode/office-executor.url` and `.opencode/office-executor.token` (mode 600), and `office down` removes them.
+
+## Versions
+
+`office.yaml` pins what runs in the office's containers; this tool only supplies the versions a new office starts at and the range it was tested with.
+
+```yaml
+versions:
+  opencode: 2.3.0
+  claude: 2.1.322
+  executor: 2.0.0-beta.49
+  mise: 2026.11.7
+upgrades:
+  minimum_release_age: 1d    # for everything upgrade-tools bumps
+  executor: 7d               # per tool, by name (one of the four, or a mise.toml tool)
+```
+
+- `office.lock`, written only by `office pin` and committed, holds the SHA-256 of each release file the image downloads (OpenCode's, Claude Code's and mise's linux-x64 assets, as GitHub reports them) and Executor's image digest. Change a version by hand, then run `office pin`. A lock that doesn't match `office.yaml` stops `office up --upgrade` and fails `office check`, naming `office pin`.
+- An office without a `versions` block runs this tool's defaults; `office check` says so. Supercronic, the Debian base image and Bun stay pinned by the tool.
+- `office up` runs what it last applied (`applied.json` in the state folder), so a bump the daily job records changes nothing until someone runs `office up --upgrade`. That prints the changes, refuses an older OpenCode or Executor than the office has run (their data only migrates forward), stops what changes and backs it up into `backups/`, builds and starts the new versions, and after an Executor upgrade runs `office apps deploy` so every app matches its `apps` framework.
+- `office check` warns, without failing, when a version is outside the range this tool was tested with, and when an upgrade is pending.
+- In host mode only Executor's version applies: OpenCode and Claude Code are the host's. `office check` warns when the host's OpenCode is outside the tested range.
 
 ## Host mode
 
@@ -137,7 +163,11 @@ In the container, supercronic runs the crontab with each command wrapped in `off
 The template ships two jobs:
 
 - `cron/update-references.sh` (06:00): `office sync --references`.
-- `cron/upgrade-tools.sh` (06:30): `office upgrade-tools`. For each exact pin in the root's and each desk's `mise.toml` (never a clone's), it asks `mise latest <tool> --minimum-release-age 1d` for the newest version at least a day old and installs it. Only after the install succeeds does it rewrite the pin. It skips a file with uncommitted changes, and keeps the old pin when an install fails. Changed files (and a `mise.lock` beside them, if the office uses one) go into one commit, such as `chore: bump node 26.13.1 → 26.14.0`, made as `office cron <office-cron@localhost>` through `git -c`, so no git config changes. It never pushes. It notifies the first desk's app (`notifications.send`) of what moved or failed, stays silent when nothing changed, and exits non-zero on a failure, so the job counts as missed and runs again at the next start.
+- `cron/upgrade-tools.sh` (06:30): `office upgrade-tools`.
+  - For each exact pin in the root's and each desk's `mise.toml` (never a clone's), it asks `mise latest <tool> --minimum-release-age <age>` for the newest version at least that old and installs it; only after the install succeeds does it rewrite the pin, and a failed install keeps the old one.
+  - For the four versions in `office.yaml`, it reads each project's newest hundred GitHub releases without a login, keeps the line the office runs (`v<semver>` tags for OpenCode, Claude Code and mise; Executor's `executor@2.…` pre-releases, not its v1 line), drops releases younger than the age, and takes the highest version, never a lower one than the pin. It confirms the release file, or Executor's image on ghcr.io, exists, then rewrites only those version lines in `office.yaml` and `office.lock`. A failed lookup (GitHub's rate limit, no network) skips that tool and is reported. It never rebuilds or restarts anything.
+  - Ages come from `upgrades` in `office.yaml`: a tool's own, else `minimum_release_age`, else a day.
+  - It skips a file with uncommitted changes (for the versions, `office.yaml` or `office.lock`). Changed files (and a `mise.lock` beside them, if the office uses one) go into one commit, such as `chore: bump opencode 2.3.0 → 2.4.0, node 26.13.1 → 26.14.0`, made as `office cron <office-cron@localhost>` through `git -c`, so no git config changes. It never pushes. It notifies the first desk's app (`notifications.send`) of what moved or failed, stays silent when nothing changed, and exits non-zero on a failure, so the job counts as missed and runs again at the next start.
 
 ## First run
 
@@ -149,6 +179,7 @@ office up
 
 Then:
 
+0. **The secrets hook.** `pre-commit install`, once per clone (the office's `mise.toml` pins pre-commit, and the container installs it too).
 1. **Executor.** Open `http://localhost:41440` and finish the first-run setup. Create a token under **Account settings → Tokens**, named `opencode`, save it, and restart:
 
    ```sh
@@ -168,6 +199,7 @@ Then:
 
 3. **Apps.** `office apps deploy`. It creates the OpenCode account in Executor from `secrets.env` and links it to every app that needs it.
 4. **Check.** `office check`.
+5. **The desktop app.** `office pair` prints a link that connects the OpenCode app or a browser.
 
 OpenCode's API picks a session's folder from the `x-opencode-directory` header or the `location[directory]` query parameter; it ignores `?directory=` and falls back to its start folder.
 

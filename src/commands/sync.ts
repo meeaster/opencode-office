@@ -150,8 +150,8 @@ function linkSkills(office: Office): string[] {
  * Makes the office's copies of the tool's plugins match the tool's, saying what it replaced:
  * a differing file was edited by hand or written by an older `office`.
  */
-function refreshPlugins(office: Office): string[] {
-  return pluginDrift(office).map((file) => {
+async function refreshPlugins(office: Office): Promise<string[]> {
+  return (await pluginDrift(office)).map((file) => {
     const path = join(office.dir, file.path);
 
     if (file.content === undefined) {
@@ -167,7 +167,7 @@ function refreshPlugins(office: Office): string[] {
 }
 
 /** Runs the sync and returns one line per change. With `referencesOnly`, it only updates references. */
-export function sync(office: Office, { referencesOnly = false } = {}): string[] {
+export async function sync(office: Office, { referencesOnly = false } = {}): Promise<string[]> {
   const changes: string[] = [];
 
   for (const clone of clones(office)) {
@@ -191,7 +191,7 @@ export function sync(office: Office, { referencesOnly = false } = {}): string[] 
 
   if (referencesOnly) return changes;
 
-  changes.push(...refreshPlugins(office));
+  changes.push(...(await refreshPlugins(office)));
 
   for (const desk of office.desks) {
     for (const path of scaffoldDesk(office, desk)) changes.push(`created ${relative(office.dir, path)}`);

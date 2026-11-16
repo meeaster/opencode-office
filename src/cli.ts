@@ -8,6 +8,8 @@ import { deploy } from "./commands/apps.ts";
 import { check } from "./commands/check.ts";
 import { down, up } from "./commands/compose.ts";
 import { init } from "./commands/init.ts";
+import { pair } from "./commands/pair.ts";
+import { pin } from "./commands/pin.ts";
 import { sync } from "./commands/sync.ts";
 import { upgradeTools } from "./commands/upgrade.ts";
 import { catchUp, runJob, wrappedCrontab } from "./cron/container.ts";
@@ -22,9 +24,13 @@ const usage = `usage: office <command> [--office <dir>]
   check                        report drift from office.yaml and the tool, and the running
                                containers' state
   instructions [folder]        print the office guidance a session started in <folder> gets
-  up | down                    start or stop this office's containers
+  up [--upgrade] | down        start or stop this office's containers. up runs the versions it
+                               last applied; --upgrade applies office.yaml's newer ones
+  pin                          write office.lock for the versions office.yaml pins
+  pair [--origin <url>]        print a one-time link that connects the OpenCode app or a browser
   apps deploy                  deploy every Executor app in the office from its files
-  upgrade-tools                bump exact pins in the office's mise.toml files and commit them
+  upgrade-tools                bump exact pins in mise.toml files and office.yaml's versions,
+                               and commit them
   cron crontab | catch-up | run <command>
                                the container's cron runner: print the wrapped crontab, run
                                jobs missed since their last success, or run one job and stamp it
@@ -39,6 +45,8 @@ const { values: flags, positionals } = parseArgs({
     office: { type: "string" },
     name: { type: "string" },
     references: { type: "boolean" },
+    upgrade: { type: "boolean" },
+    origin: { type: "string" },
     version: { type: "boolean" },
     help: { type: "boolean", short: "h" },
   },
@@ -62,7 +70,7 @@ async function main(): Promise<void> {
   if (command === "init") {
     if (rest[0] === undefined) throw new OfficeError("usage: office init <dir> [--name <name>]");
 
-    const { dir, changes } = init(rest[0], flags.name);
+    const { dir, changes } = await init(rest[0], flags.name);
 
     for (const line of changes) console.log(line);
 
@@ -73,7 +81,7 @@ async function main(): Promise<void> {
 
     if (text !== "") console.log(text);
   } else if (command === "sync") {
-    const changes = sync(currentOffice(flags), { referencesOnly: flags.references === true });
+    const changes = await sync(currentOffice(flags), { referencesOnly: flags.references === true });
 
     for (const line of changes) console.log(line);
 
@@ -83,7 +91,11 @@ async function main(): Promise<void> {
   } else if (command === "check") {
     if (!(await check(currentOffice(flags)))) process.exitCode = 1;
   } else if (command === "up") {
-    await up(currentOffice(flags));
+    await up(currentOffice(flags), { upgrade: flags.upgrade === true });
+  } else if (command === "pin") {
+    for (const line of await pin(currentOffice(flags))) console.log(line);
+  } else if (command === "pair") {
+    console.log(await pair(currentOffice(flags), flags.origin));
   } else if (command === "down") {
     down(currentOffice(flags));
   } else if (command === "upgrade-tools") {

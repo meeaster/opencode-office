@@ -1,19 +1,28 @@
-// Compiles `office` into one executable that carries the template, the plugins, the image files
+// Compiles `office` into one executable that carries the template, the bundled plugins, the image files
 // and the base compose file. `bun src/build.ts` writes target/office; with --install it also
 // installs it as ~/.local/bin/office. With --prerelease <id> the version becomes <version>-<id>,
 // as the release workflow builds it.
-import { copyFileSync, renameSync } from "node:fs";
+import { copyFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import manifest from "../package.json";
-import { assets, checkoutCommit } from "./tool.ts";
+import { toolPlugins } from "./office.ts";
+import { assets, bundlePlugin, checkoutCommit } from "./tool.ts";
 
 const root = resolve(import.meta.dir, "..");
 
 /** Compiles the CLI from this checkout into `outfile`, stamped with `version` and the checkout's commit. */
 export async function compile(outfile: string, version = manifest.version): Promise<void> {
+  // The plugins as offices hold them, bundled into target/plugins/ to be embedded.
+  rmSync(join(root, "target/plugins"), { recursive: true, force: true });
+
+  for (const plugin of toolPlugins) {
+    mkdirSync(join(root, "target/plugins", plugin), { recursive: true });
+    writeFileSync(join(root, "target/plugins", plugin, "index.js"), await bundlePlugin(plugin));
+  }
+
   const result = await Bun.build({
     entrypoints: [join(root, "src/cli.ts")],
     compile: { outfile, assets: assets.map((path) => join(root, path)) },

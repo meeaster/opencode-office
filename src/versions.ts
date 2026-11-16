@@ -1,0 +1,181 @@
+// The versions an office runs. office.yaml pins OpenCode, Claude Code, Executor and mise; office.lock
+// (written only by the tool) holds what makes each verifiable; the state folder's applied.json
+// records what `office up` last applied. The tool supplies the versions a new office starts at, and
+// the range it was tested with.
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+import * as v from "valibot";
+import { parse } from "yaml";
+
+import { type Office, OfficeError } from "./office.ts";
+import { check, type Lock, lockSchema, type PinnedTool, pinnedTools, version } from "./schema.ts";
+
+export type Pin = Lock[PinnedTool];
+
+/** What a new office starts at, and what an office without a `versions` block runs. */
+export const defaultPins: Lock = {
+  opencode: { version: "2.3.0", digest: "sha256:fc0f81522aceeabac47693d88389efa2bc517ce74c2c38fd6967819fcc6e4d3b" },
+  claude: { version: "2.1.322", digest: "sha256:3d2bc5ae54d4d4cd63510e9fcca5b6d48d2b18806708df8c8f691aa486c5dca8" },
+  executor: { version: "2.0.0-beta.49", digest: "sha256:cc693691db13635ad5abb456fa132634816ec7acc73f04bd6b8932e0a8c45038" },
+  mise: { version: "2026.11.7", digest: "sha256:8f5426d9971eaf713b37509749174ca69cf2f08b8b25e389168dcfcab9cd1a4d" },
+};
+
+/** The versions this release of the tool was tested with, lowest and highest. */
+export const tested: Record<PinnedTool, { from: string; to: string }> = {
+  opencode: { from: "2.2.7", to: "2.3.0" },
+  claude: { from: "2.1.322", to: "2.1.322" },
+  executor: { from: "2.0.0-beta.49", to: "2.0.0-beta.49" },
+  mise: { from: "2026.11.7", to: "2026.11.7" },
+};
+
+/** The tools that run in the office's own containers in each OpenCode mode. */
+export function toolsFor(office: Office): PinnedTool[] {
+  return office.opencode.mode === "host" ? ["executor"] : [...pinnedTools];
+}
+
+/** Compares two versions by semver precedence: numbers numerically, a pre-release before its release. */
+export function compareVersions(left: string, right: string): number {
+  const [leftCore = "", leftPre] = splitPrerelease(left);
+  const [rightCore = "", rightPre] = splitPrerelease(right);
+  const core = compareParts(leftCore.split("."), rightCore.split("."));
+
+  if (core !== 0) return core;
+
+  if (leftPre === undefined || rightPre === undefined) return leftPre === rightPre ? 0 : leftPre === undefined ? 1 : -1;
+
+  return compareParts(leftPre.split("."), rightPre.split("."));
+}
+
+function splitPrerelease(value: string): [string, string | undefined] {
+  const dash = value.indexOf("-");
+
+  return dash === -1 ? [value, undefined] : [value.slice(0, dash), value.slice(dash + 1)];
+}
+
+function compareParts(left: string[], right: string[]): number {
+  for (let index = 0; index < Math.max(left.length, right.length); index++) {
+    const [a, b] = [left[index], right[index]];
+
+    if (a === undefined || b === undefined) return a === b ? 0 : a === undefined ? -1 : 1;
+
+    const order = /^\d+$/.test(a) && /^\d+$/.test(b) ? Number(a) - Number(b) : a.localeCompare(b);
+
+    if (order !== 0) return Math.sign(order);
+  }
+
+  return 0;
+}
+
+/** The version office.yaml asks for: its pin, else the tool's default. */
+export function wantedVersion(office: Office, tool: PinnedTool): string {
+  return office.versions?.[tool] ?? defaultPins[tool].version;
+}
+
+export const lockFile = "office.lock";
+
+/** office.lock, or undefined when the office has none. */
+export function readLock(dir: string): Lock | undefined {
+  const path = join(dir, lockFile);
+
+  if (!existsSync(path)) return undefined;
+
+  const result = check(v.safeParse(lockSchema, parse(readFileSync(path, "utf8"))));
+
+  if (!result.ok) throw new OfficeError(`${lockFile} is not valid (run office pin to rewrite it):\n${result.errors.map((line) => `  ${line}`).join("\n")}`);
+
+  return result.value;
+}
+
+export function writeLock(dir: string, lock: Lock): void {
+  const lines = [
+    "# Written by `office pin` from office.yaml's versions; don't edit. For each tool, the SHA-256 of",
+    "# the release file the image downloads (Executor: the image's digest).",
+    ...pinnedTools.flatMap((tool) => [`${tool}:`, `  version: ${lock[tool].version}`, `  digest: ${lock[tool].digest}`]),
+    "",
+  ];
+
+  writeFileSync(join(dir, lockFile), lines.join("\n"));
+}
+
+/**
+ * The pins office.yaml asks for, verified by office.lock. An office without a `versions` block runs
+ * the tool's defaults. Throws, naming `office pin`, when the lock is missing or doesn't match.
+ */
+export function wantedPins(office: Office): Lock {
+  if (office.versions === undefined) return defaultPins;
+
+  const lock = readLock(office.dir);
+
+  if (lock === undefined) throw new OfficeError(`office.yaml pins versions but there is no ${lockFile}: run office pin`);
+
+  const stale = pinnedTools.filter((tool) => lock[tool].version !== wantedVersion(office, tool));
+
+  if (stale.length > 0) {
+    throw new OfficeError(`${lockFile} doesn't match office.yaml for ${stale.map((tool) => `${tool} (${lock[tool].version}, office.yaml ${wantedVersion(office, tool)})`).join(", ")}: run office pin`);
+  }
+
+  return lock;
+}
+
+/** What `office up` last applied, and the highest OpenCode and Executor this office has run. */
+const appliedSchema = v.strictObject({ pins: lockSchema, highest: v.strictObject({ opencode: version, executor: version }) });
+
+export type Applied = v.InferOutput<typeof appliedSchema>;
+
+function appliedPath(office: Office): string {
+  return join(office.state, "applied.json");
+}
+
+export function readApplied(office: Office): Applied | undefined {
+  const path = appliedPath(office);
+
+  if (!existsSync(path)) return undefined;
+
+  const result = check(v.safeParse(appliedSchema, JSON.parse(readFileSync(path, "utf8"))));
+
+  if (!result.ok) throw new OfficeError(`${path} is not valid: ${result.errors.join("; ")}`);
+
+  return result.value;
+}
+
+export function writeApplied(office: Office, pins: Lock): void {
+  const before = readApplied(office);
+
+  const higher = (tool: "opencode" | "executor") => {
+    const previous = before?.highest[tool];
+
+    return previous !== undefined && compareVersions(previous, pins[tool].version) > 0 ? previous : pins[tool].version;
+  };
+
+  mkdirSync(office.state, { recursive: true });
+  writeFileSync(appliedPath(office), `${JSON.stringify({ pins, highest: { opencode: higher("opencode"), executor: higher("executor") } }, null, 2)}\n`);
+}
+
+/** The tools whose applied pin differs from the wanted one, among those the mode runs. */
+export function changes(office: Office, from: Lock, to: Lock): { tool: PinnedTool; from: string; to: string }[] {
+  return toolsFor(office).flatMap((tool) => (from[tool].version === to[tool].version && from[tool].digest === to[tool].digest ? [] : [{ tool, from: from[tool].version, to: to[tool].version }]));
+}
+
+/** The base image for a set of pins: its name carries the versions, so offices on different ones never share it. */
+export function baseImage(pins: Lock): string {
+  return `office-opencode:${pins.opencode.version}-claude${pins.claude.version}-mise${pins.mise.version}`;
+}
+
+export function executorImage(pin: Pin): string {
+  return `ghcr.io/usefulsoftwareco/executor-selfhost:${pin.version}@${pin.digest}`;
+}
+
+/** Whether a version lies in the range this release of the tool was tested with. */
+export function isTested(tool: PinnedTool, value: string): boolean {
+  return compareVersions(value, tested[tool].from) >= 0 && compareVersions(value, tested[tool].to) <= 0;
+}
+
+/** A move as `office up` and `office check` show it, naming a downgrade `office up --upgrade` refuses. */
+export function describeMove(office: Office, move: { tool: PinnedTool; from: string; to: string }): string {
+  const highest = readApplied(office)?.highest;
+  const ceiling = move.tool === "opencode" || move.tool === "executor" ? highest?.[move.tool] : undefined;
+  const refused = ceiling !== undefined && compareVersions(move.to, ceiling) < 0;
+
+  return `${move.tool} ${move.from} → ${move.to}${refused ? ` (refused: older than the ${ceiling} this office has run)` : ""}`;
+}

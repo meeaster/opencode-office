@@ -6,39 +6,35 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 
-// What the text uses from office.yaml. It is read leniently, since `office check` validates the
-// file: a field that is missing or of another type is left out.
-type Described = { name: string; description: string | undefined };
+import * as v from "valibot";
 
-type DeskInfo = Described & { repos: Described[] };
+import { check, type OfficeConfig, officeSchema, type Parsed } from "../../src/schema.ts";
 
-type OfficeInfo = { name: string; desks: DeskInfo[]; references: Described[] };
+// What the text uses from office.yaml, read through the schema the CLI uses.
+type DeskInfo = { name: string } & OfficeConfig["desks"][string];
 
-/** A parsed YAML mapping's fields; any other value has none. */
-function fields(value: unknown): Map<string, unknown> {
-  return new Map(typeof value === "object" && value !== null && !Array.isArray(value) ? Object.entries(value) : []);
-}
+type OfficeInfo = { name: string; desks: DeskInfo[]; references: OfficeConfig["references"] };
 
-function described(name: string, value: unknown): Described {
-  const description = fields(value).get("description");
-
-  return { name, description: typeof description === "string" && description !== "" ? description : undefined };
-}
-
-function namedList(value: unknown): Described[] {
-  return Array.isArray(value) ? value.map((item) => described(String(fields(item).get("name")), item)) : [];
-}
-
-function readOffice(office: string): OfficeInfo {
+function readOffice(office: string): Parsed<OfficeInfo> {
   // The plugin and the compiled `office` both run on Bun, which parses YAML itself.
-  const config = fields(Bun.YAML.parse(readFileSync(join(office, "office.yaml"), "utf8")));
-  const name = config.get("name");
+  const result = check(v.safeParse(officeSchema, Bun.YAML.parse(readFileSync(join(office, "office.yaml"), "utf8"))));
 
-  return {
-    name: typeof name === "string" ? name : "unnamed",
-    desks: [...fields(config.get("desks"))].map(([deskName, desk]) => ({ ...described(deskName, desk), repos: namedList(fields(desk).get("repos")) })),
-    references: namedList(config.get("references")),
-  };
+  if (!result.ok) return result;
+
+  const config = result.value;
+
+  return { ok: true, value: { name: config.name, desks: Object.entries(config.desks).map(([name, desk]) => ({ name, ...desk })), references: config.references } };
+}
+
+/** What a session is told when office.yaml doesn't match the schema. */
+function invalidText(errors: string[]): string {
+  return [
+    "# This office's office.yaml is not valid",
+    "",
+    "`office` commands refuse to run here until these fields are fixed:",
+    "",
+    ...errors.map((error) => `- ${error}`),
+  ].join("\n");
 }
 
 function findOffice(folder: string): string | undefined {
@@ -70,7 +66,7 @@ function sharedApps(office: string): string[] {
 }
 
 // What every scope shares from the root, listed in full so a desk session can use it directly.
-function sharedSections(references: Described[], apps: string[]): string[] {
+function sharedSections(references: OfficeConfig["references"], apps: string[]): string[] {
   return [
     "## References (read-only clones; `office sync` updates them)",
     "",
@@ -134,7 +130,11 @@ export function officeInstructions(folder: string): string {
 
   if (dir === undefined) return "";
 
-  const office = readOffice(dir);
+  const read = readOffice(dir);
+
+  if (!read.ok) return invalidText(read.errors);
+
+  const office = read.value;
   const apps = sharedApps(dir);
   const [first] = relative(dir, folder).split(sep);
   const desk = office.desks.find((candidate) => candidate.name === first);

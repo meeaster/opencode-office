@@ -4,9 +4,9 @@ import { existsSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { type Office, skillsFolder, toolPlugins } from "./office.ts";
-import { toolFiles, toolPath } from "./tool.ts";
+import { pluginFiles } from "./tool.ts";
 
-export type Clone = { name: string; url: string; ref: string | undefined; kind: string; dir: string };
+export type Clone = { name: string; url: string; ref?: string; kind: string; dir: string };
 
 /** Every clone office.yaml declares, with the folder it belongs in. */
 export function clones(office: Office): Clone[] {
@@ -75,15 +75,15 @@ export function skillSelections(office: Office): SkillSelection[] {
 export type PluginDrift = { path: string; state: "missing" | "differs" | "extra"; content: string | undefined };
 
 /** Where the office's copies of the tool's plugins differ from the tool's own. */
-export function pluginDrift(office: Office): PluginDrift[] {
-  return toolPlugins.flatMap((plugin) => {
-    const folder = join(office.dir, ".opencode/plugins", plugin);
-    const wanted = toolFiles(`plugins/${plugin}`);
-    const present = existsSync(folder) ? readdirSync(folder, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => relative(folder, join(entry.parentPath, entry.name))) : [];
-    const drift: PluginDrift[] = [];
+export async function pluginDrift(office: Office): Promise<PluginDrift[]> {
+  const drift: PluginDrift[] = [];
 
-    for (const file of wanted) {
-      const content = readFileSync(toolPath(`plugins/${plugin}/${file}`), "utf8");
+  for (const plugin of toolPlugins) {
+    const folder = join(office.dir, ".opencode/plugins", plugin);
+    const wanted = await pluginFiles(plugin);
+    const present = existsSync(folder) ? readdirSync(folder, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => relative(folder, join(entry.parentPath, entry.name))) : [];
+
+    for (const [file, content] of wanted) {
       const path = relative(office.dir, join(folder, file));
 
       if (!present.includes(file)) drift.push({ path, state: "missing", content });
@@ -91,9 +91,9 @@ export function pluginDrift(office: Office): PluginDrift[] {
     }
 
     for (const file of present) {
-      if (!wanted.includes(file)) drift.push({ path: relative(office.dir, join(folder, file)), state: "extra", content: undefined });
+      if (!wanted.has(file)) drift.push({ path: relative(office.dir, join(folder, file)), state: "extra", content: undefined });
     }
+  }
 
-    return drift;
-  });
+  return drift;
 }
