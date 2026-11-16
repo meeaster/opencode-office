@@ -14,6 +14,15 @@ opencode: container
 #   mode: host
 #   url: http://127.0.0.1:4096
 
+# Optional: who the office commits as, the git default in the container and for its cron jobs (a
+# repository's own config overrides it), and `credentials: gh` to authenticate HTTPS remotes with
+# the host's gh login, which the container shares read-only. `credentials: gh` also authorizes
+# `office setup` to run `gh auth setup-git` and pin gh in mise.toml. Interactive setup offers both.
+# git:
+#   name: Your Name
+#   email: you@example.com
+#   credentials: gh
+
 # The versions this office runs in its containers. office.lock (written by `office pin`; don't
 # edit it) holds their checksums: run `office pin` after changing a version by hand. The daily
 # upgrade-tools job bumps them; `office up --upgrade` applies a bump, `office up` never does. In

@@ -6,12 +6,14 @@
 // `office up` runs the versions it last applied (the state folder's applied.json) and says what
 // office.yaml has moved to since; `office up --upgrade` applies those, after backing up what the
 // upgrade migrates. Neither ever runs an older OpenCode or Executor than the office has run.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { installTimers, removeTimers } from "../cron/host.ts";
+import { ghConfigDir, ghHosts } from "../github.ts";
+import { hostTool } from "../host-tools.ts";
 import { type Office, OfficeError, readEnvFile } from "../office.ts";
 import type { Lock } from "../schema.ts";
 import { prepareSecrets } from "../secrets.ts";
@@ -59,7 +61,20 @@ function environment(office: Office, profiles: string, pins: Lock): NodeJS.Proce
     OFFICE_EXECUTOR_IMAGE: executorImage(pins.executor),
     // OpenCode as the office's containers reach it, such as a dashboard's API.
     OFFICE_OPENCODE_URL: office.opencode.containerUrl,
+    // The container's git defaults; empty leaves git's own config.
+    OFFICE_GIT_NAME: office.git?.name ?? "",
+    OFFICE_GIT_EMAIL: office.git?.email ?? "",
+    OFFICE_GH_CONFIG: ghConfigDir(),
+    OFFICE_GH_HOSTS: sharesGithubLogin(office) ? ghHosts().join(",") : "",
   };
+}
+
+/**
+ * Whether the opencode container gets the host's gh login: office.yaml asks for it, and the host
+ * has one in a file. Docker would create a missing bind-mount source as root, so none is mounted.
+ */
+function sharesGithubLogin(office: Office): boolean {
+  return office.opencode.mode === "container" && office.git?.credentials === "gh" && existsSync(join(ghConfigDir(), "hosts.yml"));
 }
 
 type ComposeOptions = { capture?: boolean; profiles?: string; pins?: Lock };
@@ -69,19 +84,32 @@ type ComposeOptions = { capture?: boolean; profiles?: string; pins?: Lock };
  * `profiles` defaults to the office's mode: the opencode container only in container mode.
  */
 export function compose(office: Office, args: string[], { capture = false, profiles = office.opencode.mode, pins = runningPins(office) }: ComposeOptions = {}): string {
-  const files = ["-f", join(unpackedImage(), "compose.yaml")];
-
-  if (office.claude !== undefined && office.opencode.mode === "container") files.push("-f", join(unpackedImage(), "claude-compose.yaml"));
-
-  if (existsSync(join(office.dir, "compose.yaml"))) files.push("-f", join(office.dir, "compose.yaml"));
-
   return (
-    execFileSync("docker", ["compose", "-p", `office-${office.name}`, ...files, ...args], {
+    execFileSync("docker", composeArguments(office, args), {
       env: environment(office, profiles, pins),
       encoding: "utf8",
       stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",
     }) ?? ""
   ).trim();
+}
+
+/** `docker compose` for the office with the terminal attached; returns the command's exit status. */
+export function composeAttached(office: Office, args: string[]): number {
+  const result = spawnSync("docker", composeArguments(office, args), { env: environment(office, office.opencode.mode, runningPins(office)), stdio: "inherit" });
+
+  return result.status ?? 1;
+}
+
+function composeArguments(office: Office, args: string[]): string[] {
+  const files = ["-f", join(unpackedImage(), "compose.yaml")];
+
+  if (office.claude !== undefined && office.opencode.mode === "container") files.push("-f", join(unpackedImage(), "claude-compose.yaml"));
+
+  if (sharesGithubLogin(office)) files.push("-f", join(unpackedImage(), "gh-compose.yaml"));
+
+  if (existsSync(join(office.dir, "compose.yaml"))) files.push("-f", join(office.dir, "compose.yaml"));
+
+  return ["compose", "-p", `office-${office.name}`, ...files, ...args];
 }
 
 /**
@@ -139,8 +167,8 @@ function installTools(office: Office): void {
     if (!existsSync(join(dir, "mise.toml"))) continue;
 
     try {
-      execFileSync("mise", ["trust", "--quiet", join(dir, "mise.toml")], { stdio: "inherit" });
-      execFileSync("mise", ["install", "--quiet"], { cwd: dir, stdio: "inherit" });
+      execFileSync(hostTool("mise"), ["trust", "--quiet", join(dir, "mise.toml")], { stdio: "inherit" });
+      execFileSync(hostTool("mise"), ["install", "--quiet"], { cwd: dir, stdio: "inherit" });
     } catch {
       // As in the container, a failed install must not keep the office from starting.
       console.error(`office: mise install failed in ${dir}`);
@@ -304,6 +332,10 @@ export async function up(office: Office, { upgrade = false } = {}): Promise<void
     installTools(office);
     installTimers(office);
   } else {
+    if (office.git?.credentials === "gh" && !sharesGithubLogin(office)) {
+      console.log(`office: office.yaml shares the host's gh login, but ${join(ghConfigDir(), "hosts.yml")} doesn't exist, so the container gets none. Log in with office setup, or gh auth login --git-protocol https --web --insecure-storage`);
+    }
+
     await buildImages(office, pins);
 
     // Timers and files left from host mode would run the jobs twice and expose a stale token.

@@ -1,0 +1,18 @@
+# Added by `office` in container mode when office.yaml has `git: { credentials: gh }` and the host's
+# gh keeps its login in a file: the host's gh configuration, read-only, so the container's agents
+# and cron jobs use the user's one GitHub login. The entrypoint makes gh git's HTTPS credential
+# helper for OFFICE_GH_HOSTS. Read-only: the login, account switches and logouts stay on the host.
+services:
+  opencode:
+    environment:
+      GH_CONFIG_DIR: /run/office-gh
+      OFFICE_GH_HOSTS: ${OFFICE_GH_HOSTS:-}
+      GH_NO_UPDATE_NOTIFIER: "1"
+    volumes:
+      # Only gh's configuration folder; never the home folder, .ssh or the global git config.
+      - type: bind
+        source: ${OFFICE_GH_CONFIG:?run this through office up}
+        target: /run/office-gh
+        read_only: true
+        bind:
+          create_host_path: false

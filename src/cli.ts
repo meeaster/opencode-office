@@ -14,6 +14,7 @@ import { init } from "./commands/init.ts";
 import { pair } from "./commands/pair.ts";
 import { pin } from "./commands/pin.ts";
 import { setup } from "./commands/setup.ts";
+import { runInContainer } from "./commands/shell.ts";
 import { sync } from "./commands/sync.ts";
 import { update } from "./commands/update.ts";
 import { upgradeTools } from "./commands/upgrade.ts";
@@ -25,8 +26,11 @@ import { version } from "./tool.ts";
 const usage = `usage: office <command> [--office <dir>]
 
   init <dir> [--name <name>]   create an office from the template, with one example desk
-  setup [--owner-email <email>] [--generate-age-key]
+  setup [--owner-email <email>] [--generate-age-key] [--install-deps]
                                guide resumable onboarding (explicit consent to create a host identity)
+                               --install-deps authorizes host mise/SOPS/age (and gh) installs and
+                               updates, using exact stable releases at least 3d old. office.yaml's
+                               git block declares the commit identity and GitHub (credentials: gh)
   executor credentials [--password-only]
                                deliberately reveal the stored encrypted owner login, even offline
   sync [--references]          clone and update, refresh the tool's plugins, scaffold missing
@@ -36,6 +40,9 @@ const usage = `usage: office <command> [--office <dir>]
   instructions [folder]        print the office guidance a session started in <folder> gets
   up [--upgrade] | down        start or stop this office's containers. up runs the versions it
                                last applied; --upgrade applies office.yaml's newer ones
+  shell                        open a shell in the running opencode container, in the folder
+                               matching this one
+  exec -- <command...>         run one command there the same way, with its stdin and exit status
   pin                          write office.lock for the versions office.yaml pins
   pair [--origin <url>]        print a one-time link that connects the OpenCode app or a browser
   apps deploy                  deploy every Executor app in the office from its files
@@ -104,6 +111,7 @@ async function main(): Promise<void> {
       name: { type: "string" },
       "owner-email": { type: "string" },
       "generate-age-key": { type: "boolean" },
+      "install-deps": { type: "boolean" },
       "password-only": { type: "boolean" },
       references: { type: "boolean" },
       upgrade: { type: "boolean" },
@@ -153,7 +161,15 @@ async function main(): Promise<void> {
   } else if (command === "up") {
     await up(currentOffice(flags), { upgrade: flags.upgrade === true });
   } else if (command === "setup") {
-    await setup(currentOffice(flags), { ownerEmail: flags["owner-email"], generateAgeKey: flags["generate-age-key"] === true });
+    await setup(currentOffice(flags), { ownerEmail: flags["owner-email"], generateAgeKey: flags["generate-age-key"] === true, installDeps: flags["install-deps"] === true });
+  } else if (command === "shell") {
+    if (rest.length > 0) throw new OfficeError("usage: office shell (to run a command: office exec -- <command...>)");
+
+    process.exitCode = runInContainer(currentOffice(flags), undefined);
+  } else if (command === "exec") {
+    if (rest.length === 0) throw new OfficeError("usage: office exec -- <command...>");
+
+    process.exitCode = runInContainer(currentOffice(flags), rest);
   } else if (command === "executor" && rest[0] === "credentials") {
     credentials(currentOffice(flags), flags["password-only"] === true);
   } else if (command === "pin") {

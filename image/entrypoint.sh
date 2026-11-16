@@ -5,6 +5,25 @@ set -eu
 
 office=/home/assistant/workspace
 
+# The container user's git defaults (GIT_CONFIG_SYSTEM points here): the office's commit identity
+# and, when the host's gh login is shared, gh as the HTTPS credential helper. ~/.gitconfig and a
+# repository's own config override them.
+gitconfig=/etc/opencode/gitconfig
+printf '[include]\n\tpath = /etc/gitconfig\n' > "$gitconfig"
+git_note='- The office sets no commit identity (`git` in `office.yaml`), so commits use your own git config.'
+if [ -n "${OFFICE_GIT_NAME:-}" ] && [ -n "${OFFICE_GIT_EMAIL:-}" ]; then
+  git config --file "$gitconfig" user.name "$OFFICE_GIT_NAME"
+  git config --file "$gitconfig" user.email "$OFFICE_GIT_EMAIL"
+  git_note="- Commits default to the office's identity, $OFFICE_GIT_NAME <$OFFICE_GIT_EMAIL> (\`git\` in \`office.yaml\`); a repository's own git config overrides it."
+fi
+gh_note=""
+for host in $(printf '%s' "${OFFICE_GH_HOSTS:-}" | tr ',' ' '); do
+  git config --file "$gitconfig" --add "credential.https://$host.helper" ""
+  # From the office root, so mise's shim finds the office's gh wherever git runs.
+  git config --file "$gitconfig" --add "credential.https://$host.helper" "!cd $office && gh auth git-credential"
+  gh_note="- HTTPS git remotes on ${OFFICE_GH_HOSTS} authenticate through \`gh\` (pinned in the office's \`mise.toml\`) with the user's GitHub login, shared read-only from the host, so fetch, pull and push work. Never run \`gh auth login\`, \`logout\` or \`switch\` here: the user manages that login on the host."
+done
+
 # Where the agent is running; /etc/opencode/opencode.jsonc loads this as an instruction.
 cat > /etc/opencode/machine.md <<EOF
 # Machine
@@ -14,6 +33,8 @@ cat > /etc/opencode/machine.md <<EOF
 - Executor is at http://executor:4400 on the container network; the user opens its dashboard at ${OFFICE_EXECUTOR_DASHBOARD:-http://localhost:41440}.
 - Pass \`--server http://127.0.0.1:4096\` to every \`opencode\` command, so it uses this container's server (its password is in \`OPENCODE_PASSWORD\`); without it most commands start a second server on the same database. Never run \`opencode service\`.
 - When an Executor tool returns an approval link, give the user the link and wait for them to approve before resuming.
+${git_note}
+${gh_note}
 EOF
 
 # The office's .opencode/opencode.jsonc reads these names, so the same file works on the host.

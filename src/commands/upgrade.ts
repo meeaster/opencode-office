@@ -1,15 +1,17 @@
 // `office upgrade-tools`: bumps each exact pin in the office's own mise.toml files (the root's and
 // each desk's), and the four versions office.yaml pins, to the newest release at least the
-// office's minimum release age old, and commits the changed files alone under the "office cron"
-// identity. mise.toml pins are looked up and installed through mise; the four versions on GitHub
-// (and Executor's image on its registry), and only recorded: `office up --upgrade` applies them.
-// Files with uncommitted changes are left for the user. A failed install or lookup keeps the old
-// pin. Never pushes.
+// office's minimum release age old, and commits the changed files alone under the office's git
+// identity (office.yaml's `git`), else "office cron". mise.toml pins are looked up and installed
+// through mise; the four versions on GitHub (and Executor's image on its registry), and only
+// recorded: `office up --upgrade` applies them. Files with uncommitted changes are left for the
+// user. A failed install or lookup keeps the old pin. Never pushes.
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 import { git } from "../git.ts";
+import { entryPattern, toolPins } from "../mise-toml.ts";
+import { installedTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";
 import { isScalar, parseDocument } from "yaml";
 
@@ -23,35 +25,24 @@ function ageFor(office: Office, tool: string): string {
   return office.upgrades[tool] ?? office.upgrades.minimum_release_age ?? "1d";
 }
 
-/** Commits made by the job carry this identity, set for that commit only. */
-const identity = ["-c", "user.name=office cron", "-c", "user.email=office-cron@localhost", "-c", "commit.gpgsign=false"];
-
-// A [tools] entry: `name = "1.2.3"` or `name = { version = "1.2.3", ... }`, name optionally quoted.
-const entryPattern = /^(\s*)("[^"]+"|[A-Za-z0-9_.:@/-]+)(\s*=\s*(?:\{[^}]*?\bversion\s*=\s*)?")([^"]+)(".*)$/;
+/**
+ * Who the job's commit is by, set for that commit only: the office's identity from office.yaml,
+ * else "office cron", so a job never fails for a missing identity.
+ */
+function committer(office: Office) {
+  return { name: office.git?.name ?? "office cron", email: office.git?.email ?? "office-cron@localhost" };
+}
 
 /** A pin the job moved. */
 type Move = { tool: string; from: string; to: string };
 
 function mise(args: string[], cwd: string) {
-  const result = spawnSync("mise", args, { cwd, encoding: "utf8", env: { ...process.env, MISE_YES: "1" } });
+  const result = spawnSync(installedTool("mise")?.path ?? "mise", args, { cwd, encoding: "utf8", env: { ...process.env, MISE_YES: "1" } });
 
   const errors = (result.stderr ?? "").split("\n").filter((line) => line.includes("ERROR") && !line.includes("MISE_VERBOSE"));
 
   // mise ends every failure with a hint to rerun verbosely; the first error line says what failed.
   return { ok: result.status === 0, out: (result.stdout ?? "").trim(), error: errors[0]?.replace(/^.*?ERROR\s*/, "") ?? "unknown error" };
-}
-
-/** The pins in a mise.toml's [tools] table, with the line each is on. */
-function pins(text: string): { index: number; tool: string; version: string }[] {
-  let inTools = false;
-
-  return text.split("\n").flatMap((line, index) => {
-    if (/^\s*\[/.test(line)) inTools = /^\s*\[tools\]\s*(#.*)?$/.test(line);
-
-    const match = inTools ? entryPattern.exec(line) : null;
-
-    return match === null ? [] : [{ index, tool: match[2].replaceAll('"', ""), version: match[4] }];
-  });
 }
 
 /** Compares dotted versions part by part, numerically where both parts are numbers. */
@@ -79,7 +70,7 @@ function upgradeFile(office: Office, path: string) {
   const moves: Move[] = [];
   const failures: string[] = [];
 
-  for (const pin of pins(lines.join("\n"))) {
+  for (const pin of toolPins(lines.join("\n"))) {
     const exact = mise(["latest", `${pin.tool}@${pin.version}`], dir);
 
     if (!exact.ok || exact.out !== pin.version) continue;
@@ -241,7 +232,9 @@ export async function upgradeTools(office: Office): Promise<boolean> {
     const subject = `chore: bump ${report.map((move) => `${move.tool} ${move.from} → ${move.to}${where(move)}`).join(", ")}`;
     const body = report.map((move) => `- ${move.file}: ${move.tool} ${move.from} → ${move.to}`).join("\n");
 
-    git([...identity, "commit", "--quiet", "-m", subject, "-m", body, "--", ...changed], office.dir);
+    const { name, email } = committer(office);
+
+    git(["-c", `user.name=${name}`, "-c", `user.email=${email}`, "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", subject, "-m", body, "--", ...changed], office.dir);
     console.log(subject);
   }
 
@@ -257,7 +250,7 @@ export async function upgradeTools(office: Office): Promise<boolean> {
 
   await notify(office, {
     title: failures.length === 0 ? "Tools upgraded" : "Tool upgrade needs attention",
-    body: `${lines.join("\n")}${report.length > 0 ? "\nCommitted locally as office cron; revert the commit to undo." : ""}${versions.moves.length > 0 ? "\nNothing restarted: `office up --upgrade` applies the new versions in office.yaml." : ""}`,
+    body: `${lines.join("\n")}${report.length > 0 ? `\nCommitted locally as ${committer(office).name}; revert the commit to undo.` : ""}${versions.moves.length > 0 ? "\nNothing restarted: `office up --upgrade` applies the new versions in office.yaml." : ""}`,
   });
 
   return failures.length === 0;

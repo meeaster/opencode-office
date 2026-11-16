@@ -1,7 +1,10 @@
 // Host mode's cron: each cron/crontab job becomes a systemd user timer with Persistent=true, so
 // systemd runs a job missed while the computer was off, as `office cron catch-up` does in the
 // container. Each timer's service runs `office cron run <command>` from the office root. The
-// units are named office-<office>-<job>, written by `office up` and removed by `office down`.
+// units are named office-<office>-<job>, written by `office up` and removed by `office down`. With a
+// git identity in office.yaml, each service's GIT_CONFIG_GLOBAL is a generated file that includes
+// the user's global git config and then sets that identity, so the office's jobs commit as the
+// office without the host's global identity changing; a repository's own config still overrides.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -109,9 +112,33 @@ function generatedUnits(office: Office): string[] {
   );
 }
 
+/**
+ * The global git config the office's jobs run with: the user's own (both places git reads it
+ * from, or GIT_CONFIG_GLOBAL's file), then the office's identity. Undefined without an identity.
+ */
+function jobGitConfig(office: Office): string | undefined {
+  if (office.git?.name === undefined || office.git.email === undefined) return undefined;
+
+  const path = join(office.state, "cron-gitconfig");
+  const own = process.env.GIT_CONFIG_GLOBAL === undefined ? [join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "git/config"), join(homedir(), ".gitconfig")] : [process.env.GIT_CONFIG_GLOBAL];
+  const set = (...args: string[]) => execFileSync("git", ["config", "--file", path, ...args], { stdio: "ignore" });
+
+  mkdirSync(office.state, { recursive: true });
+  rmSync(path, { force: true });
+
+  // Git skips an included file that doesn't exist.
+  for (const file of own) set("--add", "include.path", file);
+
+  set("user.name", office.git.name);
+  set("user.email", office.git.email);
+
+  return path;
+}
+
 /** Writes the office's timers, removes ones the crontab no longer lists, and starts them. */
 export function installTimers(office: Office): void {
   const wanted = timers(office);
+  const gitConfig = jobGitConfig(office);
   const header = `${marker} for the ${office.name} office from cron/crontab. Don't edit: \`office up\` rewrites it and \`office down\` removes it.`;
 
   stopTimers(generatedUnits(office).filter((file) => !wanted.some((timer) => file.startsWith(`${timer.unit}.`))));
@@ -131,6 +158,7 @@ export function installTimers(office: Office): void {
         "Type=oneshot",
         `WorkingDirectory=${office.dir}`,
         `Environment=${quoted(`PATH=${jobPath()}`)}`,
+        ...(gitConfig === undefined ? [] : [`Environment=${quoted(`GIT_CONFIG_GLOBAL=${gitConfig}`)}`]),
         `ExecStart=${[officeCommand(), "cron", "run", timer.command].map(argument).join(" ")}`,
         "",
       ].join("\n"),

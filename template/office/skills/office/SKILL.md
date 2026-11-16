@@ -1,6 +1,6 @@
 ---
 name: office
-description: Configure or onboard this office with office.yaml and office setup; change desks, references, skills, plugins, Executor apps or cron jobs.
+description: Configure or onboard this office with office.yaml and office setup; change desks, references, skills, plugins, Executor apps, cron jobs, its git identity or GitHub access.
 ---
 
 # Working on the office
@@ -17,7 +17,10 @@ Use `office` from any folder inside the office; `office.yaml` declares its struc
 | Add a plugin | A local plugin goes in `.opencode/plugins/<name>/`; `office` and `knowledge` there belong to the tool, and `office sync` replaces edits to them. A published one is one line in `.opencode/opencode.jsonc` `plugins`. One developed in another repository goes under `plugins:` in `office.yaml` |
 | Change a desk's Executor app | Edit `<desk>/executor/apps/<desk>/`, then `office apps deploy` |
 | Add a file-system job | Add a script to `cron/` and a line to `cron/crontab`: a five-field cron expression (UTC) or `@daily`, then the command, run from the office root. Restart the container with `office up`. A job that exits 0 is stamped; one missed while the container was down runs at its next start |
-| Pin a tool | Exact versions in the root's or a desk's `mise.toml`. The daily `upgrade-tools` job bumps them and commits as `office cron`; it skips a file with uncommitted changes |
+| Pin a tool | Exact versions in the root's or a desk's `mise.toml`. The daily `upgrade-tools` job bumps them and commits as the office's identity, else `office cron`; it skips a file with uncommitted changes |
+| Set who the office commits as | `git: { name, email }` in `office.yaml`, then `office up`. It is the container's git default and the cron jobs' identity; a repository's own config overrides it |
+| Clone or push a private GitHub repository | Add `credentials: gh` under `git:` in `office.yaml`, then the user runs `office setup` on the host: gh, their browser login, `gh auth setup-git` and a gh pin in `mise.toml`. The login belongs to the user: never run `gh auth login`, `logout` or `switch` from a session |
+| Run a command in the container from the host | `office exec -- <command>`, or `office shell`, from the folder it should run in |
 | Change the OpenCode, Claude Code, Executor or mise version | Edit `versions:` in `office.yaml`, run `office pin`, commit `office.yaml` and `office.lock`, then `office up --upgrade`. The daily job bumps them too, waiting the ages under `upgrades:`; it never restarts anything. Never set an older OpenCode or Executor than the office has run |
 
 `office check` reports drift between `office.yaml` and the folders. `office instructions [folder]` prints the guidance the office plugin gives a session in that folder.

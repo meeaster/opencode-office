@@ -42,6 +42,9 @@ services:
       OFFICE_NAME: ${OFFICE_NAME}
       OFFICE_EXECUTOR_URL: http://executor:4400
       OFFICE_EXECUTOR_DASHBOARD: http://localhost:${EXECUTOR_PORT:-41440}
+      # office.yaml's git identity, which the entrypoint makes the container's git default.
+      OFFICE_GIT_NAME: ${OFFICE_GIT_NAME:-}
+      OFFICE_GIT_EMAIL: ${OFFICE_GIT_EMAIL:-}
     volumes:
       # Sessions, provider sign-ins, the Claude Code login and mise's tools.
       - ${OFFICE_STATE}/opencode-home:/home/assistant

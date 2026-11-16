@@ -4,17 +4,23 @@ import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import * as v from "valibot";
-import { parseDocument } from "yaml";
 
-import { loadOffice, type Office, OfficeError, readEnvFile } from "../office.ts";
-import { atomicWrite, decrypt, encrypt, initializeIdentity, parsed, prepareSecrets, requireTool } from "../secrets.ts";
+import { git } from "../git.ts";
+import { githubStep, planGithub, unreachableSources } from "../github.ts";
+import { hostTool, onboardHostTools } from "../host-tools.ts";
+import { type Office, OfficeError, readEnvFile, updateConfig } from "../office.ts";
+import { decrypt, encrypt, initializeIdentity, parsed, prepareSecrets, requireTool } from "../secrets.ts";
 import { deploy } from "./apps.ts";
 import { check } from "./check.ts";
 import { assertGatewayMode, ports, startExecutor, up } from "./compose.ts";
 import { bootstrapExecutor } from "./executor.ts";
 import { sync } from "./sync.ts";
 
-type SetupOptions = { ownerEmail?: string; generateAgeKey: boolean };
+type SetupOptions = {
+  ownerEmail?: string;
+  generateAgeKey: boolean;
+  installDeps?: boolean;
+};
 
 async function question(text: string): Promise<string> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new OfficeError(`${text} Rerun interactively or supply the documented setup options; no prompt was opened`);
@@ -37,6 +43,13 @@ export async function setup(initial: Office, options: SetupOptions): Promise<voi
   requireTool("docker", ["buildx", "version"]);
   requireTool("git");
 
+  const ask = process.stdin.isTTY && process.stdout.isTTY ? question : undefined;
+
+  // Anonymous reads first, so gh is offered only to an office that uses it or has private sources.
+  const github = planGithub(office);
+
+  await onboardHostTools(options.installDeps === true, ask, { gh: github.needed });
+
   if (options.generateAgeKey) initializeIdentity(office);
 
   // Legacy offices with a token need no new secrets configuration. Bootstrap does need portable
@@ -52,11 +65,7 @@ export async function setup(initial: Office, options: SetupOptions): Promise<voi
       initializeIdentity(office);
     }
 
-    const document = parseDocument(readFileSync(join(office.dir, "office.yaml"), "utf8"));
-
-    document.setIn(["secrets", "executor_owner"], "secrets/executor-owner.enc.json");
-    atomicWrite(join(office.dir, "office.yaml"), document.toString(), 0o644);
-    office = loadOffice(office.dir);
+    office = updateConfig(office, [[["secrets", "executor_owner"], "secrets/executor-owner.enc.json"]]);
   }
 
   const ownerFile = office.secrets?.executor_owner;
@@ -67,7 +76,7 @@ export async function setup(initial: Office, options: SetupOptions): Promise<voi
 
     // No temporary plaintext; SOPS decrypts the encrypted stdin directly.
     try {
-      execFileSync("sops", ["decrypt", "--input-type", "json", "--output-type", "json", "/dev/stdin"], {
+      execFileSync(hostTool("sops"), ["decrypt", "--input-type", "json", "--output-type", "json", "/dev/stdin"], {
         input: probe, stdio: ["pipe", "ignore", "pipe"], cwd: office.dir,
       });
     } catch {
@@ -79,6 +88,16 @@ export async function setup(initial: Office, options: SetupOptions): Promise<voi
 
   prepareSecrets(office, { allowMissingOwner: true });
   assertGatewayMode(office);
+
+  office = await commitIdentity(office, ask);
+  office = await githubStep(office, github, ask);
+
+  // A login alone proves nothing: read every source as sync will, before cloning starts.
+  const unreachable = unreachableSources(office);
+
+  if (unreachable.length > 0) {
+    throw new OfficeError(`these sources don't read on this host, so nothing was cloned:\n${unreachable.map((line) => `  - ${line}`).join("\n")}\nFix them or office.yaml, then rerun office setup`);
+  }
 
   const changes = await sync(office, { referencesOnly: false });
 
@@ -114,6 +133,52 @@ export async function setup(initial: Office, options: SetupOptions): Promise<voi
   } else {
     console.log(`Provider authentication remains human-controlled: use /connect in OpenCode and /models. For Claude Agent in container mode: docker exec -it office-${office.name}-opencode-1 claude auth login, then connect Claude Agent in OpenCode. Other provider logins are independent.`);
   }
+}
+
+function globalGit(key: string): string | undefined {
+  try {
+    return git(["config", "--global", "--get", key]) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The office's commit identity, `git.name` and `git.email` in office.yaml: kept when set, else
+ * offered from the host's global git identity when interactive and saved there. Never invented.
+ */
+async function commitIdentity(office: Office, ask: ((text: string) => Promise<string>) | undefined): Promise<Office> {
+  if (office.git?.name !== undefined) {
+    console.log(`Git identity: ${office.git.name} <${office.git.email}> (office.yaml)`);
+
+    return office;
+  }
+
+  let name: string | undefined;
+  let email: string | undefined;
+
+  if (ask !== undefined) {
+    const [hostName, hostEmail] = [globalGit("user.name"), globalGit("user.email")];
+    const answer = hostName !== undefined && hostEmail !== undefined ? await ask(`Commit as ${hostName} <${hostEmail}> (this host's git identity) in this office's container and jobs? It is saved to office.yaml. [yes/no/other]`) : "other";
+
+    if (answer === "yes") [name, email] = [hostName, hostEmail];
+    else if (answer === "other") {
+      name = (await ask("Commit name for this office (blank to skip):")) || undefined;
+      email = name === undefined ? undefined : (await ask("Commit email:")) || undefined;
+    }
+  }
+
+  if (name === undefined || email === undefined) {
+    console.log("Git identity: none in office.yaml, so upgrade-tools commits as office cron and other commits use git's own config. To set one, add `name` and `email` under `git:` in office.yaml");
+
+    return office;
+  }
+
+  const updated = updateConfig(office, [[["git", "name"], name], [["git", "email"], email]]);
+
+  console.log(`Git identity: saved ${name} <${email}> to office.yaml (review and commit it)`);
+
+  return updated;
 }
 
 async function connectClaude(office: Office): Promise<void> {

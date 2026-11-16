@@ -92,6 +92,7 @@ function rootText(office: OfficeInfo, apps: string[]): string {
     "- `office.yaml` declares the desks, their repositories, the references, which skills from `skills/` are enabled where, and cloned plugins. After changing it, run `office sync`.",
     "- Reach services through the `office-executor` MCP server. Each desk has an Executor app at `<desk>/executor/apps/<desk>/` with `reports.*`, `notifications.*` and `agent.ask`; after changing it, run `office apps deploy`. For onboarding use `office setup`. Owner credentials are human-only: let the human run `office executor credentials` in their terminal, never capture its output in an agent transcript. Keep private age identities and decrypted runtime state outside the office repository.",
     "- `knowledge/` holds articles every session sees listed; `cron/crontab` runs file-system jobs in the container.",
+    "- `git` in `office.yaml` sets the commit identity of the container and the office's jobs; with `credentials: gh`, HTTPS remotes use the user's GitHub login, which the user manages on the host. Never run `gh auth login`, `logout` or `switch` for them.",
     "",
     "## Desks",
     "",

@@ -7,6 +7,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import * as v from "valibot";
 
+import { hostTool } from "./host-tools.ts";
 import { type Office, OfficeError } from "./office.ts";
 import { check } from "./schema.ts";
 
@@ -107,10 +108,10 @@ export function requireTool(tool: string, args = ["--version"]): void {
 
 export function decrypt(office: Office, file: string): string {
   requireHostIdentity(office);
-  requireTool("sops");
+  const sops = hostTool("sops");
 
   try {
-    return execFileSync("sops", ["decrypt", "--output-type", "json", source(office, file)], {
+    return execFileSync(sops, ["decrypt", "--output-type", "json", source(office, file)], {
       cwd: office.dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
     });
   } catch {
@@ -119,10 +120,10 @@ export function decrypt(office: Office, file: string): string {
 }
 
 export function encrypt(office: Office, file: string, plaintext: string): string {
-  requireTool("sops");
+  const sops = hostTool("sops");
 
   try {
-    return execFileSync("sops", ["encrypt", "--filename-override", source(office, file), "--input-type", "json", "--output-type", "json", "/dev/stdin"], {
+    return execFileSync(sops, ["encrypt", "--filename-override", source(office, file), "--input-type", "json", "--output-type", "json", "/dev/stdin"], {
       cwd: office.dir, input: plaintext, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
     });
   } catch {
@@ -152,7 +153,7 @@ export function ownerRecord(office: Office): Owner {
 
 /** Explicit consent only; never replace an identity or amend existing recipients. */
 export function initializeIdentity(office: Office): void {
-  requireTool("age-keygen");
+  const keygen = hostTool("age-keygen");
 
   const key = requireHostIdentity(office);
 
@@ -160,7 +161,7 @@ export function initializeIdentity(office: Office): void {
     mkdirSync(dirname(key), { recursive: true, mode: 0o700 });
 
     try {
-      execFileSync("age-keygen", ["-o", key], { stdio: "ignore" });
+      execFileSync(keygen, ["-o", key], { stdio: "ignore" });
       chmodSync(key, 0o600);
     } catch {
       throw new OfficeError("age identity generation failed; existing files were not replaced");
@@ -170,7 +171,7 @@ export function initializeIdentity(office: Office): void {
   let recipient;
 
   try {
-    recipient = execFileSync("age-keygen", ["-y", key], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    recipient = execFileSync(keygen, ["-y", key], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   } catch {
     throw new OfficeError("cannot derive a public recipient from the selected age identity (contents withheld)");
   }

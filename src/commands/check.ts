@@ -6,6 +6,8 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { timerStates } from "../cron/host.ts";
+import { ghConfigDir, ghLogin, ghPin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
+import { installedTool } from "../host-tools.ts";
 import { clones, library, pluginDrift, skillSelections } from "../layout.ts";
 import { type Office, readEnvFile } from "../office.ts";
 import { pinnedTools } from "../schema.ts";
@@ -153,11 +155,13 @@ async function runtime(office: Office, report: Report): Promise<void> {
 
   if (!running.includes("opencode") && !running.includes("executor")) {
     report(true, "containers", `not running (start them with office up)`);
+    gitChecks(office, report, false);
 
     return;
   }
 
   report(office.opencode.mode === "container" || !running.includes("opencode"), "containers", `running: ${running.join(", ")}${office.opencode.mode === "host" ? ` (OpenCode on the host at ${office.opencode.url})` : ""}`);
+  gitChecks(office, report, office.opencode.mode === "container" && running.includes("opencode"));
 
   if (office.opencode.mode === "container" && running.includes("opencode")) officeVersions(office, report);
 
@@ -313,6 +317,67 @@ async function appFrameworks(office: Office, report: Report): Promise<void> {
     report(problems.length === 0, "app frameworks", problems.length === 0 ? `every app is deployed for apps@${served}` : `Executor serves apps@${served}: ${problems.join("; ")}; run office apps deploy`);
   } catch (error) {
     report(false, "app frameworks", error instanceof Error ? error.message : String(error));
+  }
+}
+
+/**
+ * The office's commit identity, and when office.yaml shares the host's gh login, whether it is
+ * ready: on the host, and in a running opencode container. An office without it isn't failed.
+ */
+function gitChecks(office: Office, report: Report, running: boolean): void {
+  report(
+    true,
+    "git identity",
+    office.git?.name === undefined
+      ? "none in office.yaml: upgrade-tools commits as office cron, other commits use git's own config"
+      : `${office.git.name} <${office.git.email}>, the default for ${office.opencode.mode === "container" ? "the container's commits" : "the office's cron jobs (a host server's agents use the host's own git config)"}`,
+  );
+
+  if (office.git?.credentials !== "gh") {
+    report(true, "GitHub", "office.yaml doesn't use the host's gh login; only sources that read without a login clone, and agents can't push over HTTPS (add credentials: gh under git: to use it)");
+
+    return;
+  }
+
+  const gh = installedTool("gh");
+
+  if (gh === undefined) {
+    report(false, "GitHub", "office.yaml shares the host's gh login, but gh isn't installed on this host (office setup --install-deps)");
+
+    return;
+  }
+
+  const container = office.opencode.mode === "container";
+  const hosts = githubHosts(office);
+
+  for (const host of hosts) {
+    const login = ghLogin(gh, host);
+    const problem = login?.state !== "success" ? `${loginProblem(login)} (office setup guides the login; gh auth status --hostname ${host} shows more)` : container ? unshareable(login) : undefined;
+
+    report(problem === undefined, `GitHub ${host}`, problem ?? `logged in as ${login?.account ?? "?"} with gh ${gh.version}${container ? `, shared read-only from ${ghConfigDir()}` : ""}`);
+
+    const helper = gitHelper(host);
+
+    report(isGhHelper(helper), `GitHub ${host}: host git`, isGhHelper(helper) ? `uses ${helper}` : `doesn't use gh (${helper ?? "no helper"}): run gh auth setup-git --hostname ${host}`);
+  }
+
+  if (!container) return;
+
+  const pin = ghPin(office);
+
+  report(pin !== undefined, "GitHub: container gh", pin === undefined ? "mise.toml doesn't pin gh, so the container can't use the login (office setup adds it)" : `gh ${pin} from mise.toml`);
+
+  if (!running) return;
+
+  for (const host of hosts) {
+    try {
+      // `gh auth status` reads the mounted login and asks the host's API; it never prints the token.
+      const helper = compose(office, ["exec", "-T", "opencode", "sh", "-c", `gh auth status --hostname "$1" >/dev/null 2>&1 && git config --get-urlmatch credential.helper "https://$1"`, "sh", host], { capture: true });
+
+      report(helper.endsWith("gh auth git-credential"), `GitHub ${host}: container`, `gh is logged in and git uses ${helper}`);
+    } catch {
+      report(false, `GitHub ${host}: container`, "gh isn't logged in there, or git doesn't use it; run office up, then office check");
+    }
   }
 }
 

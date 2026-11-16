@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { accessSync, constants, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
+import { fetchBytes } from "../download.ts";
 import { OfficeError } from "../office.ts";
 import { ageMs, type Release, releaseByTag, releases } from "../releases.ts";
 import { type Build, build, toolPath, version } from "../tool.ts";
@@ -162,20 +163,6 @@ async function exact(current: Build, tag: string): Promise<Download | undefined>
   if (releaseTag.test(current.version) && compareVersions(tag, current.version) < 0) console.log(`${tag} is older than this office's ${current.version}`);
 
   return downloadOf(release);
-}
-
-async function fetchBytes(url: string, what: string): Promise<Uint8Array> {
-  try {
-    const response = await fetch(url, { headers: { "user-agent": "office" }, signal: AbortSignal.timeout(600_000) });
-
-    if (!response.ok) throw new OfficeError(`downloading ${what} answered HTTP ${response.status}`);
-
-    return new Uint8Array(await response.arrayBuffer());
-  } catch (error) {
-    if (error instanceof OfficeError) throw error;
-
-    throw new OfficeError(`couldn't download ${what}: ${error instanceof Error ? error.message.trim() : String(error)}`);
-  }
 }
 
 /** The SHA-256 `sums` lists for `name`, as `sha256sum` writes it. */

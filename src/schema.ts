@@ -106,11 +106,28 @@ const skills = v.nullish(
   {},
 );
 
+// The office's commit identity, set as git defaults where the office runs git (repository config
+// still overrides), and how HTTPS remotes authenticate: `gh` shares the host's gh login.
+const git = v.optional(
+  v.pipe(
+    v.strictObject(
+      {
+        name: v.optional(text),
+        email: v.optional(v.pipe(text, v.email("must be an email address"))),
+        credentials: v.optional(v.literal("gh", "must be gh, the host's GitHub CLI login")),
+      },
+      "must be a mapping of name, email and credentials",
+    ),
+    v.check((value) => (value.name === undefined) === (value.email === undefined), "needs both name and email, or neither"),
+  ),
+);
+
 export const officeSchema = v.strictObject(
   {
     name,
     state: v.optional(text),
     opencode,
+    git,
     secrets: v.optional(v.strictObject({ executor_owner: v.optional(text) })),
     claude: v.optional(v.strictObject({ credential: text, settings: text })),
     versions,
@@ -120,7 +137,7 @@ export const officeSchema = v.strictObject(
     skills,
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
   },
-  "must be a mapping of name, state, opencode, secrets, claude, versions, upgrades, references, desks, skills and plugins",
+  "must be a mapping of name, state, opencode, git, secrets, claude, versions, upgrades, references, desks, skills and plugins",
 );
 
 export type OfficeConfig = v.InferOutput<typeof officeSchema>;

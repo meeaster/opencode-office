@@ -124,22 +124,27 @@ export type Lookup = {
 
 /** The highest release of `tool`'s line that is at least `age` old. */
 export async function newestRelease(tool: PinnedTool, age: string, now = new Date()): Promise<Lookup> {
+  return selectToolRelease(tool, await releases(sources[tool].repo), age, now);
+}
+
+export function selectToolRelease(tool: PinnedTool, listed: Release[], age: string, now = new Date()): Lookup {
   const source = sources[tool];
   const cutoff = now.getTime() - ageMs(age);
   const candidates: Candidate[] = [];
   const tooNew: string[] = [];
   const ignored: string[] = [];
 
-  for (const release of await releases(source.repo)) {
+  for (const release of listed) {
     const version = source.tag.exec(release.tag_name)?.[1];
+    const published = Date.parse(release.published_at ?? "");
 
-    if (version === undefined || release.draft || release.published_at === null || (release.prerelease && !source.prereleases)) {
+    if (version === undefined || release.draft || !Number.isFinite(published) || (release.prerelease && !source.prereleases)) {
       ignored.push(release.tag_name);
       continue;
     }
 
-    if (new Date(release.published_at).getTime() > cutoff) tooNew.push(version);
-    else candidates.push({ version, published: release.published_at, release });
+    if (published > cutoff) tooNew.push(version);
+    else candidates.push({ version, published: new Date(published).toISOString(), release });
   }
 
   candidates.sort((left, right) => compareVersions(right.version, left.version));

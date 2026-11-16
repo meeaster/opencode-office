@@ -64,6 +64,9 @@ ENV HOME=/home/assistant \
     # The office's mise.toml files are its own, so mise trusts everything under the mount.
     MISE_TRUSTED_CONFIG_PATHS=/home/assistant/workspace \
     MISE_YES=1 \
+    # The office's git defaults, which the entrypoint writes: its commit identity and gh as the
+    # HTTPS credential helper. It includes /etc/gitconfig; ~/.gitconfig and repositories override it.
+    GIT_CONFIG_SYSTEM=/etc/opencode/gitconfig \
     # mise's shims first, so a shell anywhere in the office runs the tools that folder declares.
     PATH=/home/assistant/.local/share/mise/shims:/home/assistant/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /home/assistant/workspace

@@ -1,12 +1,12 @@
 // Finds an office and reads its office.yaml into a checked shape. Everything else takes the
 // value returned here, so office.yaml is validated once, at this boundary, by the schema the
 // office plugin shares.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import * as v from "valibot";
-import { parse } from "yaml";
+import { isMap, isNode, isScalar, parse, parseDocument, stringify } from "yaml";
 
 import { check, type OfficeConfig, officeSchema, type PinnedTool } from "./schema.ts";
 
@@ -37,6 +37,8 @@ export type Office = {
   name: string;
   state: string;
   opencode: OpencodeMode;
+  /** The commit identity and HTTPS credentials office.yaml sets; undefined leaves git's own config. */
+  git: OfficeConfig["git"];
   secrets?: OfficeConfig["secrets"];
   claude?: OfficeConfig["claude"];
   /** The versions office.yaml pins; undefined when it has no `versions` block (the tool's defaults apply). */
@@ -110,6 +112,7 @@ export function loadOffice(dir: string): Office {
     name: config.name,
     state: config.state === undefined ? join(homedir(), ".local/share/office", config.name) : resolve(dir, expandHome(config.state)),
     opencode: opencodeMode(config.opencode, dir),
+    git: config.git,
     secrets: config.secrets,
     claude: config.claude,
     versions: config.versions,
@@ -119,6 +122,68 @@ export function loadOffice(dir: string): Office {
     skills: config.skills,
     plugins: config.plugins.map((plugin) => ({ name: plugin.name, url: plugin.repo, ref: plugin.ref })),
   };
+}
+
+/**
+ * office.yaml's text with `key.field` set, edited as text so every other line, comment and layout
+ * stays as written: a new top-level block goes at the end, a new field after the block's last.
+ */
+function setField(text: string, key: string, field: string, value: string): string {
+  const document = parseDocument(text, { keepSourceTokens: true });
+  const block = document.get(key, true);
+  const line = `${field}: ${stringify(value).trimEnd()}`;
+
+  if (block === undefined) return `${text}${text === "" || text.endsWith("\n") ? "" : "\n"}${key}:\n  ${line}\n`;
+
+  if (!isMap(block) || block.flow === true || block.items.length === 0) throw new OfficeError(`office.yaml: set ${key}.${field} by hand; ${key} isn't a block mapping`);
+
+  const existing = block.get(field, true);
+
+  if (isScalar(existing) && existing.range !== undefined && existing.range !== null) {
+    return `${text.slice(0, existing.range[0])}${stringify(value).trimEnd()}${text.slice(existing.range[1])}`;
+  }
+
+  const [first] = block.items;
+  const last = block.items[block.items.length - 1];
+  const start = isNode(first.key) ? first.key.range?.[0] : undefined;
+  const end = isNode(last.value) ? last.value.range?.[1] : isNode(last.key) ? last.key.range?.[1] : undefined;
+
+  if (start === undefined || end === undefined) throw new OfficeError(`office.yaml: set ${key}.${field} by hand`);
+
+  const indent = start - text.lastIndexOf("\n", start - 1) - 1;
+  // After the line the last value ends on, so a comment there stays on its own line.
+  const newline = text.indexOf("\n", end);
+  const at = newline === -1 ? text.length : newline;
+
+  return `${text.slice(0, at)}\n${" ".repeat(indent)}${line}${text.slice(at)}`;
+}
+
+/**
+ * Sets fields in office.yaml (`[key, field]` → value), keeping every other line as written, and
+ * returns the office re-read. A change the schema rejects is never written.
+ */
+export function updateConfig(office: Office, values: [[string, string], string][]): Office {
+  const path = join(office.dir, "office.yaml");
+  let text = readFileSync(path, "utf8");
+
+  for (const [[key, field], value] of values) text = setField(text, key, field, value);
+
+  let document;
+
+  try {
+    document = parse(text);
+  } catch (error) {
+    throw new OfficeError(`office.yaml would not parse: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const result = check(v.safeParse(officeSchema, document));
+
+  if (!result.ok) throw new OfficeError(`office.yaml would not be valid:\n${result.errors.map((line) => `  ${line}`).join("\n")}`);
+
+  writeFileSync(`${path}.new`, text);
+  renameSync(`${path}.new`, path);
+
+  return loadOffice(office.dir);
 }
 
 /** The office named by --office, or the one the current folder is in. */
