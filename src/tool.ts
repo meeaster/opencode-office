@@ -12,6 +12,9 @@ import manifest from "../package.json";
 /** The commit `src/build.ts` compiled from, with "+uncommitted" for a tree with changes. Defined only in the executable. */
 declare const OFFICE_COMMIT: string;
 
+/** The version `src/build.ts` compiled, such as 0.1.0 or a release's 0.1.0-20261116T154210Z. Defined only in the executable. */
+declare const OFFICE_VERSION: string;
+
 const root = Bun.isStandaloneExecutable ? import.meta.dir : resolve(import.meta.dir, "..");
 
 /** A path inside the tool's files, such as "template/office" or "plugins/office". */
@@ -51,7 +54,7 @@ export function version(): string {
   const commit = Bun.isStandaloneExecutable ? OFFICE_COMMIT : checkoutCommit();
   const [hash, dirty] = commit.split("+");
 
-  return `office ${manifest.version} (commit ${hash}${dirty === undefined ? "" : ", built with uncommitted changes"})`;
+  return `office ${Bun.isStandaloneExecutable ? OFFICE_VERSION : manifest.version} (commit ${hash}${dirty === undefined ? "" : ", built with uncommitted changes"})`;
 }
 
 /** How a systemd unit runs this office command: the executable itself, or the checkout's launcher. */

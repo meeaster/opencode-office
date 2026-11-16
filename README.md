@@ -23,6 +23,16 @@ An office keeps its own content: desks, skills, plugins, Executor apps, cron job
 
 `office` is one executable that carries everything it needs: the template, the plugins and the image files. Put it on your PATH, such as at `~/.local/bin/office`; Docker is the only other requirement. `office --version` prints the version and the commit it was built from.
 
+Every commit to `main` publishes a pre-release named `0.1.0-<UTC date and time>` on the [releases page](https://github.com/meeaster/opencode-office/releases), for Linux x64; the newest ten are kept. To install one:
+
+```sh
+curl -fsSLO https://github.com/meeaster/opencode-office/releases/download/<release>/office-linux-x64
+curl -fsSLO https://github.com/meeaster/opencode-office/releases/download/<release>/SHA256SUMS
+sha256sum -c SHA256SUMS
+install -m 755 office-linux-x64 ~/.local/bin/office
+office --version
+```
+
 To build it from this checkout, with Bun, pnpm and pre-commit from `mise.toml`:
 
 ```sh

@@ -1,0 +1,92 @@
+# On every push to main: scan the history for secrets, then build `office` for Linux x64 and
+# publish it as a pre-release named 0.1.0-<UTC datetime>, keeping the newest ten.
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+# Releases are published and pruned one push at a time.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  gitleaks:
+    name: Scan for secrets
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # check out the history
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The whole history, so commits pushed without the pre-commit hook are scanned too.
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/gitleaks.tar.gz" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+      - name: Scan the history
+        run: '"$RUNNER_TEMP/gitleaks" git --redact --no-banner .'
+
+  release:
+    name: Build and publish
+    needs: gitleaks
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # create and delete releases and their tags
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Bun and pnpm at the versions mise.toml pins.
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        with:
+          version: 2026.11.7
+          install_args: bun pnpm
+          cache: false
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run typecheck
+      - name: Build
+        id: build
+        run: |
+          stamp=$(date -u +%Y%m%dT%H%M%SZ)
+          version="$(jq -r .version package.json)-${stamp}"
+          pnpm run build --prerelease "$stamp"
+          # The executable must name this version and this commit, from a clean tree.
+          expected="office ${version} (commit ${GITHUB_SHA:0:12})"
+          actual=$(target/office --version)
+          echo "$actual"
+          [ "$actual" = "$expected" ] || { echo "expected: $expected"; exit 1; }
+          mkdir dist
+          cp target/office dist/office-linux-x64
+          (cd dist && sha256sum office-linux-x64 > SHA256SUMS)
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.build.outputs.version }}
+        run: |
+          subject=$(git log -1 --format=%s)
+          gh release create "$VERSION" dist/office-linux-x64 dist/SHA256SUMS \
+            --prerelease --target "$GITHUB_SHA" --title "$VERSION" \
+            --notes "${subject} (${GITHUB_SHA})"
+      - name: Keep the newest ten releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release list --limit 200 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | test("^[0-9]+\\.[0-9]+\\.[0-9]+-[0-9]{8}T[0-9]{6}Z$"))] | sort_by(.createdAt) | reverse | .[10:] | .[].tagName' |
+            while read -r tag; do
+              gh release delete "$tag" --cleanup-tag --yes
+              echo "deleted $tag"
+            done
