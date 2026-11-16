@@ -23,12 +23,18 @@ An office keeps its own content: desks, skills, plugins, Executor apps, cron job
 
 `office` is one executable that carries everything it needs: the template, the plugins and the image files. Put it on your PATH, such as at `~/.local/bin/office`; Docker is the only other requirement. `office --version` prints the version and the commit it was built from.
 
-To build it from this checkout, with Bun and pnpm from `mise.toml`:
+To build it from this checkout, with Bun, pnpm and pre-commit from `mise.toml`:
 
 ```sh
 mise install
 pnpm install
 pnpm run install-office   # builds target/office and installs it as ~/.local/bin/office
+```
+
+Before your first commit, install the gitleaks hook once per clone; it blocks commits that contain secrets:
+
+```sh
+pre-commit install
 ```
 
 `pnpm run build` only builds `target/office`. `bin/office` runs the CLI from the checkout with Bun, without building. `pnpm run typecheck` checks the CLI and the plugins.
