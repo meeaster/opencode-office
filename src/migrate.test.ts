@@ -111,7 +111,9 @@ test("one sync moves an office from the earlier layout, a second changes nothing
   );
   expect(readFileSync(join(office, ".opencode/opencode.jsonc"), "utf8")).toBe(config(browserEntry));
   expect(readlinkSync(join(office, ".opencode/plugins/knowledge"))).toBe("../../.office/packages/knowledge/plugin");
-  expect(readFileSync(join(office, ".office/packages/knowledge/.template.json"), "utf8")).toBe('[\n  "knowledge/README.md"\n]\n');
+  expect(JSON.parse(readFileSync(join(office, ".office/packages/knowledge/.template.json"), "utf8"))).toEqual(["knowledge/AGENTS.md", "knowledge/README.md", "knowledge/origins.md"]);
+  expect(readFileSync(join(office, "knowledge/AGENTS.md"), "utf8")).toContain("knowledge-base-format: 2");
+  expect(existsSync(join(office, "knowledge/origins.md"))).toBe(true);
   expect(existsSync(join(office, "knowledge/README.md"))).toBe(false);
   expect(existsSync(join(office, "skills/office/SKILL.md"))).toBe(true);
   expect(await sync(loadOffice(office))).toEqual([editedOfficeSkill]);

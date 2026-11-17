@@ -1,2 +1,2 @@
 name: knowledge
-description: Lists the office's knowledge articles (knowledge/**/*.md) with their descriptions in every session, refreshed on each prompt.
+description: Discovers knowledge articles on each prompt and delivers the knowledge-base skill and plain-file provenance checker.
