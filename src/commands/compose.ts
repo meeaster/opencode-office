@@ -143,9 +143,10 @@ function prepareState(office: Office): void {
   }
 }
 
-// The host server reads the office's .opencode/opencode.jsonc but not the container's environment,
-// so the office-executor MCP server's address and token come from these files, which the config
-// substitutes with {file:...}. They are gitignored and exist only in host mode.
+// A host OpenCode server doesn't have the container's environment, so the office package's plugin
+// reads the office-executor MCP server's address and token from these files. They are written in
+// both modes: a host session opened in a container-mode office reaches Executor on its published
+// loopback port, while the container's own variables still win there. They are gitignored.
 const executorFiles = { url: ".opencode/office-executor.url", token: ".opencode/office-executor.token" };
 
 function writeExecutorFiles(office: Office): void {
@@ -393,10 +394,10 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
     else await buildImages(office, pins, refreshed);
 
     // Installing only the refresh timer removes cron timers left from host mode, which would run
-    // the jobs twice; the executor files left from it would expose a stale token.
+    // the jobs twice.
     installRefreshTimer(office);
-    removeExecutorFiles(office);
     compose(office, ["up", "-d", "--build", "--remove-orphans"], { pins });
+    writeExecutorFiles(office);
   }
 
   writeApplied(office, pins, office.opencode.mode === "container" ? refreshed : applied?.refreshed);

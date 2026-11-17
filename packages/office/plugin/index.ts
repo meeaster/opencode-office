@@ -48,9 +48,9 @@ function officeSkill(): Skill {
 
 /**
  * The office's Executor address or key: in the container, OFFICE_EXECUTOR_URL (http://executor:4400)
- * and OFFICE_EXECUTOR_TOKEN (the office's key). A host server has neither, so in host mode
- * `office up` writes them to the gitignored `.opencode/office-executor.url` and
- * `.opencode/office-executor.token` instead.
+ * and OFFICE_EXECUTOR_TOKEN (the office's key). A host server has neither, so `office up` writes
+ * them, in either mode, to the gitignored `.opencode/office-executor.url` and
+ * `.opencode/office-executor.token`, with Executor's published loopback address.
  */
 function executorValue(office: string, variable: string, file: string): string | undefined {
   const fromEnvironment = process.env[variable];
