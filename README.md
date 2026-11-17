@@ -2,7 +2,7 @@
 
 An **office** is a source-controlled folder of **desks** for OpenCode. The folder a session starts in decides what the agent knows and can do: every session loads the office root's instructions, config and skills, and a session in a desk also loads that desk's. Desks never load each other's.
 
-This repository holds the `office` command, the template `office init` copies, the two plugins every office runs, the base image of the `opencode` container and the compose file for the two services every office runs:
+This repository holds the `office` command, the template `office init` copies, the plugin every office runs, the first-party packages, the base image of the `opencode` container and the compose file for the two services every office runs:
 
 - **Executor** holds every service account and runs the office's schedules, webhooks and approvals. It always runs in a container.
 - **OpenCode** serves every desk, in one of two modes that `office.yaml` chooses:
@@ -21,7 +21,7 @@ An office keeps its own content: desks, skills, plugins, Executor apps, cron job
 
 ## Install
 
-`office` is one executable carrying the template, bundled plugins and image files. Put it on your PATH, such as at `~/.local/bin/office`. Docker with Compose and Buildx, and Git, are host prerequisites. Portable encrypted secrets also need host SOPS and age, and an office with private GitHub sources gh; no Node/npm runtime is needed. `office --version` prints its version and build commit.
+`office` is one executable carrying the template, the bundled `office` plugin, the first-party packages and image files. Put it on your PATH, such as at `~/.local/bin/office`. Docker with Compose and Buildx, and Git, are host prerequisites. Portable encrypted secrets also need host SOPS and age, and an office with private GitHub sources gh; no Node/npm runtime is needed. `office --version` prints its version and build commit.
 
 Every commit to `main` publishes a pre-release named `0.1.0-<UTC date and time>` on the [releases page](https://github.com/meeaster/opencode-office/releases), for Linux x64; the newest ten are kept. To install one:
 
@@ -49,7 +49,7 @@ office update --version 0.1.0-20261116T163238Z   # exactly this release, whateve
 - It downloads beside the executable, checks the file against the release's `SHA256SUMS`, runs it once to confirm it reports the release's version and commit, and only then renames it over the old one. Any failure leaves the old executable as it was. When `office` is a symlink, it replaces the file the link points to. It needs write access to that folder and never uses sudo.
 - `office` run from a checkout (`bin/office`) refuses: update the checkout instead.
 
-Updating `office` changes no office. Each office picks the new one up when you run, in it, `office sync` (refreshes the plugin copies, which you then commit), `office up` (in container mode, rebuilds the `opencode` image with the new `office`) and `office check` (confirms the container runs the host's `office`). `office up` keeps the OpenCode, Claude Code, Executor and mise versions the office last applied; only `office up --upgrade` applies newer ones from `office.yaml` (see "Versions"). In host mode the cron timers run the executable itself, so they use the new `office` straight away.
+Updating `office` changes no office. Each office picks the new one up when you run, in it, `office sync` (refreshes the `office` plugin's copy, which you then commit), `office up` (in container mode, rebuilds the `opencode` image with the new `office`) and `office check` (confirms the container runs the host's `office`). `office up` keeps the OpenCode, Claude Code, Executor and mise versions the office last applied; only `office up --upgrade` applies newer ones from `office.yaml` (see "Versions"). In host mode the cron timers run the executable itself, so they use the new `office` straight away.
 
 ### Building from source
 
@@ -75,11 +75,11 @@ pre-commit install
 
 | Command | Does |
 |---|---|
-| `office init <dir> [--name <name>]` | Creates an office from `template/`: root files, a starter `office.yaml` at this tool's versions with its `office.lock`, one example desk, and a git repository on branch `main` |
+| `office init <dir> [--name <name>]` | Creates an office from `template/`: root files, a starter `office.yaml` at this tool's versions with its `office.lock`, one example desk, the `knowledge` package (see "Packages") and a git repository on branch `main` |
 | `office setup [--owner-email <email>] [--generate-age-key] [--install-deps]` | Resumes onboarding after init or clone: checks prerequisites and secrets, the office's commit identity and GitHub, reads every source, syncs, starts Executor, bootstraps its owner and the office's organization-bound Executor key (see "The office's Executor key"), then starts OpenCode, deploys apps and checks. Human provider logins remain separate. `--generate-age-key` consents to creating a host identity/public recipient config. `--install-deps` authorizes host mise, SOPS and age (and gh) installs or updates. The identity and GitHub come from `office.yaml`'s `git` block; see "Git and GitHub" |
 | `office executor credentials [--password-only]` | Deliberately decrypts and reveals the stored owner login on the host, even with Executor stopped. Password-only writes exact password bytes, without a newline, for a clipboard pipe; it does not verify the live password |
-| `office sync [--references]` | Clones and updates references and desk repositories, refreshes the office's copies of the tool's plugins (saying what it replaced), scaffolds declared desks that are missing, copies declared skills into `skills/` (recording the commit in `.source.json`), links enabled skills into each `.opencode/skills/`, clones declared plugins. It never writes to `AGENTS.md` or other hand-written files |
-| `office check` | Reports drift between `office.yaml` and the folders, and plugin copies that differ from the tool's; the versions and whether `office.lock` matches, a warning for versions outside the range this tool was tested with and for a pending upgrade; when the containers run, also whether they run the applied versions, Executor's health, whether the container's `office` is the host's (`office --version`), whether every app is deployed for the `apps` framework Executor serves; for the root and each desk, on the mode's OpenCode server, its agents, its skills (expected loaded, the rest not) and its Executor connection; and the cron runner (supercronic in the container, or the host's timers) |
+| `office sync [--references]` | Clones and updates references and desk repositories, refusing a clone path that holds anything but its own clone (or an empty folder), refreshes the office's copy of the tool's `office` plugin (saying what it replaced), scaffolds declared desks that are missing, copies declared skills into `skills/` (recording the commit in `.source.json`), installs and updates packages (see "Packages"), links enabled skills and package skills into each `.opencode/skills/` and package plugins into `.opencode/plugins/`, clones declared plugins. It never writes to `AGENTS.md` or other hand-written files |
+| `office check` | Reports drift between `office.yaml` and the folders, and a copy of the `office` plugin that differs from the tool's; one line per package (its source commit, local edits, settings, skills, plugin); the versions and whether `office.lock` matches, a warning for versions outside the range this tool was tested with and for a pending upgrade; when the containers run, also whether they run the applied versions, Executor's health, whether the container's `office` is the host's (`office --version`), whether every app is deployed for the `apps` framework Executor serves; for the root and each desk, on the mode's OpenCode server, its agents, its skills (expected loaded, the rest not), its plugins (the `office` plugin and each package's, active) and its Executor connection; and the cron runner (supercronic in the container, or the host's timers) |
 | `office instructions [folder]` | Prints the guidance the office plugin gives a session started in that folder, from the same code |
 | `office up [--upgrade]` / `office down` | Starts or stops the compose project `office-<name>`: `executor`, `opencode` (container mode only) and the office's own `compose.yaml`. `up` runs the versions it last applied and prints what `office.yaml` has moved to since; `--upgrade` applies those (see "Versions"). In container mode `up` builds the base image with this `office` inside it, and the office's `Dockerfile` on top of it when there is one. In host mode `up` also installs the office's `mise.toml` tools with the host's mise and the cron timers; `down` removes the timers. See "Host mode" |
 | `office shell` / `office exec -- <command...>` | A shell, or one command, in the running `opencode` container as its user, in the container folder matching the one you run it from (the office root, a desk, a repository in it; else the office root), with the container's home and mise's tools. `exec` forwards stdin and the exit status, and a terminal when both ends are one, so it works in pipes. Neither starts or rebuilds anything; in host mode they say to run commands on the host |
@@ -94,17 +94,18 @@ pre-commit install
 
 | Path | What it is |
 |---|---|
-| `src/` | The CLI in TypeScript on Bun: `cli.ts` (arguments), `schema.ts` (the shape of `office.yaml` and `office.lock`, shared with the office plugin), `office.ts` (reads `office.yaml`), `versions.ts` (pins, the lock, what was applied), `releases.ts` (release lookups on GitHub and the registry), `layout.ts` (what the folders should hold), `tool.ts` (the tool's own files, its version, the plugin bundles, the image's build folder), `build.ts` (compiles the executable), `commands/` and `cron/` (`container.ts` for supercronic, `host.ts` for systemd timers). Runtime dependencies: `yaml` and `valibot` |
+| `src/` | The CLI in TypeScript on Bun: `cli.ts` (arguments), `schema.ts` (the shape of `office.yaml`, `office.lock` and a package's `package.yaml`, shared with the office plugin), `office.ts` (reads `office.yaml`), `versions.ts` (pins, the lock, what was applied), `releases.ts` (release lookups on GitHub and the registry), `layout.ts` (what the folders should hold), `packages.ts` (installs, updates and reads packages), `tool.ts` (the tool's own files, its version, the plugin bundles, the image's build folder), `build.ts` (compiles the executable), `commands/` and `cron/` (`container.ts` for supercronic, `host.ts` for systemd timers). Runtime dependencies: `yaml` and `valibot` |
 | `bin/office` | Runs the CLI from the checkout with Bun |
-| `plugins/` | The `office` plugin (the guidance for a session's folder, from `instructions.ts`, which `office instructions` also runs) and the `knowledge` plugin. Each is bundled with what it imports into one `index.js`, which `office sync` copies into each office's `.opencode/plugins/<name>/`, where it stays committed so a clone works in the container with nothing installed |
-| `template/office/` | What `office init` copies once: `AGENTS.md`, `README.md`, `office.yaml`, `.opencode/opencode.jsonc`, `skills/office/`, `executor/apps/opencode/`, `cron/`, `knowledge/`, `mise.toml` (with pre-commit), `.pre-commit-config.yaml` (gitleaks), `.gitignore` |
+| `plugins/office/` | The `office` plugin: the guidance for a session's folder, from `instructions.ts`, which `office instructions` also runs. It is bundled with what it imports into one `index.js`, which `office sync` copies into each office's `.opencode/plugins/office/`, where it stays committed so a clone works in the container with nothing installed |
+| `template/office/` | What `office init` copies once: `AGENTS.md`, `README.md`, `office.yaml`, `.opencode/opencode.jsonc`, `skills/office/`, `executor/apps/opencode/`, `cron/`, `mise.toml` (with pre-commit), `.pre-commit-config.yaml` (gitleaks), `.gitignore` |
 | `template/desk/` | What `office sync` scaffolds for a new desk, including its starter Executor app |
+| `packages/` | First-party packages an office installs from this repository by `repo`, `path` and `ref` (see "Packages"): `knowledge` and `artifact-share`. The executable embeds them so `office init` can install `knowledge` with nothing fetched |
 | `image/Dockerfile` | The base image: Debian 13 with OpenCode, Claude Code and mise at the office's versions and checksums (build arguments), supercronic pinned by the tool, build tools and the compiled `office`. User `assistant`, uid 1000 |
 | `image/entrypoint.sh` | Writes the machine note to `/etc/opencode/machine.md`, installs the tools the office's `mise.toml` files declare, runs missed cron jobs and starts supercronic, then runs OpenCode |
 | `image/config/opencode.jsonc` | The container's managed settings: no self-update, and the machine note as an instruction |
 | `compose.yaml` | `executor` (its image from the office's versions) and `opencode` (in the `container` profile, which `office up` enables in container mode). Ports are on `127.0.0.1` only |
 
-The executable embeds `template/`, the plugin bundles, `image/` and `compose.yaml`. Docker can't read files inside it, so `office` unpacks `image/` and `compose.yaml` into `~/.cache/office/image-<hash of their content>/` and runs Docker from there; `office up` puts a copy of the executable in that folder for the image.
+The executable embeds `template/`, the `office` plugin's bundle, `packages/`, the licence, `image/` and `compose.yaml`. Docker can't read files inside it, so `office` unpacks `image/` and `compose.yaml` into `~/.cache/office/image-<hash of their content>/` and runs Docker from there; `office up` puts a copy of the executable in that folder for the image.
 
 ## Runtime
 
@@ -195,6 +196,67 @@ The template ships two jobs:
   - For the four versions in `office.yaml`, it reads each project's newest hundred GitHub releases without a login, keeps the line the office runs (`v<semver>` tags for OpenCode, Claude Code and mise; Executor's `executor@2.…` pre-releases, not its v1 line), drops releases younger than the age, and takes the highest version, never a lower one than the pin. It confirms the release file, or Executor's image on ghcr.io, exists, then rewrites only those version lines in `office.yaml` and `office.lock`. A failed lookup (GitHub's rate limit, no network) skips that tool and is reported. It never rebuilds or restarts anything.
   - Ages come from `upgrades` in `office.yaml`: a tool's own, else `minimum_release_age`, else a day.
   - It skips a file with uncommitted changes (for the versions, `office.yaml` or `office.lock`). Changed files (and a `mise.lock` beside them, if the office uses one) go into one commit, such as `chore: bump opencode 2.3.0 → 2.4.0, node 26.13.1 → 26.14.0`, made as the office's git identity from `office.yaml`, else `office cron <office-cron@localhost>`, through `git -c`, so no git config changes. It never pushes, even when the office has GitHub credentials. It notifies the first desk's app (`notifications.send`) of what moved or failed, stays silent when nothing changed, and exits non-zero on a failure, so the job counts as missed and runs again at the next start.
+
+## Packages
+
+A package is a capability an office opts into, where the tool itself holds only what every office needs to run. It is a folder, the same whether written in the office or installed from another repository:
+
+```
+packages/<name>/
+  package.yaml        # name, description, and the settings it accepts
+  skills/<id>/SKILL.md
+  plugin/             # an OpenCode plugin, package-owned like scripts
+  scripts/            # package-owned, replaced on update
+  template/           # each file copied once into the office root at the same path, then the office's
+```
+
+`package.yaml` holds only what can't be discovered; skills are found under `skills/`:
+
+```yaml
+name: artifact-share
+description: What it does, listed for every session
+settings:
+  url:
+    description: What the setting means
+    required: true     # or `default: <value>`
+```
+
+`office.yaml` lists the packages, each with its settings:
+
+```yaml
+packages:
+  - name: artifact-share
+    repo: https://github.com/meeaster/opencode-office.git
+    path: packages/artifact-share
+    ref: <commit or tag>
+    settings:
+      url: https://example.github.io/my-office
+  - name: something-local      # authored in this office under packages/something-local/: no repo, path or ref
+```
+
+An entry with `repo` needs `path` and `ref`; `ref` is a tag, a branch or a full 40-character commit SHA (git can't fetch an abbreviated one). An entry without `repo` must exist at `packages/<name>/`. For each package, `office sync`:
+
+1. Copies a remote package's folder at `ref` into `packages/<name>/`, with the repository's licence when the folder has none, and records the repository, path, ref, commit and each file's SHA-256 in its `.source.json`. The copy is committed with the office, so a clone works with nothing fetched.
+2. Updates it when the entry's repository, path or ref differs from the record, replacing the whole folder. When a package file differs from the recorded copy (edited, added or removed), it refuses and names the files; restore them, or keep the edits by dropping `repo`, `path` and `ref`, which makes it the office's own package.
+3. Links each package skill into the root's `.opencode/skills/`, so every desk loads it with no `skills.enabled` entry. A package skill whose ID is also a library skill's, or another package's, is an error, and neither is linked.
+4. Copies each file under `template/` to the same path in the office once, and says what it created; a file already there is kept and counted as handled. `packages/<name>/.template.json` records the handled paths, kept across updates, so a file the office deletes stays deleted and an update creates only files a newer version adds. It never overwrites: from then on the file is the office's.
+5. Writes the settings, with defaults applied, to `packages/<name>/.settings.json` for the package's scripts. A setting the package doesn't declare, or a required one left out, is an error naming the field. Settings are not secrets: the file is committed, so a workflow can read it.
+6. Links its `plugin/` as `.opencode/plugins/<name>` (a relative link, committed like the skill links), which OpenCode loads for the root and every desk without an entry in `opencode.jsonc`. The plugin is package files: hashed, replaced on update, and a local edit blocks an update. A package whose name is the tool's `office` plugin, a `plugins:` entry, or a plugin folder of the office's own in `.opencode/plugins/` is an error, and its plugin isn't linked (package names are unique in `office.yaml`, so two packages can't meet there). When the entry leaves `office.yaml`, sync removes the link and the plugin stops loading; the package's folder stays until you delete it.
+
+A package plugin runs with nothing installed: there is no `node_modules` beside it. It imports only what the runtime provides (Node's and Bun's built-ins, and the `@opencode/plugin` and `effect` modules OpenCode gives every plugin), or ships its own bundle built with what it imports. OpenCode loads `plugin/server.ts`, else `plugin/index.ts` (or `.js`), or the entry exported by a `package.json` there that has `name` and `exports`. Its own path may be the link's or the package folder's, so it finds the office by walking up to `office.yaml`, never by a fixed number of folders.
+
+`.source.json`, `.settings.json` and `.template.json` are the office's records, so they are left out of the file hashes. A folder in `packages/` that `office.yaml` doesn't list is reported by `office check`, and its skills and plugin aren't linked. The office plugin lists each package with its description for every session.
+
+There is no registry, no dependency between packages and no version range: an office names a ref and updates by changing it. First-party packages live in this repository's `packages/`:
+
+| Package | Does |
+|---|---|
+| [`knowledge`](packages/knowledge/README.md) | Lists the office's `knowledge/` articles, with their descriptions, in every session, refreshed on each prompt. `office init` installs it from its own files, with the entry's `ref` set to the commit the `office` executable was built from, so nothing is fetched |
+| [`artifact-share`](packages/artifact-share/README.md) | The user asks an agent to share something; it goes in the office's `artifacts/`, which a workflow publishes as a GitHub Pages site with an index page. The site may be public, even for a private repository |
+
+### Upgrading an office from before the knowledge package
+
+Earlier releases wrote the knowledge plugin into every office as `.opencode/plugins/knowledge/`. `office check` reports that copy, and the next `office sync` removes it, recognised by its header. With a `knowledge` entry under `packages:`, sync installs the package and links its plugin in the copy's place. Without one, sync says sessions no longer list the articles and prints the entry to add, with `ref` set to the commit the `office` executable was built from; add it and sync again. Commit what sync changed. `knowledge/` and its articles are the office's, and sync never touches them.
 
 ## Git and GitHub
 

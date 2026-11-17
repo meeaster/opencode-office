@@ -1,0 +1,41 @@
+/* The artifacts site's plain default, for the index and rendered Markdown pages. An office replaces it with its own artifacts/style.css. */
+body {
+  max-width: 40rem;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+img {
+  max-width: 100%;
+}
+
+pre {
+  overflow-x: auto;
+  padding: 0.75rem;
+  background: #f4f4f4;
+}
+
+code {
+  font-family: ui-monospace, monospace;
+}
+
+.artifacts {
+  padding: 0;
+  list-style: none;
+}
+
+.artifacts li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #ddd;
+}
+
+time,
+.source {
+  color: #666;
+  white-space: nowrap;
+}

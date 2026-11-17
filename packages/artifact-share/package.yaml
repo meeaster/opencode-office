@@ -1,0 +1,6 @@
+name: artifact-share
+description: Shares what the user asks to share as pages in the office's artifacts/ folder, published to a GitHub Pages site with an index.
+settings:
+  url:
+    description: The Pages site's base address, such as https://<owner>.github.io/<repository>, where each artifact is <url>/<artifact>/
+    required: true

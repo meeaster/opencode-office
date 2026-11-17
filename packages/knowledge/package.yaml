@@ -1,0 +1,2 @@
+name: knowledge
+description: Lists the office's knowledge articles (knowledge/**/*.md) with their descriptions in every session, refreshed on each prompt.

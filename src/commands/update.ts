@@ -13,10 +13,8 @@ import { basename, dirname, join } from "node:path";
 import { fetchBytes } from "../download.ts";
 import { OfficeError } from "../office.ts";
 import { ageMs, type Release, releaseByTag, releases } from "../releases.ts";
-import { type Build, build, toolPath, version } from "../tool.ts";
+import { type Build, build, toolPath, toolRepository, version } from "../tool.ts";
 import { compareVersions } from "../versions.ts";
-
-const repo = "meeaster/opencode-office";
 
 /** The tags the release workflow publishes: the package version and the UTC time of the build. */
 const releaseTag = /^\d+\.\d+\.\d+-\d{8}T\d{6}Z$/;
@@ -90,7 +88,7 @@ export type Selection = {
 export function selectRelease(listed: Release[], current: Build, age: string, now = Date.now()): Selection {
   const office = listed.filter((release) => releaseTag.test(release.tag_name) && !release.draft && release.published_at !== null);
 
-  if (office.length === 0) throw new OfficeError(`${repo} has no published releases of office`);
+  if (office.length === 0) throw new OfficeError(`${toolRepository} has no published releases of office`);
 
   office.sort((left, right) => compareVersions(right.tag_name, left.tag_name));
 
@@ -118,7 +116,7 @@ export function selectRelease(listed: Release[], current: Build, age: string, no
 /** The newest eligible release (see selectRelease), when it is newer than this `office`. */
 async function newest(current: Build, age: string): Promise<Download | undefined> {
   // The workflow keeps ten releases, but further pages are read so an old enough release is never missed.
-  const { chosen, tooNew, incomplete, baseline } = selectRelease(await releases(repo, 10), current, age);
+  const { chosen, tooNew, incomplete, baseline } = selectRelease(await releases(toolRepository, 10), current, age);
 
   if (incomplete.length > 0) console.log(`skipped, without ${sumsName}: ${incomplete.join(", ")}`);
 
@@ -150,9 +148,9 @@ async function newest(current: Build, age: string): Promise<Download | undefined
 async function exact(current: Build, tag: string): Promise<Download | undefined> {
   if (!releaseTag.test(tag)) throw new OfficeError(`${tag} isn't an office release; releases are named like 0.1.0-20261116T163238Z`);
 
-  const release = await releaseByTag(repo, tag);
+  const release = await releaseByTag(toolRepository, tag);
 
-  if (release === undefined || release.draft || release.published_at === null) throw new OfficeError(`${repo} has no release ${tag}`);
+  if (release === undefined || release.draft || release.published_at === null) throw new OfficeError(`${toolRepository} has no release ${tag}`);
 
   if (current.version === tag && !current.dirty) {
     console.log(`already running ${tag}`);

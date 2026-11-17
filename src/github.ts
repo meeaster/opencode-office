@@ -18,7 +18,7 @@ import { type Office, OfficeError, updateConfig } from "./office.ts";
 import { check } from "./schema.ts";
 import { compareVersions } from "./versions.ts";
 
-/** A declared clone source: a reference, desk repository, plugin or copied skill. */
+/** A declared clone source: a reference, desk repository, plugin, copied skill or package. */
 export type Source = { what: string; url: string; pushes: boolean };
 
 export function sources(office: Office): Source[] {
@@ -26,6 +26,7 @@ export function sources(office: Office): Source[] {
     // Desk repositories are working clones that agents commit in and push from.
     ...clones(office).map((clone) => ({ what: `${clone.kind} ${clone.name}`, url: clone.url, pushes: clone.kind !== "reference" && clone.kind !== "plugin" })),
     ...office.skills.copied.map((skill) => ({ what: `copied skill ${skill.name}`, url: skill.repo, pushes: false })),
+    ...office.packages.flatMap((entry) => (entry.source === undefined ? [] : [{ what: `package ${entry.name}`, url: entry.source.repo, pushes: false }])),
   ];
 }
 

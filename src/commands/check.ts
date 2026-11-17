@@ -8,8 +8,9 @@ import { join, relative } from "node:path";
 import { timerStates } from "../cron/host.ts";
 import { ghConfigDir, ghLogin, ghPin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
 import { installedTool } from "../host-tools.ts";
-import { clones, library, pluginDrift, skillSelections } from "../layout.ts";
-import { executorEnvFile, type Office, readEnvFile } from "../office.ts";
+import { clones, installedPackages, library, oldKnowledgePlugin, pluginDrift, pluginLinks, skillSelections } from "../layout.ts";
+import { executorEnvFile, type Office, readEnvFile, toolPlugins } from "../office.ts";
+import { localEdits, packageFolders, readRecord, settingsFile, settingsText, sourceFile } from "../packages.ts";
 import { pinnedTools } from "../schema.ts";
 import { version } from "../tool.ts";
 import { changes, defaultPins, describeMove, executorImage, isTested, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
@@ -51,6 +52,14 @@ async function drift(office: Office): Promise<string[]> {
   // A hand edit, or an office last synced by an older `office`; `office sync` restores the copy.
   for (const file of await pluginDrift(office)) problems.push(`${file.path} ${pluginProblems[file.state]} (office sync restores it)`);
 
+  if (oldKnowledgePlugin(office)) problems.push(".opencode/plugins/knowledge/ is the knowledge plugin earlier releases of office wrote, which the knowledge package replaced (office sync removes it)");
+
+  const plugins = pluginLinks(office);
+
+  for (const [name, target] of plugins.links) {
+    if (plugins.wanted.get(name) !== target) problems.push(`.opencode/plugins/${name} links to ${target}, the plugin of no declared package (office sync removes it)`);
+  }
+
   for (const skill of office.skills.copied) {
     if (!libraryIds.includes(skill.name)) problems.push(`copied skill skills/${skill.name} is missing`);
   }
@@ -63,21 +72,102 @@ async function drift(office: Office): Promise<string[]> {
       else if (!selection.links.has(skill) && !selection.folders.includes(skill)) problems.push(`${where}: ${skill} is enabled but not linked`);
     }
 
+    for (const skill of selection.packaged.keys()) {
+      if (!selection.links.has(skill) && !selection.folders.includes(skill)) problems.push(`${where}: package skill ${skill} is not linked`);
+    }
+
     for (const [entry, target] of selection.links) {
       const path = relative(office.dir, join(selection.folder, entry));
 
-      if (!selection.enabled.includes(entry)) problems.push(`${path} is linked but nothing enables it`);
+      if (!selection.wanted.includes(entry)) problems.push(`${path} is linked but nothing enables it`);
       else if (target !== selection.target(entry)) problems.push(`${path} points to ${target}, not ${selection.target(entry)}`);
     }
   }
 
+  const declaredPackages = new Set(office.packages.map((entry) => entry.name));
+
+  for (const folder of packageFolders(office)) {
+    if (!declaredPackages.has(folder)) problems.push(`packages/${folder}/ is not a package in office.yaml, so its skills and plugin aren't linked`);
+  }
+
   return problems;
+}
+
+/**
+ * One line per declared package: where it came from, whether its package files were edited
+ * since they were copied, whether its settings are valid and written, and the skills and plugin it links.
+ */
+function packageChecks(office: Office, report: Report): void {
+  const { installed, skills, plugins, problems } = installedPackages(office);
+  const links = pluginLinks(office);
+
+  for (const entry of office.packages) {
+    const item = installed.find((candidate) => candidate.entry.name === entry.name);
+    const own = problems.filter((problem) => problem.packages.includes(entry.name)).map((problem) => problem.message);
+
+    if (item === undefined) {
+      report(false, `package ${entry.name}`, own.join("; "));
+
+      continue;
+    }
+
+    const record = entry.source === undefined ? undefined : readRecord(item.dir);
+    const notes: string[] = [];
+    let ok: boolean | "warn" = own.length === 0;
+
+    if (entry.source === undefined) {
+      notes.push("authored in this office");
+    } else if (record === undefined) {
+      notes.push(`no readable ${sourceFile}; office sync can't update it`);
+      ok = false;
+    } else {
+      notes.push(`from ${record.repo} ${record.path} at ${record.commit.slice(0, 12)} (ref ${record.ref})`);
+
+      if (record.repo !== entry.source.repo || record.path !== entry.source.path || record.ref !== entry.source.ref) {
+        notes.push(`office.yaml asks for ${entry.source.ref}; office sync updates it`);
+        ok = false;
+      }
+
+      const edits = localEdits(item.dir, record);
+
+      if (edits.length > 0) {
+        notes.push(`package files edited locally, so an update would refuse: ${edits.join(", ")}`);
+        ok = ok === false ? false : "warn";
+      } else {
+        notes.push("package files as copied");
+      }
+    }
+
+    const settingsPath = join(item.dir, settingsFile);
+    const written = existsSync(settingsPath) && readFileSync(settingsPath, "utf8") === settingsText(item);
+
+    notes.push(written ? `settings valid and written to ${relative(office.dir, settingsPath)}` : `settings valid, but ${relative(office.dir, settingsPath)} doesn't hold them; office sync writes it`);
+
+    if (!written) ok = false;
+
+    const linked = item.skills.filter((skill) => skills.has(skill));
+
+    notes.push(`skills ${linked.join(", ") || "none"}${linked.length === 0 ? "" : " (root, so every desk loads them)"}`);
+
+    if (plugins.has(entry.name)) {
+      const pluginLinked = links.links.get(entry.name) === links.wanted.get(entry.name);
+
+      notes.push(pluginLinked ? `plugin linked as .opencode/plugins/${entry.name} (root, so every desk loads it)` : `plugin not linked; office sync links it as .opencode/plugins/${entry.name}`);
+
+      if (!pluginLinked) ok = false;
+    }
+
+    notes.push(...own);
+    report(ok, `package ${entry.name}`, notes.join("; "));
+  }
 }
 
 // OpenCode's list responses, with only the fields the check reads.
 type Listing<Item> = { data: Item[] };
 
 type McpServer = { name: string; status: { status: string; error?: string } };
+
+type LoadedPlugin = { source: { type: string; path?: string }; state: { status: string; error?: string } };
 
 async function getJson<Result>(url: string, headers: Record<string, string> = {}): Promise<Result> {
   const response = await fetch(url, { headers, signal: AbortSignal.timeout(10_000) });
@@ -110,7 +200,7 @@ async function settle<Result>(read: () => Promise<Result>, ready: (value: Result
 /** Skill IDs a session in `desk` (undefined: the root) must load, and the office's others it must not. */
 function expectedSkills(office: Office, desk: string | undefined) {
   const selections = skillSelections(office);
-  const own = (selection: { enabled: string[]; folders: string[] } | undefined) => (selection === undefined ? [] : [...selection.enabled, ...selection.folders]);
+  const own = (selection: { wanted: string[]; folders: string[] } | undefined) => (selection === undefined ? [] : [...selection.wanted, ...selection.folders]);
   const root = selections.find((selection) => selection.desk === undefined);
   const mine = desk === undefined ? [] : own(selections.find((selection) => selection.desk === desk));
   const expected = new Set([...own(root), ...mine]);
@@ -204,6 +294,25 @@ async function runtime(office: Office, report: Report): Promise<void> {
         `${where}: skills`,
         [`loads ${expected.join(", ") || "none of the office's"}`, ...(missing.length > 0 ? [`MISSING ${missing.join(", ")}`] : []), ...(leaked.length > 0 ? [`SHOULD NOT LOAD ${leaked.join(", ")}`] : [])].join("; "),
       );
+
+      // The root's plugins, which every desk loads: the tool's and each package's. A folder
+      // still loading lists none of them yet.
+      const plugins = [...toolPlugins, ...installedPackages(office).plugins.keys()];
+      const folder = `${base}/.opencode/plugins/`;
+
+      // Each plugin OpenCode loaded from the root's .opencode/plugins/, by folder name.
+      const byName = (answer: Listing<LoadedPlugin>) =>
+        new Map(answer.data.flatMap(({ source, state }) => (source.type === "local" && source.path?.startsWith(folder) ? [[source.path.slice(folder.length), state] as const] : [])));
+
+      const states = byName(await settle(() => getJson<Listing<LoadedPlugin>>(`${opencode}/api/plugin`, headers), (answer) => plugins.every((name) => byName(answer).has(name))));
+
+      const pluginProblems = plugins.flatMap((name) => {
+        const state = states.get(name);
+
+        return state === undefined ? [`${name} not loaded`] : state.status === "active" ? [] : [`${name} failed: ${state.error ?? "no error given"}`];
+      });
+
+      report(pluginProblems.length === 0, `${where}: plugins`, pluginProblems.length === 0 ? `${plugins.join(", ")} active` : pluginProblems.join("; "));
 
       const mcp = await settle(
         () => getJson<Listing<McpServer>>(`${opencode}/api/mcp`, headers),
@@ -409,6 +518,8 @@ export async function check(office: Office): Promise<boolean> {
   report(problems.length === 0, "office.yaml and folders", problems.length === 0 ? "in sync" : `${problems.length} problems`);
 
   for (const problem of problems) console.log(`     - ${problem}`);
+
+  packageChecks(office, report);
 
   const apps = appFolders(office);
 

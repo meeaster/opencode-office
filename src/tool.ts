@@ -1,6 +1,7 @@
-// The tool's own files (the template, the plugins, the image files and the base compose file),
-// its version, and the command that runs it. In the compiled executable the files are embedded
-// assets under import.meta.dir (/$bunfs/root); run from a checkout, they are the repository's.
+// The tool's own files (the template, the plugin bundles, the first-party packages, the image
+// files and the base compose file), its version, and the command that runs it. In the compiled
+// executable the files are embedded assets under import.meta.dir (/$bunfs/root); run from a
+// checkout, they are the repository's.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -9,7 +10,7 @@ import { dirname, join, relative, resolve } from "node:path";
 
 import manifest from "../package.json";
 
-/** The commit `src/build.ts` compiled from, with "+uncommitted" for a tree with changes. Defined only in the executable. */
+/** The full commit `src/build.ts` compiled from, with "+uncommitted" for a tree with changes. Defined only in the executable. */
 declare const OFFICE_COMMIT: string;
 
 /** The version `src/build.ts` compiled, such as 0.1.0 or a release's 0.1.0-20261116T154210Z. Defined only in the executable. */
@@ -17,13 +18,19 @@ declare const OFFICE_VERSION: string;
 
 const root = Bun.isStandaloneExecutable ? import.meta.dir : resolve(import.meta.dir, "..");
 
+/** The tool's GitHub repository, which publishes its releases and first-party packages. */
+export const toolRepository = "meeaster/opencode-office";
+
 /** A path inside the tool's files, such as "template/office" or "plugins/office". */
 export function toolPath(path: string): string {
   return join(root, path);
 }
 
-/** The asset folders `src/build.ts` embeds, each a path relative to the repository root. */
-export const assets = ["template", "target/plugins", "image", "compose.yaml"];
+/**
+ * The asset folders and files `src/build.ts` embeds, each a path relative to the repository root.
+ * `packages` and `LICENSE` are there so `office init` can install the knowledge package offline.
+ */
+export const assets = ["template", "target/plugins", "packages", "LICENSE", "image", "compose.yaml"];
 
 /**
  * A tool plugin bundled into one `index.js` with what it imports (the shared office.yaml schema
@@ -79,20 +86,27 @@ export function toolFiles(folder: string): string[] {
     .sort();
 }
 
-/** The commit of the checkout, for a run from source; "+uncommitted" when the tree has changes. */
+/** The full commit of the checkout, for a run from source; "+uncommitted" when the tree has changes. */
 export function checkoutCommit(): string {
   const git = (args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
 
-  return `${git(["rev-parse", "--short=12", "HEAD"])}${git(["status", "--porcelain"]) === "" ? "" : "+uncommitted"}`;
+  return `${git(["rev-parse", "HEAD"])}${git(["status", "--porcelain"]) === "" ? "" : "+uncommitted"}`;
+}
+
+/** The full commit the tool was built from (run from a checkout, its HEAD), and whether the tree had changes. */
+export function buildCommit() {
+  const [sha = "", dirty] = (Bun.isStandaloneExecutable ? OFFICE_COMMIT : checkoutCommit()).split("+");
+
+  return { sha, dirty: dirty !== undefined };
 }
 
 /** What an `office` was built from: its version, the commit's 12-character hash, and whether the tree had changes. */
 export type Build = { version: string; commit: string; dirty: boolean };
 
 export function build(): Build {
-  const [commit = "", dirty] = (Bun.isStandaloneExecutable ? OFFICE_COMMIT : checkoutCommit()).split("+");
+  const { sha, dirty } = buildCommit();
 
-  return { version: Bun.isStandaloneExecutable ? OFFICE_VERSION : manifest.version, commit, dirty: dirty !== undefined };
+  return { version: Bun.isStandaloneExecutable ? OFFICE_VERSION : manifest.version, commit: sha.slice(0, 12), dirty };
 }
 
 /** `office --version`: the version and the commit it was built from. */

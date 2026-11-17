@@ -1,0 +1,55 @@
+# Builds artifacts/ into a GitHub Pages site with the artifact-share package's script and deploys
+# it, on a push to main that changes them, or by hand. Set the repository's Pages source to
+# "GitHub Actions" once (Settings → Pages). The site may be public, even for a private repository.
+name: publish-artifacts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "artifacts/**"
+      - "packages/artifact-share/scripts/**"
+      - "packages/artifact-share/.settings.json"
+      - ".github/workflows/publish-artifacts.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+# One deployment at a time; a newer push waits rather than cancelling one in progress.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # check out the office
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The whole history, so each artifact is dated by its last commit.
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - run: bun packages/artifact-share/scripts/build-site.ts "$RUNNER_TEMP/site"
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/site
+
+  deploy:
+    name: Deploy to Pages
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write # publish the site
+      id-token: write # prove the deployment comes from this workflow
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

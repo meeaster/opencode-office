@@ -1,6 +1,6 @@
 ---
 name: office
-description: Configure or onboard this office with office.yaml and office setup; change desks, references, skills, plugins, Executor apps, cron jobs, its git identity or GitHub access.
+description: Configure or onboard this office with office.yaml and office setup; change desks, references, skills, plugins, packages, Executor apps, cron jobs, its git identity or GitHub access.
 ---
 
 # Working on the office
@@ -14,7 +14,9 @@ Use `office` from any folder inside the office; `office.yaml` declares its struc
 | Add a reference | Add `{ name, url, ref?, description }` under `references:`, then `office sync` |
 | Add a skill | Create `skills/<id>/SKILL.md`, enable it under `skills.enabled` (every desk) or `desks.<desk>.skills` (one desk), then `office sync` to link it |
 | Copy a skill from another repository | Add `{ name, repo, ref, path }` under `skills.copied`, enable it, then `office sync`. Commit the copy |
-| Add a plugin | A local plugin goes in `.opencode/plugins/<name>/`; `office` and `knowledge` there belong to the tool, and `office sync` replaces edits to them. A published one is one line in `.opencode/opencode.jsonc` `plugins`. One developed in another repository goes under `plugins:` in `office.yaml` |
+| Add a plugin | A local plugin goes in `.opencode/plugins/<name>/`; `office` there belongs to the tool (`office sync` replaces edits to it), and the links there are packages' plugins, which `office sync` keeps. A published one is one line in `.opencode/opencode.jsonc` `plugins`. One developed in another repository goes under `plugins:` in `office.yaml` |
+| Add a package | Add `{ name, repo, path, ref, settings }` under `packages:` (`ref` a tag or full commit SHA; `settings` as its `package.yaml` declares), then `office sync` and commit what it writes. Its skills and plugin load everywhere with no `skills.enabled` or `opencode.jsonc` edit; files it creates outside `packages/<name>/` are the office's, created once (a deleted one stays deleted). To update, change `ref` and sync; sync refuses while files inside `packages/<name>/` differ from the copy, and names them |
+| Write a package for this office | `packages/<name>/` with `package.yaml` (`name`, `description`, `settings`, each with `description` and `default` or `required: true`), `skills/<id>/SKILL.md`, `plugin/` (an OpenCode plugin importing only Node's and Bun's built-ins, `@opencode/plugin` and `effect`, finding the office by walking up to `office.yaml`), `scripts/`, `template/`; list it under `packages:` with only its `name` and `settings`, then `office sync` |
 | Change a desk's Executor app | Edit `<desk>/executor/apps/<desk>/`, then `office apps deploy` |
 | Add a file-system job | Add a script to `cron/` and a line to `cron/crontab`: a five-field cron expression (UTC) or `@daily`, then the command, run from the office root. Restart the container with `office up`. A job that exits 0 is stamped; one missed while the container was down runs at its next start |
 | Pin a tool | Exact versions in the root's or a desk's `mise.toml`. The daily `upgrade-tools` job bumps them and commits as the office's identity, else `office cron`; it skips a file with uncommitted changes |

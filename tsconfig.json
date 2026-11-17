@@ -12,5 +12,5 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["src", "plugins", "bin/office"]
+  "include": ["src", "plugins", "packages", "bin/office"]
 }

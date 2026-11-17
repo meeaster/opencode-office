@@ -14,7 +14,7 @@ import { check, type OfficeConfig, officeSchema, type PinnedTool } from "./schem
 export const containerOfficeDir = "/home/assistant/workspace";
 
 /** The plugins the tool owns; `office sync` keeps each office's copies current. */
-export const toolPlugins = ["office", "knowledge"];
+export const toolPlugins = ["office"];
 
 export class OfficeError extends Error {}
 
@@ -23,6 +23,8 @@ export type Repository = OfficeConfig["references"][number];
 export type Desk = { name: string } & OfficeConfig["desks"][string];
 
 export type CopiedSkill = OfficeConfig["skills"]["copied"][number];
+
+export type PackageEntry = OfficeConfig["packages"][number];
 
 /**
  * Where OpenCode runs. Container mode: the office's `opencode` container. Host mode: an OpenCode
@@ -49,6 +51,7 @@ export type Office = {
   desks: Desk[];
   skills: OfficeConfig["skills"];
   plugins: { name: string; url: string; ref?: string }[];
+  packages: PackageEntry[];
 };
 
 /** Walks up from `start` to the nearest folder holding office.yaml. */
@@ -121,6 +124,7 @@ export function loadOffice(dir: string): Office {
     desks: Object.entries(config.desks).map(([deskName, desk]) => ({ name: deskName, ...desk })),
     skills: config.skills,
     plugins: config.plugins.map((plugin) => ({ name: plugin.name, url: plugin.repo, ref: plugin.ref })),
+    packages: config.packages,
   };
 }
 

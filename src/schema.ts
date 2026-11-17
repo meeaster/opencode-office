@@ -45,8 +45,8 @@ const desk = v.nullish(
   {},
 );
 
-// The tool's own plugins live under these names, so a cloned plugin there would fight `office sync`.
-const reservedPlugins = ["office", "knowledge"];
+// The tool's own plugin lives under this name, so a cloned plugin there would fight `office sync`.
+const reservedPlugins = ["office"];
 
 const plugin = v.strictObject(
   {
@@ -106,6 +106,31 @@ const skills = v.nullish(
   {},
 );
 
+/** A package setting's value; settings are written to JSON for the package's scripts. */
+const settingValue = v.union([v.string(), v.number(), v.boolean()], "must be text, a number or true/false");
+
+// A package installed from a folder of another repository at a ref, or, without `repo`, authored
+// in the office under packages/<name>/.
+const packageEntry = v.pipe(
+  v.strictObject(
+    {
+      name,
+      repo: v.optional(text),
+      path: v.optional(text),
+      ref: v.optional(text),
+      settings: v.nullish(v.record(v.string(), settingValue, "must map setting names to values"), {}),
+    },
+    mapping,
+  ),
+  v.check((entry) => (entry.repo === undefined ? entry.path === undefined && entry.ref === undefined : entry.path !== undefined && entry.ref !== undefined), "needs repo, path and ref together, or none of them for a package in packages/<name>/"),
+  // The check above makes the three all present or all absent; `source` carries that as a type.
+  v.transform(({ name: packageName, settings, repo, path, ref }) => ({
+    name: packageName,
+    settings,
+    source: repo !== undefined && path !== undefined && ref !== undefined ? { repo, path, ref } : undefined,
+  })),
+);
+
 // The office's commit identity, set as git defaults where the office runs git (repository config
 // still overrides), and how HTTPS remotes authenticate: `gh` shares the host's gh login.
 const git = v.optional(
@@ -136,11 +161,32 @@ export const officeSchema = v.strictObject(
     desks: v.nullish(v.record(name, desk, "must map desk names to desks"), {}),
     skills,
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
+    packages: v.pipe(v.nullish(v.array(packageEntry, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
   },
-  "must be a mapping of name, state, opencode, git, secrets, claude, versions, upgrades, references, desks, skills and plugins",
+  "must be a mapping of name, state, opencode, git, secrets, claude, versions, upgrades, references, desks, skills, plugins and packages",
 );
 
 export type OfficeConfig = v.InferOutput<typeof officeSchema>;
+
+/** A setting a package accepts: what it means, and a default or `required: true`. */
+const packageSetting = v.pipe(
+  v.strictObject({ description: text, default: v.optional(settingValue), required: v.optional(v.literal(true, "must be true, or left out with a default")) }, mapping),
+  v.check((setting) => (setting.default === undefined) !== (setting.required === undefined), "needs a default or required: true, not both"),
+);
+
+/** A package's packages/<name>/package.yaml: what can't be discovered from its folders. */
+export const packageManifestSchema = v.strictObject(
+  {
+    name,
+    description: text,
+    settings: v.nullish(v.record(v.string(), packageSetting, "must map setting names to settings"), {}),
+  },
+  "must be a mapping of name, description and settings",
+);
+
+export type PackageManifest = v.InferOutput<typeof packageManifestSchema>;
+
+export type SettingValue = v.InferOutput<typeof settingValue>;
 
 /** One locked pin: a version and the SHA-256 of what the image downloads (Executor: its image digest). */
 const lockEntry = v.strictObject({ version, digest: v.pipe(v.string(), v.regex(/^sha256:[0-9a-f]{64}$/, "must be sha256:<64 hex digits>")) });
