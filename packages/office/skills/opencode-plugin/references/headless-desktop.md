@@ -20,7 +20,7 @@ It returns within seconds, once the sidecar lists the panel, the session exists 
 
 ## See the panel
 
-Use an `agent-browser` session name of your own, and absolute paths for screenshots.
+With `agent-browser`, which the office's `browser` package installs (see the skill's Verify step when it is missing). Use a session name of your own, and absolute paths for screenshots.
 
 ```sh
 agent-browser --session <name> connect <cdpPort>

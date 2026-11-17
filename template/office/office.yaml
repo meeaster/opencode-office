@@ -68,7 +68,7 @@ plugins: []
 # Optional capabilities. Each package's plugin loads in every session and gives it the package's
 # skills, tools and MCP servers, and each file of its template/ is copied once into the office (a
 # file you delete stays deleted). A package is one of three kinds:
-# - built-in, listed by name alone: shipped inside the office executable (knowledge,
+# - built-in, listed by name alone: shipped inside the office executable (knowledge, browser,
 #   artifact-share, design), installed in .office/packages/<name>/ and updated along with office. The
 #   office package is always installed, without an entry.
 # - with repo, path and ref (a tag or a full commit SHA): copied from that repository into
@@ -76,11 +76,15 @@ plugins: []
 # - written in this office, listed by name alone: packages/<name>/.
 # .office/packages/ is read-only: office sync restores edited files there. To change such a
 # package, copy it into packages/ under a name of your own. Settings aren't secrets: sync writes
-# them to the package's .settings.json, which is committed. Commit what sync writes. Removing an
-# entry and syncing uninstalls a built-in or copied package, keeping template files you changed.
+# them to the package's .settings.json, which is committed. A package's mise tools go in
+# .mise/conf.d/<name>.toml, whose versions are this office's to change. Commit what sync writes.
+# Removing an entry and syncing uninstalls a built-in or copied package, keeping template files you changed.
 packages:
   # Lists the articles in knowledge/ in every session.
   - name: knowledge
+  # Browser automation: agent-browser (headless Chromium, a mise tool) and, where it is installed,
+  # Browse (the user's own Chrome), each an MCP server in every session.
+  - name: browser
 #  - name: artifact-share
 #    settings:
 #      url: https://<owner>.github.io/<repository>

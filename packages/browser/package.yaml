@@ -1,0 +1,11 @@
+name: browser
+description: Browser automation for agents. agent-browser drives the office's own headless Chromium; Browse drives the user's own Chrome, with their logins, where its binary is installed. Each is an MCP server in every session where its command is found.
+settings:
+  agent_browser_tools:
+    description: The tool profiles the agent-browser MCP server starts with (`agent-browser mcp --tools`), comma-separated, such as core, core,network or all; empty for no agent-browser server
+    default: core
+  browse:
+    description: Whether sessions get the browse MCP server when the Browse binary is installed
+    default: true
+tools:
+  "npm:agent-browser": "0.43.0"

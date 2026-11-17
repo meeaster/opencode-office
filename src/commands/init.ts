@@ -1,5 +1,5 @@
 // `office init <dir>`: a new office from the template, with one example desk and the built-in
-// knowledge package, as a git repository on branch main. Its office.yaml starts at the tool's
+// knowledge and browser packages, as a git repository on branch main. Its office.yaml starts at the tool's
 // versions, which office.lock pins.
 import { existsSync, readdirSync } from "node:fs";
 import { basename, resolve } from "node:path";
@@ -24,8 +24,9 @@ export async function init(target: string, name: string | undefined) {
   });
   writeLock(dir, defaultPins);
 
-  // Installs the built-in office and knowledge packages from this executable and links their
-  // plugins, scaffolds the example desk and links the enabled skills.
+  // Installs the built-in office, knowledge and browser packages from this executable, writes the
+  // browser package's mise tools, links their plugins, scaffolds the example desk and links the
+  // enabled skills.
   const changes = await sync(loadOffice(dir));
 
   // main whatever git's default branch is on this machine.

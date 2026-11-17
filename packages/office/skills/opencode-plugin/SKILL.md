@@ -47,7 +47,7 @@ When the docs run out, read the OpenCode source ([anomalyco/opencode](https://gi
 A plugin is done when a fresh server lists it active and what it registers works when used. A panel is done when it has been seen rendering, with data from its RPC, and a rebuild changes what is seen. Typechecks, a build and a listing prove none of that.
 
 1. **Server part.** `office check` shows, per folder, the package's plugin active and its skills. Use what it registers: load the skill, run the command, call the RPC from the panel.
-2. **Panel, every change.** Run the headless Linux desktop app, isolated under `/tmp`, from WSL or inside the office container: [references/headless-desktop.md](references/headless-desktop.md). It needs `agent-browser` on PATH (`command -v agent-browser`). Without it, stop at the sidecar's listing and report: "agent-browser isn't on PATH, so the panel wasn't seen rendering"; leave installing it to the user.
+2. **Panel, every change.** Run the headless Linux desktop app, isolated under `/tmp`, from WSL or inside the office container: [references/headless-desktop.md](references/headless-desktop.md). It needs `agent-browser` on PATH (`command -v agent-browser`), which the office's `browser` package provides. Without it, stop at the sidecar's listing and report: "agent-browser isn't on PATH, so the panel wasn't seen rendering; the office needs the browser package (`- name: browser` under `packages:`, then `office sync` and `mise install`)"; leave adding it to the user.
 3. **Panel, before calling it done for a Windows user.** Check the installed copy in their Windows app: [references/windows-desktop.md](references/windows-desktop.md).
 
 Report which checks ran and name the gap each leaves:
