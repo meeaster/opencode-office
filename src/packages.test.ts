@@ -167,3 +167,69 @@ test("a template file is copied once: one the office deletes stays deleted, one 
   expect(existsSync(join(office, "notes/AGENTS.md"))).toBe(false);
   expect(install()).toEqual([]);
 });
+
+test("sync removes an unedited package whose entry is gone with the template files it still holds, and leaves changed files and the office's own beside them", async () => {
+  const repo = join(dir, "repo");
+  const office = join(dir, "office");
+
+  write(join(repo, "pkgs/demo/package.yaml"), manifest);
+  write(join(repo, "pkgs/demo/skills/demo-skill/SKILL.md"), "---\nname: demo-skill\ndescription: Demo.\n---\n");
+  write(join(repo, "pkgs/demo/template/.github/workflows/publish.yml"), "on: push\n");
+  write(join(repo, "pkgs/demo/template/out/AGENTS.md"), "from the package\n");
+  write(join(repo, "pkgs/demo/template/out/README.md"), "from the package\n");
+  git(["init", "--quiet", repo]);
+  git(["add", "-A"], repo);
+  git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "-m", "one"], repo);
+
+  write(join(office, "office.yaml"), `name: t\npackages:\n  - name: demo\n    repo: ${repo}\n    path: pkgs/demo\n    ref: ${git(["rev-parse", "HEAD"], repo)}\n    settings: { url: https://example.com }\n`);
+  git(["init", "--quiet", office]);
+  await sync(loadOffice(office));
+  write(join(office, "out/README.md"), "the office changed this\n");
+  write(join(office, "out/my-page/index.md"), "the office's own\n");
+  write(join(office, ".github/dependabot.yml"), "version: 2\n");
+  write(join(office, "office.yaml"), "name: t\n");
+
+  const changes = await sync(loadOffice(office));
+
+  expect(changes).toEqual([
+    "deleted .github/workflows/publish.yml, which package demo created",
+    "deleted out/AGENTS.md, which package demo created",
+    "kept out/README.md, which changed since package demo wrote it",
+    "removed packages/demo/, which office.yaml no longer lists",
+    "unlinked .opencode/skills/demo-skill",
+  ]);
+  expect(existsSync(join(office, "packages/demo"))).toBe(false);
+  expect(existsSync(join(office, ".github/workflows"))).toBe(false);
+  expect(readFileSync(join(office, ".github/dependabot.yml"), "utf8")).toBe("version: 2\n");
+  expect(readFileSync(join(office, "out/README.md"), "utf8")).toBe("the office changed this\n");
+  expect(readFileSync(join(office, "out/my-page/index.md"), "utf8")).toBe("the office's own\n");
+  expect(await sync(loadOffice(office))).toEqual([]);
+});
+
+test("sync refuses to remove an edited package whose entry is gone, and never removes a package authored in the office", async () => {
+  const repo = join(dir, "repo");
+  const office = join(dir, "office");
+
+  write(join(repo, "pkgs/demo/package.yaml"), manifest);
+  write(join(repo, "pkgs/demo/template/out/AGENTS.md"), "from the package\n");
+  git(["init", "--quiet", repo]);
+  git(["add", "-A"], repo);
+  git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "-m", "one"], repo);
+
+  const ref = git(["rev-parse", "HEAD"], repo);
+
+  write(join(office, "office.yaml"), `name: t\npackages:\n  - name: demo\n    repo: ${repo}\n    path: pkgs/demo\n    ref: ${ref}\n    settings: { url: https://example.com }\n`);
+  git(["init", "--quiet", office]);
+  await sync(loadOffice(office));
+  write(join(office, "packages/demo/package.yaml"), `${manifest}# edited\n`);
+  write(join(office, "packages/own/package.yaml"), "name: own\ndescription: Authored here.\n");
+  write(join(office, "office.yaml"), "name: t\n");
+
+  const [refusal, ...rest] = await sync(loadOffice(office));
+
+  expect(refusal).toStartWith(`FAILED packages/demo: not removed, though office.yaml no longer lists it, because package files differ from the copy of ${ref}: package.yaml (edited).`);
+  expect(rest).toEqual([]);
+  expect(readFileSync(join(office, "out/AGENTS.md"), "utf8")).toBe("from the package\n");
+  expect(existsSync(join(office, "packages/demo/.source.json"))).toBe(true);
+  expect(existsSync(join(office, "packages/own/package.yaml"))).toBe(true);
+});

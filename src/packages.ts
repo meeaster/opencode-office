@@ -4,7 +4,7 @@
 // package declared with `repo` is copied from that repository at `ref` and recorded in
 // `.source.json`; one without is authored in the office. Both are committed with the office.
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 import * as v from "valibot";
@@ -211,6 +211,54 @@ export function fetchPackage(office: Office, name: string, source: NonNullable<P
 
     return [`FAILED ${where}: ${error instanceof Error ? error.message.trim() : String(error)}`];
   }
+}
+
+/**
+ * Removes a package copied from a repository whose entry left office.yaml: each template file it
+ * created that is still the package's copy, the folders those deletions emptied, then
+ * `packages/<name>/`. Changed template files stay with the office. With local edits to package
+ * files, or an unreadable `.template.json`, it changes nothing and says why. Returns one line per
+ * change; a refusal starts with FAILED.
+ */
+export function removePackage(office: Office, name: string, record: PackageRecord): string[] {
+  const dir = packageDir(office, name);
+  const where = relative(office.dir, dir);
+  const edits = localEdits(dir, record);
+
+  if (edits.length > 0) {
+    return [
+      `FAILED ${where}: not removed, though office.yaml no longer lists it, because package files differ from the copy of ${record.ref}: ${edits.join(", ")}. Restore them (git checkout -- ${where}) to remove it, or keep the edits by listing it again without repo, path and ref, which makes it a package of this office`,
+    ];
+  }
+
+  const recordPath = join(dir, templateFile);
+  const read: Parsed<string[]> = existsSync(recordPath) ? readJson(recordPath, v.array(v.string())) : { ok: true, value: [] };
+
+  if (!read.ok) return [`FAILED ${where}: not removed, because ${relative(office.dir, recordPath)} doesn't say which template files it created: ${read.errors.join("; ")}`];
+
+  const changes: string[] = [];
+
+  for (const file of read.value) {
+    const target = join(office.dir, file);
+    const copy = join(dir, "template", file);
+
+    if (!existsSync(target)) continue;
+
+    if (!existsSync(copy) || !readFileSync(target).equals(readFileSync(copy))) {
+      changes.push(`kept ${file}, which changed since package ${name} wrote it`);
+
+      continue;
+    }
+
+    rmSync(target);
+    changes.push(`deleted ${file}, which package ${name} created`);
+
+    for (let folder = dirname(target); relative(office.dir, folder) !== "" && readdirSync(folder).length === 0; folder = dirname(folder)) rmdirSync(folder);
+  }
+
+  rmSync(dir, { recursive: true });
+
+  return [...changes, `removed ${where}/, which office.yaml no longer lists`];
 }
 
 /**

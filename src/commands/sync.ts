@@ -1,16 +1,16 @@
 // `office sync`: makes the office's folders match office.yaml and the tool. It clones and updates,
 // refreshes the tool's plugin, scaffolds desks that are declared but missing, copies declared
-// skills into the library, installs and updates packages, and links enabled and package skills
-// and package plugins.
+// skills into the library, installs, updates and removes packages, and links enabled and package
+// skills and package plugins.
 // It never rewrites AGENTS.md, other hand-written content, an existing app or a file a package's
-// template created.
+// template created; it deletes such a file only with its package, and only while unchanged.
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { cloneOrFetch, cloneShallow, copyFromRepository, isClone, refreshClone } from "../git.ts";
 import { clones, installedPackages, oldKnowledgePlugin, packageLink, pluginDrift, pluginLinks, skillSelections } from "../layout.ts";
 import type { CopiedSkill, Desk, Office } from "../office.ts";
-import { fetchPackage, installPackage, sourceFile, toolPackageSource } from "../packages.ts";
+import { fetchPackage, installPackage, packageDir, packageFolders, readRecord, removePackage, sourceFile, toolPackageSource } from "../packages.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
 
 /** "release-notes" → "Release notes", for titles in scaffolded files. */
@@ -240,6 +240,13 @@ export async function sync(office: Office, { referencesOnly = false } = {}): Pro
 
   for (const entry of office.packages) {
     if (entry.source !== undefined) changes.push(...fetchPackage(office, entry.name, entry.source));
+  }
+
+  // Only a copy from a repository goes; a folder without a record is the office's own content.
+  for (const name of packageFolders(office)) {
+    const record = readRecord(packageDir(office, name));
+
+    if (record !== undefined && !office.packages.some((entry) => entry.name === name)) changes.push(...removePackage(office, name, record));
   }
 
   changes.push(...removeOldKnowledgePlugin(office));

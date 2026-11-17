@@ -71,6 +71,7 @@ plugins: []
 # With repo, path and ref (a tag or a full commit SHA) it is copied from that repository and
 # updated when ref changes; without them it is authored here. Settings aren't secrets: sync writes
 # them to packages/<name>/.settings.json, which is committed. Commit what sync writes.
+# Removing an entry from a repository and syncing uninstalls it, keeping template files you changed.
 packages:
   # Lists the articles in knowledge/ in every session.
   - name: knowledge

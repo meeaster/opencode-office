@@ -11,7 +11,7 @@ import { ghConfigDir, ghLogin, ghPin, githubHosts, gitHelper, isGhHelper, loginP
 import { installedTool } from "../host-tools.ts";
 import { clones, installedPackages, library, oldKnowledgePlugin, pluginDrift, pluginLinks, skillSelections } from "../layout.ts";
 import { executorEnvFile, type Office, readEnvFile, toolPlugins } from "../office.ts";
-import { localEdits, packageFolders, readRecord, settingsFile, settingsText, sourceFile } from "../packages.ts";
+import { localEdits, packageDir, packageFolders, readRecord, settingsFile, settingsText, sourceFile } from "../packages.ts";
 import { pinnedTools } from "../schema.ts";
 import { version } from "../tool.ts";
 import { changes, defaultPins, describeMove, executorImage, isTested, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
@@ -95,7 +95,21 @@ async function drift(office: Office): Promise<string[]> {
   const declaredPackages = new Set(office.packages.map((entry) => entry.name));
 
   for (const folder of packageFolders(office)) {
-    if (!declaredPackages.has(folder)) problems.push(`packages/${folder}/ is not a package in office.yaml, so its skills and plugin aren't linked`);
+    if (declaredPackages.has(folder)) continue;
+
+    const dir = packageDir(office, folder);
+    const record = readRecord(dir);
+
+    if (record === undefined) {
+      problems.push(`packages/${folder}/ is not a package in office.yaml, so its skills and plugin aren't linked`);
+
+      continue;
+    }
+
+    const edits = localEdits(dir, record);
+
+    if (edits.length === 0) problems.push(`packages/${folder}/ was copied from ${record.repo} and office.yaml no longer lists it (office sync removes it)`);
+    else problems.push(`packages/${folder}/ was copied from ${record.repo} and office.yaml no longer lists it, but package files differ from the copy, so office sync won't remove it: ${edits.join(", ")}`);
   }
 
   return problems;
