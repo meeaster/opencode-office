@@ -13,6 +13,7 @@ import { installPanel, locate, panelBundle, panelId, removalNote } from "../desk
 import { cloneOrFetch, cloneShallow, copyFromRepository, isClone, refreshClone } from "../git.ts";
 import { clones, installedPackages, oldKnowledgePlugin, packageLink, pluginLinks, skillSelections } from "../layout.ts";
 import { migrate } from "../migrate.ts";
+import { packageComposeFile } from "../package-services.ts";
 import type { CopiedSkill, Desk, Office } from "../office.ts";
 import { fetchPackage, installBuiltin, type InstalledPackage, installPackage, pulledDir, pulledFolders, removePackage, resolvePackages, sourceFile } from "../packages.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
@@ -224,8 +225,18 @@ export async function sync(loaded: Office, { referencesOnly = false } = {}): Pro
   const { packages } = resolvePackages(office);
 
   for (const item of packages) {
+    const services = join(item.dir, packageComposeFile);
+    const before = existsSync(services) ? readFileSync(services, "utf8") : undefined;
+
     if (item.kind === "built-in") changes.push(...(await installBuiltin(office, item.entry.name)));
     else if (item.kind === "remote" && item.entry.source !== undefined) changes.push(...fetchPackage(office, item.entry.name, item.entry.source));
+
+    // A pulled-in package's services run on this machine's Docker, so a new or changed file is worth seeing.
+    const after = existsSync(services) ? readFileSync(services, "utf8") : undefined;
+
+    if (after !== undefined && after !== before) {
+      changes.push(`package ${item.entry.name} ${before === undefined ? "adds" : "changes"} ${relative(office.dir, services)}, services that run on this machine's Docker; review it, then office up${before === undefined ? "" : " --upgrade"} applies it`);
+    }
   }
 
   // .office/packages/ holds only what sync pulled in, so a folder no package wants goes. Its panel

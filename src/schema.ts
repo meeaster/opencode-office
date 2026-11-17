@@ -176,15 +176,91 @@ const packageSetting = v.pipe(
   v.check((setting) => (setting.default === undefined) !== (setting.required === undefined), "needs a default or required: true, not both"),
 );
 
-/** A package's package.yaml: what can't be discovered from its folders. */
-export const packageManifestSchema = v.strictObject(
+/**
+ * How `office up` generates one of a package's secrets, once: `bytes` random bytes as `hex` or
+ * `base64`, after an optional fixed `prefix`. The prefix is kept to characters an env file holds unquoted.
+ */
+const packageSecret = v.strictObject(
   {
-    name,
-    description: text,
-    settings: v.nullish(v.record(v.string(), packageSetting, "must map setting names to settings"), {}),
+    generate: v.picklist(["hex", "base64"], "must be hex or base64"),
+    bytes: v.pipe(v.number("must be a number of bytes"), v.integer("must be a whole number"), v.minValue(16, "must be at least 16"), v.maxValue(1024, "must be at most 1024")),
+    prefix: v.optional(v.pipe(v.string("must be text"), v.regex(/^[A-Za-z0-9._:/+=-]*$/, "may hold only letters, digits and . _ : / + = -"))),
   },
-  "must be a mapping of name, description and settings",
+  mapping,
 );
+
+/** The prefix of every variable a package's compose file gets from office: its namespace in capitals, `-` as `_`. */
+export function packageVariablePrefix(namespace: string): string {
+  return `${namespace.toUpperCase().replaceAll("-", "_")}_`;
+}
+
+/** The variable a package setting reaches its compose file as, such as ARTIFACT_SHARE_URL. */
+export function settingVariable(namespace: string, setting: string): string {
+  return `${packageVariablePrefix(namespace)}${setting.toUpperCase().replaceAll(/[^A-Z0-9]/g, "_")}`;
+}
+
+/** A package's package.yaml: what can't be discovered from its folders. */
+export const packageManifestSchema = v.pipe(
+  v.strictObject(
+    {
+      name,
+      // What its services, volumes and variables are named after, when that isn't its name.
+      namespace: v.optional(name),
+      description: text,
+      settings: v.nullish(v.record(v.string(), packageSetting, "must map setting names to settings"), {}),
+      secrets: v.nullish(v.record(v.pipe(v.string(), v.regex(/^[A-Z][A-Z0-9_]*$/, "must be an environment variable name in capitals")), packageSecret, "must map variable names to how each is generated"), {}),
+    },
+    "must be a mapping of name, namespace, description, settings and secrets",
+  ),
+  v.transform((manifest) => ({ ...manifest, namespace: manifest.namespace ?? manifest.name })),
+  // Every compose file of the office is interpolated with the same process environment, which wins
+  // over a package's own values, so a package's secrets carry its namespace.
+  v.forward(
+    v.check((manifest) => Object.keys(manifest.secrets).every((key) => key.startsWith(packageVariablePrefix(manifest.namespace))), "each name must start with the package's namespace (its name unless it sets namespace:) in capitals and _ for -, such as DOOP_"),
+    ["secrets"],
+  ),
+  v.forward(
+    v.check((manifest) => Object.keys(manifest.settings).every((setting) => manifest.secrets[settingVariable(manifest.namespace, setting)] === undefined), "a name is also the variable of one of the package's settings"),
+    ["secrets"],
+  ),
+);
+
+/**
+ * A published port, read as whether it binds only 127.0.0.1: the short syntax binds every
+ * interface unless it starts with a host address (`127.0.0.1:8080:80`), the long syntax unless its
+ * `host_ip` is one.
+ */
+const composePort = v.union(
+  [
+    v.pipe(
+      v.string(),
+      v.transform((port) => ({ loopback: port.startsWith("127.0.0.1:") })),
+    ),
+    v.pipe(
+      v.number(),
+      v.transform(() => ({ loopback: false })),
+    ),
+    v.pipe(
+      v.looseObject({ host_ip: v.optional(v.string()) }),
+      v.transform((port) => ({ loopback: port.host_ip === "127.0.0.1" })),
+    ),
+  ],
+  "must be a port",
+);
+
+/** The parts of a Compose file office checks in a package's compose.yaml; anything else passes through to Compose. */
+export const composeFileSchema = v.looseObject(
+  {
+    services: v.nullish(v.record(v.string(), v.looseObject({ ports: v.optional(v.array(composePort)), network_mode: v.optional(v.string()) }, "must be a service")), {}),
+    volumes: v.nullish(v.record(v.string(), v.nullable(v.looseObject({ name: v.optional(v.string()), external: v.optional(v.boolean()) }, "must be a volume"))), {}),
+    networks: v.nullish(v.record(v.string(), v.nullable(v.looseObject({}))), {}),
+    configs: v.nullish(v.record(v.string(), v.nullable(v.looseObject({}))), {}),
+    secrets: v.nullish(v.record(v.string(), v.nullable(v.looseObject({}))), {}),
+  },
+  "must be a Compose file",
+);
+
+export type ComposeFile = v.InferOutput<typeof composeFileSchema>;
 
 export type PackageManifest = v.InferOutput<typeof packageManifestSchema>;
 

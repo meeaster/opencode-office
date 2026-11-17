@@ -14,6 +14,7 @@ import { installedTool } from "../host-tools.ts";
 import { clones, installedPackages, library, oldKnowledgePlugin, pluginLinks, skillSelections } from "../layout.ts";
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, pulledLocalFolders } from "../migrate.ts";
 import { executorEnvFile, type Office, readEnvFile } from "../office.ts";
+import { packageComposeFile, serviceStatus, sharedNamespaces } from "../package-services.ts";
 import { describeRecord, fileHashes, localEdits, localFolders, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
 import { pinnedTools } from "../schema.ts";
 import { builtinFiles, builtinPackages, version } from "../tool.ts";
@@ -161,9 +162,22 @@ async function pulledCopy(dir: string, kind: "built-in" | "remote", name: string
  */
 async function packageChecks(office: Office, report: Report): Promise<void> {
   const { installed, plugins, problems } = installedPackages(office);
+  const shared = sharedNamespaces(installed);
   const links = pluginLinks(office);
   const { packages } = resolvePackages(office);
   const reported = new Set<string>();
+  let running: string[] | undefined;
+
+  // Asked of Docker once, and only when a package has services; without Docker, nothing runs.
+  const runningServices = () => {
+    try {
+      running ??= servicesRunning(office);
+    } catch {
+      running = [];
+    }
+
+    return running;
+  };
 
   for (const { entry, kind, dir } of packages) {
     reported.add(entry.name);
@@ -203,6 +217,28 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
       ok = false;
       notes.push(`skills ${item.skills.join(", ")} don't load: the package has no plugin to register them${kind === "remote" ? " (move ref to a version that has one)" : ""}`);
     }
+
+    const services = serviceStatus(office, item);
+    const sharing = shared.get(entry.name);
+
+    if (sharing !== undefined) {
+      ok = false;
+      notes.push(`its namespace ${item.manifest.namespace} is also package ${sharing.join(" and ")}'s, so office up refuses both; give one another namespace: in its package.yaml`);
+    }
+
+    if (services.services.length > 0 || services.problems.length > 0) {
+      const running = runningServices().filter((service) => services.services.includes(service));
+      const state = running.length > 0 ? ` (running: ${running.join(", ")})` : runningServices().length > 0 && services.problems.length === 0 ? " (not running; office up starts them)" : "";
+
+      notes.push(`${packageComposeFile} contributes services ${services.services.join(", ") || "none"}${item.manifest.namespace === entry.name ? "" : ` in namespace ${item.manifest.namespace}`}${state}`);
+    }
+
+    if (services.problems.length > 0) {
+      ok = false;
+      notes.push(`${packageComposeFile} problems, so office up won't apply it: ${services.problems.join("; ")}`);
+    }
+
+    if (services.pending) notes.push(`its ${packageComposeFile} changed since office up applied it; office up --upgrade applies it`);
 
     if (plugins.has(entry.name)) {
       const pluginLinked = links.links.get(entry.name) === links.wanted.get(entry.name);
@@ -391,8 +427,13 @@ function officeVersions(office: Office, report: Report): void {
   report(container === host, "office versions", container === host ? `host and container run ${host}` : `host runs ${host}, the container ${container} (rebuild the image with office up)`);
 }
 
+/** The office's services that are running, whichever mode started them. */
+function servicesRunning(office: Office): string[] {
+  return compose(office, ["ps", "--status", "running", "--format", "{{.Service}}"], { capture: true, profiles: "container" }).split("\n").filter(Boolean);
+}
+
 async function runtime(office: Office, report: Report): Promise<void> {
-  const running = compose(office, ["ps", "--status", "running", "--format", "{{.Service}}"], { capture: true, profiles: "container" }).split("\n").filter(Boolean);
+  const running = servicesRunning(office);
 
   if (!running.includes("opencode") && !running.includes("executor")) {
     report(true, "containers", `not running (start them with office up)`);

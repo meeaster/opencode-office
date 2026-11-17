@@ -79,9 +79,9 @@ pre-commit install
 | `office setup [--owner-email <email>] [--generate-age-key] [--install-deps]` | Resumes onboarding after init or clone: checks prerequisites and secrets, the office's commit identity and GitHub, reads every source, syncs, starts Executor, bootstraps its owner and the office's organization-bound Executor key (see "The office's Executor key"), then starts OpenCode, deploys apps and checks. Human provider logins remain separate. `--generate-age-key` consents to creating a host identity/public recipient config. `--install-deps` authorizes host mise, SOPS and age (and gh) installs or updates. The identity and GitHub come from `office.yaml`'s `git` block; see "Git and GitHub" |
 | `office executor credentials [--password-only]` | Deliberately decrypts and reveals the stored owner login on the host, even with Executor stopped. Password-only writes exact password bytes, without a newline, for a clipboard pipe; it does not verify the live password |
 | `office sync [--references]` | Clones and updates references and desk repositories, refusing a clone path that holds anything but its own clone (or an empty folder), moves an office laid out by an earlier release to the current layout (see "Upgrading an office from before built-in packages"), scaffolds declared desks that are missing, copies declared skills into `skills/` (recording the commit in `.source.json`), installs, updates, restores and removes packages (see "Packages"), links enabled library skills into each `.opencode/skills/` and package plugins into `.opencode/plugins/`, clones declared plugins, and installs package panels on the desktop app's machine (see "Panels"). It never writes to `AGENTS.md` or other hand-written files |
-| `office check` | Reports drift between `office.yaml` and the folders, including what an earlier release's layout left that `office sync` moves on; one line per package (its kind and source, edits to a pulled-in copy, settings, plugin) and per package panel (installed, registered, this office's build); the versions and whether `office.lock` matches, a warning for versions outside the range this tool was tested with and for a pending upgrade; when the containers run, also whether they run the applied versions, Executor's health, whether the container's `office` is the host's (`office --version`), whether every app is deployed for the `apps` framework Executor serves; for the root and each desk, on the mode's OpenCode server, its agents, its skills (the library's it enables and each package's), its plugins (each package's, the `office` package's included, active) and its Executor connection; and the cron runner (supercronic in the container, or the host's timers); in container mode, the weekly image refresh timer and a warning when the image's Debian packages are more than eight days old |
+| `office check` | Reports drift between `office.yaml` and the folders, including what an earlier release's layout left that `office sync` moves on; one line per package (its kind and source, edits to a pulled-in copy, settings, plugin, and the services its `compose.yaml` contributes: their problems, a pending upgrade and, when the office runs, whether they run) and per package panel (installed, registered, this office's build); the versions and whether `office.lock` matches, a warning for versions outside the range this tool was tested with and for a pending upgrade; when the containers run, also whether they run the applied versions, Executor's health, whether the container's `office` is the host's (`office --version`), whether every app is deployed for the `apps` framework Executor serves; for the root and each desk, on the mode's OpenCode server, its agents, its skills (the library's it enables and each package's), its plugins (each package's, the `office` package's included, active) and its Executor connection; and the cron runner (supercronic in the container, or the host's timers); in container mode, the weekly image refresh timer and a warning when the image's Debian packages are more than eight days old |
 | `office instructions [folder]` | Prints the guidance the `office` package's plugin gives a session started in that folder, from the same code |
-| `office up [--upgrade] [--refresh]` / `office down` | Starts or stops the compose project `office-<name>`: `executor`, `opencode` (container mode only) and the office's own `compose.yaml`. `up` runs the versions it last applied and prints what `office.yaml` has moved to since; `--upgrade` applies those (see "Versions"). In container mode `up` builds the base image with this `office` inside it, and the office's `Dockerfile` on top of it when there is one, and installs the weekly image refresh timer; `--refresh` rebuilds with current Debian packages (see "Image refresh"). In host mode `up` also installs the office's `mise.toml` tools with the host's mise and the cron timers. `down` removes the timers. See "Host mode" |
+| `office up [--upgrade] [--refresh]` / `office down` | Starts or stops the compose project `office-<name>`: `executor`, `opencode` (container mode only), the services packages contribute and the office's own `compose.yaml`. `up` runs the versions and package compose files it last applied and prints what has changed since; `--upgrade` applies those (see "Versions" and "Services"). In container mode `up` builds the base image with this `office` inside it, and the office's `Dockerfile` on top of it when there is one, and installs the weekly image refresh timer; `--refresh` rebuilds with current Debian packages (see "Image refresh"). In host mode `up` also installs the office's `mise.toml` tools with the host's mise and the cron timers. `down` removes the timers. See "Host mode" |
 | `office shell` / `office exec -- <command...>` | A shell, or one command, in the running `opencode` container as its user, in the container folder matching the one you run it from (the office root, a desk, a repository in it; else the office root), with the container's home and mise's tools. `exec` forwards stdin and the exit status, and a terminal when both ends are one, so it works in pipes. Neither starts or rebuilds anything; in host mode they say to run commands on the host |
 | `office pin` | Writes `office.lock` for the versions `office.yaml` pins, looking up any it doesn't already hold on GitHub or Executor's registry |
 | `office pair [--origin <url>]` | Prints a one-time link that connects the OpenCode desktop app or a browser to the office's OpenCode server. It works once, within five minutes; the app stays signed in until the password changes. `--origin` replaces the address in the link |
@@ -95,7 +95,7 @@ pre-commit install
 
 | Path | What it is |
 |---|---|
-| `src/` | The CLI in TypeScript on Bun: `cli.ts` (arguments), `schema.ts` (the shape of `office.yaml`, `office.lock` and a package's `package.yaml`, shared with the `office` package's plugin), `office.ts` (reads `office.yaml`), `versions.ts` (pins, the lock, what was applied), `releases.ts` (release lookups on GitHub and the registry), `layout.ts` (what the folders should hold), `packages.ts` (the three kinds of package; installs, updates, restores and reads them), `migrate.ts` (moves an office from an earlier release's layout), `desktop.ts` (installs package panels on the desktop app's machine), `tool.ts` (the tool's own files, the built-in packages as offices get them, its version, the image's build folder), `build.ts` (compiles the executable), `vendor-artifact-share.ts` (regenerates the libraries the artifact-share package carries, from pinned devDependencies), `commands/` and `cron/` (`container.ts` for supercronic, `host.ts` for systemd timers). Runtime dependencies: `yaml` and `valibot` |
+| `src/` | The CLI in TypeScript on Bun: `cli.ts` (arguments), `schema.ts` (the shape of `office.yaml`, `office.lock` and a package's `package.yaml`, shared with the `office` package's plugin), `office.ts` (reads `office.yaml`), `versions.ts` (pins, the lock, what was applied), `releases.ts` (release lookups on GitHub and the registry), `layout.ts` (what the folders should hold), `packages.ts` (the three kinds of package; installs, updates, restores and reads them), `package-services.ts` (the services packages add: validation, generated secrets, the applied copies), `migrate.ts` (moves an office from an earlier release's layout), `desktop.ts` (installs package panels on the desktop app's machine), `tool.ts` (the tool's own files, the built-in packages as offices get them, its version, the image's build folder), `build.ts` (compiles the executable), `vendor-artifact-share.ts` (regenerates the libraries the artifact-share package carries, from pinned devDependencies), `commands/` and `cron/` (`container.ts` for supercronic, `host.ts` for systemd timers). Runtime dependencies: `yaml` and `valibot` |
 | `bin/office` | Runs the CLI from the checkout with Bun |
 | `template/office/` | What `office init` copies once: `AGENTS.md`, `README.md`, `office.yaml`, `.opencode/opencode.jsonc`, `executor/apps/opencode/`, `cron/`, `mise.toml` (with pre-commit), `.pre-commit-config.yaml` (gitleaks), `.gitignore` |
 | `template/desk/` | What `office sync` scaffolds for a new desk, including its starter Executor app, which a desk with `app: false` in `office.yaml` goes without |
@@ -121,6 +121,7 @@ The executable embeds `template/`, the built-in packages as offices get them (st
 | `OFFICE_OPENCODE_URL` | OpenCode as containers reach it: `http://opencode:4096`, or in host mode the configured URL with a loopback host replaced by `host.docker.internal`. The office's own services (a dashboard API) use it |
 | `OFFICE_GIT_NAME`, `OFFICE_GIT_EMAIL` | `office.yaml`'s `git` identity, which the container's entrypoint makes git's default; empty without one |
 | `OFFICE_GH_CONFIG`, `OFFICE_GH_HOSTS` | The host's gh configuration folder and the hosts it has accounts for, when the container shares the host's gh login (see "Git and GitHub") |
+| `<NAMESPACE>_<SETTING>`, and each secret | In a package's own `compose.yaml` only: its settings and generated secrets (see "Services") |
 
 The state folder holds:
 
@@ -131,7 +132,8 @@ The state folder holds:
 | `opencode-home/` | The container user's home: sessions, provider sign-ins, the Claude Code login, mise's tools |
 | `cron-gitconfig` | Host mode with a `git` identity: the global git config the cron timers run with (yours, included, then the office's identity) |
 | `applied.json` | The versions `office up` last applied, the highest OpenCode and Executor the office has run, and when the opencode image last took current Debian packages (`refreshed`) |
-| `backups/` | What `office up --upgrade` saved before an upgrade: `<time>-executor-<version>.tar.gz` (Executor's data volume) and `<time>-opencode-<version>/` (OpenCode's database files) |
+| `backups/` | What `office up --upgrade` saved before an upgrade: `<time>-executor-<version>.tar.gz` (Executor's data volume), `<time>-opencode-<version>/` (OpenCode's database files) and `<time>-package-<name>-<volume>.tar.gz` (a package's named volume) |
+| `packages/` | Package services (see "Services"), private (mode 700): `<name>.env`, the package's generated secrets (mode 600), and `<name>/`, its applied `compose.yaml` with the `settings.env` and `include.yaml` `office up` writes beside it |
 
 Executor keeps its database and keys in the `office-<name>_executor-data` volume.
 
@@ -216,6 +218,7 @@ A package is a capability an office opts into, where the tool itself holds only 
   scripts/              # package-owned, for tooling and CI
   template/             # each file copied once into the office root at the same path, then the office's
   gui/                  # a desktop app panel: src/, package.json (build dependencies), dist/gui-experimental.cjs (built, committed)
+  compose.yaml          # services it adds to the office's compose project
 ```
 
 There are three kinds, by where a package comes from:
@@ -243,6 +246,8 @@ settings:
   url:
     description: What the setting means
     required: true     # or `default: <value>`
+namespace: share       # optional, for a package with services: what they're named after; see "Services"
+secrets:               # generated once, for a package with services; see "Services"
 ```
 
 `office.yaml` lists the packages, each with its settings:
@@ -298,6 +303,64 @@ The app loads a panel only from its own sidecar server, which reads the config o
 `office check` reports each panel: installed, registered and this office's build. The install is per machine, so offices that share a panel replace each other's copy and the last sync wins; check names the office that installed a different build. When a package leaves `office.yaml`, its panel stays installed, since other offices may use it: sync (for a pulled-in package) and check say how to delete the folder and its `plugins` entry.
 
 While building a local package's panel, `office gui dev <name>` watches its bundle and installs each new build, beside the package's own watch build. `OFFICE_APP_CONFIG_DIR` and `OFFICE_APP_PANELS_DIR` together replace the app machine's config and panels folders, for tests and scratch offices.
+
+### Services
+
+A package can add containers to the office: a `compose.yaml` at its root is what gives it services, and nothing goes in `package.yaml` for it. `office up` adds each package's file to the compose project `office-<name>`, in either mode, after the tool's files and before the office's own `compose.yaml`, in package-name order, so the office's file can override a package's service.
+
+```yaml
+# packages/notes/package.yaml
+name: notes
+# namespace: notes             # what services, volumes and variables are named after; the name by default
+description: A notes app with its own database
+settings:
+  title:
+    description: The app's title
+    default: Notes
+secrets:
+  NOTES_AUTH_SECRET:
+    generate: hex
+    bytes: 32
+  NOTES_ENCRYPTION_KEYS:
+    generate: base64
+    bytes: 32
+    prefix: "k1:"
+```
+
+```yaml
+# packages/notes/compose.yaml
+services:
+  notes:
+    build: .                       # the package's folder
+    environment:
+      AUTH_SECRET: ${NOTES_AUTH_SECRET}
+      ENCRYPTION_KEYS: ${NOTES_ENCRYPTION_KEYS}
+      TITLE: ${NOTES_TITLE}
+      OPENCODE_URL: ${OFFICE_OPENCODE_URL}
+    ports:
+      - "127.0.0.1:${NOTES_PORT:-41500}:3000"
+  notes-db:
+    image: postgres:18
+    volumes:
+      - notes-data:/var/lib/postgresql
+volumes:
+  notes-data:
+```
+
+- **Names.** Every service, volume, network, config and secret the file defines is named after the package's namespace, `<namespace>` or `<namespace>-*`. The namespace is the package's name unless `package.yaml` sets `namespace:` (lowercase letters, digits and dashes), as a package called `design` whose services are `doop` and `doop-db` does with `namespace: doop`. So packages can't define or change `executor`, `opencode` or each other's services: a namespace can't be `executor` or `opencode`, and two packages in an office can't claim the same one, which `office check` reports on both packages' lines and `office up` refuses, naming both.
+- **Ports.** Every published port binds `127.0.0.1`: `"127.0.0.1:<port>:<port>"`, or `host_ip: 127.0.0.1` in the long syntax. `network_mode: host` is refused. `office check` reports a file that breaks these rules on the package's line, and `office up` refuses to apply it, naming each problem.
+- **Paths.** Relative paths (a `build` context, a bind mount, an `env_file`) are the package's folder: `office up` includes each package's file with that folder as its project directory, since Compose would otherwise resolve them against the tool's own `compose.yaml`.
+- **Variables.** Besides the office's variables (see "Runtime"), a package's file, and only its own, gets its settings as `<NAMESPACE>_<SETTING>` (the names in capitals, any character but letters and digits as `_`; `title` in `notes` is `NOTES_TITLE`) and its secrets. The environment `office up` runs in wins over both, which is why they carry the namespace.
+- **Secrets.** `secrets:` in `package.yaml` maps each variable to how it's generated: `bytes` random bytes (16 to 1024) as `hex` or `base64`, after an optional fixed `prefix`. Each name starts with the namespace in capitals with `_` for `-` (`NOTES_`), and can't be a setting's variable. `office up` writes any missing one to `<state>/packages/<name>.env` (mode 600) and never replaces a value, since services sign users in and encrypt stored credentials with them. To rotate one, delete its line. office never prints a value or writes one into the office.
+
+`office up` runs the copy of each package's file it last applied, `<state>/packages/<name>/compose.yaml`, as it runs the versions it last applied:
+
+- A package the office hasn't run before is applied on a plain `office up`.
+- When a package's file changes, `office up` says so and keeps running the applied copy; `office check` shows it as pending. `office up --upgrade` stops that package's services, backs up each named volume its applied file declares to `backups/` (printing where each went), then applies the new file.
+- A package that leaves `office.yaml` stops contributing on the next `office up`, which removes its applied copy; its containers go as orphans. Its volumes and secrets stay, so adding it back finds its data.
+- `office down`, `office check` and every other command use the same applied files as `office up`.
+
+Only the compose file is snapshotted: a package that builds from files in its own folder builds from the current files whenever Compose rebuilds. Package services have no downgrade guard. Settings aren't gated either: `office up` passes the current ones. `office sync` says when a pulled-in package's copy adds or changes a `compose.yaml`, because its services run on this machine's Docker.
 
 ### Upgrading an office from before built-in packages
 

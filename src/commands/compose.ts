@@ -1,5 +1,6 @@
-// Runs an office's containers: the tool's compose.yaml (executor, opencode) plus the office's own
-// compose.yaml when it has one, as the compose project office-<name>. In host mode the opencode
+// Runs an office's containers: the tool's compose.yaml (executor, opencode), the services packages
+// contribute (src/package-services.ts), and the office's own compose.yaml when it has one, as the
+// compose project office-<name>. In host mode the opencode
 // container stays off (its compose profile isn't enabled), and `office up` prepares what the
 // container would otherwise do itself: the office's tools and its cron jobs.
 //
@@ -18,6 +19,7 @@ import { ghConfigDir, ghHosts } from "../github.ts";
 import { hostTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
+import { packageComposeFile, preparePackageServices, serviceFiles, type UpgradedServices } from "../package-services.ts";
 import type { Lock } from "../schema.ts";
 import { prepareSecrets } from "../secrets.ts";
 import { placeExecutable, toolPath, unpackedImage } from "../tool.ts";
@@ -103,12 +105,17 @@ export function composeAttached(office: Office, args: string[]): number {
   return result.status ?? 1;
 }
 
-function composeArguments(office: Office, args: string[]): string[] {
+/** The `docker compose` arguments for the office: its project and files, in the order Compose merges them, then `args`. */
+export function composeArguments(office: Office, args: string[]): string[] {
   const files = ["-f", join(unpackedImage(), "compose.yaml")];
 
   if (office.claude !== undefined && office.opencode.mode === "container") files.push("-f", join(unpackedImage(), "claude-compose.yaml"));
 
   if (sharesGithubLogin(office)) files.push("-f", join(unpackedImage(), "gh-compose.yaml"));
+
+  // After the tool's files, so they can't change executor or opencode, and before the office's
+  // own, which can override a package's service.
+  for (const file of serviceFiles(office)) files.push("-f", file);
 
   if (existsSync(join(office.dir, "compose.yaml"))) files.push("-f", join(office.dir, "compose.yaml"));
 
@@ -264,6 +271,36 @@ function stamp(): string {
   return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 }
 
+/** Writes a Docker volume as the tarball `file` in the backups folder `dir`, owned by the user; returns its path. */
+function backUpVolume(dir: string, volume: string, file: string): string {
+  docker(["run", "--rm", "-v", `${volume}:/data:ro`, "-v", `${dir}:/backup`, debianImage(), "sh", "-c", `tar -czf /backup/${file} -C /data . && chown ${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0} /backup/${file}`]);
+
+  return join(dir, file);
+}
+
+/**
+ * Stops the services of each package whose compose file an upgrade replaces and backs up the named
+ * volumes its applied file declares. A volume the services never created has nothing to save.
+ * Returns where each went.
+ */
+function backUpPackages(office: Office, upgraded: UpgradedServices[]): string[] {
+  const dir = join(office.state, "backups");
+  const written: string[] = [];
+
+  for (const item of upgraded) {
+    if (item.services.length > 0) compose(office, ["stop", ...item.services]);
+
+    for (const volume of item.volumes) {
+      if (spawnSync("docker", ["volume", "inspect", volume], { stdio: "ignore" }).status !== 0) continue;
+
+      mkdirSync(dir, { recursive: true });
+      written.push(backUpVolume(dir, volume, `${stamp()}-package-${item.name}-${volume}.tar.gz`));
+    }
+  }
+
+  return written;
+}
+
 /**
  * Backs up what an upgrade migrates, with the containers stopped so the files are consistent:
  * Executor's data volume as a tarball, and OpenCode's database files. Returns where each went.
@@ -275,12 +312,8 @@ function backUp(office: Office, tools: Set<string>, from: Lock): string[] {
   mkdirSync(dir, { recursive: true });
 
   if (tools.has("executor")) {
-    const volume = `office-${office.name}_executor-data`;
-    const file = `${stamp()}-executor-${from.executor.version}.tar.gz`;
-
     compose(office, ["stop", "executor"], { pins: from });
-    docker(["run", "--rm", "-v", `${volume}:/data:ro`, "-v", `${dir}:/backup`, debianImage(), "sh", "-c", `tar -czf /backup/${file} -C /data . && chown ${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0} /backup/${file}`]);
-    written.push(join(dir, file));
+    written.push(backUpVolume(dir, `office-${office.name}_executor-data`, `${stamp()}-executor-${from.executor.version}.tar.gz`));
   }
 
   const database = join(office.state, "opencode-home/.local/share/opencode");
@@ -368,13 +401,21 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
 
   guardDowngrade(office, pins);
 
+  const services = preparePackageServices(office, upgrade);
+
   if (upgrade) {
-    console.log(moved.length === 0 ? "office: nothing to upgrade" : `office: upgrading ${moved.map((move) => `${move.tool} ${move.from} → ${move.to}`).join(", ")}`);
+    const what = [...moved.map((move) => `${move.tool} ${move.from} → ${move.to}`), ...services.upgraded.map((item) => `package ${item.name}'s ${packageComposeFile}`)];
+
+    console.log(what.length === 0 ? "office: nothing to upgrade" : `office: upgrading ${what.join(", ")}`);
 
     if (moved.length > 0 && from !== undefined) {
       for (const path of backUp(office, new Set(moved.map((move) => move.tool)), from)) console.log(`office: backed up to ${path}`);
     }
+
+    for (const path of backUpPackages(office, services.upgraded)) console.log(`office: backed up to ${path}`);
   }
+
+  services.apply();
 
   if (office.opencode.mode === "host") {
     // An opencode container left from container mode would answer on the old port.

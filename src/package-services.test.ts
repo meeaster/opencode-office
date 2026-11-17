@@ -1,0 +1,208 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+
+import * as v from "valibot";
+import { parse } from "yaml";
+
+import { composeArguments } from "./commands/compose.ts";
+import { loadOffice } from "./office.ts";
+import { composeProblems, ensureSecrets, planServices, preparePackageServices, secretsPath } from "./package-services.ts";
+import { check, packageManifestSchema } from "./schema.ts";
+
+let dir: string;
+let cache: string | undefined;
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "office-package-services-"));
+  cache = process.env.XDG_CACHE_HOME;
+  process.env.XDG_CACHE_HOME = join(dir, "cache");
+});
+
+afterEach(() => {
+  if (cache === undefined) delete process.env.XDG_CACHE_HOME;
+  else process.env.XDG_CACHE_HOME = cache;
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+function write(path: string, content: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, content);
+}
+
+test("a package's compose file may name only its own resources and publish only on 127.0.0.1", () => {
+  const valid = `services:
+  doop:
+    build: .
+    ports:
+      - "127.0.0.1:\${DOOP_PORT:-3000}:3000"
+      - target: 80
+        host_ip: 127.0.0.1
+        published: 8080
+    expose: ["5432"]
+  doop-db:
+    image: postgres
+volumes:
+  doop-data:
+`;
+
+  expect(composeProblems("doop", valid)).toEqual([]);
+
+  const invalid = `services:
+  executor:
+    image: x
+  doop:
+    ports: ["8080:80", 3000, { target: 80 }]
+  doop-host:
+    network_mode: host
+volumes:
+  data:
+networks:
+  doopnet:
+`;
+
+  expect(composeProblems("doop", invalid)).toEqual([
+    "services.executor: must be named doop or doop-*",
+    "volumes.data: must be named doop or doop-*",
+    "networks.doopnet: must be named doop or doop-*",
+    'services.doop.ports[0]: must bind 127.0.0.1, such as "127.0.0.1:8080:80" or host_ip: 127.0.0.1',
+    'services.doop.ports[1]: must bind 127.0.0.1, such as "127.0.0.1:8080:80" or host_ip: 127.0.0.1',
+    'services.doop.ports[2]: must bind 127.0.0.1, such as "127.0.0.1:8080:80" or host_ip: 127.0.0.1',
+    "services.doop-host: network_mode host would publish every port beyond 127.0.0.1",
+  ]);
+
+  expect(composeProblems("executor", "services:\n  executor-x:\n    image: x\n")).toEqual(["executor is one of the office's own services, so a package with that namespace can't have a compose.yaml"]);
+});
+
+test("a package's secrets carry its namespace, its name by default, and don't take a setting's variable", () => {
+  const manifest = (head: string, secrets: string) => check(v.safeParse(packageManifestSchema, parse(`${head}description: d\nsettings:\n  url:\n    description: u\n    default: x\nsecrets:\n${secrets}`)));
+  const prefixError = { ok: false as const, errors: ["secrets: each name must start with the package's namespace (its name unless it sets namespace:) in capitals and _ for -, such as DOOP_"] };
+
+  expect(manifest("name: my-pkg\n", "  MY_PKG_KEY:\n    generate: hex\n    bytes: 32\n")).toMatchObject({ ok: true, value: { namespace: "my-pkg" } });
+  expect(manifest("name: my-pkg\n", "  KEY:\n    generate: hex\n    bytes: 32\n")).toEqual(prefixError);
+  expect(manifest("name: my-pkg\n", "  MY_PKG_URL:\n    generate: hex\n    bytes: 32\n")).toEqual({ ok: false, errors: ["secrets: a name is also the variable of one of the package's settings"] });
+
+  expect(manifest("name: design\nnamespace: doop\n", "  DOOP_KEY:\n    generate: hex\n    bytes: 32\n")).toMatchObject({ ok: true, value: { name: "design", namespace: "doop" } });
+  expect(manifest("name: design\nnamespace: doop\n", "  DESIGN_KEY:\n    generate: hex\n    bytes: 32\n")).toEqual(prefixError);
+  expect(manifest("name: design\nnamespace: doop\n", "  DOOP_URL:\n    generate: hex\n    bytes: 32\n")).toEqual({ ok: false, errors: ["secrets: a name is also the variable of one of the package's settings"] });
+});
+
+test("a namespaced package's services and settings follow its namespace, and two packages can't claim one", () => {
+  const office = join(dir, "office");
+
+  write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: design\n    settings:\n      url: https://example.com\n");
+  write(join(office, "packages/design/package.yaml"), "name: design\nnamespace: doop\ndescription: d\nsettings:\n  url:\n    description: u\n    required: true\n");
+  write(join(office, "packages/design/compose.yaml"), "services:\n  design:\n    image: busybox\n");
+  expect(() => preparePackageServices(loadOffice(office), false)).toThrow("package design: compose.yaml: services.design: must be named doop or doop-*");
+
+  write(join(office, "packages/design/compose.yaml"), "services:\n  doop:\n    image: busybox\n  doop-db:\n    image: postgres\n");
+  preparePackageServices(loadOffice(office), false).apply();
+  expect(readFileSync(join(office, "state/packages/design/settings.env"), "utf8")).toBe("DOOP_URL='https://example.com'\n");
+
+  write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: design\n    settings:\n      url: https://example.com\n  - name: doop\n");
+  write(join(office, "packages/doop/package.yaml"), "name: doop\ndescription: d\n");
+  expect(() => preparePackageServices(loadOffice(office), false)).toThrow("packages design and doop claim the same namespace, doop");
+});
+
+test("secrets are generated once: a later run adds only new ones and keeps every value", () => {
+  const path = join(dir, "doop.env");
+
+  expect(ensureSecrets(path, { DOOP_AUTH: { generate: "hex", bytes: 32 } })).toEqual(["DOOP_AUTH"]);
+
+  const first = readFileSync(path, "utf8");
+
+  expect(first).toMatch(/^DOOP_AUTH=[0-9a-f]{64}\n$/);
+  expect(statSync(path).mode & 0o777).toBe(0o600);
+
+  expect(ensureSecrets(path, { DOOP_AUTH: { generate: "hex", bytes: 32 }, DOOP_KEYS: { generate: "base64", bytes: 32, prefix: "k1:" } })).toEqual(["DOOP_KEYS"]);
+
+  const [auth, keys] = readFileSync(path, "utf8").split("\n");
+
+  expect(`${auth}\n`).toBe(first);
+  expect(Buffer.from(keys.replace(/^DOOP_KEYS=k1:/, ""), "base64")).toHaveLength(32);
+  expect(ensureSecrets(path, { DOOP_AUTH: { generate: "hex", bytes: 32 } })).toEqual([]);
+});
+
+test("a new package applies at once, a changed file waits for --upgrade, and a removed package stops without it", () => {
+  const listed = new Set(["new", "changed", "same", "broken", "dropped-file"]);
+
+  const current = new Map<string, string | undefined>([
+    ["new", "a"],
+    ["changed", "b2"],
+    ["same", "c"],
+    ["dropped-file", undefined],
+  ]);
+
+  // "broken" is listed but can't be read, so it keeps its copy; "gone" left office.yaml.
+  const applied = new Map([
+    ["changed", "b1"],
+    ["same", "c"],
+    ["broken", "d"],
+    ["dropped-file", "e"],
+    ["gone", "f"],
+  ]);
+
+  expect(planServices(current, applied, listed, false)).toEqual({
+    apply: [
+      { name: "gone", from: "f", to: undefined },
+      { name: "new", from: undefined, to: "a" },
+    ],
+    pending: ["changed", "dropped-file"],
+  });
+
+  expect(planServices(current, applied, listed, true).apply.map((change) => change.name)).toEqual(["changed", "dropped-file", "gone", "new"]);
+});
+
+test("office up runs the applied copy through an include in the package's folder, between the tool's files and the office's", () => {
+  const office = join(dir, "office");
+  const services = "services:\n  demo:\n    image: busybox\nvolumes:\n  demo-data:\n";
+
+  write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: zeta\n  - name: demo\n    settings:\n      url: https://example.com\n");
+  write(join(office, "compose.yaml"), "services: {}\n");
+
+  for (const name of ["demo", "zeta"]) write(join(office, `packages/${name}/compose.yaml`), services.replaceAll("demo", name));
+
+  write(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: d\nsettings:\n  url:\n    description: u\n    required: true\nsecrets:\n  DEMO_KEY:\n    generate: hex\n    bytes: 16\n");
+  write(join(office, "packages/zeta/package.yaml"), "name: zeta\ndescription: z\n");
+
+  const loaded = loadOffice(office);
+  const first = preparePackageServices(loaded, false);
+
+  expect(first.upgraded).toEqual([]);
+  first.apply();
+
+  const state = join(office, "state/packages");
+  const include = parse(readFileSync(join(state, "demo/include.yaml"), "utf8"));
+
+  expect(include).toEqual({ include: [{ path: join(state, "demo/compose.yaml"), project_directory: join(office, "packages/demo"), env_file: [join(state, "demo.env"), join(state, "demo/settings.env")] }] });
+  expect(readFileSync(join(state, "demo/settings.env"), "utf8")).toBe("DEMO_URL='https://example.com'\n");
+  expect(statSync(state).mode & 0o777).toBe(0o700);
+
+  const files = composeArguments(loaded, []).filter((_, index, args) => args[index - 1] === "-f");
+
+  expect(files.slice(-3)).toEqual([join(state, "demo/include.yaml"), join(state, "zeta/include.yaml"), join(office, "compose.yaml")]);
+
+  // A change waits: the applied copy stays until --upgrade, which names what to back up.
+  write(join(office, "packages/demo/compose.yaml"), `${services}# changed\n`);
+  preparePackageServices(loaded, false).apply();
+  expect(readFileSync(join(state, "demo/compose.yaml"), "utf8")).toBe(services);
+
+  const upgrade = preparePackageServices(loaded, true);
+
+  expect(upgrade.upgraded).toEqual([{ name: "demo", services: ["demo"], volumes: ["office-t_demo-data"] }]);
+  upgrade.apply();
+  expect(readFileSync(join(state, "demo/compose.yaml"), "utf8")).toBe(`${services}# changed\n`);
+
+  // An invalid file is refused rather than applied.
+  write(join(office, "packages/zeta/compose.yaml"), "services:\n  web:\n    ports: ['80:80']\n");
+  expect(() => preparePackageServices(loaded, true)).toThrow("package zeta: compose.yaml: services.web: must be named zeta or zeta-*");
+
+  // A removed package stops contributing; its secrets stay.
+  write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: zeta\n");
+  write(join(office, "packages/zeta/compose.yaml"), services.replaceAll("demo", "zeta"));
+  preparePackageServices(loadOffice(office), false).apply();
+  expect(composeArguments(loadOffice(office), []).filter((arg) => arg.includes("include.yaml"))).toEqual([join(state, "zeta/include.yaml")]);
+  expect(readFileSync(secretsPath(loaded, "demo"), "utf8")).toMatch(/^DEMO_KEY=[0-9a-f]{32}\n$/);
+});
