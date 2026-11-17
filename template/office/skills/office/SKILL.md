@@ -9,7 +9,7 @@ Use `office` from any folder inside the office; `office.yaml` declares its struc
 
 | To | Do |
 |---|---|
-| Add a desk | Add it under `desks:` with a description, then `office sync`. Sync scaffolds `<desk>/` with `AGENTS.md`, `.opencode/opencode.jsonc`, `mise.toml` and a starter Executor app. Deploy the app with `office apps deploy` |
+| Add a desk | Add it under `desks:` with a description, then `office sync`. Sync scaffolds `<desk>/` with `AGENTS.md`, `.opencode/opencode.jsonc`, `mise.toml` and a starter Executor app (unless the desk sets `app: false`). Deploy the app with `office apps deploy` |
 | Clone a repository for a desk | Add `{ name, url, description }` under `desks.<desk>.repos`, then `office sync` |
 | Add a reference | Add `{ name, url, ref?, description }` under `references:`, then `office sync` |
 | Add a skill | Create `skills/<id>/SKILL.md`, enable it under `skills.enabled` (every desk) or `desks.<desk>.skills` (one desk), then `office sync` to link it |

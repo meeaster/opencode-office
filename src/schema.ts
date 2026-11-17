@@ -39,6 +39,8 @@ const desk = v.nullish(
       description: v.optional(text),
       repos: repositories,
       skills: names,
+      // Whether the desk has its own Executor app at <desk>/executor/apps/<desk>/.
+      app: v.optional(v.boolean("must be true or false"), true),
     },
     mapping,
   ),

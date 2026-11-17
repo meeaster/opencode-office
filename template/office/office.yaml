@@ -52,6 +52,8 @@ desks:
     description: An example desk. Rename it, or add desks beside it.
     repos: []
     skills: []
+    # Set to false for a desk without its own Executor app (reports, notifications, agent.ask).
+    app: true
 
 skills:
   # Library skills (skills/<id>/) linked into the root's .opencode/skills/, so every desk gets them.

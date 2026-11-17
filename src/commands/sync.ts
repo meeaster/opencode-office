@@ -51,23 +51,21 @@ export function copyTemplate(from: string, to: string, values: Record<string, st
 
 /**
  * Scaffolds a desk whose folder is missing, or only the starter Executor app of a desk that has
- * none. A desk that has both is left alone; `office check` reports anything else missing.
+ * none. A desk that has both is left alone; `office check` reports anything else missing. A desk
+ * with `app: false` never gets the app; an existing one is left for the human to delete.
  */
 function scaffoldDesk(office: Office, desk: Desk): string[] {
   const dir = join(office.dir, desk.name);
   const appPath = join("executor/apps", desk.name);
   const deskExists = existsSync(dir);
-  const appExists = existsSync(join(dir, appPath));
+  const appExists = !desk.app || existsSync(join(dir, appPath));
 
   for (const folder of ["repos", "scratch"]) mkdirSync(join(dir, folder), { recursive: true });
 
   if (deskExists && appExists) return [];
 
-  const written = copyTemplate(
-    "template/desk",
-    dir,
-    { DESK: desk.name, DESK_TITLE: title(desk.name) },
-    (path) => !deskExists || path.startsWith(`${appPath}/`),
+  const written = copyTemplate("template/desk", dir, { DESK: desk.name, DESK_TITLE: title(desk.name) }, (path) =>
+    path.startsWith(`${appPath}/`) ? !appExists : !deskExists,
   );
 
   // Desk apps carry a copy of the office's OpenCode client, so they declare the same provider

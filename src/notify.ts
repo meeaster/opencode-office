@@ -1,13 +1,14 @@
-// Notifications from the office's own jobs go to the first desk's app (`notifications.send`), the
-// outbox a dashboard can read. A job still finishes when Executor can't be reached; it logs instead.
+// Notifications from the office's own jobs go to the app of the first desk that has one
+// (`notifications.send`), the outbox a dashboard can read. A job still finishes when Executor
+// can't be reached; it logs instead.
 import { type ExecutorApp, client, connection } from "./commands/apps.ts";
 import type { Office } from "./office.ts";
 
 export async function notify(office: Office, { title, body }: { title: string; body: string }): Promise<void> {
-  const desk = office.desks[0]?.name;
+  const desk = office.desks.find((candidate) => candidate.app)?.name;
 
   try {
-    if (desk === undefined) throw new Error("the office has no desk");
+    if (desk === undefined) throw new Error("no desk has an Executor app");
 
     const call = client(connection(office));
     const { organization } = await call<{ organization: string }>("GET", "/api/context");
