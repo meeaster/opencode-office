@@ -3,12 +3,12 @@
 // - the office's guidance for the session's folder, from instructions.ts, which `office
 //   instructions [folder]` also runs. It is attached as a session instruction entry, refreshed on
 //   each prompt, so it follows office.yaml and reaches every provider (claude-agent included);
-// - the `office` skill, from the package's skills/office/;
+// - the package's skills, each skills/<id>/: `office`, and `opencode-plugin` for a package's plugin and panel;
 // - the `office-executor` MCP server, the office's Executor.
 //
 // The office package is built into the `office` tool, which bundles this plugin with what it
 // imports into the one index.js an office holds; `office sync` restores that copy.
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,10 +30,11 @@ type Context = {
 
 // OpenCode loads the plugin through the link `.opencode/plugins/office`; the real folder is the
 // one beside the package's skills/.
-const skillFile = join(dirname(realpathSync(dirname(fileURLToPath(import.meta.url)))), "skills/office/SKILL.md");
+const skillsDir = join(dirname(realpathSync(dirname(fileURLToPath(import.meta.url)))), "skills");
 
-/** The skill as OpenCode registers it: the description from its front matter and the body after it. */
-function officeSkill(): Skill {
+/** A skill as OpenCode registers it: the description from its front matter and the body after it. */
+function packageSkill(id: string): Skill {
+  const skillFile = join(skillsDir, id, "SKILL.md");
   const text = readFileSync(skillFile, "utf8");
   const frontMatter = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
 
@@ -43,7 +44,7 @@ function officeSkill(): Skill {
 
   if (line === undefined) throw new Error(`${skillFile} has no description`);
 
-  return { id: "office", name: "office", description: line.slice("description:".length).trim().replace(/^(["'])(.*)\1$/, "$2"), path: skillFile, content: text.slice(frontMatter[0].length) };
+  return { id, name: id, description: line.slice("description:".length).trim().replace(/^(["'])(.*)\1$/, "$2"), path: skillFile, content: text.slice(frontMatter[0].length) };
 }
 
 /**
@@ -81,7 +82,9 @@ export default {
     });
 
     // Read on each load of the skills, so a restored copy's text arrives without a restart.
-    await ctx.skill.transform((editor) => editor.add(officeSkill()));
+    await ctx.skill.transform((editor) => {
+      for (const id of readdirSync(skillsDir)) editor.add(packageSkill(id));
+    });
 
     if (office === undefined) return;
 
