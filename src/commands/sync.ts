@@ -1,18 +1,20 @@
 // `office sync`: makes the office's folders match office.yaml and the tool. It clones and updates,
 // moves an office from an earlier release's layout (src/migrate.ts), scaffolds desks that are
 // declared but missing, copies declared skills into the library, installs, updates, restores and
-// removes packages, and links enabled library skills and package plugins. A package's skills
-// aren't linked: its plugin registers them, so sync removes the links earlier releases made.
+// removes packages, links enabled library skills and package plugins, and installs package panels
+// on the desktop app's machine. A package's skills aren't linked: its plugin registers them, so sync
+// removes the links earlier releases made.
 // It never rewrites AGENTS.md, other hand-written content, an existing app or a file a package's
 // template created; it deletes such a file only with its package, and only while unchanged.
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { cloneOrFetch, cloneShallow, copyFromRepository, isClone, refreshClone } from "../git.ts";
 import { clones, installedPackages, oldKnowledgePlugin, packageLink, pluginLinks, skillSelections } from "../layout.ts";
 import { migrate } from "../migrate.ts";
 import type { CopiedSkill, Desk, Office } from "../office.ts";
-import { fetchPackage, installBuiltin, installPackage, pulledFolders, removePackage, resolvePackages, sourceFile } from "../packages.ts";
+import { fetchPackage, installBuiltin, type InstalledPackage, installPackage, pulledDir, pulledFolders, removePackage, resolvePackages, sourceFile } from "../packages.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
 
 /** "release-notes" → "Release notes", for titles in scaffolded files. */
@@ -226,9 +228,16 @@ export async function sync(loaded: Office, { referencesOnly = false } = {}): Pro
     else if (item.kind === "remote" && item.entry.source !== undefined) changes.push(...fetchPackage(office, item.entry.name, item.entry.source));
   }
 
-  // .office/packages/ holds only what sync pulled in, so a folder no package wants goes.
+  // .office/packages/ holds only what sync pulled in, so a folder no package wants goes. Its panel
+  // stays on the app's machine, where other offices may use it.
+  const removedPanels: string[] = [];
+
   for (const name of pulledFolders(office)) {
-    if (!packages.some((item) => item.kind !== "local" && item.entry.name === name)) changes.push(...removePackage(office, name));
+    if (packages.some((item) => item.kind !== "local" && item.entry.name === name)) continue;
+
+    if (existsSync(join(pulledDir(office, name), panelBundle))) removedPanels.push(name);
+
+    changes.push(...removePackage(office, name));
   }
 
   changes.push(...removeOldKnowledgePlugin(office));
@@ -242,8 +251,29 @@ export async function sync(loaded: Office, { referencesOnly = false } = {}): Pro
   changes.push(...linkSkills(office));
   changes.push(...linkPlugins(office));
   changes.push(...excludePluginClones(office));
+  changes.push(...installPanels(office, installed.installed, removedPanels));
 
   return changes;
+}
+
+/**
+ * Installs each package's desktop app panel on the machine the app runs on, and says how to remove
+ * the panel of a package that left office.yaml. The app machine is looked up only when there is a
+ * panel to handle; inside the container, or when it can't be reached, nothing is installed.
+ */
+function installPanels(office: Office, installed: InstalledPackage[], removed: string[]): string[] {
+  const panels = installed.flatMap((item) => (item.panel === undefined ? [] : [{ name: item.entry.name, bundle: item.panel }]));
+
+  if (panels.length === 0 && removed.length === 0) return [];
+
+  const where = locate();
+  const names = panels.map((panel) => panelId(panel.name)).join(", ");
+
+  if (where.kind === "container") return panels.length === 0 ? [] : [`not installing panels (${names}) from the container: they install on the desktop app's machine, so run office sync on the host`];
+
+  if (where.kind === "unreachable") return panels.length === 0 ? [] : [`not installing panels (${names}): ${where.reason}`];
+
+  return [...panels.flatMap((panel) => installPanel(where.machine, office, panel)), ...removed.map((name) => removalNote(where.machine, name))];
 }
 
 /**

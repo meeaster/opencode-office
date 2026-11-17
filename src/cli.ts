@@ -11,6 +11,7 @@ import { deploy } from "./commands/apps.ts";
 import { check } from "./commands/check.ts";
 import { down, up } from "./commands/compose.ts";
 import { credentials } from "./commands/executor.ts";
+import { guiDev } from "./commands/gui.ts";
 import { init } from "./commands/init.ts";
 import { pair } from "./commands/pair.ts";
 import { pin } from "./commands/pin.ts";
@@ -36,7 +37,8 @@ const usage = `usage: office <command> [--office <dir>]
   executor credentials [--password-only]
                                deliberately reveal the stored encrypted owner login, even offline
   sync [--references]          clone and update, scaffold missing desks, copy and link library
-                               skills, install, restore and link packages, migrate old layouts
+                               skills, install, restore and link packages, install their panels
+                               on the desktop app's machine, migrate old layouts
   check                        report drift from office.yaml and the tool, and the running
                                containers' state
   instructions [folder]        print the office guidance a session started in <folder> gets
@@ -51,6 +53,8 @@ const usage = `usage: office <command> [--office <dir>]
   pin                          write office.lock for the versions office.yaml pins
   pair [--origin <url>]        print a one-time link that connects the OpenCode app or a browser
   apps deploy                  deploy every Executor app in the office from its files
+  gui dev <package>            install a local package's panel on the desktop app's machine each
+                               time its build writes the bundle
   upgrade-tools                bump exact pins in mise.toml files and office.yaml's versions,
                                and commit them
   update [--check] [--minimum-release-age <age> | --version <release>]
@@ -201,6 +205,10 @@ async function main(): Promise<void> {
     for (const line of migrateHome(homedir())) console.log(`office: ${line}`);
   } else if (command === "apps" && rest[0] === "deploy") {
     await deploy(currentOffice(flags));
+  } else if (command === "gui" && rest[0] === "dev") {
+    if (rest[1] === undefined) throw new OfficeError("usage: office gui dev <package>");
+
+    await guiDev(currentOffice(flags), rest[1]);
   } else {
     console.error(usage);
     process.exitCode = 2;

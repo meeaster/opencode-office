@@ -1,4 +1,5 @@
-// `office check`: drift between office.yaml, the tool and the folders, then, when this office's
+// `office check`: drift between office.yaml, the tool and the folders, the packages and their
+// panels on the desktop app's machine, then, when this office's
 // containers are running, whether Executor is ready, each desk loads what it should on the OpenCode
 // server of the office's mode, the container runs the host's `office`, the cron jobs are
 // scheduled (supercronic, or the host's timers), and in container mode the image refresh timer is
@@ -7,6 +8,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { cronTimers, hasSystemd, refreshTimer, timerStates } from "../cron/host.ts";
+import { configFile, installedPanelNames, locate, panelDir, panelId, panelState, readPanelRecord, removalNote } from "../desktop.ts";
 import { ghConfigDir, ghLogin, ghPin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
 import { installedTool } from "../host-tools.ts";
 import { clones, installedPackages, library, oldKnowledgePlugin, pluginLinks, skillSelections } from "../layout.ts";
@@ -219,6 +221,69 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
     for (const name of problem.packages) {
       if (!reported.has(name)) report(false, `package ${name}`, problem.message);
     }
+  }
+}
+
+/**
+ * One line per package panel: installed on the desktop app's machine, registered in its config, and
+ * the office's copy, naming the office that installed another (the install is per machine, so the
+ * last sync wins). Also one line for each panel this office installed whose package it no longer lists.
+ */
+function panelChecks(office: Office, report: Report): void {
+  const panels = installedPackages(office).installed.flatMap((item) => (item.panel === undefined ? [] : [{ name: item.entry.name, bundle: item.panel }]));
+  const where = locate();
+
+  if (where.kind === "container") {
+    for (const panel of panels) report("warn", `panel ${panelId(panel.name)}`, "not checked from the container: panels install on the desktop app's machine, so run office check on the host");
+
+    return;
+  }
+
+  if (where.kind === "unreachable") {
+    for (const panel of panels) report("warn", `panel ${panelId(panel.name)}`, `not checked: ${where.reason}`);
+
+    return;
+  }
+
+  const { machine } = where;
+  const config = configFile(machine);
+
+  for (const panel of panels) {
+    const state = panelState(machine, panel);
+    const notes: string[] = [];
+    let ok: boolean | "warn" = true;
+
+    if (state.record === undefined && !state.current) {
+      ok = false;
+      notes.push(`not installed on ${machine.label} (office sync installs it in ${panelDir(machine, panel.name)})`);
+    } else if (state.current) {
+      notes.push(`installed on ${machine.label} in ${panelDir(machine, panel.name)}, matching this office's bundle${state.record !== undefined && state.record.dir !== office.dir ? ` (last synced by office ${state.record.office})` : ""}`);
+    } else {
+      ok = "warn";
+      notes.push(
+        state.record !== undefined && state.record.dir !== office.dir
+          ? `${machine.label} has another bundle, installed by office ${state.record.office} (${state.record.dir}); the last sync wins, so office sync here installs this office's`
+          : `${machine.label} has another bundle than this office's; office sync installs this office's`,
+      );
+    }
+
+    if (state.registered === undefined) {
+      ok = false;
+      notes.push(`${config} can't be read`);
+    } else if (state.registered) {
+      notes.push(`registered in ${config}`);
+    } else {
+      ok = false;
+      notes.push(`not in plugins in ${config} (office sync adds ${machine.url(panel.name)})`);
+    }
+
+    report(ok, `panel ${panelId(panel.name)}`, notes.join("; "));
+  }
+
+  for (const name of installedPanelNames(machine)) {
+    if (panels.some((panel) => panel.name === name) || readPanelRecord(machine, name)?.dir !== office.dir) continue;
+
+    report("warn", `panel ${panelId(name)}`, `this office installed it, but none of its packages has that panel now. ${removalNote(machine, name)}`);
   }
 }
 
@@ -605,6 +670,7 @@ export async function check(office: Office): Promise<boolean> {
   for (const problem of problems) console.log(`     - ${problem}`);
 
   await packageChecks(office, report);
+  panelChecks(office, report);
 
   const apps = appFolders(office);
 

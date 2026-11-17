@@ -1,6 +1,6 @@
 // Packages: capabilities an office opts into, each a folder with a package.yaml, an OpenCode
-// plugin, skills the plugin registers, package-owned scripts and a template copied once into the
-// office. There are three kinds, by where a package comes from:
+// plugin, skills the plugin registers, package-owned scripts, a template copied once into the
+// office and a desktop app panel (src/desktop.ts). There are three kinds, by where a package comes from:
 //
 // - built-in: shipped inside the `office` executable (the tool's packages/), listed by name alone,
 //   and replaced whenever it differs from the executable's copy. `office` is always installed.
@@ -17,6 +17,7 @@ import { dirname, join, relative } from "node:path";
 import * as v from "valibot";
 import { parse } from "yaml";
 
+import { panelBundle } from "./desktop.ts";
 import { copyFromRepository } from "./git.ts";
 import type { Office, PackageEntry } from "./office.ts";
 import { check, type PackageManifest, packageManifestSchema, type Parsed, type SettingValue } from "./schema.ts";
@@ -80,6 +81,8 @@ export type InstalledPackage = ResolvedPackage & {
   skills: string[];
   /** Whether it has `plugin/`, an OpenCode plugin `office sync` links as `.opencode/plugins/<name>`. */
   plugin: boolean;
+  /** Its desktop app panel's built bundle, `gui/dist/gui-experimental.cjs`, when it has one; `office sync` installs it on the app's machine. */
+  panel: string | undefined;
 };
 
 /** The folder of a built-in or remote package. */
@@ -432,7 +435,9 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
         .map((item) => item.name)
     : [];
 
-  return { ok: true, value: { ...resolved, manifest, settings, skills, plugin: existsSync(join(dir, "plugin")) } };
+  const panel = join(dir, panelBundle);
+
+  return { ok: true, value: { ...resolved, manifest, settings, skills, plugin: existsSync(join(dir, "plugin")), panel: existsSync(panel) ? panel : undefined } };
 }
 
 /** `.settings.json`'s content for a package's resolved settings. */
