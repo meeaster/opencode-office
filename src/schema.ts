@@ -47,7 +47,7 @@ const desk = v.nullish(
   {},
 );
 
-// The tool's own plugin lives under this name, so a cloned plugin there would fight `office sync`.
+// The office package's plugin is linked under this name, so a cloned plugin there would fight `office sync`.
 const reservedPlugins = ["office"];
 
 const plugin = v.strictObject(
@@ -111,8 +111,8 @@ const skills = v.nullish(
 /** A package setting's value; settings are written to JSON for the package's scripts. */
 const settingValue = v.union([v.string(), v.number(), v.boolean()], "must be text, a number or true/false");
 
-// A package installed from a folder of another repository at a ref, or, without `repo`, authored
-// in the office under packages/<name>/.
+// A package copied from a folder of another repository at a ref, or, without `repo`, one of the
+// tool's built-in packages or a package authored in the office under packages/<name>/.
 const packageEntry = v.pipe(
   v.strictObject(
     {
@@ -124,7 +124,7 @@ const packageEntry = v.pipe(
     },
     mapping,
   ),
-  v.check((entry) => (entry.repo === undefined ? entry.path === undefined && entry.ref === undefined : entry.path !== undefined && entry.ref !== undefined), "needs repo, path and ref together, or none of them for a package in packages/<name>/"),
+  v.check((entry) => (entry.repo === undefined ? entry.path === undefined && entry.ref === undefined : entry.path !== undefined && entry.ref !== undefined), "needs repo, path and ref together, or none of them for a built-in package or one in packages/<name>/"),
   // The check above makes the three all present or all absent; `source` carries that as a type.
   v.transform(({ name: packageName, settings, repo, path, ref }) => ({
     name: packageName,
@@ -176,7 +176,7 @@ const packageSetting = v.pipe(
   v.check((setting) => (setting.default === undefined) !== (setting.required === undefined), "needs a default or required: true, not both"),
 );
 
-/** A package's packages/<name>/package.yaml: what can't be discovered from its folders. */
+/** A package's package.yaml: what can't be discovered from its folders. */
 export const packageManifestSchema = v.strictObject(
   {
     name,

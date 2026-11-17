@@ -1,26 +1,30 @@
-// Compiles `office` into one executable that carries the template, the bundled plugins, the image files
+// Compiles `office` into one executable that carries the template, the built-in packages, the image files
 // and the base compose file. `bun src/build.ts` writes target/office; with --install it also
 // installs it as ~/.local/bin/office. With --prerelease <id> the version becomes <version>-<id>,
 // as the release workflow builds it.
-import { copyFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 
 import manifest from "../package.json";
-import { toolPlugins } from "./office.ts";
-import { assets, bundlePlugin, checkoutCommit } from "./tool.ts";
+import { assets, bundledPlugins, bundlePlugin, checkoutCommit, packageTests } from "./tool.ts";
 
 const root = resolve(import.meta.dir, "..");
 
 /** Compiles the CLI from this checkout into `outfile`, stamped with `version` and the checkout's commit. */
 export async function compile(outfile: string, version = manifest.version): Promise<void> {
-  // The plugins as offices hold them, bundled into target/plugins/ to be embedded.
-  rmSync(join(root, "target/plugins"), { recursive: true, force: true });
+  // The built-in packages as offices hold them, staged in target/packages/ to be embedded: a
+  // bundled plugin replaces its package's plugin/ sources with the one built index.js.
+  const staged = join(root, "target/packages");
 
-  for (const plugin of toolPlugins) {
-    mkdirSync(join(root, "target/plugins", plugin), { recursive: true });
-    writeFileSync(join(root, "target/plugins", plugin, "index.js"), await bundlePlugin(plugin));
+  rmSync(staged, { recursive: true, force: true });
+  cpSync(join(root, "packages"), staged, { recursive: true, filter: (path) => !`${relative(join(root, "packages"), path).split(sep).slice(1).join("/")}/`.startsWith(packageTests) });
+
+  for (const name of bundledPlugins) {
+    rmSync(join(staged, name, "plugin"), { recursive: true });
+    mkdirSync(join(staged, name, "plugin"));
+    writeFileSync(join(staged, name, "plugin/index.js"), await bundlePlugin(name));
   }
 
   const result = await Bun.build({

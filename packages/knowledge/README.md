@@ -12,17 +12,14 @@ description: How the nightly export works and what to do when it fails
 
 ## Install
 
-`office init` adds it to every new office. To add it to another office, put this in `office.yaml`, with `ref` a tag or a full 40-character commit SHA of this repository:
+It is built into `office`, and `office init` adds it to every new office. To add it to another office, put this in `office.yaml`:
 
 ```yaml
 packages:
   - name: knowledge
-    repo: https://github.com/meeaster/opencode-office.git
-    path: packages/knowledge
-    ref: <commit or tag>
 ```
 
-Then run `office sync` and commit what it wrote. It has no settings.
+Then run `office sync` and commit what it wrote: the package in `.office/packages/knowledge/`, which updates with `office` and is read-only there. It has no settings.
 
 ## What it holds
 

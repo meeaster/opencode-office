@@ -1,4 +1,4 @@
-// The tool's own files (the template, the plugin bundles, the first-party packages, the image
+// The tool's own files (the template, the built-in packages with their plugin bundles, the image
 // files and the base compose file), its version, and the command that runs it. In the compiled
 // executable the files are embedded assets under import.meta.dir (/$bunfs/root); run from a
 // checkout, they are the repository's.
@@ -21,22 +21,28 @@ const root = Bun.isStandaloneExecutable ? import.meta.dir : resolve(import.meta.
 /** The tool's GitHub repository, which publishes its releases and first-party packages. */
 export const toolRepository = "meeaster/opencode-office";
 
-/** A path inside the tool's files, such as "template/office" or "plugins/office". */
+/** A path inside the tool's files, such as "template/office" or "packages/knowledge". */
 export function toolPath(path: string): string {
   return join(root, path);
 }
 
 /**
  * The asset folders and files `src/build.ts` embeds, each a path relative to the repository root.
- * `packages` and `LICENSE` are there so `office init` can install the knowledge package offline.
+ * `target/packages` is `packages/` as offices get the built-in packages, which embeds as `packages`.
  */
-export const assets = ["template", "target/plugins", "packages", "LICENSE", "image", "compose.yaml"];
+export const assets = ["template", "target/packages", "LICENSE", "image", "compose.yaml"];
 
 /**
- * A tool plugin bundled into one `index.js` with what it imports (the shared office.yaml schema
- * and its library), so an office's copy needs no packages. The header says where it comes from.
+ * The built-in packages whose `plugin/` an office gets as one bundled `index.js`, because the
+ * plugin imports the tool's own code (the office.yaml schema and its libraries).
  */
-export async function bundlePlugin(plugin: string): Promise<string> {
+export const bundledPlugins = ["office"];
+
+/**
+ * A built-in package's plugin bundled into one `index.js` with what it imports, so an office's
+ * copy needs no packages. The header says where it comes from.
+ */
+export async function bundlePlugin(name: string): Promise<string> {
   // Bun names each bundled module in a comment, relative to the current folder; building from the
   // repository keeps the bundle the same wherever `office` runs, and free of the machine's paths.
   const previous = process.cwd();
@@ -44,29 +50,47 @@ export async function bundlePlugin(plugin: string): Promise<string> {
   process.chdir(root);
 
   const result = await Bun.build({
-    entrypoints: [toolPath(`plugins/${plugin}/index.ts`)],
+    entrypoints: [toolPath(`packages/${name}/plugin/index.ts`)],
     target: "bun",
-    banner: `// The office tool's ${plugin} plugin, bundled from its plugins/${plugin}/. \`office sync\` replaces this copy; change the tool's.`,
+    banner: `// The ${name} package's plugin, bundled by the office tool from its packages/${name}/plugin/. \`office sync\` restores this copy; change the tool's.`,
   }).finally(() => process.chdir(previous));
 
   const [output] = result.outputs;
 
-  if (!result.success || output === undefined) throw new AggregateError(result.logs, `bundling the ${plugin} plugin failed`);
+  if (!result.success || output === undefined) throw new AggregateError(result.logs, `bundling the ${name} plugin failed`);
 
   return output.text();
 }
 
+/** The names of the built-in packages: every folder of the tool's `packages/`. */
+export function builtinPackages(): string[] {
+  return readdirSync(toolPath("packages"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
+}
+
+/** A built-in package's tests, which stay in the tool: `pnpm test` runs them, and an office never does. */
+export const packageTests = "test/";
+
 /**
- * The files an office's copy of a tool plugin holds, by name: embedded in the executable by
- * `src/build.ts`, or bundled now when run from a checkout.
+ * The files of a built-in package as an office holds it, by path: the package without its tests,
+ * with the tool's licence, and a bundled plugin as its one built `plugin/index.js`. The executable embeds them
+ * that way (`src/build.ts`); run from a checkout, the plugin is bundled now.
  */
-export async function pluginFiles(plugin: string): Promise<Map<string, string>> {
-  if (Bun.isStandaloneExecutable) {
-    // Bun embeds an asset folder under its own name, so target/plugins/ is plugins/ in the executable.
-    return new Map(toolFiles(`plugins/${plugin}`).map((name) => [name, readFileSync(toolPath(`plugins/${plugin}/${name}`), "utf8")]));
+export async function builtinFiles(name: string): Promise<Map<string, string>> {
+  const folder = `packages/${name}`;
+  const bundled = !Bun.isStandaloneExecutable && bundledPlugins.includes(name);
+  const files = new Map<string, string>();
+
+  for (const file of toolFiles(folder)) {
+    if (!file.startsWith(packageTests) && !(bundled && file.startsWith("plugin/"))) files.set(file, readFileSync(toolPath(`${folder}/${file}`), "utf8"));
   }
 
-  return new Map([["index.js", await bundlePlugin(plugin)]]);
+  if (bundled) files.set("plugin/index.js", await bundlePlugin(name));
+
+  files.set("LICENSE", readFileSync(toolPath("LICENSE"), "utf8"));
+
+  return new Map([...files].sort(([a], [b]) => a.localeCompare(b)));
 }
 
 /**

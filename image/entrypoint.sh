@@ -41,7 +41,7 @@ ${git_note}
 ${gh_note}
 EOF
 
-# The office's .opencode/opencode.jsonc reads these names, so the same file works on the host.
+# The office package's plugin reads these names; on the host it reads files office up writes instead.
 export OFFICE_EXECUTOR_TOKEN="${OFFICE_EXECUTOR_TOKEN:-${EXECUTOR_TOKEN:-}}"
 
 # A failed install (offline, a typo) must not keep OpenCode from starting.

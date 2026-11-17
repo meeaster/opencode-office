@@ -8,8 +8,8 @@ on:
     branches: [main]
     paths:
       - "artifacts/**"
-      - "packages/artifact-share/scripts/**"
-      - "packages/artifact-share/.settings.json"
+      - ".office/packages/artifact-share/scripts/**"
+      - ".office/packages/artifact-share/.settings.json"
       - ".github/workflows/publish-artifacts.yml"
   workflow_dispatch:
 
@@ -35,7 +35,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
-      - run: bun packages/artifact-share/scripts/build-site.ts "$RUNNER_TEMP/site"
+      - run: bun .office/packages/artifact-share/scripts/build-site.ts "$RUNNER_TEMP/site"
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: ${{ runner.temp }}/site

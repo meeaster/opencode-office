@@ -1,8 +1,15 @@
-// Packages: capabilities an office opts into, each a folder `packages/<name>/` with a
-// package.yaml, skills, an OpenCode plugin, package-owned scripts and a template copied once into
-// the office. A
-// package declared with `repo` is copied from that repository at `ref` and recorded in
-// `.source.json`; one without is authored in the office. Both are committed with the office.
+// Packages: capabilities an office opts into, each a folder with a package.yaml, an OpenCode
+// plugin, skills the plugin registers, package-owned scripts and a template copied once into the
+// office. There are three kinds, by where a package comes from:
+//
+// - built-in: shipped inside the `office` executable (the tool's packages/), listed by name alone,
+//   and replaced whenever it differs from the executable's copy. `office` is always installed.
+// - remote: copied from a folder of another repository at a ref, and replaced when the ref moves.
+// - local: written in the office, in `packages/<name>/`.
+//
+// Built-in and remote packages are pulled into `.office/packages/<name>/` and are read-only: the
+// hash of each file is recorded in `.source.json`, `office check` reports an edit and `office
+// sync` restores the copy. Every kind is committed with the office, so a clone needs nothing fetched.
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -13,13 +20,13 @@ import { parse } from "yaml";
 import { copyFromRepository } from "./git.ts";
 import type { Office, PackageEntry } from "./office.ts";
 import { check, type PackageManifest, packageManifestSchema, type Parsed, type SettingValue } from "./schema.ts";
-import { buildCommit, toolFiles, toolPath, toolRepository, writeToolFile } from "./tool.ts";
+import { build, buildCommit, builtinFiles, builtinPackages, toolRepository } from "./tool.ts";
 
-/** Where a copied skill or package records the repository, ref and commit it came from. */
+/** Where a pulled-in package records where it came from and the hash of each of its files. */
 export const sourceFile = ".source.json";
 
 /**
- * The resolved settings `office sync` writes for a package's scripts. A dot-file beside
+ * The resolved settings `office sync` writes for a package's plugin and scripts. A dot-file beside
  * `.source.json` marks it as the office's record rather than package content, so it is left out
  * of the content hash. Settings aren't secrets: it is committed, so scripts in CI can read it.
  */
@@ -28,45 +35,64 @@ export const settingsFile = ".settings.json";
 /**
  * The template files a package has handled in the office, created or found already there, as a
  * sorted JSON list of paths: each is copied at most once, so a file the office deletes stays
- * deleted. One file for packages from a repository and packages authored in the office, kept
- * across updates like `.settings.json`, while `.source.json` describes only the current copy.
+ * deleted. Kept across updates like `.settings.json`, while `.source.json` describes only the
+ * current copy.
  */
 export const templateFile = ".template.json";
 
 /** The office's own records in a package folder, left out of its file hashes. */
 const records = [sourceFile, settingsFile, templateFile];
 
-const recordSchema = v.object({
-  repo: v.string(),
-  path: v.string(),
-  ref: v.string(),
-  commit: v.string(),
-  /** SHA-256 of each package file as copied, by path; local edits show as differences. */
-  files: v.record(v.string(), v.string()),
-});
+/** The built-in packages every office has, without an entry in office.yaml. */
+export const requiredPackages = ["office"];
+
+/** Where packages pulled into the office live: hidden, so searches and a plain `ls` skip them. */
+export const pulledFolder = ".office/packages";
+
+const files = v.record(v.string(), v.string());
+
+/** A copy from a repository: where it came from, and when it was copied. */
+const remoteRecord = v.object({ repo: v.string(), path: v.string(), ref: v.string(), commit: v.string(), files, copied: v.optional(v.string()) });
+
+/** A built-in copy: the `office` version and commit that wrote it. */
+const builtinRecord = v.object({ office: v.string(), commit: v.string(), files });
+
+const recordSchema = v.union([remoteRecord, builtinRecord]);
 
 export type PackageRecord = v.InferOutput<typeof recordSchema>;
 
-export type InstalledPackage = {
-  entry: PackageEntry;
-  dir: string;
+export type PackageKind = "built-in" | "remote" | "local";
+
+/** A package the office has, with its kind and its folder. */
+export type ResolvedPackage = { entry: PackageEntry; kind: PackageKind; dir: string };
+
+/** Why a package isn't installed, or its plugin isn't linked. */
+export type PackageProblem = { packages: string[]; message: string };
+
+/** The packages an office has, and the entries of office.yaml that can't be one. */
+export type ResolvedPackages = { packages: ResolvedPackage[]; problems: PackageProblem[] };
+
+export type InstalledPackage = ResolvedPackage & {
   manifest: PackageManifest;
-  /** The settings with defaults applied, as the scripts read them from `.settings.json`. */
+  /** The settings with defaults applied, as the plugin and scripts read them from `.settings.json`. */
   settings: Record<string, SettingValue>;
-  /** Skill IDs under `skills/`, each a folder with a SKILL.md. */
+  /** Skill IDs under `skills/`, each a folder with a SKILL.md, which the package's plugin registers. */
   skills: string[];
   /** Whether it has `plugin/`, an OpenCode plugin `office sync` links as `.opencode/plugins/<name>`. */
   plugin: boolean;
 };
 
-export function packageDir(office: Office, name: string): string {
+/** The folder of a built-in or remote package. */
+export function pulledDir(office: Office, name: string): string {
+  return join(office.dir, pulledFolder, name);
+}
+
+/** The folder of a package written in the office. */
+export function localDir(office: Office, name: string): string {
   return join(office.dir, "packages", name);
 }
 
-/** The package folders present, declared or not. */
-export function packageFolders(office: Office): string[] {
-  const dir = join(office.dir, "packages");
-
+function folders(dir: string): string[] {
   if (!existsSync(dir)) return [];
 
   return readdirSync(dir, { withFileTypes: true })
@@ -74,8 +100,64 @@ export function packageFolders(office: Office): string[] {
     .map((entry) => entry.name);
 }
 
+/** The package folders in `.office/packages/`, declared or not. */
+export function pulledFolders(office: Office): string[] {
+  return folders(join(office.dir, pulledFolder));
+}
+
+/** The package folders in `packages/`, declared or not. */
+export function localFolders(office: Office): string[] {
+  return folders(join(office.dir, "packages"));
+}
+
+/** Whether `repo` is this tool's own repository, which publishes the built-in packages. */
+export function isToolRepository(repo: string): boolean {
+  return repo.replace(/\/+$/, "").replace(/\.git$/, "") === `https://github.com/${toolRepository}`;
+}
+
+/**
+ * The packages the office has: the required built-ins, then each entry of office.yaml, with its
+ * kind. An entry without `repo` is built-in when the tool ships a package of its name, so those
+ * names are reserved. `problems` names each entry that can't be one: a required built-in listed,
+ * or a built-in's name taken from another repository.
+ */
+export function resolvePackages(office: Office): ResolvedPackages {
+  const builtins = builtinPackages();
+  const problems: PackageProblem[] = [];
+
+  const packages: ResolvedPackage[] = requiredPackages.map((name) => ({ entry: { name, settings: {}, source: undefined }, kind: "built-in", dir: pulledDir(office, name) }));
+
+  for (const entry of office.packages) {
+    const problem = (message: string) => problems.push({ packages: [entry.name], message });
+
+    if (requiredPackages.includes(entry.name)) {
+      problem(`every office has the ${entry.name} package without an entry; remove it from packages: in office.yaml`);
+
+      continue;
+    }
+
+    if (!builtins.includes(entry.name)) {
+      packages.push({ entry, kind: entry.source === undefined ? "local" : "remote", dir: entry.source === undefined ? localDir(office, entry.name) : pulledDir(office, entry.name) });
+
+      continue;
+    }
+
+    if (entry.source !== undefined && !isToolRepository(entry.source.repo)) {
+      problem(`${entry.name} is a built-in package, so its entry can't take it from ${entry.source.repo}; list that copy under a name of its own`);
+
+      continue;
+    }
+
+    if (entry.source !== undefined) problem(`the entry takes the built-in package ${entry.name} from the tool's repository; office sync drops its repo, path and ref, so it follows this office executable`);
+
+    packages.push({ entry, kind: "built-in", dir: pulledDir(office, entry.name) });
+  }
+
+  return { packages, problems };
+}
+
 /** Every file under `dir` as a path relative to it, sorted. */
-function files(dir: string): string[] {
+function filesIn(dir: string): string[] {
   if (!existsSync(dir)) return [];
 
   return readdirSync(dir, { recursive: true, withFileTypes: true })
@@ -84,12 +166,16 @@ function files(dir: string): string[] {
     .sort();
 }
 
+function sha256(content: string | Buffer): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
 /** The SHA-256 of each package file, leaving out the office's own records. */
-function fileHashes(dir: string): PackageRecord["files"] {
+export function fileHashes(dir: string): PackageRecord["files"] {
   const hashes: PackageRecord["files"] = {};
 
-  for (const file of files(dir)) {
-    if (!records.includes(file)) hashes[file] = createHash("sha256").update(readFileSync(join(dir, file))).digest("hex");
+  for (const file of filesIn(dir)) {
+    if (!records.includes(file)) hashes[file] = sha256(readFileSync(join(dir, file)));
   }
 
   return hashes;
@@ -108,7 +194,7 @@ function readJson<Schema extends v.GenericSchema>(path: string, schema: Schema):
   return check(v.safeParse(schema, document));
 }
 
-/** The record of a copied package, or undefined for a folder without a readable one. */
+/** The record of a pulled-in package, or undefined for a folder without a readable one. */
 export function readRecord(dir: string): PackageRecord | undefined {
   const path = join(dir, sourceFile);
 
@@ -129,75 +215,32 @@ export function localEdits(dir: string, record: PackageRecord): string[] {
   ];
 }
 
-/** Records where the package in `dir` was copied from, with the hash of each of its files. */
-function writeRecord(dir: string, source: NonNullable<PackageEntry["source"]>, commit: string): void {
-  const copied: PackageRecord & { copied: string } = { ...source, commit, files: fileHashes(dir), copied: new Date().toISOString() };
-
-  writeFileSync(join(dir, sourceFile), `${JSON.stringify(copied, null, 2)}\n`);
+/** What a record says the copy is, for messages. */
+export function describeRecord(record: PackageRecord): string {
+  return "repo" in record ? `${record.repo} ${record.path} at ${record.commit.slice(0, 12)} (ref ${record.ref})` : `the built-in copy of office ${record.office} (commit ${record.commit.slice(0, 12)})`;
 }
 
-/** A first-party package as published by this `office`'s build: the tool's repository at the commit it was built from. */
-export function toolPackageSource(name: string): NonNullable<PackageEntry["source"]> {
-  return { repo: `https://github.com/${toolRepository}.git`, path: `packages/${name}`, ref: buildCommit().sha };
-}
+/** How to change a package pulled into the office, which is read-only. */
+export const readOnlyNote = "packages in .office/packages/ are read-only: to change one, copy it into packages/<another name>/ and list that instead";
 
-/**
- * Installs a first-party package from the tool's own files, with the repository's licence, as
- * `office init` does for knowledge, recorded as copied from `toolPackageSource(name)`. A later
- * sync finds it installed and fetches nothing; an update moves `ref` as for any package from a
- * repository.
- */
-export function copyToolPackage(officeDir: string, name: string): void {
-  const dir = join(officeDir, "packages", name);
-  const source = toolPackageSource(name);
-
-  for (const file of toolFiles(`packages/${name}`)) writeToolFile(join(dir, file), readFileSync(toolPath(`packages/${name}/${file}`), "utf8"));
-
-  writeToolFile(join(dir, "LICENSE"), readFileSync(toolPath("LICENSE"), "utf8"));
-  writeRecord(dir, source, source.ref);
+/** Writes one of the office's records in a package folder. */
+function writeJson(path: string, value: PackageRecord | string[]): void {
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 /**
- * Copies or updates a package declared with a repository. It installs a missing package, and
- * replaces an installed one when the entry's repository, path or ref differs from the record,
- * unless package files were edited locally: then it changes nothing and says which. Returns one
- * line per change; a refusal or failure starts with FAILED.
+ * Fills a new copy of the package folder `dir` with `fill`, beside it, then swaps it in, so a
+ * failed copy leaves the installed one as it was. The office's settings and template records stay:
+ * sync reports the settings file only when the settings change, and never copies a template file twice.
  */
-export function fetchPackage(office: Office, name: string, source: NonNullable<PackageEntry["source"]>): string[] {
-  const dir = packageDir(office, name);
-  const where = relative(office.dir, dir);
-  const record = readRecord(dir);
-
-  if (existsSync(dir)) {
-    if (record === undefined) return [`FAILED ${where}: it has no readable ${sourceFile}, so it isn't a copy office sync replaces; move it away to install ${name} from ${source.repo}`];
-
-    if (record.repo === source.repo && record.path === source.path && record.ref === source.ref) return [];
-
-    const edits = localEdits(dir, record);
-
-    if (edits.length > 0) {
-      return [
-        `FAILED ${where}: not updated to ${source.ref}, because package files differ from the copy of ${record.ref}: ${edits.join(", ")}. Restore them (git checkout -- ${where}), or keep the edits by removing repo, path and ref from the entry, which makes it a package of this office`,
-      ];
-    }
-  }
-
-  // Copied beside the package and swapped in, so a failed copy leaves the installed one as it was.
-  const staging = join(office.dir, "packages", `.${name}.new`);
+function replaceFolder<Result>(dir: string, fill: (staging: string) => Result): Result {
+  const staging = join(dirname(dir), `.${relative(dirname(dir), dir)}.new`);
 
   rmSync(staging, { recursive: true, force: true });
 
   try {
-    const commit = copyFromRepository(source, staging, "package.yaml");
+    const result = fill(staging);
 
-    // A package shared from another office's packages/ carries that office's records; its
-    // .template.json would make this office skip template files it never received.
-    for (const file of records) rmSync(join(staging, file), { force: true });
-
-    writeRecord(staging, source, commit);
-
-    // Kept: sync reports the settings file only when the settings change, and never copies a
-    // template file twice.
     for (const kept of [settingsFile, templateFile]) {
       if (existsSync(join(dir, kept))) copyFileSync(join(dir, kept), join(staging, kept));
     }
@@ -205,32 +248,106 @@ export function fetchPackage(office: Office, name: string, source: NonNullable<P
     rmSync(dir, { recursive: true, force: true });
     renameSync(staging, dir);
 
-    return [record === undefined ? `installed ${where} from ${source.repo} at ${commit}` : `updated ${where} from ${record.ref} to ${source.ref} (${commit})`];
-  } catch (error) {
+    return result;
+  } finally {
     rmSync(staging, { recursive: true, force: true });
+  }
+}
 
+function builtinRecordFor(hashes: PackageRecord["files"]): PackageRecord {
+  return { office: build().version, commit: buildCommit().sha, files: hashes };
+}
+
+/** This executable's copy of the built-in packages, for messages. */
+function thisCopy(): string {
+  return describeRecord(builtinRecordFor({}));
+}
+
+/**
+ * Makes a built-in package's folder hold this executable's copy: installs a missing one, replaces
+ * one that differs (written by another `office`, copied from a repository, or edited), and records
+ * an unchanged copy that lacks a built-in record. Returns one line per change.
+ */
+export async function installBuiltin(office: Office, name: string): Promise<string[]> {
+  const dir = pulledDir(office, name);
+  const where = relative(office.dir, dir);
+  const wanted = await builtinFiles(name);
+  const hashes = Object.fromEntries([...wanted].map(([file, content]) => [file, sha256(content)]));
+  const record = readRecord(dir);
+
+  if (existsSync(dir) && Bun.deepEquals(fileHashes(dir), hashes)) {
+    if (record !== undefined && !("repo" in record) && Bun.deepEquals(record.files, hashes)) return [];
+
+    writeJson(join(dir, sourceFile), builtinRecordFor(hashes));
+
+    return [`recorded ${where} as ${thisCopy()}`];
+  }
+
+  const edits = record === undefined ? [] : localEdits(dir, record);
+
+  replaceFolder(dir, (staging) => {
+    for (const [file, content] of wanted) {
+      mkdirSync(dirname(join(staging, file)), { recursive: true });
+      writeFileSync(join(staging, file), content);
+    }
+
+    writeJson(join(staging, sourceFile), builtinRecordFor(hashes));
+  });
+
+  if (record === undefined) return [`installed ${where}, the built-in ${name} package`];
+
+  if (edits.length > 0) return [`restored ${where}, undoing edits to ${edits.join(", ")}; ${readOnlyNote}`];
+
+  return [`updated ${where} from ${describeRecord(record)} to ${thisCopy()}`];
+}
+
+/**
+ * Copies or updates a package declared with a repository into `.office/packages/<name>/`: it
+ * installs a missing one, replaces one whose record differs from the entry's repository, path or
+ * ref, and restores one whose files were edited. Returns one line per change; a failure starts
+ * with FAILED.
+ */
+export function fetchPackage(office: Office, name: string, source: NonNullable<PackageEntry["source"]>): string[] {
+  const dir = pulledDir(office, name);
+  const where = relative(office.dir, dir);
+  const record = readRecord(dir);
+  const current = record !== undefined && "repo" in record && record.repo === source.repo && record.path === source.path && record.ref === source.ref;
+  const edits = record === undefined ? [] : localEdits(dir, record);
+
+  if (current && edits.length === 0) return [];
+
+  try {
+    const commit = replaceFolder(dir, (staging) => {
+      const copied = copyFromRepository(source, staging, "package.yaml");
+
+      // A package shared from another office's packages/ carries that office's records; its
+      // .template.json would make this office skip template files it never received.
+      for (const file of records) rmSync(join(staging, file), { force: true });
+
+      writeJson(join(staging, sourceFile), { ...source, commit: copied, files: fileHashes(staging), copied: new Date().toISOString() });
+
+      return copied;
+    });
+
+    if (record === undefined) return [`installed ${where} from ${source.repo} at ${commit}`];
+
+    if (current) return [`restored ${where} to its copy of ${source.ref}, undoing edits to ${edits.join(", ")}; ${readOnlyNote}`];
+
+    return [`updated ${where} from ${describeRecord(record)} to ${source.ref} (${commit})`];
+  } catch (error) {
     return [`FAILED ${where}: ${error instanceof Error ? error.message.trim() : String(error)}`];
   }
 }
 
 /**
- * Removes a package copied from a repository whose entry left office.yaml: each template file it
- * created that is still the package's copy, the folders those deletions emptied, then
- * `packages/<name>/`. Changed template files stay with the office. With local edits to package
- * files, or an unreadable `.template.json`, it changes nothing and says why. Returns one line per
- * change; a refusal starts with FAILED.
+ * Removes a pulled-in package whose entry left office.yaml: each template file it created that is
+ * still the package's copy, the folders those deletions emptied, then the package folder. Changed
+ * template files stay with the office. With an unreadable `.template.json` it changes nothing and
+ * says why. Returns one line per change; a refusal starts with FAILED.
  */
-export function removePackage(office: Office, name: string, record: PackageRecord): string[] {
-  const dir = packageDir(office, name);
+export function removePackage(office: Office, name: string): string[] {
+  const dir = pulledDir(office, name);
   const where = relative(office.dir, dir);
-  const edits = localEdits(dir, record);
-
-  if (edits.length > 0) {
-    return [
-      `FAILED ${where}: not removed, though office.yaml no longer lists it, because package files differ from the copy of ${record.ref}: ${edits.join(", ")}. Restore them (git checkout -- ${where}) to remove it, or keep the edits by listing it again without repo, path and ref, which makes it a package of this office`,
-    ];
-  }
-
   const recordPath = join(dir, templateFile);
   const read: Parsed<string[]> = existsSync(recordPath) ? readJson(recordPath, v.array(v.string())) : { ok: true, value: [] };
 
@@ -265,12 +382,15 @@ export function removePackage(office: Office, name: string, record: PackageRecor
  * Reads an installed package and resolves its entry's settings against package.yaml: an unknown
  * setting, or a missing required one, is an error naming the field.
  */
-export function readPackage(office: Office, entry: PackageEntry): Parsed<InstalledPackage> {
-  const dir = packageDir(office, entry.name);
+export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<InstalledPackage> {
+  const { entry, kind, dir } = resolved;
   const where = relative(office.dir, dir);
 
   if (!existsSync(join(dir, "package.yaml"))) {
-    return { ok: false, errors: [entry.source === undefined ? `${where}/package.yaml is missing; an entry without repo names a package authored in ${where}/` : `${where} is not installed; office sync installs it`] };
+    return {
+      ok: false,
+      errors: [kind === "local" ? `${where}/package.yaml is missing; an entry without repo names a built-in package (${builtinPackages().join(", ")}) or one written in ${where}/` : `${where} is not installed; office sync installs it`],
+    };
   }
 
   let document;
@@ -312,7 +432,7 @@ export function readPackage(office: Office, entry: PackageEntry): Parsed<Install
         .map((item) => item.name)
     : [];
 
-  return { ok: true, value: { entry, dir, manifest, settings, skills, plugin: existsSync(join(dir, "plugin")) } };
+  return { ok: true, value: { ...resolved, manifest, settings, skills, plugin: existsSync(join(dir, "plugin")) } };
 }
 
 /** `.settings.json`'s content for a package's resolved settings. */
@@ -344,7 +464,7 @@ export function installPackage(office: Office, installed: InstalledPackage): str
   const handled = new Set(read.value);
   const before = handled.size;
 
-  for (const file of files(template)) {
+  for (const file of filesIn(template)) {
     const target = join(office.dir, file);
 
     if (handled.has(file)) continue;
@@ -362,7 +482,7 @@ export function installPackage(office: Office, installed: InstalledPackage): str
     changes.push(`created ${file} from package ${installed.entry.name}`);
   }
 
-  if (handled.size !== before) writeFileSync(recordPath, `${JSON.stringify([...handled].sort(), null, 2)}\n`);
+  if (handled.size !== before) writeJson(recordPath, [...handled].sort());
 
   return changes;
 }

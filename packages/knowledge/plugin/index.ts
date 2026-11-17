@@ -17,7 +17,7 @@ type Context = {
 /**
  * The office this plugin belongs to: the nearest folder above it holding office.yaml. OpenCode
  * loads it through the link `.opencode/plugins/knowledge`, and the runtime may report either that
- * path or the package's own `packages/knowledge/plugin/`; both are inside the office.
+ * path or the package's own `.office/packages/knowledge/plugin/`; both are inside the office.
  */
 function findOffice(): string {
   for (let dir = dirname(fileURLToPath(import.meta.url)); ; dir = dirname(dir)) {

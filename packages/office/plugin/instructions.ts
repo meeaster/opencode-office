@@ -1,5 +1,5 @@
-// The office's guidance for a session, built from office.yaml and the folders. The office plugin
-// adds it to each session; `office instructions [folder]` runs this same code to print it, so the
+// The office's guidance for a session, built from office.yaml and the folders. The office
+// package's plugin adds it to each session; `office instructions [folder]` runs this same code to print it, so the
 // text is never hidden. It looks downward from the session's folder: the root sees the whole
 // office, a desk (or any folder inside it) sees that desk in detail and only a note of what is
 // shared above it.
@@ -8,23 +8,12 @@ import { dirname, join, relative, sep } from "node:path";
 
 import * as v from "valibot";
 
-import { check, type OfficeConfig, officeSchema, packageManifestSchema, type Parsed } from "../../src/schema.ts";
+import { check, type OfficeConfig, officeSchema, type Parsed } from "../../../src/schema.ts";
 
 // What the text uses from office.yaml, read through the schema the CLI uses.
 type DeskInfo = { name: string } & OfficeConfig["desks"][string];
 
-type OfficeInfo = { name: string; desks: DeskInfo[]; references: OfficeConfig["references"]; packages: { name: string; description: string | undefined }[] };
-
-/** A declared package's description from its package.yaml; undefined until `office sync` installs it. */
-function packageDescription(office: string, name: string): string | undefined {
-  const path = join(office, "packages", name, "package.yaml");
-
-  if (!existsSync(path)) return undefined;
-
-  const result = check(v.safeParse(packageManifestSchema, Bun.YAML.parse(readFileSync(path, "utf8"))));
-
-  return result.ok ? result.value.description : undefined;
-}
+type OfficeInfo = { name: string; desks: DeskInfo[]; references: OfficeConfig["references"] };
 
 function readOffice(office: string): Parsed<OfficeInfo> {
   // The plugin and the compiled `office` both run on Bun, which parses YAML itself.
@@ -40,7 +29,6 @@ function readOffice(office: string): Parsed<OfficeInfo> {
       name: config.name,
       desks: Object.entries(config.desks).map(([name, desk]) => ({ name, ...desk })),
       references: config.references,
-      packages: config.packages.map((entry) => ({ name: entry.name, description: packageDescription(office, entry.name) })),
     },
   };
 }
@@ -56,7 +44,8 @@ function invalidText(errors: string[]): string {
   ].join("\n");
 }
 
-function findOffice(folder: string): string | undefined {
+/** The nearest folder at or above `folder` holding office.yaml. */
+export function findOffice(folder: string): string | undefined {
   for (let dir = folder; ; dir = dirname(dir)) {
     if (existsSync(join(dir, "office.yaml"))) return dir;
 
@@ -94,14 +83,6 @@ function sharedSections(office: OfficeInfo, apps: string[]): string[] {
     "## Shared Executor apps",
     "",
     ...(apps.length === 0 ? ["None."] : apps),
-    ...(office.packages.length === 0
-      ? []
-      : [
-          "",
-          "## Packages (their skills and plugins load in every session)",
-          "",
-          ...office.packages.map((item) => entry(`packages/${item.name}/`, item.description ?? "not installed yet; `office sync` installs it")),
-        ]),
   ];
 }
 
@@ -116,7 +97,7 @@ function rootText(office: OfficeInfo, apps: string[]): string {
     "This session is at the root of an office: a source-controlled folder of desks. Paths below are relative to the office root.",
     "",
     "- Each desk is a top-level folder. A session started in a desk loads the root's instructions, config and skills plus the desk's own; desks never load each other's. Do a desk's work in a session started there.",
-    "- `office.yaml` declares the desks, their repositories, the references, which skills from `skills/` are enabled where, cloned plugins and packages (`packages/<name>/`). After changing it, run `office sync`.",
+    "- `office.yaml` declares the desks, their repositories, the references, which skills from `skills/` are enabled where, cloned plugins and packages: the office's own in `packages/<name>/`, and built-in and remote ones in `.office/packages/`, which are read-only. After changing it, run `office sync`.",
     "- Reach services through the `office-executor` MCP server. Each desk has an Executor app at `<desk>/executor/apps/<desk>/` with `reports.*`, `notifications.*` and `agent.ask`, unless `office.yaml` sets `app: false` for it; after changing an app, run `office apps deploy`. For onboarding use `office setup`. Owner credentials are human-only: let the human run `office executor credentials` in their terminal, never capture its output in an agent transcript. Keep private age identities and decrypted runtime state outside the office repository.",
     "- `cron/crontab` runs file-system jobs in the container.",
     "- `git` in `office.yaml` sets the commit identity of the container and the office's jobs; with `credentials: gh`, HTTPS remotes use the user's GitHub login, which the user manages on the host. Never run `gh auth login`, `logout` or `switch` for them.",

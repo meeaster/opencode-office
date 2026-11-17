@@ -9,11 +9,12 @@ import { join, relative } from "node:path";
 import { cronTimers, hasSystemd, refreshTimer, timerStates } from "../cron/host.ts";
 import { ghConfigDir, ghLogin, ghPin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
 import { installedTool } from "../host-tools.ts";
-import { clones, installedPackages, library, oldKnowledgePlugin, pluginDrift, pluginLinks, skillSelections } from "../layout.ts";
-import { executorEnvFile, type Office, readEnvFile, toolPlugins } from "../office.ts";
-import { localEdits, packageDir, packageFolders, readRecord, settingsFile, settingsText, sourceFile } from "../packages.ts";
+import { clones, installedPackages, library, oldKnowledgePlugin, pluginLinks, skillSelections } from "../layout.ts";
+import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, pulledLocalFolders } from "../migrate.ts";
+import { executorEnvFile, type Office, readEnvFile } from "../office.ts";
+import { describeRecord, fileHashes, localEdits, localFolders, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
 import { pinnedTools } from "../schema.ts";
-import { version } from "../tool.ts";
+import { builtinFiles, builtinPackages, version } from "../tool.ts";
 import { changes, defaultPins, describeMove, executorImage, isTested, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
 import { appFolders, deployedFrameworks } from "./apps.ts";
 import { compose, officeImage, ports, runningPins } from "./compose.ts";
@@ -21,12 +22,6 @@ import { keyOrganization } from "./executor.ts";
 
 /** Prints one check; "warn" is shown but doesn't fail `office check`. */
 type Report = (ok: boolean | "warn", name: string, detail: string) => void;
-
-const pluginProblems = {
-  missing: "is missing",
-  differs: "differs from the tool's copy",
-  extra: "is not in the tool's copy",
-};
 
 async function drift(office: Office): Promise<string[]> {
   const problems: string[] = [];
@@ -57,8 +52,23 @@ async function drift(office: Office): Promise<string[]> {
     if (!existsSync(join(clone.dir, ".git"))) problems.push(`${clone.kind} ${relative(office.dir, clone.dir)} is not cloned`);
   }
 
-  // A hand edit, or an office last synced by an older `office`; `office sync` restores the copy.
-  for (const file of await pluginDrift(office)) problems.push(`${file.path} ${pluginProblems[file.state]} (office sync restores it)`);
+  // What an office laid out by an earlier release still holds; `office sync` moves it on.
+  if (hasOldOfficePlugin(office)) problems.push(".opencode/plugins/office/ is the copy of the tool's plugin earlier releases wrote (office sync replaces it with the office package's plugin)");
+
+  const skill = officeSkillState(office);
+
+  if (skill === "shipped") problems.push("skills/office/ is the copy of the office skill earlier releases wrote, which the office package provides now (office sync removes it)");
+  else if (skill === "edited") problems.push(editedOfficeSkill);
+
+  const executor = executorEntryState(office);
+
+  if (executor.state === "template") problems.push(".opencode/opencode.jsonc declares the office-executor MCP server, which the office package registers now (office sync removes the entry)");
+  else if (executor.state === "differs") problems.push(".opencode/opencode.jsonc declares office-executor differently from the entry office init wrote; the office package registers that server now, so remove the entry yourself");
+  else if (executor.state === "unreadable") problems.push(`.opencode/opencode.jsonc can't be read: ${executor.error}`);
+
+  const pulledLocal = pulledLocalFolders(office);
+
+  for (const name of pulledLocal) problems.push(`packages/${name}/ was pulled in from a repository (office sync moves it to .office/packages/${name}/)`);
 
   if (oldKnowledgePlugin(office)) problems.push(".opencode/plugins/knowledge/ is the knowledge plugin earlier releases of office wrote, which the knowledge package replaced (office sync removes it)");
 
@@ -88,38 +98,74 @@ async function drift(office: Office): Promise<string[]> {
     }
   }
 
-  const declaredPackages = new Set(office.packages.map((entry) => entry.name));
+  const { packages } = resolvePackages(office);
+  const builtins = builtinPackages();
 
-  for (const folder of packageFolders(office)) {
-    if (declaredPackages.has(folder)) continue;
+  for (const folder of localFolders(office)) {
+    if (pulledLocal.includes(folder)) continue;
 
-    const dir = packageDir(office, folder);
-    const record = readRecord(dir);
+    if (builtins.includes(folder)) problems.push(`packages/${folder}/ has the name of a built-in package, which an entry without repo always means; rename the folder, its package.yaml and its entry`);
+    else if (!packages.some((item) => item.kind === "local" && item.entry.name === folder)) problems.push(`packages/${folder}/ is not a package in office.yaml, so its plugin isn't linked`);
+  }
 
-    if (record === undefined) {
-      problems.push(`packages/${folder}/ is not a package in office.yaml, so its plugin isn't linked`);
-
-      continue;
-    }
-
-    const edits = localEdits(dir, record);
-
-    if (edits.length === 0) problems.push(`packages/${folder}/ was copied from ${record.repo} and office.yaml no longer lists it (office sync removes it)`);
-    else problems.push(`packages/${folder}/ was copied from ${record.repo} and office.yaml no longer lists it, but package files differ from the copy, so office sync won't remove it: ${edits.join(", ")}`);
+  for (const folder of pulledFolders(office)) {
+    if (!packages.some((item) => item.kind !== "local" && item.entry.name === folder)) problems.push(`.office/packages/${folder}/ is a package office.yaml no longer lists (office sync removes it)`);
   }
 
   return problems;
 }
 
 /**
- * One line per declared package: where it came from, whether its package files were edited
- * since they were copied, whether its settings are valid and written, and the plugin it links.
+ * Whether a pulled-in package's files are the copy office sync put there, and for a built-in one,
+ * this executable's copy. Each note is added to `notes`; returns whether the copy is as it should be.
  */
-function packageChecks(office: Office, report: Report): void {
+async function pulledCopy(dir: string, kind: "built-in" | "remote", name: string, notes: string[]): Promise<boolean> {
+  const record = readRecord(dir);
+
+  if (record === undefined) {
+    notes.push(`no readable ${sourceFile} (office sync replaces the copy)`);
+
+    return false;
+  }
+
+  notes.push(`from ${describeRecord(record)}`);
+
+  const edits = localEdits(dir, record);
+
+  if (edits.length > 0) {
+    notes.push(`package files edited: ${edits.join(", ")}; office sync restores them, as ${readOnlyNote}`);
+
+    return false;
+  }
+
+  if (kind === "built-in") {
+    const wanted = new Map([...(await builtinFiles(name))].map(([file, content]) => [file, new Bun.CryptoHasher("sha256").update(content).digest("hex")]));
+
+    if (!Bun.deepEquals(fileHashes(dir), Object.fromEntries(wanted))) {
+      notes.push("differs from this office executable's copy (office sync updates it)");
+
+      return false;
+    }
+  }
+
+  notes.push("package files as copied");
+
+  return true;
+}
+
+/**
+ * One line per package: its kind and where it came from, whether a pulled-in copy was edited,
+ * whether its settings are valid and written, and the plugin it links.
+ */
+async function packageChecks(office: Office, report: Report): Promise<void> {
   const { installed, plugins, problems } = installedPackages(office);
   const links = pluginLinks(office);
+  const { packages } = resolvePackages(office);
+  const reported = new Set<string>();
 
-  for (const entry of office.packages) {
+  for (const { entry, kind, dir } of packages) {
+    reported.add(entry.name);
+
     const item = installed.find((candidate) => candidate.entry.name === entry.name);
     const own = problems.filter((problem) => problem.packages.includes(entry.name)).map((problem) => problem.message);
 
@@ -129,30 +175,17 @@ function packageChecks(office: Office, report: Report): void {
       continue;
     }
 
-    const record = entry.source === undefined ? undefined : readRecord(item.dir);
-    const notes: string[] = [];
-    let ok: boolean | "warn" = own.length === 0;
+    const notes: string[] = [kind === "local" ? `the office's own, in ${relative(office.dir, dir)}/` : `${kind}, in ${relative(office.dir, dir)}/`];
+    let ok = own.length === 0;
 
-    if (entry.source === undefined) {
-      notes.push("authored in this office");
-    } else if (record === undefined) {
-      notes.push(`no readable ${sourceFile}; office sync can't update it`);
-      ok = false;
-    } else {
-      notes.push(`from ${record.repo} ${record.path} at ${record.commit.slice(0, 12)} (ref ${record.ref})`);
+    if (kind !== "local") {
+      ok = (await pulledCopy(dir, kind, entry.name, notes)) && ok;
 
-      if (record.repo !== entry.source.repo || record.path !== entry.source.path || record.ref !== entry.source.ref) {
+      const record = readRecord(dir);
+
+      if (kind === "remote" && entry.source !== undefined && record !== undefined && !("repo" in record && record.repo === entry.source.repo && record.path === entry.source.path && record.ref === entry.source.ref)) {
         notes.push(`office.yaml asks for ${entry.source.ref}; office sync updates it`);
         ok = false;
-      }
-
-      const edits = localEdits(item.dir, record);
-
-      if (edits.length > 0) {
-        notes.push(`package files edited locally, so an update would refuse: ${edits.join(", ")}`);
-        ok = ok === false ? false : "warn";
-      } else {
-        notes.push("package files as copied");
       }
     }
 
@@ -166,7 +199,7 @@ function packageChecks(office: Office, report: Report): void {
     // Skills reach OpenCode only through the package's plugin; earlier releases linked them.
     if (item.skills.length > 0 && !item.plugin) {
       ok = false;
-      notes.push(`skills ${item.skills.join(", ")} don't load: the package has no plugin to register them${entry.source === undefined ? "" : " (move ref to a version that has one)"}`);
+      notes.push(`skills ${item.skills.join(", ")} don't load: the package has no plugin to register them${kind === "remote" ? " (move ref to a version that has one)" : ""}`);
     }
 
     if (plugins.has(entry.name)) {
@@ -179,6 +212,13 @@ function packageChecks(office: Office, report: Report): void {
 
     notes.push(...own);
     report(ok, `package ${entry.name}`, notes.join("; "));
+  }
+
+  // Entries that resolve to no package, such as a required built-in listed by name.
+  for (const problem of problems) {
+    for (const name of problem.packages) {
+      if (!reported.has(name)) report(false, `package ${name}`, problem.message);
+    }
   }
 }
 
@@ -217,13 +257,17 @@ async function settle<Result>(read: () => Promise<Result>, ready: (value: Result
   throw lastError;
 }
 
-/** Skill IDs a session in `desk` (undefined: the root) must load, and the office's others it must not. */
+/**
+ * Skill IDs a session in `desk` (undefined: the root) must load, and the office's others it must
+ * not. Package plugins register their skills in every session.
+ */
 function expectedSkills(office: Office, desk: string | undefined) {
   const selections = skillSelections(office);
   const own = (selection: { enabled: string[]; folders: string[] } | undefined) => (selection === undefined ? [] : [...selection.enabled, ...selection.folders]);
   const root = selections.find((selection) => selection.desk === undefined);
   const mine = desk === undefined ? [] : own(selections.find((selection) => selection.desk === desk));
-  const expected = new Set([...own(root), ...mine]);
+  const packaged = installedPackages(office).installed.flatMap((item) => (item.plugin ? item.skills : []));
+  const expected = new Set([...own(root), ...mine, ...packaged]);
   const everything = new Set([...library(office), ...selections.flatMap(own)]);
 
   return { expected: [...expected], forbidden: [...everything].filter((skill) => !expected.has(skill)) };
@@ -336,9 +380,9 @@ async function runtime(office: Office, report: Report): Promise<void> {
         [`loads ${expected.join(", ") || "none of the office's"}`, ...(missing.length > 0 ? [`MISSING ${missing.join(", ")}`] : []), ...(leaked.length > 0 ? [`SHOULD NOT LOAD ${leaked.join(", ")}`] : [])].join("; "),
       );
 
-      // The root's plugins, which every desk loads: the tool's and each package's. A folder
-      // still loading lists none of them yet.
-      const plugins = [...toolPlugins, ...installedPackages(office).plugins.keys()];
+      // The root's plugins, which every desk loads: each package's, the office package's
+      // included. A folder still loading lists none of them yet.
+      const plugins = [...installedPackages(office).plugins.keys()];
       const folder = `${base}/.opencode/plugins/`;
 
       // Each plugin OpenCode loaded from the root's .opencode/plugins/, by folder name.
@@ -560,7 +604,7 @@ export async function check(office: Office): Promise<boolean> {
 
   for (const problem of problems) console.log(`     - ${problem}`);
 
-  packageChecks(office, report);
+  await packageChecks(office, report);
 
   const apps = appFolders(office);
 

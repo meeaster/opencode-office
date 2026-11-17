@@ -1,17 +1,18 @@
 // `office sync`: makes the office's folders match office.yaml and the tool. It clones and updates,
-// refreshes the tool's plugin, scaffolds desks that are declared but missing, copies declared
-// skills into the library, installs, updates and removes packages, and links enabled library
-// skills and package plugins. A package's skills aren't linked: its plugin registers them, so sync
-// removes the links earlier releases made.
+// moves an office from an earlier release's layout (src/migrate.ts), scaffolds desks that are
+// declared but missing, copies declared skills into the library, installs, updates, restores and
+// removes packages, and links enabled library skills and package plugins. A package's skills
+// aren't linked: its plugin registers them, so sync removes the links earlier releases made.
 // It never rewrites AGENTS.md, other hand-written content, an existing app or a file a package's
 // template created; it deletes such a file only with its package, and only while unchanged.
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { cloneOrFetch, cloneShallow, copyFromRepository, isClone, refreshClone } from "../git.ts";
-import { clones, installedPackages, oldKnowledgePlugin, packageLink, pluginDrift, pluginLinks, skillSelections } from "../layout.ts";
+import { clones, installedPackages, oldKnowledgePlugin, packageLink, pluginLinks, skillSelections } from "../layout.ts";
+import { migrate } from "../migrate.ts";
 import type { CopiedSkill, Desk, Office } from "../office.ts";
-import { fetchPackage, installPackage, packageDir, packageFolders, readRecord, removePackage, sourceFile, toolPackageSource } from "../packages.ts";
+import { fetchPackage, installBuiltin, installPackage, pulledFolders, removePackage, resolvePackages, sourceFile } from "../packages.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
 
 /** "release-notes" → "Release notes", for titles in scaffolded files. */
@@ -162,36 +163,12 @@ function removeOldKnowledgePlugin(office: Office): string[] {
 
   if (office.packages.some((entry) => entry.name === "knowledge")) return [`${removed}; the knowledge package's plugin replaces it`];
 
-  const { repo, path, ref } = toolPackageSource("knowledge");
-
-  return [
-    `${removed}. Sessions no longer list knowledge/ articles; to keep that, add the knowledge package under packages: in office.yaml and run office sync again:`,
-    `  - name: knowledge\n    repo: ${repo}\n    path: ${path}\n    ref: ${ref}`,
-  ];
-}
-
-/**
- * Makes the office's copies of the tool's plugins match the tool's, saying what it replaced:
- * a differing file was edited by hand or written by an older `office`.
- */
-async function refreshPlugins(office: Office): Promise<string[]> {
-  return (await pluginDrift(office)).map((file) => {
-    const path = join(office.dir, file.path);
-
-    if (file.content === undefined) {
-      rmSync(path);
-
-      return `removed ${file.path}: the tool's plugin has no such file`;
-    }
-
-    writeToolFile(path, file.content);
-
-    return file.state === "missing" ? `created ${file.path}` : `replaced ${file.path}, which differed from the tool's copy`;
-  });
+  return [`${removed}. Sessions no longer list knowledge/ articles; to keep that, add \`- name: knowledge\` under packages: in office.yaml and run office sync again`];
 }
 
 /** Runs the sync and returns one line per change. With `referencesOnly`, it only updates references. */
-export async function sync(office: Office, { referencesOnly = false } = {}): Promise<string[]> {
+export async function sync(loaded: Office, { referencesOnly = false } = {}): Promise<string[]> {
+  let office = loaded;
   const changes: string[] = [];
 
   for (const clone of clones(office)) {
@@ -219,7 +196,10 @@ export async function sync(office: Office, { referencesOnly = false } = {}): Pro
 
   if (referencesOnly) return changes;
 
-  changes.push(...(await refreshPlugins(office)));
+  const migrated = migrate(office);
+
+  office = migrated.office;
+  changes.push(...migrated.changes);
 
   for (const desk of office.desks) {
     for (const path of scaffoldDesk(office, desk)) changes.push(`created ${relative(office.dir, path)}`);
@@ -239,24 +219,25 @@ export async function sync(office: Office, { referencesOnly = false } = {}): Pro
     }
   }
 
-  for (const entry of office.packages) {
-    if (entry.source !== undefined) changes.push(...fetchPackage(office, entry.name, entry.source));
+  const { packages } = resolvePackages(office);
+
+  for (const item of packages) {
+    if (item.kind === "built-in") changes.push(...(await installBuiltin(office, item.entry.name)));
+    else if (item.kind === "remote" && item.entry.source !== undefined) changes.push(...fetchPackage(office, item.entry.name, item.entry.source));
   }
 
-  // Only a copy from a repository goes; a folder without a record is the office's own content.
-  for (const name of packageFolders(office)) {
-    const record = readRecord(packageDir(office, name));
-
-    if (record !== undefined && !office.packages.some((entry) => entry.name === name)) changes.push(...removePackage(office, name, record));
+  // .office/packages/ holds only what sync pulled in, so a folder no package wants goes.
+  for (const name of pulledFolders(office)) {
+    if (!packages.some((item) => item.kind !== "local" && item.entry.name === name)) changes.push(...removePackage(office, name));
   }
 
   changes.push(...removeOldKnowledgePlugin(office));
 
-  const packages = installedPackages(office);
+  const installed = installedPackages(office);
 
-  changes.push(...packages.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
+  changes.push(...installed.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
 
-  for (const installed of packages.installed) changes.push(...installPackage(office, installed));
+  for (const item of installed.installed) changes.push(...installPackage(office, item));
 
   changes.push(...linkSkills(office));
   changes.push(...linkPlugins(office));

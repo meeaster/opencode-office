@@ -4,13 +4,13 @@
 // and the date of its last commit. The index and rendered pages share the package's themes and
 // any of the office's own in artifacts/themes/. It needs only Bun:
 //
-//   bun packages/artifact-share/scripts/build-site.ts <output>
+//   bun .office/packages/artifact-share/scripts/build-site.ts <output>
 //
 // An office whose own site publishes more can build into a subfolder of it, such as
 // <site>/artifacts. Files already in <output> are overwritten, never removed.
 import { execFileSync } from "node:child_process";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { renderBlocks } from "./blocks.ts";
 import { safeLinks } from "./links.ts";
 import { coverTones, parseTheme, themeCss, type Theme } from "./theme.ts";
@@ -24,12 +24,25 @@ type Artifact = { name: string; markdown: string | undefined; title: string; des
 const output = process.argv[2];
 
 if (output === undefined) {
-  console.error("usage: bun packages/artifact-share/scripts/build-site.ts <output folder>");
+  console.error("usage: bun .office/packages/artifact-share/scripts/build-site.ts <output folder>");
   process.exit(2);
 }
 
-// This script lives in <office>/packages/artifact-share/scripts/.
-const office = resolve(import.meta.dir, "../../..");
+// The office is the nearest folder above the script with an office.yaml: the package is in
+// .office/packages/artifact-share/, or in packages/<name>/ as a copy of the office's own.
+function findOffice(): string {
+  for (let dir = import.meta.dir; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, "office.yaml"))) return dir;
+
+    if (dirname(dir) === dir) {
+      console.error(`${import.meta.dir} is in no office: no office.yaml above it`);
+      process.exit(1);
+    }
+  }
+}
+
+const office = findOffice();
+const settingsPath = resolve(import.meta.dir, "../.settings.json");
 const artifacts = join(office, "artifacts");
 
 function fail(message: string): never {
@@ -115,17 +128,15 @@ function viewable(name: string): Artifact | undefined {
  * and to settings a file written by an older version of the package lacks.
  */
 function siteSettings() {
-  const path = resolve(import.meta.dir, "../.settings.json");
+  if (!existsSync(settingsPath)) return { url: undefined, title: "Artifacts", theme: "paper" };
 
-  if (!existsSync(path)) return { url: undefined, title: "Artifacts", theme: "paper" };
-
-  const settings: unknown = JSON.parse(readFileSync(path, "utf8"));
+  const settings: unknown = JSON.parse(readFileSync(settingsPath, "utf8"));
   const values = new Map<string, unknown>(typeof settings === "object" && settings !== null ? Object.entries(settings) : []);
 
   const field = (key: string) => {
     const value = values.get(key);
 
-    if (value !== undefined && typeof value !== "string") fail(`packages/artifact-share/.settings.json: ${key} must be a string; run office sync to rewrite it`);
+    if (value !== undefined && typeof value !== "string") fail(`${relative(office, settingsPath)}: ${key} must be a string; run office sync to rewrite it`);
 
     return value;
   };
@@ -156,12 +167,12 @@ const siteTitle = escape(site.title);
 // The office's own themes replace the package's of the same id.
 const themes = new Map<string, Theme>();
 
-for (const theme of [...readThemes(join(import.meta.dir, "themes"), "packages/artifact-share/scripts/themes"), ...readThemes(join(artifacts, "themes"), "artifacts/themes")]) {
+for (const theme of [...readThemes(join(import.meta.dir, "themes"), relative(office, join(import.meta.dir, "themes"))), ...readThemes(join(artifacts, "themes"), "artifacts/themes")]) {
   themes.set(theme.id, theme);
 }
 
 const themeList = [...themes.values()].sort((a, b) => a.name.localeCompare(b.name));
-const defaultTheme = themes.get(site.theme) ?? fail(`packages/artifact-share/.settings.json: theme ${JSON.stringify(site.theme)} isn't one of the site's themes: ${themeList.map((theme) => theme.id).join(", ")}`);
+const defaultTheme = themes.get(site.theme) ?? fail(`${relative(office, settingsPath)}: theme ${JSON.stringify(site.theme)} isn't one of the site's themes: ${themeList.map((theme) => theme.id).join(", ")}`);
 
 function day(date: string): string {
   return new Date(`${date}T00:00:00Z`).toLocaleDateString("en", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });

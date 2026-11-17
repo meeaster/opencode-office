@@ -1,19 +1,5 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "servers": {
-      // The office's Executor, which holds every service account. In the container,
-      // OFFICE_EXECUTOR_URL is http://executor:4400 and OFFICE_EXECUTOR_TOKEN is the office's
-      // key. In host mode the server has neither, so `office up` writes the address and token
-      // to the gitignored office-executor.url and office-executor.token beside this file instead;
-      // each value is the variable's or the file's, whichever exists. Browser elicitation turns
-      // approvals into links for the user.
-      "office-executor": {
-        "type": "remote",
-        "url": "{env:OFFICE_EXECUTOR_URL}{file:office-executor.url}/mcp?elicitation_mode=browser",
-        "oauth": false,
-        "headers": { "Authorization": "Bearer {env:OFFICE_EXECUTOR_TOKEN}{file:office-executor.token}" },
-      },
-    },
-  },
+  // Config for every session in the office: agents, MCP servers and plugins. The office package's
+  // plugin already registers the office-executor MCP server, the office's Executor.
 }

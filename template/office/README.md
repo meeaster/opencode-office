@@ -20,8 +20,9 @@ Portable owner credentials are SOPS-encrypted in `secrets/executor-owner.enc.jso
 | `office.lock` | The checksum of each version in `office.yaml`, written by `office pin`; don't edit it |
 | `AGENTS.md`, `.opencode/opencode.jsonc` | Your instructions and config for every session. No tool writes to `AGENTS.md` |
 | `skills/<id>/` | The skill library. Only skills `office.yaml` enables are linked into a `.opencode/skills/` |
-| `.opencode/plugins/` | OpenCode plugins every session loads: `office` (the office's guidance for the session's folder; `office instructions` prints it), which belongs to the `office` tool (`office sync` replaces this copy with its own, and `office check` reports a copy that differs, so change it in the tool), and a link to each package's plugin, which `office sync` keeps |
-| `packages/` | The packages `office.yaml` lists, such as `knowledge`, which lists the articles in `knowledge/` in every session |
+| `.opencode/plugins/` | OpenCode plugins every session loads: a link to each package's plugin, which `office sync` keeps, and any of your own |
+| `.office/packages/` | Packages pulled into the office, committed so a clone needs nothing fetched: built-in ones from the `office` executable, such as `office` (the guidance for a session's folder, which `office instructions` prints, the `office` skill and the `office-executor` MCP server) and `knowledge` (lists the articles in `knowledge/` in every session), and ones copied from another repository. They are read-only: `office check` reports an edit and `office sync` restores the copy. To change one, copy it into `packages/` under a name of your own |
+| `packages/` | Packages written in this office |
 | `knowledge/` | Articles every session sees listed, through the `knowledge` package |
 | `mise.toml` | Tools every desk gets; a desk's own `mise.toml` adds more |
 | `executor/apps/` | Executor apps the whole office shares, such as `opencode` (start a session and wait for it) |
@@ -37,7 +38,7 @@ Portable owner credentials are SOPS-encrypted in `secrets/executor-owner.enc.jso
 - OpenCode, Claude Code, Executor and mise run at the versions in `office.yaml`. The daily `upgrade-tools` job bumps them and commits as the office's git identity (else `office cron`); nothing restarts until you run `office up --upgrade`, which backs up and applies them (`office up` alone keeps the applied versions and says what is pending). After changing a version by hand, run `office pin`. An office never goes back to an older OpenCode or Executor.
 - `office pair` prints a one-time link that connects the OpenCode app or a browser to this office.
 
-- Change `office.yaml`, then run `office sync`. It clones, refreshes the tool's plugin, scaffolds missing desks, installs and removes packages and links library skills and package plugins; it never overwrites hand-written content.
+- Change `office.yaml`, then run `office sync`. It clones, scaffolds missing desks, installs, updates, restores and removes packages and links library skills and package plugins; it never overwrites hand-written content.
 - A desk's jobs are code in its Executor app: a schedule or webhook starts a workflow, which can run an OpenCode session in the desk's folder (`agent.ask`).
 - Skills enabled at the root reach every desk. Enable a skill for one desk under `desks.<desk>.skills`.
 - `office check` reports drift between `office.yaml` and the folders, and the running containers' state.

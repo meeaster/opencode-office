@@ -1,13 +1,12 @@
 // What an office's folders should hold, derived from office.yaml and the tool: the clones, the
-// installed packages, the library skill and package plugin links and the tool's plugin. `office sync`
-// makes the folders match; `office check` compares. Nothing of a package but its plugin is linked:
-// the plugin gives OpenCode whatever the package provides, its skills and MCP servers included.
+// installed packages, and the library skill and package plugin links. `office sync` makes the
+// folders match; `office check` compares. Nothing of a package but its plugin is linked: the plugin
+// gives OpenCode whatever the package provides, its skills and MCP servers included.
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { join, relative } from "node:path";
 
-import { type Office, skillsFolder, toolPlugins } from "./office.ts";
-import { type InstalledPackage, readPackage } from "./packages.ts";
-import { pluginFiles } from "./tool.ts";
+import { type Office, skillsFolder } from "./office.ts";
+import { type InstalledPackage, type PackageProblem, readPackage, resolvePackages } from "./packages.ts";
 
 export type Clone = { name: string; url: string; ref?: string; kind: string; dir: string };
 
@@ -34,34 +33,37 @@ export function library(office: Office): string[] {
 }
 
 /**
- * The declared packages that are installed with valid settings, and each one's plugin to link.
- * `problems` names each package that isn't, and each plugin not linked because of its name.
+ * The office's packages that are installed with valid settings, and each one's plugin to link.
+ * `problems` names each package that isn't, each entry that can't be one, and each plugin not
+ * linked because of its name.
  */
 export function installedPackages(office: Office): InstalledPackages {
   const installed: InstalledPackage[] = [];
-  const problems: PackageProblem[] = [];
+  const resolved = resolvePackages(office);
+  const problems = [...resolved.problems];
 
-  for (const entry of office.packages) {
-    const read = readPackage(office, entry);
+  for (const item of resolved.packages) {
+    const read = readPackage(office, item);
 
     if (read.ok) installed.push(read.value);
-    else problems.push(...read.errors.map((message) => ({ packages: [entry.name], message })));
+    else problems.push(...read.errors.map((message) => ({ packages: [item.entry.name], message })));
   }
 
   // A package's plugin is linked under the package's name, which office.yaml keeps unique among
-  // packages; it can still meet the tool's plugin, a cloned plugin or one of the office's own.
+  // packages; it can still meet a cloned plugin or one of the office's own.
   const plugins = new Map<string, string>();
 
   for (const { entry, dir, plugin } of installed) {
     if (!plugin) continue;
 
     const at = `.opencode/plugins/${entry.name}`;
+    const taken = occupied(join(office.dir, at)) && packageLink(join(office.dir, at)) === undefined;
 
-    const problem = toolPlugins.includes(entry.name)
-      ? `its plugin would be ${at}, the tool's own ${entry.name} plugin`
-      : office.plugins.some((cloned) => cloned.name === entry.name)
-        ? `its plugin would be ${at}, where the plugins: entry ${entry.name} is cloned`
-        : occupied(join(office.dir, at)) && packageLink(join(office.dir, at)) === undefined
+    const problem = office.plugins.some((cloned) => cloned.name === entry.name)
+      ? `its plugin would be ${at}, where the plugins: entry ${entry.name} is cloned`
+      : taken && entry.name === "office"
+        ? `its plugin would be ${at}, where earlier releases of office copied the tool's plugin; office sync replaces that copy with the link`
+        : taken
           ? `its plugin would be ${at}, which holds a plugin of this office's own (not a link office sync made)`
           : undefined;
 
@@ -71,9 +73,6 @@ export function installedPackages(office: Office): InstalledPackages {
 
   return { installed, plugins, problems };
 }
-
-/** Why a package isn't installed, or its plugin isn't linked. */
-export type PackageProblem = { packages: string[]; message: string };
 
 export type InstalledPackages = {
   installed: InstalledPackage[];
@@ -92,7 +91,10 @@ function occupied(path: string): boolean {
   }
 }
 
-/** The target of `path` when it is a link office sync made to a package plugin, `../../packages/<name>/plugin`. */
+/**
+ * The target of `path` when it is a link office sync made to a package plugin,
+ * `../../.office/packages/<name>/plugin` or `../../packages/<name>/plugin`.
+ */
 export function packageLink(path: string): string | undefined {
   let target;
 
@@ -103,11 +105,11 @@ export function packageLink(path: string): string | undefined {
     return undefined;
   }
 
-  return target.startsWith("../../packages/") ? target : undefined;
+  return target.startsWith("../../packages/") || target.startsWith("../../.office/packages/") ? target : undefined;
 }
 
 /**
- * The package plugins of `.opencode/plugins/`: the links office.yaml's packages want, by name with
+ * The package plugins of `.opencode/plugins/`: the links the office's packages want, by name with
  * their relative targets, and the links to package plugins there now.
  */
 export function pluginLinks(office: Office) {
@@ -152,8 +154,8 @@ export type SkillSelection = {
 };
 
 /**
- * The skill selection of the root (`desk` undefined) and of each desk: which library and package
- * skills should be linked into that `.opencode/skills/`, and what is there now.
+ * The skill selection of the root (`desk` undefined) and of each desk: which library skills
+ * should be linked into that `.opencode/skills/`, and what is there now.
  */
 export function skillSelections(office: Office): SkillSelection[] {
   const levels = [{ desk: undefined, enabled: office.skills.enabled }, ...office.desks.map((desk) => ({ desk: desk.name, enabled: desk.skills }))];
@@ -178,34 +180,4 @@ export function skillSelections(office: Office): SkillSelection[] {
       target: (skill) => relative(folder, join(office.dir, "skills", skill)),
     };
   });
-}
-
-/**
- * One file of a tool plugin's copy in the office, `.opencode/plugins/<plugin>/<file>`: `missing`,
- * `differs` from the tool's, or `extra` (the tool's copy has no such file).
- */
-export type PluginDrift = { path: string; state: "missing" | "differs" | "extra"; content: string | undefined };
-
-/** Where the office's copies of the tool's plugins differ from the tool's own. */
-export async function pluginDrift(office: Office): Promise<PluginDrift[]> {
-  const drift: PluginDrift[] = [];
-
-  for (const plugin of toolPlugins) {
-    const folder = join(office.dir, ".opencode/plugins", plugin);
-    const wanted = await pluginFiles(plugin);
-    const present = existsSync(folder) ? readdirSync(folder, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => relative(folder, join(entry.parentPath, entry.name))) : [];
-
-    for (const [file, content] of wanted) {
-      const path = relative(office.dir, join(folder, file));
-
-      if (!present.includes(file)) drift.push({ path, state: "missing", content });
-      else if (readFileSync(join(folder, file), "utf8") !== content) drift.push({ path, state: "differs", content });
-    }
-
-    for (const file of present) {
-      if (!wanted.has(file)) drift.push({ path: relative(office.dir, join(folder, file)), state: "extra", content: undefined });
-    }
-  }
-
-  return drift;
 }

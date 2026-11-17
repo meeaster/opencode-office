@@ -12,12 +12,12 @@ An artifact is one folder in the office root's `artifacts/`, published to a GitH
 3. **Preview.** From the office root, build the site into a new temporary folder and open its `index.html`, checking the index entry and the page:
 
    ```sh
-   bun packages/artifact-share/scripts/build-site.ts "$(mktemp -d)/site"
+   bun .office/packages/artifact-share/scripts/build-site.ts "$(mktemp -d)/site"
    ```
 
-   A Mermaid block that doesn't parse stops the build with the artifact's file, the block's number among the page's mermaid blocks (the first is block 1) and the line and column within it to fix. Where `bun` isn't installed, as in the office's container, `BUN_BE_BUN=1 office packages/artifact-share/scripts/build-site.ts "$(mktemp -d)/site"` runs it with the `office` executable.
+   A Mermaid block that doesn't parse stops the build with the artifact's file, the block's number among the page's mermaid blocks (the first is block 1) and the line and column within it to fix. Where `bun` isn't installed, as in the office's container, `BUN_BE_BUN=1 office .office/packages/artifact-share/scripts/build-site.ts "$(mktemp -d)/site"` runs it with the `office` executable.
 4. **Publish.** Commit the folder. A push to `main` publishes it through the `publish-artifacts` workflow; push only when the user asks to publish.
-5. **Link.** Give the user `<url>/<name>/`, with `url` from `packages/artifact-share/.settings.json`. It works once the workflow has deployed the push.
+5. **Link.** Give the user `<url>/<name>/`, with `url` from `.office/packages/artifact-share/.settings.json`. It works once the workflow has deployed the push.
 
 The site may be public: on a personal GitHub account it is, even when the repository is private. Share only what the user chose to share.
 

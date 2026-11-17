@@ -6,7 +6,7 @@ import { parseArgs } from "node:util";
 
 import * as v from "valibot";
 
-import { officeInstructions } from "../plugins/office/instructions.ts";
+import { officeInstructions } from "../packages/office/plugin/instructions.ts";
 import { deploy } from "./commands/apps.ts";
 import { check } from "./commands/check.ts";
 import { down, up } from "./commands/compose.ts";
@@ -35,8 +35,8 @@ const usage = `usage: office <command> [--office <dir>]
                                git block declares the commit identity and GitHub (credentials: gh)
   executor credentials [--password-only]
                                deliberately reveal the stored encrypted owner login, even offline
-  sync [--references]          clone and update, refresh the tool's plugins, scaffold missing
-                               desks, copy and link library skills, install packages
+  sync [--references]          clone and update, scaffold missing desks, copy and link library
+                               skills, install, restore and link packages, migrate old layouts
   check                        report drift from office.yaml and the tool, and the running
                                containers' state
   instructions [folder]        print the office guidance a session started in <folder> gets
@@ -152,7 +152,7 @@ async function main(): Promise<void> {
 
     console.log(`created the office in ${dir}`);
   } else if (command === "instructions") {
-    // The same code the office plugin runs; `office check` reports an office whose copy differs.
+    // The same code the office package's plugin runs; `office check` reports a copy that differs.
     const text = officeInstructions(resolve(rest[0] ?? flags.office ?? process.cwd()));
 
     if (text !== "") console.log(text);

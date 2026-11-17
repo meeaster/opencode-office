@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { sync } from "./commands/sync.ts";
 import { git } from "./git.ts";
 import { loadOffice } from "./office.ts";
-import { fetchPackage, installPackage, readPackage } from "./packages.ts";
+import { fetchPackage, installPackage, readPackage, resolvePackages } from "./packages.ts";
 
 let dir: string;
 
@@ -23,6 +23,16 @@ function write(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
+/** The office's package named `name`, read with its settings. */
+function read(office: string, name: string) {
+  const loaded = loadOffice(office);
+  const resolved = resolvePackages(loaded).packages.find((item) => item.entry.name === name);
+
+  if (resolved === undefined) throw new Error(`no package ${name}`);
+
+  return { loaded, result: readPackage(loaded, resolved) };
+}
+
 const manifest = "name: demo\ndescription: A demo package.\nsettings:\n  url:\n    description: Where it publishes\n    required: true\n  title:\n    description: The index title\n    default: Shared\n";
 
 test("settings the package doesn't declare, and required ones left out, are named; defaults fill the rest", () => {
@@ -31,7 +41,7 @@ test("settings the package doesn't declare, and required ones left out, are name
   write(join(office, "packages/demo/package.yaml"), manifest);
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n    settings:\n      colour: blue\n");
 
-  const invalid = readPackage(loadOffice(office), loadOffice(office).packages[0]);
+  const invalid = read(office, "demo").result;
 
   expect(invalid).toEqual({
     ok: false,
@@ -40,12 +50,12 @@ test("settings the package doesn't declare, and required ones left out, are name
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n    settings:\n      url: https://example.com/site\n");
 
-  const valid = readPackage(loadOffice(office), loadOffice(office).packages[0]);
+  const valid = read(office, "demo").result;
 
   expect(valid.ok && valid.value.settings).toEqual({ url: "https://example.com/site", title: "Shared" });
 });
 
-test("an install ignores the source office's records, and an update by full commit SHA replaces the package, refuses over local edits, and leaves template copies alone", () => {
+test("an install ignores the source office's records, an update by full commit SHA replaces the package, an edited copy is restored, and template copies are left alone", () => {
   const repo = join(dir, "repo");
   const office = join(dir, "office");
 
@@ -73,34 +83,33 @@ test("an install ignores the source office's records, and an update by full comm
 
   write(join(office, "office.yaml"), entry(first));
 
-  let loaded = loadOffice(office);
+  const loaded = loadOffice(office);
+  const script = join(office, ".office/packages/demo/scripts/run.sh");
 
-  expect(fetchPackage(loaded, "demo", { repo, path: "pkgs/demo", ref: first })).toEqual([`installed packages/demo from ${repo} at ${first}`]);
+  expect(fetchPackage(loaded, "demo", { repo, path: "pkgs/demo", ref: first })).toEqual([`installed .office/packages/demo from ${repo} at ${first}`]);
 
-  const installed = readPackage(loaded, loaded.packages[0]);
+  const installed = read(office, "demo").result;
 
   if (!installed.ok) throw new Error(installed.errors.join("\n"));
 
-  expect(installPackage(loaded, installed.value)).toEqual(["wrote packages/demo/.settings.json", "created out/AGENTS.md from package demo"]);
+  expect(installPackage(loaded, installed.value)).toEqual(["wrote .office/packages/demo/.settings.json", "created out/AGENTS.md from package demo"]);
   write(join(office, "out/AGENTS.md"), "the office's own\n");
-  write(join(office, "packages/demo/scripts/run.sh"), "echo edited\n");
+  write(script, "echo edited\n");
+
+  const [restored] = fetchPackage(loaded, "demo", { repo, path: "pkgs/demo", ref: first });
+
+  expect(restored).toStartWith(`restored .office/packages/demo to its copy of ${first}, undoing edits to scripts/run.sh (edited);`);
+  expect(readFileSync(script, "utf8")).toBe("echo one\n");
+
   write(join(office, "office.yaml"), entry(second));
-  loaded = loadOffice(office);
+  expect(fetchPackage(loadOffice(office), "demo", { repo, path: "pkgs/demo", ref: second })).toEqual([`updated .office/packages/demo from ${repo} pkgs/demo at ${first.slice(0, 12)} (ref ${first}) to ${second} (${second})`]);
+  expect(readFileSync(script, "utf8")).toBe("echo two\n");
 
-  const [refusal] = fetchPackage(loaded, "demo", { repo, path: "pkgs/demo", ref: second });
+  const updated = read(office, "demo");
 
-  expect(refusal).toStartWith(`FAILED packages/demo: not updated to ${second}, because package files differ from the copy of ${first}: scripts/run.sh (edited).`);
-  expect(readFileSync(join(office, "packages/demo/scripts/run.sh"), "utf8")).toBe("echo edited\n");
+  if (!updated.result.ok) throw new Error(updated.result.errors.join("\n"));
 
-  write(join(office, "packages/demo/scripts/run.sh"), "echo one\n");
-  expect(fetchPackage(loaded, "demo", { repo, path: "pkgs/demo", ref: second })).toEqual([`updated packages/demo from ${first} to ${second} (${second})`]);
-  expect(readFileSync(join(office, "packages/demo/scripts/run.sh"), "utf8")).toBe("echo two\n");
-
-  const updated = readPackage(loaded, loaded.packages[0]);
-
-  if (!updated.ok) throw new Error(updated.errors.join("\n"));
-
-  expect(installPackage(loaded, updated.value)).toEqual([]);
+  expect(installPackage(updated.loaded, updated.result.value)).toEqual([]);
   expect(readFileSync(join(office, "out/AGENTS.md"), "utf8")).toBe("the office's own\n");
 });
 
@@ -143,12 +152,11 @@ test("a template file is copied once: one the office deletes stays deleted, one 
   const office = join(dir, "office");
 
   const install = () => {
-    const loaded = loadOffice(office);
-    const read = readPackage(loaded, loaded.packages[0]);
+    const { loaded, result } = read(office, "demo");
 
-    if (!read.ok) throw new Error(read.errors.join("\n"));
+    if (!result.ok) throw new Error(result.errors.join("\n"));
 
-    return installPackage(loaded, read.value);
+    return installPackage(loaded, result.value);
   };
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
@@ -168,7 +176,7 @@ test("a template file is copied once: one the office deletes stays deleted, one 
   expect(install()).toEqual([]);
 });
 
-test("sync removes an unedited package whose entry is gone with the template files it still holds, and leaves changed files and the office's own beside them", async () => {
+test("sync removes a copied package whose entry is gone with the template files it still holds, and leaves changed files and the office's own beside them", async () => {
   const repo = join(dir, "repo");
   const office = join(dir, "office");
 
@@ -195,9 +203,9 @@ test("sync removes an unedited package whose entry is gone with the template fil
     "deleted .github/workflows/publish.yml, which package demo created",
     "deleted out/AGENTS.md, which package demo created",
     "kept out/README.md, which changed since package demo wrote it",
-    "removed packages/demo/, which office.yaml no longer lists",
+    "removed .office/packages/demo/, which office.yaml no longer lists",
   ]);
-  expect(existsSync(join(office, "packages/demo"))).toBe(false);
+  expect(existsSync(join(office, ".office/packages/demo"))).toBe(false);
   expect(existsSync(join(office, ".github/workflows"))).toBe(false);
   expect(readFileSync(join(office, ".github/dependabot.yml"), "utf8")).toBe("version: 2\n");
   expect(readFileSync(join(office, "out/README.md"), "utf8")).toBe("the office changed this\n");
@@ -205,30 +213,86 @@ test("sync removes an unedited package whose entry is gone with the template fil
   expect(await sync(loadOffice(office))).toEqual([]);
 });
 
-test("sync refuses to remove an edited package whose entry is gone, and never removes a package authored in the office", async () => {
+test("sync removes an edited copy whose entry is gone too, and never removes a package written in the office", async () => {
   const repo = join(dir, "repo");
   const office = join(dir, "office");
 
   write(join(repo, "pkgs/demo/package.yaml"), manifest);
-  write(join(repo, "pkgs/demo/template/out/AGENTS.md"), "from the package\n");
   git(["init", "--quiet", repo]);
   git(["add", "-A"], repo);
   git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "-m", "one"], repo);
 
-  const ref = git(["rev-parse", "HEAD"], repo);
-
-  write(join(office, "office.yaml"), `name: t\npackages:\n  - name: demo\n    repo: ${repo}\n    path: pkgs/demo\n    ref: ${ref}\n    settings: { url: https://example.com }\n`);
+  write(join(office, "office.yaml"), `name: t\npackages:\n  - name: demo\n    repo: ${repo}\n    path: pkgs/demo\n    ref: ${git(["rev-parse", "HEAD"], repo)}\n    settings: { url: https://example.com }\n`);
   git(["init", "--quiet", office]);
   await sync(loadOffice(office));
-  write(join(office, "packages/demo/package.yaml"), `${manifest}# edited\n`);
-  write(join(office, "packages/own/package.yaml"), "name: own\ndescription: Authored here.\n");
+  write(join(office, ".office/packages/demo/package.yaml"), `${manifest}# edited\n`);
+  write(join(office, "packages/own/package.yaml"), "name: own\ndescription: Written here.\n");
   write(join(office, "office.yaml"), "name: t\n");
 
-  const [refusal, ...rest] = await sync(loadOffice(office));
-
-  expect(refusal).toStartWith(`FAILED packages/demo: not removed, though office.yaml no longer lists it, because package files differ from the copy of ${ref}: package.yaml (edited).`);
-  expect(rest).toEqual([]);
-  expect(readFileSync(join(office, "out/AGENTS.md"), "utf8")).toBe("from the package\n");
-  expect(existsSync(join(office, "packages/demo/.source.json"))).toBe(true);
+  expect(await sync(loadOffice(office))).toEqual(["removed .office/packages/demo/, which office.yaml no longer lists"]);
   expect(existsSync(join(office, "packages/own/package.yaml"))).toBe(true);
+});
+
+test("an entry without repo is built-in when the tool ships a package of that name and the office's own otherwise; office is always there and can't be listed, and a built-in can't come from another repository", () => {
+  const office = join(dir, "office");
+
+  write(
+    join(office, "office.yaml"),
+    [
+      "name: t",
+      "packages:",
+      "  - name: knowledge",
+      "  - name: mine",
+      "  - name: office",
+      "  - name: shared",
+      "    repo: https://example.com/shared.git",
+      "    path: packages/shared",
+      "    ref: main",
+      "  - name: artifact-share",
+      "    repo: https://example.com/fork.git",
+      "    path: packages/artifact-share",
+      "    ref: main",
+      "",
+    ].join("\n"),
+  );
+
+  const { packages, problems } = resolvePackages(loadOffice(office));
+
+  expect(packages.map((item) => [item.entry.name, item.kind, item.dir.slice(office.length + 1)])).toEqual([
+    ["office", "built-in", ".office/packages/office"],
+    ["knowledge", "built-in", ".office/packages/knowledge"],
+    ["mine", "local", "packages/mine"],
+    ["shared", "remote", ".office/packages/shared"],
+  ]);
+  expect(problems.map((problem) => problem.packages)).toEqual([["office"], ["artifact-share"]]);
+});
+
+test("sync installs the built-in packages from the tool and restores an edited copy, keeping the office's records", async () => {
+  const office = join(dir, "office");
+  const skill = join(office, ".office/packages/office/skills/office/SKILL.md");
+
+  write(join(office, "office.yaml"), "name: t\npackages:\n  - name: knowledge\n");
+
+  const installed = await sync(loadOffice(office));
+
+  expect(installed).toContain("installed .office/packages/office, the built-in office package");
+  expect(installed).toContain("installed .office/packages/knowledge, the built-in knowledge package");
+  expect(installed).toContain("linked .opencode/plugins/office");
+  expect(readlinkSync(join(office, ".opencode/plugins/office"))).toBe("../../.office/packages/office/plugin");
+  expect(existsSync(join(office, ".office/packages/office/plugin/index.js"))).toBe(true);
+
+  const original = readFileSync(skill, "utf8");
+  const template = readFileSync(join(office, ".office/packages/knowledge/.template.json"), "utf8");
+
+  write(skill, "edited\n");
+  rmSync(join(office, ".office/packages/knowledge/README.md"));
+
+  const restored = await sync(loadOffice(office));
+
+  expect(restored).toHaveLength(2);
+  expect(restored[0]).toStartWith("restored .office/packages/office, undoing edits to skills/office/SKILL.md (edited);");
+  expect(restored[1]).toStartWith("restored .office/packages/knowledge, undoing edits to README.md (removed);");
+  expect(readFileSync(skill, "utf8")).toBe(original);
+  expect(readFileSync(join(office, ".office/packages/knowledge/.template.json"), "utf8")).toBe(template);
+  expect(await sync(loadOffice(office))).toEqual([]);
 });
