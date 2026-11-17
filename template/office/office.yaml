@@ -65,8 +65,8 @@ skills:
 # OpenCode plugins developed in another repository, cloned into .opencode/plugins/<name>/.
 plugins: []
 
-# Optional capabilities, each a folder packages/<name>/ that office sync installs: its skills and
-# its plugin load in every session, and each file of its template/ is copied once into the office
+# Optional capabilities, each a folder packages/<name>/ that office sync installs: its plugin loads in
+# every session and provides its skills, tools and MCP servers, and each file of its template/ is copied once into the office
 # (a file you delete stays deleted).
 # With repo, path and ref (a tag or a full commit SHA) it is copied from that repository and
 # updated when ref changes; without them it is authored here. Settings aren't secrets: sync writes

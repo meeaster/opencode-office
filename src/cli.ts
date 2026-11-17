@@ -36,7 +36,7 @@ const usage = `usage: office <command> [--office <dir>]
   executor credentials [--password-only]
                                deliberately reveal the stored encrypted owner login, even offline
   sync [--references]          clone and update, refresh the tool's plugins, scaffold missing
-                               desks, copy and link skills
+                               desks, copy and link library skills, install packages
   check                        report drift from office.yaml and the tool, and the running
                                containers' state
   instructions [folder]        print the office guidance a session started in <folder> gets

@@ -1,7 +1,8 @@
 // `office sync`: makes the office's folders match office.yaml and the tool. It clones and updates,
 // refreshes the tool's plugin, scaffolds desks that are declared but missing, copies declared
-// skills into the library, installs, updates and removes packages, and links enabled and package
-// skills and package plugins.
+// skills into the library, installs, updates and removes packages, and links enabled library
+// skills and package plugins. A package's skills aren't linked: its plugin registers them, so sync
+// removes the links earlier releases made.
 // It never rewrites AGENTS.md, other hand-written content, an existing app or a file a package's
 // template created; it deletes such a file only with its package, and only while unchanged.
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
@@ -94,7 +95,7 @@ function copySkill(skill: CopiedSkill, to: string): string {
   return commit;
 }
 
-/** Makes each .opencode/skills/ hold exactly the enabled library skills and package skills as relative links. */
+/** Makes each .opencode/skills/ hold exactly the enabled library skills as relative links. */
 function linkSkills(office: Office): string[] {
   const changes: string[] = [];
 
@@ -102,18 +103,18 @@ function linkSkills(office: Office): string[] {
     mkdirSync(selection.folder, { recursive: true });
 
     for (const [entry, target] of selection.links) {
-      if (selection.wanted.includes(entry) && target === selection.target(entry)) continue;
+      if (selection.enabled.includes(entry) && target === selection.target(entry)) continue;
 
       unlinkSync(join(selection.folder, entry));
       changes.push(`unlinked ${relative(office.dir, join(selection.folder, entry))}`);
     }
 
-    for (const skill of selection.wanted) {
+    for (const skill of selection.enabled) {
       const path = join(selection.folder, skill);
 
       if (selection.folders.includes(skill)) {
         changes.push(`kept the real folder ${relative(office.dir, path)} instead of linking ${relative(office.dir, join(selection.folder, selection.target(skill)))}`);
-      } else if (!selection.packaged.has(skill) && !existsSync(join(office.dir, "skills", skill))) {
+      } else if (!existsSync(join(office.dir, "skills", skill))) {
         changes.push(`not linked: skills/${skill} is missing from the library`);
       } else if (selection.links.get(skill) !== selection.target(skill)) {
         symlinkSync(selection.target(skill), path);

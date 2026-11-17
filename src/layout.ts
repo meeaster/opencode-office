@@ -1,10 +1,12 @@
 // What an office's folders should hold, derived from office.yaml and the tool: the clones, the
-// installed packages, the skill and package plugin links and the tool's plugin. `office sync` makes the folders match; `office check` compares.
+// installed packages, the library skill and package plugin links and the tool's plugin. `office sync`
+// makes the folders match; `office check` compares. Nothing of a package but its plugin is linked:
+// the plugin gives OpenCode whatever the package provides, its skills and MCP servers included.
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { type Office, skillsFolder, toolPlugins } from "./office.ts";
-import { type InstalledPackage, packageDir, readPackage } from "./packages.ts";
+import { type InstalledPackage, readPackage } from "./packages.ts";
 import { pluginFiles } from "./tool.ts";
 
 export type Clone = { name: string; url: string; ref?: string; kind: string; dir: string };
@@ -32,9 +34,8 @@ export function library(office: Office): string[] {
 }
 
 /**
- * The declared packages that are installed with valid settings, and the folder of each package
- * skill. `problems` names each package that isn't, and each package skill not linked because
- * its ID is a library skill's or another package's too.
+ * The declared packages that are installed with valid settings, and each one's plugin to link.
+ * `problems` names each package that isn't, and each plugin not linked because of its name.
  */
 export function installedPackages(office: Office): InstalledPackages {
   const installed: InstalledPackage[] = [];
@@ -45,21 +46,6 @@ export function installedPackages(office: Office): InstalledPackages {
 
     if (read.ok) installed.push(read.value);
     else problems.push(...read.errors.map((message) => ({ packages: [entry.name], message })));
-  }
-
-  const libraryIds = library(office);
-  const owners = new Map<string, string[]>();
-
-  for (const item of installed) {
-    for (const skill of item.skills) owners.set(skill, [...(owners.get(skill) ?? []), item.entry.name]);
-  }
-
-  const skills = new Map<string, string>();
-
-  for (const [skill, names] of owners) {
-    if (libraryIds.includes(skill)) problems.push({ packages: names, message: `skill ${skill} has the ID of the library skill skills/${skill}, so it isn't linked` });
-    else if (names.length > 1) problems.push({ packages: names, message: `packages ${names.join(" and ")} both have a skill ${skill}, so neither is linked` });
-    else skills.set(skill, join(packageDir(office, names[0]), "skills", skill));
   }
 
   // A package's plugin is linked under the package's name, which office.yaml keeps unique among
@@ -83,15 +69,14 @@ export function installedPackages(office: Office): InstalledPackages {
     else problems.push({ packages: [entry.name], message: `${problem}, so it isn't linked; rename one of them` });
   }
 
-  return { installed, skills, plugins, problems };
+  return { installed, plugins, problems };
 }
 
-/** Why a package, or a skill of one or more packages, isn't installed. */
+/** Why a package isn't installed, or its plugin isn't linked. */
 export type PackageProblem = { packages: string[]; message: string };
 
 export type InstalledPackages = {
   installed: InstalledPackage[];
-  skills: Map<string, string>;
   /** Each package plugin to link, by package name, with its folder. */
   plugins: Map<string, string>;
   problems: PackageProblem[];
@@ -159,12 +144,8 @@ export function oldKnowledgePlugin(office: Office): boolean {
 export type SkillSelection = {
   desk: string | undefined;
   folder: string;
-  /** Library skills enabled here. */
+  /** Library skills enabled here, each linked into this `.opencode/skills/`. */
   enabled: string[];
-  /** Package skills, by ID, with their folders; only the root links them, so every desk gets them. */
-  packaged: Map<string, string>;
-  /** Every skill to link here: the enabled library skills and the package skills. */
-  wanted: string[];
   links: Map<string, string>;
   folders: string[];
   target: (skill: string) => string;
@@ -175,14 +156,9 @@ export type SkillSelection = {
  * skills should be linked into that `.opencode/skills/`, and what is there now.
  */
 export function skillSelections(office: Office): SkillSelection[] {
-  const { skills } = installedPackages(office);
+  const levels = [{ desk: undefined, enabled: office.skills.enabled }, ...office.desks.map((desk) => ({ desk: desk.name, enabled: desk.skills }))];
 
-  const levels = [
-    { desk: undefined, enabled: office.skills.enabled, packaged: skills },
-    ...office.desks.map((desk) => ({ desk: desk.name, enabled: desk.skills, packaged: new Map<string, string>() })),
-  ];
-
-  return levels.map(({ desk, enabled, packaged }) => {
+  return levels.map(({ desk, enabled }) => {
     const folder = skillsFolder(office, desk);
     const links = new Map<string, string>();
     const folders: string[] = [];
@@ -196,12 +172,10 @@ export function skillSelections(office: Office): SkillSelection[] {
       desk,
       folder,
       enabled,
-      packaged,
-      wanted: [...enabled, ...packaged.keys()],
       links,
       folders,
       /** The relative link target for a skill, so it resolves on the host and in the container. */
-      target: (skill) => relative(folder, packaged.get(skill) ?? join(office.dir, "skills", skill)),
+      target: (skill) => relative(folder, join(office.dir, "skills", skill)),
     };
   });
 }

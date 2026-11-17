@@ -196,7 +196,6 @@ test("sync removes an unedited package whose entry is gone with the template fil
     "deleted out/AGENTS.md, which package demo created",
     "kept out/README.md, which changed since package demo wrote it",
     "removed packages/demo/, which office.yaml no longer lists",
-    "unlinked .opencode/skills/demo-skill",
   ]);
   expect(existsSync(join(office, "packages/demo"))).toBe(false);
   expect(existsSync(join(office, ".github/workflows"))).toBe(false);

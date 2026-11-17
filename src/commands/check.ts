@@ -80,14 +80,10 @@ async function drift(office: Office): Promise<string[]> {
       else if (!selection.links.has(skill) && !selection.folders.includes(skill)) problems.push(`${where}: ${skill} is enabled but not linked`);
     }
 
-    for (const skill of selection.packaged.keys()) {
-      if (!selection.links.has(skill) && !selection.folders.includes(skill)) problems.push(`${where}: package skill ${skill} is not linked`);
-    }
-
     for (const [entry, target] of selection.links) {
       const path = relative(office.dir, join(selection.folder, entry));
 
-      if (!selection.wanted.includes(entry)) problems.push(`${path} is linked but nothing enables it`);
+      if (!selection.enabled.includes(entry)) problems.push(`${path} is linked but nothing enables it`);
       else if (target !== selection.target(entry)) problems.push(`${path} points to ${target}, not ${selection.target(entry)}`);
     }
   }
@@ -101,7 +97,7 @@ async function drift(office: Office): Promise<string[]> {
     const record = readRecord(dir);
 
     if (record === undefined) {
-      problems.push(`packages/${folder}/ is not a package in office.yaml, so its skills and plugin aren't linked`);
+      problems.push(`packages/${folder}/ is not a package in office.yaml, so its plugin isn't linked`);
 
       continue;
     }
@@ -117,10 +113,10 @@ async function drift(office: Office): Promise<string[]> {
 
 /**
  * One line per declared package: where it came from, whether its package files were edited
- * since they were copied, whether its settings are valid and written, and the skills and plugin it links.
+ * since they were copied, whether its settings are valid and written, and the plugin it links.
  */
 function packageChecks(office: Office, report: Report): void {
-  const { installed, skills, plugins, problems } = installedPackages(office);
+  const { installed, plugins, problems } = installedPackages(office);
   const links = pluginLinks(office);
 
   for (const entry of office.packages) {
@@ -167,9 +163,11 @@ function packageChecks(office: Office, report: Report): void {
 
     if (!written) ok = false;
 
-    const linked = item.skills.filter((skill) => skills.has(skill));
-
-    notes.push(`skills ${linked.join(", ") || "none"}${linked.length === 0 ? "" : " (root, so every desk loads them)"}`);
+    // Skills reach OpenCode only through the package's plugin; earlier releases linked them.
+    if (item.skills.length > 0 && !item.plugin) {
+      ok = false;
+      notes.push(`skills ${item.skills.join(", ")} don't load: the package has no plugin to register them${entry.source === undefined ? "" : " (move ref to a version that has one)"}`);
+    }
 
     if (plugins.has(entry.name)) {
       const pluginLinked = links.links.get(entry.name) === links.wanted.get(entry.name);
@@ -222,7 +220,7 @@ async function settle<Result>(read: () => Promise<Result>, ready: (value: Result
 /** Skill IDs a session in `desk` (undefined: the root) must load, and the office's others it must not. */
 function expectedSkills(office: Office, desk: string | undefined) {
   const selections = skillSelections(office);
-  const own = (selection: { wanted: string[]; folders: string[] } | undefined) => (selection === undefined ? [] : [...selection.wanted, ...selection.folders]);
+  const own = (selection: { enabled: string[]; folders: string[] } | undefined) => (selection === undefined ? [] : [...selection.enabled, ...selection.folders]);
   const root = selections.find((selection) => selection.desk === undefined);
   const mine = desk === undefined ? [] : own(selections.find((selection) => selection.desk === desk));
   const expected = new Set([...own(root), ...mine]);
