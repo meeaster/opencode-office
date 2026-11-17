@@ -6,14 +6,17 @@
 // `office up` runs the versions it last applied (the state folder's applied.json) and says what
 // office.yaml has moved to since; `office up --upgrade` applies those, after backing up what the
 // upgrade migrates. Neither ever runs an older OpenCode or Executor than the office has run.
+// `office up --refresh` rebuilds the opencode image with current Debian packages, which a weekly
+// systemd timer runs in container mode; every other build reuses the last refresh's packages.
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { installTimers, removeTimers } from "../cron/host.ts";
+import { cronTimers, hasSystemd, installTimers, refreshTimer, removeTimers } from "../cron/host.ts";
 import { ghConfigDir, ghHosts } from "../github.ts";
 import { hostTool } from "../host-tools.ts";
+import { notify } from "../notify.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
 import type { Lock } from "../schema.ts";
 import { prepareSecrets } from "../secrets.ts";
@@ -183,8 +186,11 @@ function docker(args: string[]): void {
   execFileSync("docker", args, { stdio: "inherit" });
 }
 
-/** Builds the base image for `pins` with the running `office` inside, and the office's own image on top. */
-async function buildImages(office: Office, pins: Lock): Promise<void> {
+/**
+ * Builds the base image for `pins` with the running `office` inside, and the office's own image on
+ * top. `refreshed` keys the base image's apt layer: a new value installs current Debian packages.
+ */
+async function buildImages(office: Office, pins: Lock, refreshed: string): Promise<void> {
   const context = unpackedImage();
   const hex = (digest: string) => digest.replace(/^sha256:/, "");
 
@@ -195,6 +201,7 @@ async function buildImages(office: Office, pins: Lock): Promise<void> {
     CLAUDE_SHA256: hex(pins.claude.digest),
     MISE_VERSION: pins.mise.version,
     MISE_SHA256: hex(pins.mise.digest),
+    APT_REFRESH: refreshed,
   };
 
   await placeExecutable(context);
@@ -203,6 +210,44 @@ async function buildImages(office: Office, pins: Lock): Promise<void> {
   if (existsSync(join(office.dir, "Dockerfile"))) {
     docker(["build", "-t", officeImage(office, pins), "--build-arg", `BASE_IMAGE=${baseImage(pins)}`, office.dir]);
   }
+}
+
+/** The Chromium version an image carries, or undefined when the image doesn't exist or has none. */
+function chromiumVersion(image: string): string | undefined {
+  try {
+    // "Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)"
+    return /^Chromium \S+/.exec(execFileSync("docker", ["run", "--rm", "--entrypoint", "chromium", image, "--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }))?.[0];
+  } catch {
+    return undefined;
+  }
+}
+
+/** Rebuilds the images with current Debian packages and tells the user what Chromium moved to, or why it failed. */
+async function refreshImages(office: Office, pins: Lock, refreshed: string): Promise<void> {
+  const before = chromiumVersion(officeImage(office, pins));
+
+  try {
+    await buildImages(office, pins, refreshed);
+  } catch (error) {
+    await notify(office, { title: "Image refresh failed", body: `office up --refresh couldn't rebuild the opencode image: ${error instanceof Error ? error.message : String(error)}` });
+
+    throw error;
+  }
+
+  const after = chromiumVersion(officeImage(office, pins)) ?? "no Chromium";
+
+  await notify(office, { title: "Image refreshed", body: `The opencode image has current Debian packages and restarts now. ${before === undefined || before === after ? after : `${before} → ${after}`}` });
+}
+
+/** Installs the weekly refresh timer, which needs a systemd user manager the machine may lack. */
+function installRefreshTimer(office: Office): void {
+  if (hasSystemd()) {
+    installTimers(office, [refreshTimer(office)]);
+
+    return;
+  }
+
+  console.log("office: no systemd user manager, so nothing refreshes the opencode image's Debian packages weekly; run office up --refresh yourself");
 }
 
 /** The Debian image the base image starts from, which also runs the backup of Executor's volume. */
@@ -309,13 +354,16 @@ function choosePins(office: Office, upgrade: boolean) {
   return { pins, moved: changes(office, applied.pins, pins) };
 }
 
-export async function up(office: Office, { upgrade = false } = {}): Promise<void> {
+export async function up(office: Office, { upgrade = false, refresh = false } = {}): Promise<void> {
   prepareSecrets(office);
   assertGatewayMode(office);
   prepareState(office);
 
   const { pins, moved } = choosePins(office, upgrade);
-  const from = readApplied(office)?.pins;
+  const applied = readApplied(office);
+  const from = applied?.pins;
+  // A build with no refresh recorded yet takes current packages and records them as of now.
+  const refreshed = refresh || applied?.refreshed === undefined ? new Date().toISOString() : applied.refreshed;
 
   guardDowngrade(office, pins);
 
@@ -333,21 +381,25 @@ export async function up(office: Office, { upgrade = false } = {}): Promise<void
     compose(office, ["up", "-d", "--build", "--remove-orphans"], { pins });
     writeExecutorFiles(office);
     installTools(office);
-    installTimers(office);
+    installTimers(office, cronTimers(office));
+
+    if (refresh) console.log("office: host mode has no opencode image to refresh");
   } else {
     if (office.git?.credentials === "gh" && !sharesGithubLogin(office)) {
       console.log(`office: office.yaml shares the host's gh login, but ${join(ghConfigDir(), "hosts.yml")} doesn't exist, so the container gets none. Log in with office setup, or gh auth login --git-protocol https --web --insecure-storage`);
     }
 
-    await buildImages(office, pins);
+    if (refresh) await refreshImages(office, pins, refreshed);
+    else await buildImages(office, pins, refreshed);
 
-    // Timers and files left from host mode would run the jobs twice and expose a stale token.
-    removeTimers(office);
+    // Installing only the refresh timer removes cron timers left from host mode, which would run
+    // the jobs twice; the executor files left from it would expose a stale token.
+    installRefreshTimer(office);
     removeExecutorFiles(office);
     compose(office, ["up", "-d", "--build", "--remove-orphans"], { pins });
   }
 
-  writeApplied(office, pins);
+  writeApplied(office, pins, office.opencode.mode === "container" ? refreshed : applied?.refreshed);
 
   // A new Executor serves a new apps framework; every app must match it.
   if (moved.some((move) => move.tool === "executor")) {
@@ -385,7 +437,7 @@ export async function startExecutor(office: Office): Promise<void> {
   if (!(await waitForExecutor())) throw new OfficeError("Executor didn't become ready; fix its startup and rerun office setup");
 }
 
-/** Stops the office's containers, whichever mode started them, and in host mode its timers. */
+/** Stops the office's containers, whichever mode started them, and its timers. */
 export function down(office: Office): void {
   compose(office, ["down"], { profiles: "container" });
   removeTimers(office);

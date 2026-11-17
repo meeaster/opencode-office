@@ -118,8 +118,15 @@ export function wantedPins(office: Office): Lock {
   return lock;
 }
 
-/** What `office up` last applied, and the highest OpenCode and Executor this office has run. */
-const appliedSchema = v.strictObject({ pins: lockSchema, highest: v.strictObject({ opencode: version, executor: version }) });
+/**
+ * What `office up` last applied, the highest OpenCode and Executor this office has run, and when
+ * the opencode image last took current Debian packages (container mode; `office up --refresh`).
+ */
+const appliedSchema = v.strictObject({
+  pins: lockSchema,
+  highest: v.strictObject({ opencode: version, executor: version }),
+  refreshed: v.optional(v.pipe(v.string(), v.isoTimestamp())),
+});
 
 export type Applied = v.InferOutput<typeof appliedSchema>;
 
@@ -139,7 +146,7 @@ export function readApplied(office: Office): Applied | undefined {
   return result.value;
 }
 
-export function writeApplied(office: Office, pins: Lock): void {
+export function writeApplied(office: Office, pins: Lock, refreshed: string | undefined): void {
   const before = readApplied(office);
 
   const higher = (tool: "opencode" | "executor") => {
@@ -149,7 +156,7 @@ export function writeApplied(office: Office, pins: Lock): void {
   };
 
   mkdirSync(office.state, { recursive: true });
-  writeFileSync(appliedPath(office), `${JSON.stringify({ pins, highest: { opencode: higher("opencode"), executor: higher("executor") } }, null, 2)}\n`);
+  writeFileSync(appliedPath(office), `${JSON.stringify({ pins, highest: { opencode: higher("opencode"), executor: higher("executor") }, refreshed }, null, 2)}\n`);
 }
 
 /** The tools whose applied pin differs from the wanted one, among those the mode runs. */

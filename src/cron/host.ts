@@ -1,7 +1,9 @@
-// Host mode's cron: each cron/crontab job becomes a systemd user timer with Persistent=true, so
-// systemd runs a job missed while the computer was off, as `office cron catch-up` does in the
-// container. Each timer's service runs `office cron run <command>` from the office root. The
-// units are named office-<office>-<job>, written by `office up` and removed by `office down`. With a
+// The office's systemd user timers, each with Persistent=true, so systemd runs one missed while the
+// computer was off. In host mode each cron/crontab job becomes one, as `office cron catch-up` does in
+// the container, whose service runs `office cron run <command>` from the office root. In container
+// mode the only one runs `office up --refresh` weekly, which the container can't do itself: it
+// rebuilds the opencode image with current Debian packages and restarts the container. The units
+// are named office-<office>-<job>, written by `office up` and removed by `office down`. With a
 // git identity in office.yaml, each service's GIT_CONFIG_GLOBAL is a generated file that includes
 // the user's global git config and then sets that identity, so the office's jobs commit as the
 // office without the host's global identity changing; a repository's own config still overrides.
@@ -14,8 +16,8 @@ import { type Office, OfficeError } from "../office.ts";
 import { officeCommand } from "../tool.ts";
 import { jobs, scheduleFields } from "./container.ts";
 
-/** A job as a systemd timer: its unit name, command and OnCalendar value. */
-type Timer = { unit: string; command: string; calendar: string };
+/** A systemd timer: its unit name, OnCalendar value, a description, and the `office` arguments its service runs. */
+type Timer = { unit: string; calendar: string; description: string; args: string[] };
 
 const unitDir = join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "systemd/user");
 
@@ -26,6 +28,17 @@ const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function systemctl(args: string[], { capture = false } = {}): string {
   return execFileSync("systemctl", ["--user", ...args], { encoding: "utf8", stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit" }) ?? "";
+}
+
+/** Whether this machine has a systemd user manager to run timers; macOS and some WSL setups don't. */
+export function hasSystemd(): boolean {
+  try {
+    execFileSync("systemctl", ["--user", "show", "--property=Version"], { stdio: "ignore" });
+
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function values(set: Set<number> | undefined, format: (value: number) => string = String): string {
@@ -69,14 +82,22 @@ function argument(text: string): string {
  * mise's shims resolve each tool for the folder a job runs in.
  */
 function jobPath(): string {
-  return (process.env.PATH ?? "/usr/bin:/bin")
-    .split(":")
-    .filter((dir) => !dir.includes("/mise/installs/"))
-    .join(":");
+  const dirs: string[] = [];
+
+  for (const dir of (process.env.PATH ?? "/usr/bin:/bin").split(":")) {
+    const installs = dir.indexOf("/mise/installs/");
+    // `mise activate` puts install folders on PATH rather than the shims, so each becomes the
+    // shims folder of the same mise, which then provides those tools, such as sops for `office up`.
+    const entry = installs === -1 ? dir : `${dir.slice(0, installs)}/mise/shims`;
+
+    if (!dirs.includes(entry)) dirs.push(entry);
+  }
+
+  return dirs.join(":");
 }
 
-/** The timers for an office's crontab: each job's unit name, command and calendar. */
-export function timers(office: Office): Timer[] {
+/** The timers for an office's crontab, in host mode. */
+export function cronTimers(office: Office): Timer[] {
   const crontab = join(office.dir, "cron/crontab");
 
   if (!existsSync(crontab)) return [];
@@ -100,15 +121,30 @@ export function timers(office: Office): Timer[] {
 
     used.add(unit);
 
-    return [{ unit, command: job.command, calendar }];
+    return [{ unit, calendar, description: job.command, args: ["cron", "run", job.command] }];
   });
+}
+
+/** Container mode's weekly refresh of the opencode image, Sundays after the daily jobs. */
+export function refreshTimer(office: Office): Timer {
+  return { unit: `office-${office.name}-refresh-image`, calendar: "Sun *-*-* 07:00:00 UTC", description: "office up --refresh", args: ["up", "--refresh"] };
+}
+
+/**
+ * The environment `office up` ran with that the office's commands read: PATH, and the ports, so a
+ * timer brings up an office started on other ports (EXECUTOR_PORT=42440) on the same ones.
+ */
+function jobEnvironment(): string[] {
+  const ports = Object.entries(process.env).filter((entry): entry is [string, string] => entry[0].endsWith("_PORT") && entry[1] !== undefined);
+
+  return [`PATH=${jobPath()}`, ...ports.map(([name, value]) => `${name}=${value}`)];
 }
 
 function generatedUnits(office: Office): string[] {
   if (!existsSync(unitDir)) return [];
 
   return readdirSync(unitDir).filter(
-    (file) => file.startsWith(`office-${office.name}-`) && /\.(service|timer)$/.test(file) && readFileSync(join(unitDir, file), "utf8").startsWith(`${marker} for the ${office.name} office `),
+    (file) => file.startsWith(`office-${office.name}-`) && /\.(service|timer)$/.test(file) && readFileSync(join(unitDir, file), "utf8").startsWith(`${marker} for the ${office.name} office`),
   );
 }
 
@@ -135,17 +171,17 @@ function jobGitConfig(office: Office): string | undefined {
   return path;
 }
 
-/** Writes the office's timers, removes ones the crontab no longer lists, and starts them. */
-export function installTimers(office: Office): void {
-  const wanted = timers(office);
+/** Writes the office's timers, removes generated ones not among them, and starts them. */
+export function installTimers(office: Office, wanted: Timer[]): void {
   const gitConfig = jobGitConfig(office);
-  const header = `${marker} for the ${office.name} office from cron/crontab. Don't edit: \`office up\` rewrites it and \`office down\` removes it.`;
+  const environment = jobEnvironment();
+  const header = `${marker} for the ${office.name} office. Don't edit: \`office up\` rewrites it and \`office down\` removes it.`;
 
   stopTimers(generatedUnits(office).filter((file) => !wanted.some((timer) => file.startsWith(`${timer.unit}.`))));
   mkdirSync(unitDir, { recursive: true });
 
   for (const timer of wanted) {
-    const description = `Description=office ${office.name}: ${timer.command}`;
+    const description = `Description=office ${office.name}: ${timer.description}`;
 
     writeFileSync(
       join(unitDir, `${timer.unit}.service`),
@@ -157,9 +193,9 @@ export function installTimers(office: Office): void {
         "[Service]",
         "Type=oneshot",
         `WorkingDirectory=${office.dir}`,
-        `Environment=${quoted(`PATH=${jobPath()}`)}`,
+        ...environment.map((variable) => `Environment=${quoted(variable)}`),
         ...(gitConfig === undefined ? [] : [`Environment=${quoted(`GIT_CONFIG_GLOBAL=${gitConfig}`)}`]),
-        `ExecStart=${[officeCommand(), "cron", "run", timer.command].map(argument).join(" ")}`,
+        `ExecStart=${[officeCommand(), ...timer.args].map(argument).join(" ")}`,
         "",
       ].join("\n"),
     );
@@ -174,7 +210,7 @@ export function installTimers(office: Office): void {
 
   if (wanted.length > 0) systemctl(["enable", "--now", ...wanted.map((timer) => `${timer.unit}.timer`)]);
 
-  for (const timer of wanted) console.log(`timer ${timer.unit}: ${timer.calendar}, ${timer.command}`);
+  for (const timer of wanted) console.log(`timer ${timer.unit}: ${timer.calendar}, ${timer.description}`);
 }
 
 function stopTimers(files: string[]): void {
@@ -191,16 +227,16 @@ function stopTimers(files: string[]): void {
 export function removeTimers(office: Office): void {
   const files = generatedUnits(office);
 
-  // A container-mode office has none, and its machine may have no systemd.
+  // The machine of an office without timers may have no systemd.
   if (files.length === 0) return;
 
   stopTimers(files);
   systemctl(["daemon-reload"]);
 }
 
-/** Each expected timer's state, for `office check`. */
-export function timerStates(office: Office): (Timer & { active: boolean; next: string; last: string })[] {
-  return timers(office).map((timer) => {
+/** Each timer's state, for `office check`. */
+export function timerStates(expected: Timer[]): (Timer & { active: boolean; next: string; last: string })[] {
+  return expected.map((timer) => {
     const exists = existsSync(join(unitDir, `${timer.unit}.timer`));
     const shown = exists ? systemctl(["show", `${timer.unit}.timer`, "--property=ActiveState,NextElapseUSecRealtime,LastTriggerUSec"], { capture: true }) : "";
     const property = (name: string) => new RegExp(`^${name}=(.*)$`, "m").exec(shown)?.[1] ?? "";

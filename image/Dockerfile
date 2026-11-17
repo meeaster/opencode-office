@@ -1,5 +1,5 @@
 # The base image of every office's `opencode` container: Debian with OpenCode, Claude Code, mise,
-# build tools, supercronic for the office's cron jobs, and the compiled `office` executable.
+# build tools, Chromium, supercronic for the office's cron jobs, and the compiled `office` executable.
 # `office up` builds it from a folder holding these image files and the `office` it runs as, so
 # the container's `office` is the host's, and passes the versions the office pins (office.yaml)
 # with their checksums (office.lock). An office's own Dockerfile can add system packages on top.
@@ -7,9 +7,17 @@ FROM debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c5
 
 LABEL org.opencontainers.image.title=office-opencode
 
-RUN apt-get update \
+# The Debian base is pinned by digest, so its packages only get security fixes here. `office up`
+# passes the time of the office's last refresh (`office up --refresh`, which a weekly timer runs):
+# a new value rebuilds this layer and everything after it with current packages, and the same
+# value keeps the cached layer. Chromium and its fonts let agents check their work in a browser;
+# AGENT_BROWSER_EXECUTABLE_PATH (below) points agent-browser at it.
+ARG APT_REFRESH
+RUN echo "packages as of ${APT_REFRESH:-the first build}" \
+ && apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends \
-      build-essential ca-certificates curl git jq libatomic1 openssh-client pkg-config python3 ripgrep unzip xz-utils \
+      build-essential ca-certificates chromium curl fonts-liberation fonts-noto-color-emoji git jq libatomic1 openssh-client pkg-config python3 ripgrep unzip xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # Runs the office's cron/crontab. The tool pins it: offices don't choose their cron runner.
@@ -64,6 +72,8 @@ ENV HOME=/home/assistant \
     # The office's mise.toml files are its own, so mise trusts everything under the mount.
     MISE_TRUSTED_CONFIG_PATHS=/home/assistant/workspace \
     MISE_YES=1 \
+    # Debian's Chromium, installed above, for agent-browser.
+    AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
     # The office's git defaults, which the entrypoint writes: its commit identity and gh as the
     # HTTPS credential helper. It includes /etc/gitconfig; ~/.gitconfig and repositories override it.
     GIT_CONFIG_SYSTEM=/etc/opencode/gitconfig \

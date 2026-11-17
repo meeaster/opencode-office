@@ -25,5 +25,6 @@ Use `office` from any folder inside the office; `office.yaml` declares its struc
 | Let a service in `compose.yaml` call Executor | Add `env_file: [{ path: "${OFFICE_STATE}/office-executor.env", required: false }]` and `EXECUTOR_URL: http://executor:4400` to the service, then `office up`. It gets the office's key as `EXECUTOR_TOKEN` and `EXECUTOR_ORGANIZATION`; never print or copy them |
 | Run a command in the container from the host | `office exec -- <command>`, or `office shell`, from the folder it should run in |
 | Change the OpenCode, Claude Code, Executor or mise version | Edit `versions:` in `office.yaml`, run `office pin`, commit `office.yaml` and `office.lock`, then `office up --upgrade`. The daily job bumps them too, waiting the ages under `upgrades:`; it never restarts anything. Never set an older OpenCode or Executor than the office has run |
+| Update the container's Debian packages, Chromium among them | `office up --refresh` rebuilds the image with current ones and restarts the container. In container mode a host systemd timer runs it every Sunday; `office check` warns when the last refresh is more than eight days old |
 
 `office check` reports drift between `office.yaml` and the folders. `office instructions [folder]` prints the guidance the office plugin gives a session in that folder.

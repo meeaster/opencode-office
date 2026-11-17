@@ -1,11 +1,12 @@
 // `office check`: drift between office.yaml, the tool and the folders, then, when this office's
 // containers are running, whether Executor is ready, each desk loads what it should on the OpenCode
-// server of the office's mode, the container runs the host's `office`, and the cron jobs are
-// scheduled (supercronic, or the host's timers).
+// server of the office's mode, the container runs the host's `office`, the cron jobs are
+// scheduled (supercronic, or the host's timers), and in container mode the image refresh timer is
+// active and the image's Debian packages are recent.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
-import { timerStates } from "../cron/host.ts";
+import { cronTimers, hasSystemd, refreshTimer, timerStates } from "../cron/host.ts";
 import { ghConfigDir, ghLogin, ghPin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
 import { installedTool } from "../host-tools.ts";
 import { clones, installedPackages, library, oldKnowledgePlugin, pluginDrift, pluginLinks, skillSelections } from "../layout.ts";
@@ -217,19 +218,40 @@ function expectedSkills(office: Office, desk: string | undefined) {
 }
 
 function cron(office: Office, report: Report, running: string[]): void {
-  if (office.opencode.mode === "host") {
-    for (const timer of timerStates(office)) {
+  const timers = office.opencode.mode === "host" ? cronTimers(office) : [refreshTimer(office)];
+
+  if (office.opencode.mode === "host" || hasSystemd()) {
+    for (const timer of timerStates(timers)) {
       report(timer.active, `timer ${timer.unit}`, timer.active ? `${timer.calendar}; next ${timer.next || "?"}, last ${timer.last || "never"}` : "not active (office up installs it)");
     }
-
-    return;
+  } else {
+    report("warn", "image refresh", "no systemd user manager, so nothing refreshes the opencode image weekly; run office up --refresh yourself");
   }
+
+  if (office.opencode.mode === "host") return;
+
+  imageAge(office, report);
 
   if (!running.includes("opencode")) return;
 
   const processes = compose(office, ["top", "opencode"], { capture: true });
 
   report(processes.includes("supercronic"), "cron", processes.includes("supercronic") ? "supercronic runs in the opencode container" : "supercronic isn't running in the opencode container");
+}
+
+/** How old the opencode image's Debian packages are: the weekly refresh keeps them under a week, with a day's grace. */
+function imageAge(office: Office, report: Report): void {
+  const refreshed = readApplied(office)?.refreshed;
+
+  if (refreshed === undefined) {
+    report("warn", "Debian packages", "no refresh recorded; office up --refresh installs current ones");
+
+    return;
+  }
+
+  const days = Math.floor((Date.now() - Date.parse(refreshed)) / 86_400_000);
+
+  report(days <= 8 ? true : "warn", "Debian packages", `refreshed ${days === 0 ? "today" : `${days} days ago`}${days <= 8 ? "" : "; office up --refresh installs current ones"}`);
 }
 
 /** The container's `office` must be the host's, or the image predates the host's executable. */

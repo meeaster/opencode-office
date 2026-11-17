@@ -38,8 +38,11 @@ const usage = `usage: office <command> [--office <dir>]
   check                        report drift from office.yaml and the tool, and the running
                                containers' state
   instructions [folder]        print the office guidance a session started in <folder> gets
-  up [--upgrade] | down        start or stop this office's containers. up runs the versions it
-                               last applied; --upgrade applies office.yaml's newer ones
+  up [--upgrade] [--refresh] | down
+                               start or stop this office's containers. up runs the versions it
+                               last applied; --upgrade applies office.yaml's newer ones;
+                               --refresh rebuilds the opencode image with current Debian
+                               packages, which a weekly timer runs in container mode
   shell                        open a shell in the running opencode container, in the folder
                                matching this one
   exec -- <command...>         run one command there the same way, with its stdin and exit status
@@ -115,6 +118,7 @@ async function main(): Promise<void> {
       "password-only": { type: "boolean" },
       references: { type: "boolean" },
       upgrade: { type: "boolean" },
+      refresh: { type: "boolean" },
       origin: { type: "string" },
       version: { type: "boolean" },
       help: { type: "boolean", short: "h" },
@@ -159,7 +163,7 @@ async function main(): Promise<void> {
   } else if (command === "check") {
     if (!(await check(currentOffice(flags)))) process.exitCode = 1;
   } else if (command === "up") {
-    await up(currentOffice(flags), { upgrade: flags.upgrade === true });
+    await up(currentOffice(flags), { upgrade: flags.upgrade === true, refresh: flags.refresh === true });
   } else if (command === "setup") {
     await setup(currentOffice(flags), { ownerEmail: flags["owner-email"], generateAgeKey: flags["generate-age-key"] === true, installDeps: flags["install-deps"] === true });
   } else if (command === "shell") {
