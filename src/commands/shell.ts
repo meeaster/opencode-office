@@ -27,5 +27,5 @@ export function runInContainer(office: Office, command: string[] | undefined, fo
   const terminal = process.stdin.isTTY && process.stdout.isTTY;
 
   // bash, not a login shell: Debian's /etc/profile would replace the PATH that puts mise's shims first.
-  return composeAttached(office, ["exec", ...(terminal ? [] : ["-T"]), "--user", "assistant", "--workdir", containerFolder(office, folder), "opencode", ...(command ?? ["bash"])]);
+  return composeAttached(office, ["exec", ...(terminal ? [] : ["-T"]), "--user", "office", "--workdir", containerFolder(office, folder), "opencode", ...(command ?? ["bash"])]);
 }

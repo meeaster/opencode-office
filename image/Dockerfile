@@ -51,12 +51,14 @@ RUN curl -fsSLo /tmp/opencode.tar.gz "https://github.com/anomalyco/opencode/rele
  && echo "${MISE_SHA256}  /usr/local/bin/mise" | sha256sum -c - \
  && chmod 755 /usr/local/bin/mise
 
-# The container user keeps uid 1000 and its home, so existing sessions and logins stay valid.
-RUN groupadd -g 1000 assistant && useradd -m -u 1000 -g assistant -s /bin/bash assistant \
- && install -d -o assistant -g assistant /etc/opencode
+# The container user keeps uid 1000, which owns the home volume and the office's files. It was
+# `assistant` with home /home/assistant; the entrypoint's `office migrate-home` moves the paths
+# the home volume stored then.
+RUN groupadd -g 1000 office && useradd -m -u 1000 -g office -s /bin/bash office \
+ && install -d -o office -g office /etc/opencode
 
 # Managed settings. The entrypoint writes the machine note beside them at start.
-COPY --chown=assistant:assistant config/ /etc/opencode/
+COPY --chown=office:office config/ /etc/opencode/
 COPY --chmod=755 entrypoint.sh /usr/local/bin/office-entrypoint
 RUN mkdir -p /usr/local/lib/office && mv /usr/local/bin/claude /usr/local/lib/office/claude
 COPY --chmod=755 claude.sh /usr/local/bin/claude
@@ -64,13 +66,13 @@ COPY --chmod=755 claude.sh /usr/local/bin/claude
 # The office CLI, compiled with Bun into one file that needs no runtime. Last, as it changes most.
 COPY --chmod=755 office /usr/local/bin/office
 
-USER assistant
-ENV HOME=/home/assistant \
+USER office
+ENV HOME=/home/office \
     SHELL=/bin/bash \
     # Claude Code is pinned above; its own updater is off.
     DISABLE_AUTOUPDATER=1 \
     # The office's mise.toml files are its own, so mise trusts everything under the mount.
-    MISE_TRUSTED_CONFIG_PATHS=/home/assistant/workspace \
+    MISE_TRUSTED_CONFIG_PATHS=/home/office/workspace \
     MISE_YES=1 \
     # Debian's Chromium, installed above, for agent-browser.
     AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
@@ -78,8 +80,8 @@ ENV HOME=/home/assistant \
     # HTTPS credential helper. It includes /etc/gitconfig; ~/.gitconfig and repositories override it.
     GIT_CONFIG_SYSTEM=/etc/opencode/gitconfig \
     # mise's shims first, so a shell anywhere in the office runs the tools that folder declares.
-    PATH=/home/assistant/.local/share/mise/shims:/home/assistant/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-WORKDIR /home/assistant/workspace
+    PATH=/home/office/.local/share/mise/shims:/home/office/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /home/office/workspace
 
 EXPOSE 4096
 ENTRYPOINT ["office-entrypoint"]

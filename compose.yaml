@@ -48,9 +48,9 @@ services:
       OFFICE_GIT_EMAIL: ${OFFICE_GIT_EMAIL:-}
     volumes:
       # Sessions, provider sign-ins, the Claude Code login and mise's tools.
-      - ${OFFICE_STATE}/opencode-home:/home/assistant
+      - ${OFFICE_STATE}/opencode-home:/home/office
       # The office itself, where every session starts.
-      - ${OFFICE_DIR:?run this through office up}:/home/assistant/workspace
+      - ${OFFICE_DIR:?run this through office up}:/home/office/workspace
     ports:
       - "127.0.0.1:${OPENCODE_PORT:-41497}:4096"
 

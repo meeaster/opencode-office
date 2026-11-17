@@ -1,5 +1,6 @@
 // The `office` command: initialize, sync, check and run an office. See README.md.
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -19,6 +20,7 @@ import { sync } from "./commands/sync.ts";
 import { update } from "./commands/update.ts";
 import { upgradeTools } from "./commands/upgrade.ts";
 import { catchUp, runJob, wrappedCrontab } from "./cron/container.ts";
+import { migrateHome } from "./home-migration.ts";
 import { currentOffice, findOffice, OfficeError } from "./office.ts";
 import { age } from "./schema.ts";
 import { version } from "./tool.ts";
@@ -59,6 +61,8 @@ const usage = `usage: office <command> [--office <dir>]
   cron crontab | catch-up | run <command>
                                the container's cron runner: print the wrapped crontab, run
                                jobs missed since their last success, or run one job and stamp it
+  migrate-home                 the container's start: move sessions and logins stored under
+                               /home/assistant, the old home, to this home
 
   --version                    print the version and the commit this office was built from
 
@@ -193,6 +197,8 @@ async function main(): Promise<void> {
     else if (rest[0] === "catch-up") catchUp(dir, text);
     else if (rest[0] === "run" && rest[1] !== undefined) process.exitCode = runJob(dir, rest.slice(1).join(" "));
     else throw new OfficeError("usage: office cron crontab | catch-up | run <command>");
+  } else if (command === "migrate-home") {
+    for (const line of migrateHome(homedir())) console.log(`office: ${line}`);
   } else if (command === "apps" && rest[0] === "deploy") {
     await deploy(currentOffice(flags));
   } else {

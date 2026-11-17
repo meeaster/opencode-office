@@ -7,4 +7,4 @@ export const origin = "http://opencode:4096";
 export const host = "opencode:4096";
 
 /** Session folders are under this one. */
-export const officeDirectory = "/home/assistant/workspace";
+export const officeDirectory = "/home/office/workspace";

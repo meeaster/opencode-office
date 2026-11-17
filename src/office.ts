@@ -11,7 +11,7 @@ import { isMap, isNode, isScalar, parse, parseDocument, stringify } from "yaml";
 import { check, type OfficeConfig, officeSchema, type PinnedTool } from "./schema.ts";
 
 /** Where the office is mounted in the `opencode` container, and so the folder sessions start in. */
-export const containerOfficeDir = "/home/assistant/workspace";
+export const containerOfficeDir = "/home/office/workspace";
 
 /** The plugins the tool owns; `office sync` keeps each office's copies current. */
 export const toolPlugins = ["office"];

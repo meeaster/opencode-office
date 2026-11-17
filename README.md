@@ -100,7 +100,7 @@ pre-commit install
 | `template/office/` | What `office init` copies once: `AGENTS.md`, `README.md`, `office.yaml`, `.opencode/opencode.jsonc`, `skills/office/`, `executor/apps/opencode/`, `cron/`, `mise.toml` (with pre-commit), `.pre-commit-config.yaml` (gitleaks), `.gitignore` |
 | `template/desk/` | What `office sync` scaffolds for a new desk, including its starter Executor app, which a desk with `app: false` in `office.yaml` goes without |
 | `packages/` | First-party packages an office installs from this repository by `repo`, `path` and `ref` (see "Packages"): `knowledge` and `artifact-share`. The executable embeds them so `office init` can install `knowledge` with nothing fetched |
-| `image/Dockerfile` | The base image: Debian 13 with OpenCode, Claude Code and mise at the office's versions and checksums (build arguments), supercronic pinned by the tool, build tools, Chromium (with `AGENT_BROWSER_EXECUTABLE_PATH` pointing agent-browser at it) and the compiled `office`. Its apt layer upgrades Debian's packages as of the office's last refresh (the `APT_REFRESH` build argument). User `assistant`, uid 1000 |
+| `image/Dockerfile` | The base image: Debian 13 with OpenCode, Claude Code and mise at the office's versions and checksums (build arguments), supercronic pinned by the tool, build tools, Chromium (with `AGENT_BROWSER_EXECUTABLE_PATH` pointing agent-browser at it) and the compiled `office`. Its apt layer upgrades Debian's packages as of the office's last refresh (the `APT_REFRESH` build argument). User `office`, uid 1000 |
 | `image/entrypoint.sh` | Writes the machine note to `/etc/opencode/machine.md`, installs the tools the office's `mise.toml` files declare, runs missed cron jobs and starts supercronic, then runs OpenCode |
 | `image/config/opencode.jsonc` | The container's managed settings: no self-update, and the machine note as an instruction |
 | `compose.yaml` | `executor` (its image from the office's versions) and `opencode` (in the `container` profile, which `office up` enables in container mode). Ports are on `127.0.0.1` only |
@@ -113,7 +113,7 @@ The executable embeds `template/`, the `office` plugin's bundle, `packages/`, th
 
 | Variable | Value |
 |---|---|
-| `OFFICE_DIR` | The office, bind-mounted at `/home/assistant/workspace` |
+| `OFFICE_DIR` | The office, bind-mounted at `/home/office/workspace` |
 | `OFFICE_STATE` | The office's runtime state: `office.yaml`'s `state`, else `~/.local/share/office/<name>` |
 | `OFFICE_DESKS` | The desk names, for services such as a dashboard |
 | `OFFICE_OPENCODE_IMAGE` | `office-opencode:<opencode>-claude<claude>-mise<mise>`, or `office-<name>-opencode:<the same>` when the office has a `Dockerfile`. The versions in the name keep offices on different versions from sharing an image |
@@ -325,7 +325,7 @@ Review and commit `.sops.yaml`, `office.yaml` and encrypted credentials yourself
    docker exec -it office-mine-opencode-1 claude auth login
    P=$(grep OPENCODE_PASSWORD ~/.local/share/office/mine/secrets.env | cut -d= -f2)
    curl -u "opencode:$P" -X POST -H 'content-type: application/json' \
-     -H 'x-opencode-directory: /home/assistant/workspace' -d '{"methodID":"claude-login"}' \
+     -H 'x-opencode-directory: /home/office/workspace' -d '{"methodID":"claude-login"}' \
      http://127.0.0.1:41497/api/integration/claude-agent/connect/external
    ```
 
