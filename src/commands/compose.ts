@@ -19,7 +19,7 @@ import { ghConfigDir, ghHosts } from "../github.ts";
 import { hostTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
-import { packageComposeFile, preparePackageServices, serviceFiles, type UpgradedServices } from "../package-services.ts";
+import { packageComposeFile, preparePackageServices, serviceFiles, serviceSettings, type UpgradedServices } from "../package-services.ts";
 import type { Lock } from "../schema.ts";
 import { prepareSecrets } from "../secrets.ts";
 import { placeExecutable, toolPath, unpackedImage } from "../tool.ts";
@@ -56,6 +56,9 @@ export function runningPins(office: Office): Lock {
 function environment(office: Office, profiles: string, pins: Lock): NodeJS.ProcessEnv {
   return {
     ...process.env,
+    ...serviceSettings(office),
+    // Default provenance changes cached builds' image IDs, making Compose recreate unchanged services.
+    BUILDX_NO_DEFAULT_ATTESTATIONS: process.env.BUILDX_NO_DEFAULT_ATTESTATIONS ?? "1",
     // The opencode service is in the "container" profile.
     COMPOSE_PROFILES: profiles,
     OFFICE_NAME: office.name,

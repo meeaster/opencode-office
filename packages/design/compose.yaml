@@ -1,0 +1,60 @@
+# Doop (https://github.com/kgoedecke/doop) and its Postgres, in the office's compose project.
+#
+# Doop publishes no container image, so this builds upstream's Dockerfile from the v0.15.0 release
+# commit. To move to another release, change the commit and the image tag together; `office up
+# --upgrade` applies the change after backing up doop-pg.
+
+services:
+  doop:
+    # A local-only name, so Compose never looks for it on a registry.
+    image: office-doop:v0.15.0
+    build: https://github.com/kgoedecke/doop.git#9a4fb9ec442a982772b752004761eda3aca2633d
+    restart: unless-stopped
+    environment:
+      # Doop listens on the published port inside its container too. It builds asset and
+      # screenshot addresses on BETTER_AUTH_URL, and its own Chromium loads frame assets from
+      # there when it renders a screenshot, so http://localhost:<port> must answer inside the
+      # container as well as in the browser.
+      PORT: ${DOOP_PORT}
+      # The exact address the browser opens: OAuth, sign-in and every link Doop hands out use it.
+      BETTER_AUTH_URL: ${DOOP_URL:-http://localhost:${DOOP_PORT}}
+      # Browsers on this machine may open Doop by its loopback address even behind a proxy.
+      TRUSTED_ORIGINS: http://localhost:${DOOP_PORT},http://127.0.0.1:${DOOP_PORT}
+      # Signs sessions and OAuth tokens.
+      BETTER_AUTH_SECRET: ${DOOP_BETTER_AUTH_SECRET}
+      # Encrypts the model keys and integration tokens users connect.
+      SECRETS_ENCRYPTION_KEYS: ${DOOP_SECRETS_ENCRYPTION_KEYS}
+      DATABASE_URL: postgres://doop:${DOOP_DB_PASSWORD}@doop-db:5432/doop
+      # Connecting a ChatGPT subscription from a server isn't sanctioned by OpenAI; users connect
+      # API keys instead.
+      CHATGPT_CONNECT_DISABLED: "1"
+    depends_on:
+      doop-db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${DOOP_PORT}:${DOOP_PORT}"
+    volumes:
+      # Upstream stores uploaded images, fonts and generated previews on disk, not in Postgres.
+      - doop-assets:/app/data/assets
+
+  doop-db:
+    # The major version upstream's own compose file runs.
+    image: postgres:16-alpine@sha256:81e77a4833487b8132fe4b00bedd39dc3f74b8641e387f19312a48f7de218c2e
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: doop
+      # Generated once; Postgres takes it only when it creates the database, so it can't be
+      # rotated by deleting its line.
+      POSTGRES_PASSWORD: ${DOOP_DB_PASSWORD}
+      POSTGRES_DB: doop
+    volumes:
+      - doop-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U doop -d doop"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  doop-pg:
+  doop-assets:

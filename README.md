@@ -99,7 +99,7 @@ pre-commit install
 | `bin/office` | Runs the CLI from the checkout with Bun |
 | `template/office/` | What `office init` copies once: `AGENTS.md`, `README.md`, `office.yaml`, `.opencode/opencode.jsonc`, `executor/apps/opencode/`, `cron/`, `mise.toml` (with pre-commit), `.pre-commit-config.yaml` (gitleaks), `.gitignore` |
 | `template/desk/` | What `office sync` scaffolds for a new desk, including its starter Executor app, which a desk with `app: false` in `office.yaml` goes without |
-| `packages/` | The built-in packages, embedded in the executable (see "Packages"): `office`, which every office has, and `knowledge` and `artifact-share`. `packages/office/plugin/` is the source of the `office` package's plugin, with `instructions.ts`, which `office instructions` also runs; offices get it bundled with what it imports into one `plugin/index.js` |
+| `packages/` | The built-in packages, embedded in the executable (see "Packages"): `office`, which every office has, and `knowledge`, `artifact-share` and `design`. `packages/office/plugin/` is the source of the `office` package's plugin, with `instructions.ts`, which `office instructions` also runs; offices get it bundled with what it imports into one `plugin/index.js` |
 | `image/Dockerfile` | The base image: Debian 13 with OpenCode, Claude Code and mise at the office's versions and checksums (build arguments), supercronic pinned by the tool, build tools, Chromium (with `AGENT_BROWSER_EXECUTABLE_PATH` pointing agent-browser at it) and the compiled `office`. Its apt layer upgrades Debian's packages as of the office's last refresh (the `APT_REFRESH` build argument). User `office`, uid 1000 |
 | `image/entrypoint.sh` | Writes the machine note to `/etc/opencode/machine.md`, installs the tools the office's `mise.toml` files declare, runs missed cron jobs and starts supercronic, then runs OpenCode |
 | `image/config/opencode.jsonc` | The container's managed settings: no self-update, and the machine note as an instruction |
@@ -121,7 +121,9 @@ The executable embeds `template/`, the built-in packages as offices get them (st
 | `OFFICE_OPENCODE_URL` | OpenCode as containers reach it: `http://opencode:4096`, or in host mode the configured URL with a loopback host replaced by `host.docker.internal`. The office's own services (a dashboard API) use it |
 | `OFFICE_GIT_NAME`, `OFFICE_GIT_EMAIL` | `office.yaml`'s `git` identity, which the container's entrypoint makes git's default; empty without one |
 | `OFFICE_GH_CONFIG`, `OFFICE_GH_HOSTS` | The host's gh configuration folder and the hosts it has accounts for, when the container shares the host's gh login (see "Git and GitHub") |
-| `<NAMESPACE>_<SETTING>`, and each secret | In a package's own `compose.yaml` only: its settings and generated secrets (see "Services") |
+| `<NAMESPACE>_<SETTING>`, and each secret | Package settings and generated secrets (see "Services") |
+
+Only the office's `opencode` container gets `OFFICE_CONTAINER=1`. Package plugins can use it to choose service-network addresses; host servers must leave it unset.
 
 The state folder holds:
 
@@ -229,8 +231,8 @@ There are three kinds, by where a package comes from:
 | Remote | Another repository | `name` with `repo`, `path` and `ref` | `.office/packages/<name>/` | No |
 | Local | Written in the office | `- name: mine` | `packages/<name>/` | Yes |
 
-- An entry without `repo` is built-in when this tool ships a package of that name, and the office's own otherwise; a local package can't use a built-in's name. The built-in packages are this repository's `packages/`: `office`, `knowledge` and `artifact-share`.
-- `office` is required: every office has it without an entry, and listing it is an error that `office sync` and `office check` report (nothing else changes). It holds what every office needs from OpenCode, given by its plugin: the guidance for a session's folder (which `office instructions` prints), the `office` skill and the `office-executor` MCP server (see "Runtime"). `knowledge` and `artifact-share` are optional.
+- An entry without `repo` is built-in when this tool ships a package of that name, and the office's own otherwise; a local package can't use a built-in's name. The built-in packages are this repository's `packages/`: `office`, `knowledge`, `artifact-share` and `design`.
+- `office` is required: every office has it without an entry, and listing it is an error that `office sync` and `office check` report (nothing else changes). It holds what every office needs from OpenCode, given by its plugin: the guidance for a session's folder (which `office instructions` prints), the `office` skill and the `office-executor` MCP server (see "Runtime"). `knowledge`, `artifact-share` and `design` are optional.
 - A built-in package follows the `office` executable: `office sync` replaces the office's copy whenever it differs from the executable's. An entry naming a built-in with a `repo` other than this tool's repository is an error: a built-in can't be pinned or forked under its own name.
 - A remote package moves when its `ref` changes: a tag, a branch or a full 40-character commit SHA (git can't fetch an abbreviated one).
 - Every kind is committed with the office, so a clone and CI work with nothing fetched. A built-in package's `test/` stays in this repository, which runs it with `pnpm test`.
@@ -289,6 +291,7 @@ There is no registry, no dependency between packages and no version range. The b
 | `office` | Every office has it: the guidance for a session's folder, the `office` skill and the `office-executor` MCP server |
 | [`knowledge`](packages/knowledge/README.md) | Lists the office's `knowledge/` articles, with their descriptions, in every session, refreshed on each prompt. `office init` adds it |
 | [`artifact-share`](packages/artifact-share/README.md) | The user asks an agent to share something; it goes in the office's `artifacts/`, which a workflow publishes as a GitHub Pages site with an index page. The site may be public, even for a private repository |
+| [`design`](packages/design/README.md) | The office runs its own [Doop](https://github.com/kgoedecke/doop) design canvas as package services, and every session reaches it as the `doop` MCP server, with an agent key a person creates once |
 
 ### Panels
 
@@ -350,7 +353,7 @@ volumes:
 - **Names.** Every service, volume, network, config and secret the file defines is named after the package's namespace, `<namespace>` or `<namespace>-*`. The namespace is the package's name unless `package.yaml` sets `namespace:` (lowercase letters, digits and dashes), as a package called `design` whose services are `doop` and `doop-db` does with `namespace: doop`. So packages can't define or change `executor`, `opencode` or each other's services: a namespace can't be `executor` or `opencode`, and two packages in an office can't claim the same one, which `office check` reports on both packages' lines and `office up` refuses, naming both.
 - **Ports.** Every published port binds `127.0.0.1`: `"127.0.0.1:<port>:<port>"`, or `host_ip: 127.0.0.1` in the long syntax. `network_mode: host` is refused. `office check` reports a file that breaks these rules on the package's line, and `office up` refuses to apply it, naming each problem.
 - **Paths.** Relative paths (a `build` context, a bind mount, an `env_file`) are the package's folder: `office up` includes each package's file with that folder as its project directory, since Compose would otherwise resolve them against the tool's own `compose.yaml`.
-- **Variables.** Besides the office's variables (see "Runtime"), a package's file, and only its own, gets its settings as `<NAMESPACE>_<SETTING>` (the names in capitals, any character but letters and digits as `_`; `title` in `notes` is `NOTES_TITLE`) and its secrets. The environment `office up` runs in wins over both, which is why they carry the namespace.
+- **Variables.** Besides the office's variables (see "Runtime"), a package's file gets its settings as `<NAMESPACE>_<SETTING>` (the names in capitals, any character but letters and digits as `_`; `title` in `notes` is `NOTES_TITLE`) and its secrets. The applied settings are authoritative: the Compose launcher reads the generated `settings.env` into its environment, overriding shell variables and making the same values available to the office's compose file. Secrets remain scoped to the package's include; shell variables can override them.
 - **Secrets.** `secrets:` in `package.yaml` maps each variable to how it's generated: `bytes` random bytes (16 to 1024) as `hex` or `base64`, after an optional fixed `prefix`. Each name starts with the namespace in capitals with `_` for `-` (`NOTES_`), and can't be a setting's variable. `office up` writes any missing one to `<state>/packages/<name>.env` (mode 600) and never replaces a value, since services sign users in and encrypt stored credentials with them. To rotate one, delete its line. office never prints a value or writes one into the office.
 
 `office up` runs the copy of each package's file it last applied, `<state>/packages/<name>/compose.yaml`, as it runs the versions it last applied:

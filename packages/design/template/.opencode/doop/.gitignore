@@ -1,0 +1,3 @@
+# The Doop agent key the design package's plugin connects sessions with. Never commit it.
+*
+!.gitignore

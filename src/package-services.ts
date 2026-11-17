@@ -176,6 +176,16 @@ export function serviceFiles(office: Office): string[] {
     .filter((file) => existsSync(file));
 }
 
+/** Applied settings win over shell variables, just as they do for a package's plugin. */
+export function serviceSettings(office: Office): Record<string, string> {
+  return Object.fromEntries(
+    [...appliedServices(office).keys()].flatMap((name) =>
+      // settingsEnv writes single-quoted literals, unlike the unquoted secrets files.
+      Object.entries(readEnvFile(join(appliedDir(office, name), "settings.env"))).map(([key, value]) => [key, value.slice(1, -1)]),
+    ),
+  );
+}
+
 function currentFile(installed: InstalledPackage): string | undefined {
   const path = join(installed.dir, packageComposeFile);
 

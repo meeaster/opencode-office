@@ -41,6 +41,8 @@ services:
         required: false
     environment:
       OFFICE_NAME: ${OFFICE_NAME}
+      # Generic marker for plugins choosing service-network rather than host addresses.
+      OFFICE_CONTAINER: "1"
       OFFICE_EXECUTOR_URL: http://executor:4400
       OFFICE_EXECUTOR_DASHBOARD: http://localhost:${EXECUTOR_PORT:-41440}
       # office.yaml's git identity, which the entrypoint makes the container's git default.

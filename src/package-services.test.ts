@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import * as v from "valibot";
 import { parse } from "yaml";
 
-import { composeArguments } from "./commands/compose.ts";
+import { compose, composeArguments } from "./commands/compose.ts";
 import { loadOffice } from "./office.ts";
 import { composeProblems, ensureSecrets, planServices, preparePackageServices, secretsPath } from "./package-services.ts";
 import { check, packageManifestSchema } from "./schema.ts";
@@ -92,18 +92,18 @@ test("a package's secrets carry its namespace, its name by default, and don't ta
 test("a namespaced package's services and settings follow its namespace, and two packages can't claim one", () => {
   const office = join(dir, "office");
 
-  write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: design\n    settings:\n      url: https://example.com\n");
-  write(join(office, "packages/design/package.yaml"), "name: design\nnamespace: doop\ndescription: d\nsettings:\n  url:\n    description: u\n    required: true\n");
-  write(join(office, "packages/design/compose.yaml"), "services:\n  design:\n    image: busybox\n");
-  expect(() => preparePackageServices(loadOffice(office), false)).toThrow("package design: compose.yaml: services.design: must be named doop or doop-*");
+  write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: canvas\n    settings:\n      url: https://example.com\n");
+  write(join(office, "packages/canvas/package.yaml"), "name: canvas\nnamespace: doop\ndescription: d\nsettings:\n  url:\n    description: u\n    required: true\n");
+  write(join(office, "packages/canvas/compose.yaml"), "services:\n  design:\n    image: busybox\n");
+  expect(() => preparePackageServices(loadOffice(office), false)).toThrow("package canvas: compose.yaml: services.design: must be named doop or doop-*");
 
-  write(join(office, "packages/design/compose.yaml"), "services:\n  doop:\n    image: busybox\n  doop-db:\n    image: postgres\n");
+  write(join(office, "packages/canvas/compose.yaml"), "services:\n  doop:\n    image: busybox\n  doop-db:\n    image: postgres\n");
   preparePackageServices(loadOffice(office), false).apply();
-  expect(readFileSync(join(office, "state/packages/design/settings.env"), "utf8")).toBe("DOOP_URL='https://example.com'\n");
+  expect(readFileSync(join(office, "state/packages/canvas/settings.env"), "utf8")).toBe("DOOP_URL='https://example.com'\n");
 
-  write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: design\n    settings:\n      url: https://example.com\n  - name: doop\n");
+  write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: canvas\n    settings:\n      url: https://example.com\n  - name: doop\n");
   write(join(office, "packages/doop/package.yaml"), "name: doop\ndescription: d\n");
-  expect(() => preparePackageServices(loadOffice(office), false)).toThrow("packages design and doop claim the same namespace, doop");
+  expect(() => preparePackageServices(loadOffice(office), false)).toThrow("packages canvas and doop claim the same namespace, doop");
 });
 
 test("secrets are generated once: a later run adds only new ones and keeps every value", () => {
@@ -123,6 +123,32 @@ test("secrets are generated once: a later run adds only new ones and keeps every
   expect(`${auth}\n`).toBe(first);
   expect(Buffer.from(keys.replace(/^DOOP_KEYS=k1:/, ""), "base64")).toHaveLength(32);
   expect(ensureSecrets(path, { DOOP_AUTH: { generate: "hex", bytes: 32 } })).toEqual([]);
+});
+
+test.skipIf(Bun.which("docker") === null)("Compose uses applied package settings despite conflicting shell and project env values", () => {
+  const office = join(dir, "office");
+  const before = process.env.CANVAS_PORT;
+
+  write(join(office, "office.yaml"), "name: precedence\nstate: state\npackages:\n  - name: canvas\n    settings:\n      port: 43219\n      title: Cost = lunch\n");
+  write(join(office, "packages/canvas/package.yaml"), "name: canvas\ndescription: d\nsettings:\n  port:\n    description: p\n    default: 3000\n  title:\n    description: t\n    default: x\n");
+  write(join(office, "packages/canvas/compose.yaml"), 'services:\n  canvas:\n    image: busybox\n    environment:\n      TITLE: ${CANVAS_TITLE}\n    ports: ["127.0.0.1:${CANVAS_PORT}:${CANVAS_PORT}"]\n');
+  write(join(office, "packages/canvas/.env"), "CANVAS_PORT=11111\n");
+  write(join(office, "state/secrets.env"), "OPENCODE_PASSWORD=test\n");
+
+  const loaded = loadOffice(office);
+
+  preparePackageServices(loaded, false).apply();
+  process.env.CANVAS_PORT = "22222";
+
+  try {
+    const config = JSON.parse(compose(loaded, ["config", "--format", "json"], { capture: true }));
+
+    expect(config.services.canvas.ports).toEqual([{ mode: "ingress", host_ip: "127.0.0.1", target: 43219, published: "43219", protocol: "tcp" }]);
+    expect(config.services.canvas.environment.TITLE).toBe("Cost = lunch");
+  } finally {
+    if (before === undefined) delete process.env.CANVAS_PORT;
+    else process.env.CANVAS_PORT = before;
+  }
 });
 
 test("a new package applies at once, a changed file waits for --upgrade, and a removed package stops without it", () => {

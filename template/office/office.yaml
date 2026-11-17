@@ -69,7 +69,7 @@ plugins: []
 # skills, tools and MCP servers, and each file of its template/ is copied once into the office (a
 # file you delete stays deleted). A package is one of three kinds:
 # - built-in, listed by name alone: shipped inside the office executable (knowledge,
-#   artifact-share), installed in .office/packages/<name>/ and updated along with office. The
+#   artifact-share, design), installed in .office/packages/<name>/ and updated along with office. The
 #   office package is always installed, without an entry.
 # - with repo, path and ref (a tag or a full commit SHA): copied from that repository into
 #   .office/packages/<name>/, and updated when ref changes.
