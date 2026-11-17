@@ -44,12 +44,16 @@ EOF
 # The office package's plugin reads these names; on the host it reads files office up writes instead.
 export OFFICE_EXECUTOR_TOKEN="${OFFICE_EXECUTOR_TOKEN:-${EXECUTOR_TOKEN:-}}"
 
-# A failed install (offline, a typo) must not keep OpenCode from starting.
+# A failed install (offline, a typo) must not keep OpenCode from starting. The root also installs
+# when only its .mise/conf.d/ fragments (the tools packages declare) exist.
 for config in "$office/mise.toml" "$office"/*/mise.toml; do
   [ -f "$config" ] || continue
   dir=$(dirname "$config")
   (cd "$dir" && mise install --quiet) || echo "office: mise install failed in $dir" >&2
 done
+if [ ! -f "$office/mise.toml" ] && ls "$office"/.mise/conf.d/*.toml >/dev/null 2>&1; then
+  (cd "$office" && mise install --quiet) || echo "office: mise install failed in $office" >&2
+fi
 
 # The office's cron/crontab, with each command wrapped to stamp its successes in the home volume.
 # Jobs missed while the computer was off run once now, in the background, then supercronic keeps

@@ -15,6 +15,7 @@ import { clones, installedPackages, library, oldKnowledgePlugin, pluginLinks, sk
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, pulledLocalFolders } from "../migrate.ts";
 import { executorEnvFile, type Office, readEnvFile } from "../office.ts";
 import { packageComposeFile, serviceStatus, sharedNamespaces } from "../package-services.ts";
+import { orphanFragments, toolNotes } from "../package-tools.ts";
 import { describeRecord, fileHashes, localEdits, localFolders, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
 import { pinnedTools } from "../schema.ts";
 import { builtinFiles, builtinPackages, version } from "../tool.ts";
@@ -115,6 +116,8 @@ async function drift(office: Office): Promise<string[]> {
     if (!packages.some((item) => item.kind !== "local" && item.entry.name === folder)) problems.push(`.office/packages/${folder}/ is a package office.yaml no longer lists (office sync removes it)`);
   }
 
+  problems.push(...orphanFragments(office, packages.map((item) => item.entry.name)));
+
   return problems;
 }
 
@@ -158,7 +161,7 @@ async function pulledCopy(dir: string, kind: "built-in" | "remote", name: string
 
 /**
  * One line per package: its kind and where it came from, whether a pulled-in copy was edited,
- * whether its settings are valid and written, and the plugin it links.
+ * whether its settings are valid and written, its mise tools, and the plugin it links.
  */
 async function packageChecks(office: Office, report: Report): Promise<void> {
   const { installed, plugins, problems } = installedPackages(office);
@@ -239,6 +242,13 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
     }
 
     if (services.pending) notes.push(`its ${packageComposeFile} changed since office up applied it; office up --upgrade applies it`);
+
+    // A version the office changed is its own pin, not drift: only a missing or extra tool is.
+    const tools = toolNotes(office, item);
+
+    notes.push(...tools.notes);
+
+    if (!tools.ok) ok = false;
 
     if (plugins.has(entry.name)) {
       const pluginLinked = links.links.get(entry.name) === links.wanted.get(entry.name);

@@ -199,6 +199,12 @@ export function settingVariable(namespace: string, setting: string): string {
   return `${packageVariablePrefix(namespace)}${setting.toUpperCase().replaceAll(/[^A-Z0-9]/g, "_")}`;
 }
 
+/** A mise tool, as a mise.toml's [tools] table names it, such as `node` or `npm:agent-browser`. */
+const miseTool = v.pipe(v.string(), v.regex(/^[A-Za-z0-9_.:@/-]+$/, "must be a mise tool name such as node or npm:agent-browser"));
+
+/** An exact version to start a mise tool at, such as 0.43.0: never a range, a prefix or `latest`. */
+const miseVersion = v.pipe(v.string("must be an exact version such as 0.43.0"), v.regex(/^v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?$/, "must be an exact version such as 0.43.0"));
+
 /** A package's package.yaml: what can't be discovered from its folders. */
 export const packageManifestSchema = v.pipe(
   v.strictObject(
@@ -209,8 +215,11 @@ export const packageManifestSchema = v.pipe(
       description: text,
       settings: v.nullish(v.record(v.string(), packageSetting, "must map setting names to settings"), {}),
       secrets: v.nullish(v.record(v.pipe(v.string(), v.regex(/^[A-Z][A-Z0-9_]*$/, "must be an environment variable name in capitals")), packageSecret, "must map variable names to how each is generated"), {}),
+      // mise tools the package needs, each at the version an office starts at; `office sync` writes
+      // them to the office's .mise/conf.d/<name>.toml, whose versions are the office's from then on.
+      tools: v.nullish(v.record(miseTool, miseVersion, "must map mise tool names to exact versions"), {}),
     },
-    "must be a mapping of name, namespace, description, settings and secrets",
+    "must be a mapping of name, namespace, description, settings, secrets and tools",
   ),
   v.transform((manifest) => ({ ...manifest, namespace: manifest.namespace ?? manifest.name })),
   // Every compose file of the office is interpolated with the same process environment, which wins

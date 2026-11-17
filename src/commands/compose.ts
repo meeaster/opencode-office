@@ -19,6 +19,7 @@ import { ghConfigDir, ghHosts } from "../github.ts";
 import { hostTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
+import { fragmentFiles } from "../package-tools.ts";
 import { packageComposeFile, preparePackageServices, serviceFiles, serviceSettings, type UpgradedServices } from "../package-services.ts";
 import type { Lock } from "../schema.ts";
 import { prepareSecrets } from "../secrets.ts";
@@ -178,13 +179,19 @@ function removeExecutorFiles(office: Office): void {
   for (const file of Object.values(executorFiles)) rmSync(join(office.dir, file), { force: true });
 }
 
-/** Trusts and installs every office mise.toml with the host's mise, as the container does at start. */
+/**
+ * Trusts and installs every office mise.toml, and the root's .mise/conf.d/ fragments (the tools
+ * packages declare), with the host's mise, as the container does at start.
+ */
 function installTools(office: Office): void {
   for (const dir of [office.dir, ...office.desks.map((desk) => join(office.dir, desk.name))]) {
-    if (!existsSync(join(dir, "mise.toml"))) continue;
+    const configs = [...(existsSync(join(dir, "mise.toml")) ? [join(dir, "mise.toml")] : []), ...(dir === office.dir ? fragmentFiles(office) : [])];
+
+    if (configs.length === 0) continue;
 
     try {
-      execFileSync(hostTool("mise"), ["trust", "--quiet", join(dir, "mise.toml")], { stdio: "inherit" });
+      for (const config of configs) execFileSync(hostTool("mise"), ["trust", "--quiet", config], { stdio: "inherit" });
+
       execFileSync(hostTool("mise"), ["install", "--quiet"], { cwd: dir, stdio: "inherit" });
     } catch {
       // As in the container, a failed install must not keep the office from starting.
