@@ -190,6 +190,10 @@ export function fetchPackage(office: Office, name: string, source: NonNullable<P
   try {
     const commit = copyFromRepository(source, staging, "package.yaml");
 
+    // A package shared from another office's packages/ carries that office's records; its
+    // .template.json would make this office skip template files it never received.
+    for (const file of records) rmSync(join(staging, file), { force: true });
+
     writeRecord(staging, source, commit);
 
     // Kept: sync reports the settings file only when the settings change, and never copies a

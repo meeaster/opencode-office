@@ -45,7 +45,7 @@ test("settings the package doesn't declare, and required ones left out, are name
   expect(valid.ok && valid.value.settings).toEqual({ url: "https://example.com/site", title: "Shared" });
 });
 
-test("an update by full commit SHA replaces the package, refuses over local edits, and leaves template copies alone", () => {
+test("an install ignores the source office's records, and an update by full commit SHA replaces the package, refuses over local edits, and leaves template copies alone", () => {
   const repo = join(dir, "repo");
   const office = join(dir, "office");
 
@@ -59,6 +59,9 @@ test("an update by full commit SHA replaces the package, refuses over local edit
   write(join(repo, "pkgs/demo/package.yaml"), manifest);
   write(join(repo, "pkgs/demo/scripts/run.sh"), "echo one\n");
   write(join(repo, "pkgs/demo/template/out/AGENTS.md"), "from the package\n");
+  // Committed by the office that authored the package, as when sharing from its packages/.
+  write(join(repo, "pkgs/demo/.template.json"), '["out/AGENTS.md"]\n');
+  write(join(repo, "pkgs/demo/.settings.json"), '{"url":"https://example.com","title":"Shared"}\n');
   git(["init", "--quiet", repo]);
 
   const first = commit("one");
