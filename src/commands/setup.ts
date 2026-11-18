@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 
+import { requireJobs } from "../cron/jobs.ts";
 import { git } from "../git.ts";
 import { githubStep, planGithub, unreachableSources } from "../github.ts";
 import { installHook } from "../hook.ts";
@@ -118,10 +119,7 @@ export async function setup(initial: Office, options: SetupOptions): Promise<voi
     email = await question("Executor owner email:");
   }
 
-  const crontab = join(office.dir, "cron/crontab");
-  const scheduled = existsSync(crontab) && readFileSync(crontab, "utf8").split("\n").some((line) => line.trim() !== "" && !line.trim().startsWith("#"));
-
-  if (scheduled) console.log("Cron: startup keeps the existing catch-up behavior, including jobs that have never run.");
+  if (requireJobs(office).length > 0) console.log("Cron: applicable jobs are installed at startup. Review them with office cron list.");
 
   await startExecutor(office);
   await bootstrapExecutor(office, email);

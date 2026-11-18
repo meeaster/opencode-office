@@ -7,7 +7,9 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
-import { cronTimers, hasSystemd, refreshTimer, timerStates } from "../cron/host.ts";
+import { cronRevision } from "../cron/container.ts";
+import { cronTimers, hasSystemd, refreshTimer, staleTimerUnits, timerStates } from "../cron/host.ts";
+import { collectJobs } from "../cron/jobs.ts";
 import { configFile, installedPanelNames, locate, panelDir, panelId, panelState, readPanelRecord, removalNote } from "../desktop.ts";
 import { ghConfigDir, ghLogin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
 import { hookNote, hookState } from "../hook.ts";
@@ -405,11 +407,24 @@ function expectedSkills(office: Office, desk: string | undefined) {
 }
 
 function cron(office: Office, report: Report, running: string[]): void {
-  const timers = office.opencode.mode === "host" ? cronTimers(office) : [refreshTimer(office)];
+  const jobs = collectJobs(office);
+
+  if (!jobs.ok) {
+    for (const error of jobs.errors) report(false, "cron", error);
+
+    return;
+  }
+
+  const timers = office.opencode.mode === "host" ? cronTimers(office, jobs.value) : [refreshTimer(office)];
+  const stale = staleTimerUnits(office, timers);
+
+  if (stale.length > 0) report(false, "cron", `obsolete units: ${stale.join(", ")} (office up removes them)`);
 
   if (office.opencode.mode === "host" || hasSystemd()) {
     for (const timer of timerStates(timers)) {
-      report(timer.active, `timer ${timer.unit}`, timer.active ? `${timer.calendar}; next ${timer.next || "?"}, last ${timer.last || "never"}` : "not active (office up installs it)");
+      const detail = !timer.active ? "not active" : !timer.matches ? "installed schedule differs" : `${timer.calendar}; next ${timer.next || "?"}, last ${timer.last || "never"}`;
+
+      report(timer.active && timer.matches, `timer ${timer.unit}`, timer.active && timer.matches ? detail : `${detail} (run office up)`);
     }
   } else {
     report("warn", "image refresh", "no systemd user manager, so nothing refreshes the opencode image weekly; run office up --refresh yourself");
@@ -420,6 +435,22 @@ function cron(office: Office, report: Report, running: string[]): void {
   imageAge(office, report);
 
   if (!running.includes("opencode")) return;
+
+  let applied = "";
+
+  try {
+    applied = compose(office, ["exec", "-T", "opencode", "printenv", "OFFICE_CRON_REVISION"], { capture: true });
+  } catch {
+    // Earlier containers do not have a schedule revision.
+  }
+
+  if (applied !== cronRevision(jobs.value)) {
+    report(false, "cron", "the container's schedule is out of date (run office up)");
+
+    return;
+  }
+
+  if (jobs.value.length === 0) return;
 
   const processes = compose(office, ["top", "opencode"], { capture: true });
 

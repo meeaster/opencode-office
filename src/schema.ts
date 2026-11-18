@@ -3,6 +3,8 @@
 // each naming the field and what it expected.
 import * as v from "valibot";
 
+import { validSchedule } from "./cron/schedule.ts";
+
 const name = v.pipe(v.string("must be a name"), v.regex(/^[a-z0-9][a-z0-9-]*$/, "must be lowercase letters, digits and dashes"));
 
 const text = v.pipe(v.string("must be text"), v.nonEmpty("must not be empty"));
@@ -18,6 +20,30 @@ function uniqueNames<Item extends { name: string }>(items: Item[]): boolean {
 }
 
 const mapping = "must be a mapping of the fields this schema knows";
+
+// The bounds leave room for a qualified ID and office name in a systemd unit filename.
+const jobName = v.pipe(name, v.maxLength(48, "must be at most 48 characters"));
+const cronSchedule = v.pipe(text, v.check(validSchedule, "must be a valid five-field UTC cron schedule or a time macro such as @daily"));
+
+const cronScript = v.pipe(
+  text,
+  v.regex(/^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)*\.sh$/, "must be a relative .sh path, such as cron/update-references.sh"),
+);
+
+const cronFields = { schedule: cronSchedule, script: cronScript };
+
+// Valibot's record parser skips prototype keys; refuse them instead of losing a job or override.
+const noPrototypeKeys = v.rawCheck(({ dataset, addIssue }) => {
+  const input = Object(dataset.value);
+
+  if (["__proto__", "prototype", "constructor"].some((key) => Object.hasOwn(input, key))) {
+    addIssue({ message: "constructor, prototype and __proto__ are reserved names" });
+  }
+});
+
+const officeCron = v.optional(v.pipe(v.unknown(), noPrototypeKeys, v.record(jobName, v.strictObject(cronFields, mapping), "must map job names to schedules and scripts")), {});
+const packageCron = v.optional(v.pipe(v.unknown(), noPrototypeKeys, v.record(jobName, v.strictObject({ ...cronFields, when: v.optional(v.picklist(["managed-host", "host", "container"])) }, mapping), "must map job names to schedules and scripts")), {});
+const cronOverrides = v.optional(v.pipe(v.unknown(), noPrototypeKeys, v.record(jobName, v.strictObject({ schedule: v.optional(cronSchedule), enabled: v.optional(v.boolean("must be true or false")) }, mapping), "must map job names to schedule and enabled overrides")), {});
 
 const repository = v.strictObject(
   {
@@ -159,14 +185,17 @@ const packageEntry = v.pipe(
       path: v.optional(text),
       ref: v.optional(text),
       settings: v.nullish(v.record(v.string(), settingValue, "must map setting names to values"), {}),
+      cron: cronOverrides,
     },
     mapping,
   ),
   v.check((entry) => (entry.repo === undefined ? entry.path === undefined && entry.ref === undefined : entry.path !== undefined && entry.ref !== undefined), "needs repo, path and ref together, or none of them for a built-in package or one in packages/<name>/"),
+  v.check((entry) => entry.name !== "office" || (entry.repo === undefined && Object.keys(entry.settings).length === 0), "the required office package entry can only configure cron"),
   // The check above makes the three all present or all absent; `source` carries that as a type.
-  v.transform(({ name: packageName, settings, repo, path, ref }) => ({
+  v.transform(({ name: packageName, settings, cron, repo, path, ref }) => ({
     name: packageName,
     settings,
+    cron,
     source: repo !== undefined && path !== undefined && ref !== undefined ? { repo, path, ref } : undefined,
   })),
 );
@@ -199,6 +228,7 @@ export const officeSchema = v.pipe(v.strictObject(
     claude: v.optional(v.never("was the Claude gateway, which office no longer has: delete the claude block from office.yaml")),
     versions,
     upgrades,
+    cron: officeCron,
     // Whether package downloads (npm, pnpm, pip, uv, cargo and mise installs) go through Socket
     // Firewall, in the container and, in host mode, on the machine. On unless set to false.
     socket_firewall: v.optional(v.boolean("must be true or false"), true),
@@ -208,7 +238,7 @@ export const officeSchema = v.pipe(v.strictObject(
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
     packages: v.pipe(v.nullish(v.array(packageEntry, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
   },
-  "must be a mapping of name, state, opencode, git, secrets, versions, upgrades, socket_firewall, references, desks, skills, plugins and packages",
+  "must be a mapping of name, state, opencode, git, secrets, versions, upgrades, cron, socket_firewall, references, desks, skills, plugins and packages",
 ), v.forward(v.check(({ secrets, opencode }) => secrets?.server === undefined || (opencode !== "container" && opencode.mode === "host" && opencode.managed), "requires opencode.managed: true in host mode"), ["secrets", "server"]));
 
 export type OfficeConfig = v.InferOutput<typeof officeSchema>;
@@ -327,8 +357,9 @@ export const packageManifestSchema = v.pipe(
       // them to the office's .office/mise/<name>.toml, whose versions are the office's from then on.
       tools: miseTools,
       host: v.optional(hostBlock),
+      cron: packageCron,
     },
-    "must be a mapping of name, namespace, description, settings, secrets, tools and host",
+    "must be a mapping of name, namespace, description, settings, secrets, tools, host and cron",
   ),
   v.transform((manifest) => ({ ...manifest, namespace: manifest.namespace ?? manifest.name })),
   v.forward(

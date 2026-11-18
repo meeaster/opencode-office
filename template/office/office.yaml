@@ -81,12 +81,22 @@ skills:
 # OpenCode plugins developed in another repository, cloned into .opencode/plugins/<name>/.
 plugins: []
 
+# File-system jobs, in UTC. Scripts are paths relative to this office and run at its root.
+# Run office up after changing the schedule or list of jobs.
+cron:
+  update-references:
+    schedule: '0 6 * * *'
+    script: cron/update-references.sh
+  upgrade-tools:
+    schedule: '30 6 * * *'
+    script: cron/upgrade-tools.sh
+
 # Optional capabilities. Each package's plugin loads in every session and gives it the package's
 # skills, tools and MCP servers, and each file of its template/ is copied once into the office (a
 # file you delete stays deleted). A package is one of three kinds:
 # - built-in, listed by name alone: shipped inside the office executable (knowledge, browser,
 #   artifact-share, design), installed in .office/packages/<name>/ and updated along with office. The
-#   office package is always installed, without an entry.
+#   office package is always installed; list it only to override its cron defaults.
 # - with repo, path and ref (a tag or a full commit SHA): copied from that repository into
 #   .office/packages/<name>/, and updated when ref changes.
 # - written in this office, listed by name alone: packages/<name>/.

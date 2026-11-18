@@ -89,7 +89,7 @@ pre-commit install
 | `office apps deploy` | Deploys every app in `executor/apps/*` and `<desk>/executor/apps/*` from its files, creating apps that don't exist, and links the OpenCode account to each app that declares one. It first type-checks every app against the `apps` framework Executor serves (with this executable acting as Bun) and sets each app's `apps` dependency to that version, deploying nothing if one fails. Each app's `office.ts` is replaced by one for the office's mode |
 | `office upgrade-tools` | Bumps each exact pin in the office's own `mise.toml` files (root and desks), its `machine.toml` and the packages' fragments in `.office/mise/` (see "Tools"), and the versions in `office.yaml`, to the newest release at least the office's minimum release age old, and commits the changed files alone as the office's git identity, else `office cron`. See "Cron" |
 | `office update [--check] [--minimum-release-age <age> \| --version <release>]` | Replaces this `office` executable with a release from GitHub: the newest at least a day (or `<age>`) old and newer than this one, or exactly `<release>`. `--check` only reports. It changes no office; see "Updating" |
-| `office cron crontab \| catch-up \| run <command>` | The cron runner the container and the host's timers call; see "Cron" |
+| `office cron list` / `office cron run <job-id>` | Lists enabled, applicable YAML jobs or runs one by its qualified ID; see "Cron" |
 
 ## Layout
 
@@ -255,11 +255,31 @@ The OpenCode server doesn't read your startup files, so on a host its agents' co
 
 ## Cron
 
-An office's `cron/crontab` lists jobs as a five-field cron expression (or `@daily` and the like) and a command run from the office root. Times are UTC unless the container sets `TZ`. The commands are plain scripts that know nothing of the runner.
+Declare office-owned jobs by name in `office.yaml`:
 
-In host mode, `office up` turns each job into a systemd user timer, `office-<name>-<script>.timer`, with `OnCalendar` in UTC and `Persistent=true`, whose service runs `office cron run <command>` from the office root with the PATH `office up` ran with (mise's shims in place of its per-version folders). systemd runs a job once when a scheduled time passed while the computer was off. Unlike container catch-up, a timer enabled for the first time waits for its first scheduled time. A job that restricts both the day of the month and the weekday has no timer equivalent, and `office up` refuses it. `office down` removes the units; never edit them by hand.
+```yaml
+cron:
+  update-references:
+    schedule: '0 6 * * *'
+    script: cron/update-references.sh
+```
 
-In the container, supercronic runs the crontab with each command wrapped in `office cron run`, which stamps the time of each success in `~/.local/state/office/cron/` (the home volume, not the office). When the container starts, `office cron catch-up` runs once, in order, every job whose most recent scheduled time is later than its last success, including jobs that never succeeded. That covers a computer that was off at the scheduled time.
+Schedules are five-field UTC cron expressions or time macros such as `@daily`. The script must be a regular `.sh` file relative to its declaring office or package, with no symlinks. All jobs run under `/bin/sh` from the office root. `office cron list` shows IDs such as `office.update-references` and `package.<package>.<job>`; use `office cron run <job-id>` to run one directly in the execution environment you intend. Keep the job name when renaming its script: the ID tracks the job across renames.
+
+A package's `package.yaml` uses the same `cron:` mapping. A package job may also set `when: host`, `when: managed-host`, or `when: container`; omitting `when` makes it applicable in both modes. An office may change a package's schedule or disable a job under that package entry's `cron:` (alongside `settings`), for example:
+
+```yaml
+packages:
+  - name: example
+    cron:
+      report: { schedule: '15 9 * * *', enabled: false }
+```
+
+Only `schedule` and `enabled` can be overridden; `enabled: true` cannot override `when`. Unknown job names are configuration errors. The implicit `office` package accepts one optional entry for cron overrides only; removing that entry restores its defaults. Run `office sync` to update installed package copies, then `office up` to apply schedule changes. Convert any old `cron/crontab` entries to named YAML jobs and remove that file; it is no longer read.
+
+In host mode, `office up` installs systemd user timers named `office-<name>-cron-<job-id>.timer` with UTC `OnCalendar` and `Persistent=true`. An existing timer catches up once after a missed interval; a timer enabled for the first time waits for its first scheduled time. A host schedule cannot restrict both the day of the month and weekday. `office down` removes the generated units and stops their running cron services. The next `office up` reinstalls enabled jobs; it also removes obsolete units written by earlier releases.
+
+In container mode, the entrypoint generates the supercronic input in UTC. It first runs each due job once, including jobs with no successful run. Successful executions leave a stamp per qualified job ID under `$XDG_STATE_HOME/office/cron/<office>` (by default `~/.local/state/office/cron/<office>` in the home volume). `office up` recreates the container when its generated schedule changes.
 
 The template ships two jobs:
 
@@ -300,7 +320,7 @@ There are three kinds, by where a package comes from:
 | Local | Written in the office | `- name: mine` | `packages/<name>/` | Yes |
 
 - An entry without `repo` is built-in when this tool ships a package of that name, and the office's own otherwise; a local package can't use a built-in's name. The built-in packages are this repository's `packages/`: `office`, `knowledge`, `artifact-share`, `design` and `browser`.
-- `office` is required: every office has it without an entry, and listing it is an error that `office sync` and `office check` report (nothing else changes). It holds what every office needs from OpenCode, given by its plugin: the guidance for a session's folder (which `office instructions` prints), the `office` skill and the `office-executor` MCP server (see "Runtime"). `knowledge`, `artifact-share`, `design` and `browser` are optional.
+- `office` is required: every office has it without an entry, and an optional entry may only configure cron. It holds what every office needs from OpenCode, given by its plugin: the guidance for a session's folder (which `office instructions` prints), the `office` skill and the `office-executor` MCP server (see "Runtime"). `knowledge`, `artifact-share`, `design` and `browser` are optional.
 - A built-in package follows the `office` executable: `office sync` replaces the office's copy whenever it differs from the executable's. An entry naming a built-in with a `repo` other than this tool's repository is an error: a built-in can't be pinned or forked under its own name.
 - A remote package moves when its `ref` changes: a tag, a branch or a full 40-character commit SHA (git can't fetch an abbreviated one).
 - Every kind is committed with the office, so a clone and CI work with nothing fetched. A built-in package's `test/` stays in this repository, which runs it with `pnpm test`.

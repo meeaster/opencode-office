@@ -1,7 +1,6 @@
 // The `office` command: initialize, sync, check and run an office. See README.md.
-import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import * as v from "valibot";
@@ -21,10 +20,11 @@ import { runInContainer } from "./commands/shell.ts";
 import { sync } from "./commands/sync.ts";
 import { update } from "./commands/update.ts";
 import { upgradeTools } from "./commands/upgrade.ts";
-import { catchUp, runJob, wrappedCrontab } from "./cron/container.ts";
+import { catchUp, runContainerJob, supercronicInput } from "./cron/container.ts";
+import { executeJob, requireJobs } from "./cron/jobs.ts";
 import { migrateHome } from "./home-migration.ts";
 import { releaseMachine } from "./machine.ts";
-import { currentOffice, findOffice, type Office, OfficeError } from "./office.ts";
+import { currentOffice, type Office, OfficeError } from "./office.ts";
 import { age } from "./schema.ts";
 import { writeContainerWrappers } from "./sfw.ts";
 import { version } from "./tool.ts";
@@ -72,9 +72,9 @@ const usage = `usage: office <command> [--office <dir>]
                                1d old (or <age>), or exactly <release>; --check only reports.
                                Offices pick it up with office sync and office up; it never
                                changes office.yaml's versions
-  cron crontab | catch-up | run <command>
-                               the container's cron runner: print the wrapped crontab, run
-                               jobs missed since their last success, or run one job and stamp it
+  cron list | run <job-id>      list applicable YAML jobs or run one by its qualified ID
+  cron supercronic | catch-up   container internals: print generated supercronic input or run
+                               jobs missed since their last success
   migrate-home                 the container's start: move sessions and logins stored under
                                /home/assistant, the old home, to this home
   env --container              print the opencode container's environment file: the Socket
@@ -211,15 +211,26 @@ async function main(): Promise<void> {
     down(currentOffice(flags));
   } else if (command === "upgrade-tools") {
     if (!(await upgradeTools(currentOffice(flags)))) process.exitCode = 1;
-  } else if (command === "cron" && rest[0] !== undefined) {
-    const dir = findOffice(flags.office ?? process.cwd());
-    const crontab = join(dir, "cron/crontab");
-    const text = existsSync(crontab) ? readFileSync(crontab, "utf8") : "";
+  } else if (command === "cron") {
+    const office = currentOffice(flags);
+    const jobs = requireJobs(office);
+    const [action, id] = rest;
 
-    if (rest[0] === "crontab") console.log(wrappedCrontab(text));
-    else if (rest[0] === "catch-up") catchUp(dir, text);
-    else if (rest[0] === "run" && rest[1] !== undefined) process.exitCode = runJob(dir, rest.slice(1).join(" "));
-    else throw new OfficeError("usage: office cron crontab | catch-up | run <command>");
+    if (action === "run" && id !== undefined && rest.length === 2) {
+      const job = jobs.find((candidate) => candidate.id === id);
+
+      if (job === undefined) throw new OfficeError(`cron ${id}: not enabled for this office; see office cron list`);
+
+      process.exitCode = office.opencode.mode === "container" ? await runContainerJob(office, job) : await executeJob(office, job);
+    } else if (action === "list" && rest.length === 1) {
+      for (const job of jobs) console.log(job.id);
+    } else if (office.opencode.mode === "container" && rest.length === 1 && action === "supercronic") {
+      if (jobs.length > 0) console.log(supercronicInput(jobs));
+    } else if (office.opencode.mode === "container" && rest.length === 1 && action === "catch-up") {
+      await catchUp(office, jobs);
+    } else {
+      throw new OfficeError("usage: office cron list | run <job-id>");
+    }
   } else if (command === "env" && flags.container === true) {
     process.stdout.write(containerEnvText(containerOffice(flags)));
   } else if (command === "sfw-wrappers") {

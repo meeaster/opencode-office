@@ -14,7 +14,9 @@ import { randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { cronRevision } from "../cron/container.ts";
 import { cronTimers, hasSystemd, installTimers, refreshTimer, removeTimers } from "../cron/host.ts";
+import { requireJobs } from "../cron/jobs.ts";
 import { ghConfigDir, ghHosts } from "../github.ts";
 import { hostTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";
@@ -57,7 +59,7 @@ export function runningPins(office: Office): Lock {
   }
 }
 
-function environment(office: Office, profiles: string, pins: Lock): NodeJS.ProcessEnv {
+function environment(office: Office, profiles: string, pins: Lock, cronRevision = ""): NodeJS.ProcessEnv {
   return {
     ...process.env,
     ...serviceSettings(office),
@@ -69,6 +71,7 @@ function environment(office: Office, profiles: string, pins: Lock): NodeJS.Proce
     OFFICE_DIR: office.dir,
     OFFICE_STATE: office.state,
     OFFICE_DESKS: office.desks.map((desk) => desk.name).join(","),
+    OFFICE_CRON_REVISION: cronRevision,
     OFFICE_OPENCODE_IMAGE: officeImage(office, pins),
     OFFICE_EXECUTOR_IMAGE: executorImage(pins.executor),
     // OpenCode as the office's containers reach it, such as a dashboard's API.
@@ -89,16 +92,16 @@ function sharesGithubLogin(office: Office): boolean {
   return office.opencode.mode === "container" && office.git?.credentials === "gh" && existsSync(join(ghConfigDir(), "hosts.yml"));
 }
 
-type ComposeOptions = { capture?: boolean; profiles?: string; pins?: Lock };
+type ComposeOptions = { capture?: boolean; profiles?: string; pins?: Lock; cronRevision?: string };
 
 /**
  * Runs `docker compose` for the office; with `capture`, returns its output instead of printing it.
  * `profiles` defaults to the office's mode: the opencode container only in container mode.
  */
-export function compose(office: Office, args: string[], { capture = false, profiles = office.opencode.mode, pins = runningPins(office) }: ComposeOptions = {}): string {
+export function compose(office: Office, args: string[], { capture = false, profiles = office.opencode.mode, pins = runningPins(office), cronRevision }: ComposeOptions = {}): string {
   return (
     execFileSync("docker", composeArguments(office, args), {
-      env: environment(office, profiles, pins),
+      env: environment(office, profiles, pins, cronRevision),
       encoding: "utf8",
       stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",
     }) ?? ""
@@ -428,6 +431,8 @@ function choosePins(office: Office, upgrade: boolean) {
 
 export async function up(office: Office, { upgrade = false, refresh = false } = {}): Promise<void> {
   const managed = office.opencode.managed !== undefined;
+  const jobs = requireJobs(office);
+  const timers = office.opencode.mode === "host" ? cronTimers(office, jobs) : [];
 
   if (managed) requireServerConsent(office);
 
@@ -475,7 +480,6 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
     for (const line of await installSfw(office, pins.sfw)) console.log(line);
 
     installTools(office);
-    installTimers(office, cronTimers(office));
 
     if (refresh) console.log("office: host mode has no opencode image to refresh");
   } else {
@@ -489,7 +493,8 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
     // Installing only the refresh timer removes cron timers left from host mode, which would run
     // the jobs twice.
     installRefreshTimer(office);
-    compose(office, ["up", "-d", "--build", "--remove-orphans"], { pins });
+    // A changed schedule or enabled set needs a new container even when its image is unchanged.
+    compose(office, ["up", "-d", "--build", "--remove-orphans"], { pins, cronRevision: cronRevision(jobs) });
     writeExecutorFiles(office);
   }
 
@@ -519,6 +524,8 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
 
     await startServer(office, plan, upgrade, changed);
   }
+
+  if (office.opencode.mode === "host") installTimers(office, timers);
 }
 
 /** Setup starts only Executor until its local token exists; OpenCode then starts once. */
@@ -536,8 +543,8 @@ export async function startExecutor(office: Office): Promise<void> {
 
 /** Stops the office's containers, whichever mode started them, and its timers. */
 export function down(office: Office): void {
-  compose(office, ["down"], { profiles: "container" });
   removeTimers(office);
+  compose(office, ["down"], { profiles: "container" });
   removeExecutorFiles(office);
   stopRecordedServer(office);
 }

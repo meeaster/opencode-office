@@ -233,7 +233,7 @@ test("sync removes an edited copy whose entry is gone too, and never removes a p
   expect(existsSync(join(office, "packages/own/package.yaml"))).toBe(true);
 });
 
-test("an entry without repo is built-in when the tool ships a package of that name and the office's own otherwise; office is always there and can't be listed, and a built-in can't come from another repository", () => {
+test("an entry without repo is built-in when shipped and local otherwise; the required office package appears only once and a built-in can't come from another repository", () => {
   const office = join(dir, "office");
 
   write(
@@ -264,7 +264,7 @@ test("an entry without repo is built-in when the tool ships a package of that na
     ["mine", "local", "packages/mine"],
     ["shared", "remote", ".office/packages/shared"],
   ]);
-  expect(problems.map((problem) => problem.packages)).toEqual([["office"], ["artifact-share"]]);
+  expect(problems.map((problem) => problem.packages)).toEqual([["artifact-share"]]);
 });
 
 test("sync installs the built-in packages from the tool and restores an edited copy, keeping the office's records", async () => {

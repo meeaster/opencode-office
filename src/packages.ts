@@ -128,23 +128,22 @@ export function isToolRepository(repo: string): boolean {
 /**
  * The packages the office has: the required built-ins, then each entry of office.yaml, with its
  * kind. An entry without `repo` is built-in when the tool ships a package of its name, so those
- * names are reserved. `problems` names each entry that can't be one: a required built-in listed,
- * or a built-in's name taken from another repository.
+ * names are reserved. A required built-in's entry configures it without installing it twice.
  */
 export function resolvePackages(office: Office): ResolvedPackages {
   const builtins = builtinPackages();
   const problems: PackageProblem[] = [];
 
-  const packages: ResolvedPackage[] = requiredPackages.map((name) => ({ entry: { name, settings: {}, source: undefined }, kind: "built-in", dir: pulledDir(office, name) }));
+  const packages: ResolvedPackage[] = requiredPackages.map((name) => ({
+    entry: office.packages.find((entry) => entry.name === name) ?? { name, settings: {}, cron: {}, source: undefined },
+    kind: "built-in",
+    dir: pulledDir(office, name),
+  }));
 
   for (const entry of office.packages) {
     const problem = (message: string) => problems.push({ packages: [entry.name], message });
 
-    if (requiredPackages.includes(entry.name)) {
-      problem(`every office has the ${entry.name} package without an entry; remove it from packages: in office.yaml`);
-
-      continue;
-    }
+    if (requiredPackages.includes(entry.name)) continue;
 
     if (!builtins.includes(entry.name)) {
       packages.push({ entry, kind: entry.source === undefined ? "local" : "remote", dir: entry.source === undefined ? localDir(office, entry.name) : pulledDir(office, entry.name) });
@@ -419,6 +418,10 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
   const accepted = Object.keys(manifest.settings);
   const errors = manifest.name === entry.name ? [] : [`${where}/package.yaml names the package ${manifest.name}, not ${entry.name}`];
   const settings: Record<string, SettingValue> = {};
+
+  for (const key of Object.keys(entry.cron)) {
+    if (!Object.hasOwn(manifest.cron, key)) errors.push(`packages.${entry.name}.cron.${key}: no such job in ${where}/package.yaml`);
+  }
 
   for (const [key, value] of Object.entries(entry.settings)) {
     if (accepted.includes(key)) settings[key] = value;

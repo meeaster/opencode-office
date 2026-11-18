@@ -12,6 +12,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlin
 import { join, relative } from "node:path";
 
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
+import { collectJobs } from "../cron/jobs.ts";
 import { syncMachine } from "../machine.ts";
 import { cloneOrFetch, cloneShallow, copyFromRepository, isClone, refreshClone } from "../git.ts";
 import { clones, installedPackages, oldKnowledgePlugin, packageLink, pluginLinks, skillSelections } from "../layout.ts";
@@ -260,6 +261,10 @@ export async function sync(loaded: Office, { referencesOnly = false } = {}): Pro
   const installed = installedPackages(office);
 
   changes.push(...installed.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
+
+  const cron = collectJobs(office, { ...installed, problems: [] });
+
+  if (!cron.ok) changes.push(...cron.errors.map((error) => `FAILED ${error}`));
 
   for (const item of installed.installed) changes.push(...installPackage(office, item));
 

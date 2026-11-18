@@ -94,12 +94,11 @@ if ls "$conf_d"/office-*.toml >/dev/null 2>&1; then
   (cd / && mise install --quiet) || echo "office: mise install failed for the office's machine-wide tools" >&2
 fi
 
-# The office's cron/crontab, with each command wrapped to stamp its successes in the home volume.
+# Generated from the office's YAML jobs. The runner stamps successes in the home volume.
 # Jobs missed while the computer was off run once now, in the background, then supercronic keeps
 # the schedule. Job output goes to the container log.
-if [ -f "$office/cron/crontab" ]; then
-  office cron crontab > /tmp/office-crontab
-  (cd "$office" && office cron catch-up; exec supercronic -quiet /tmp/office-crontab) &
+if office --office "$office" cron supercronic > /tmp/office-crontab && [ -s /tmp/office-crontab ]; then
+  (cd "$office" && office cron catch-up && TZ=UTC exec supercronic -quiet /tmp/office-crontab) &
 fi
 
 exec "$@"

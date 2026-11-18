@@ -21,7 +21,7 @@ RUN echo "packages as of ${APT_REFRESH:-the first build}" \
       build-essential ca-certificates chromium curl fonts-liberation fonts-noto-color-emoji git jq libatomic1 openssh-client pkg-config python3 ripgrep unzip xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
-# Runs the office's cron/crontab. The tool pins it: offices don't choose their cron runner.
+# Runs the supercronic input generated from office.yaml and package defaults.
 ARG SUPERCRONIC_VERSION=0.2.51
 ARG SUPERCRONIC_SHA256=cc232108374e8e2b537045f2d5eaa1229f619db314c3ba6a14d38b35dc0aa123
 

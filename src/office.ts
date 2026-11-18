@@ -43,6 +43,7 @@ export type Office = {
   versions: Partial<Record<PinnedTool, string>> | undefined;
   /** `upgrades` from office.yaml: `minimum_release_age` and per-tool ages. */
   upgrades: Record<string, string>;
+  cron: OfficeConfig["cron"];
   /** Whether package downloads go through Socket Firewall (`socket_firewall`, on unless false). */
   socketFirewall: boolean;
   references: Repository[];
@@ -121,6 +122,7 @@ export function loadOffice(dir: string): Office {
     secrets: config.secrets,
     versions: config.versions,
     upgrades: config.upgrades,
+    cron: config.cron,
     socketFirewall: config.socket_firewall,
     references: config.references,
     desks: Object.entries(config.desks).map(([deskName, desk]) => ({ name: deskName, ...desk })),
