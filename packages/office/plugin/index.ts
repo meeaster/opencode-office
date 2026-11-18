@@ -3,7 +3,7 @@
 // - the office's guidance for the session's folder, from instructions.ts, which `office
 //   instructions [folder]` also runs. It is attached as a session instruction entry, refreshed on
 //   each prompt, so it follows office.yaml and reaches every provider (claude-agent included);
-// - the package's skills, each skills/<id>/: `office`, and `opencode-plugin` for a package's plugin and panel;
+// - every skill in this package's skills/ directory;
 // - the `office-executor` MCP server, the office's Executor.
 //
 // The office package is built into the `office` tool, which bundles this plugin with what it

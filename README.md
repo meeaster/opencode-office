@@ -398,7 +398,7 @@ There is no registry, no dependency between packages and no version range. The b
 
 | Package | Does |
 |---|---|
-| `office` | Every office has it: the guidance for a session's folder, the `office` skill and the `office-executor` MCP server |
+| `office` | Every office has it: folder guidance, the `office-executor` MCP server, and the `office`, `skill-creator`, `opencode-sessions` and `opencode-plugin` skills |
 | [`knowledge`](packages/knowledge/README.md) | Lists the office's `knowledge/` articles, with their descriptions, in every session, refreshed on each prompt. `office init` adds it |
 | [`artifact-share`](packages/artifact-share/README.md) | The user asks an agent to share something; it goes in the office's `artifacts/`, which a workflow publishes as a GitHub Pages site with an index page. The site may be public, even for a private repository |
 | [`design`](packages/design/README.md) | The office runs its own [Doop](https://github.com/kgoedecke/doop) design canvas as package services, and every session reaches it as the `doop` MCP server, with an agent key a person creates once |

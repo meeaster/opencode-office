@@ -1,0 +1,6 @@
+OpenAI Codex
+Copyright 2025 OpenAI
+
+Source: https://github.com/openai/codex/tree/f09fb197f517acb3052ae3976a7fc3b5a5a8897d/codex-rs/skills/src/assets/samples/skill-creator
+SKILL.md is adapted to omit Codex-specific setup, metadata and invocation syntax.
+The validation script is unmodified. See license.txt for the Apache License 2.0.
