@@ -49,7 +49,23 @@ function commandsOf(tool: string): OfficeCommand[] {
 }
 
 /** What the office's secrets need before anything else; gh and pre-commit only serve what uses them. */
-const required: OfficeCommand[] = ["sops", "age", "age-keygen"];
+export const required: OfficeCommand[] = ["sops", "age", "age-keygen"];
+
+/** Every command the CLI runs from the office package's tools. */
+export const officeCommands: OfficeCommand[] = ["sops", "age", "age-keygen", "gh", "pre-commit"];
+
+/** The repository each of the office package's tools is built from, which other mise backends name it by. */
+const repositories = { sops: "getsops/sops", age: "filosottile/age", gh: "cli/cli", "pre-commit": "pre-commit/pre-commit" } satisfies Record<string, string>;
+
+/**
+ * Which of the office package's tools a mise.toml key names, or undefined: its registry name, or a
+ * backend for the same repository (`aqua:cli/cli`, `github:getsops/sops[bin=sops]`, `pypi:pre-commit`).
+ */
+export function officeToolNamed(key: string): string | undefined {
+  const name = key.replace(/\[.*\]$/, "").toLowerCase();
+
+  return Object.entries(repositories).find(([tool, repository]) => name === tool || name === `pypi:${tool}` || name === repository || name.endsWith(`:${repository}`))?.[0];
+}
 
 /** The package whose tools the CLI runs. */
 const officePackage = "office";

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { ghLink, hostToolsRoot, installedTool, installMise, miseAsset, needsInstall, officeTool, onboardHostTools, requireOfficeTool, startingVersions, verifyDigest } from "./host-tools.ts";
+import { ghLink, hostToolsRoot, installedTool, installMise, miseAsset, needsInstall, officeTool, officeToolNamed, onboardHostTools, requireOfficeTool, startingVersions, verifyDigest } from "./host-tools.ts";
 import { loadOffice, type Office } from "./office.ts";
 import { type Candidate, type Release, selectToolRelease } from "./releases.ts";
 
@@ -136,6 +136,10 @@ test("the office package starts every office at exact versions of the tools the 
   expect(Object.keys(startingVersions())).toEqual(["sops", "age", "gh", "pre-commit"]);
 
   for (const version of Object.values(startingVersions())) expect(version).toMatch(/^\d+\.\d+\.\d+$/);
+});
+
+test("an office's own pin of one of these tools is recognized under its registry name or another backend", () => {
+  expect(["sops", "aqua:getsops/sops", "github:getsops/sops[bin=sops]", "gh", "cli/cli", "ubi:cli/cli", "aqua:FiloSottile/age", "pypi:pre-commit", "node", "npm:sops", "aqua:cli/cli-extra"].map(officeToolNamed)).toEqual(["sops", "sops", "sops", "gh", "gh", "gh", "age", "pre-commit", undefined, undefined, undefined]);
 });
 
 test("the CLI runs the version the office pins, as mise installed it, over newer copies on PATH and in host-tools, from any folder", () => {

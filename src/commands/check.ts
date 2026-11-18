@@ -11,7 +11,7 @@ import { cronTimers, hasSystemd, refreshTimer, timerStates } from "../cron/host.
 import { configFile, installedPanelNames, locate, panelDir, panelId, panelState, readPanelRecord, removalNote } from "../desktop.ts";
 import { ghConfigDir, ghLogin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
 import { hookNote, hookState } from "../hook.ts";
-import { officeTool, officePins } from "../host-tools.ts";
+import { officeCommands, officePins, officeTool, officeToolNamed, required } from "../host-tools.ts";
 import { clones, installedPackages, library, oldKnowledgePlugin, pluginLinks, skillSelections } from "../layout.ts";
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, oldMiseFiles, pulledLocalFolders, versionsLackSfw } from "../migrate.ts";
 import { executorEnvFile, type Office, readEnvFile } from "../office.ts";
@@ -19,7 +19,8 @@ import { packageComposeFile, serviceStatus, sharedNamespaces } from "../package-
 import { envFilePath, hostWrappers, sourceLine, sourcedBy } from "../host-env.ts";
 import { claim, machineReport } from "../machine.ts";
 import { wrappedCommands } from "../sfw.ts";
-import { fragmentNotes, orphanFragments, strayFragments } from "../package-tools.ts";
+import { toolPins } from "../mise-toml.ts";
+import { fragmentNotes, machineFile, orphanFragments, strayFragments } from "../package-tools.ts";
 import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
 import { pinnedTools } from "../schema.ts";
 import { builtinFiles, builtinPackages, version } from "../tool.ts";
@@ -455,6 +456,45 @@ function officeVersions(office: Office, report: Report): void {
   report(container === host, "office versions", container === host ? `host and container run ${host}` : `host runs ${host}, the container ${container} (rebuild the image with office up)`);
 }
 
+/**
+ * The tools the office CLI runs, the office package's: whether this host has the versions
+ * .office/mise/office.toml pins, and which of them the office's own mise files pin too.
+ */
+function officeToolChecks(office: Office, report: Report): void {
+  const install = `office setup --install-deps${office.opencode.mode === "host" ? " or office up" : ""} installs it`;
+  const found: string[] = [];
+
+  for (const command of officeCommands) {
+    const tool = officeTool(office, command);
+
+    if (tool !== undefined && tool.version === tool.pinned) {
+      found.push(`${command} ${tool.version}`);
+
+      continue;
+    }
+
+    const pin = tool?.pinned === undefined ? "the office package's" : `${command} ${tool.pinned}, the office's pin,`;
+    const detail = tool === undefined ? `${pin} isn't installed on this host, nor any other copy; ${install}` : `${pin} isn't installed on this host, so office runs ${command} ${tool.version} from ${tool.path}; ${install}`;
+
+    report(tool === undefined && required.includes(command) ? false : "warn", `office tool ${command}`, detail);
+  }
+
+  if (found.length > 0) report(true, "office tools", `${found.join(", ")}: the versions .office/mise/office.toml pins, as mise installed them`);
+
+  const files = ["mise.toml", ...office.desks.map((desk) => join(desk.name, "mise.toml")), machineFile];
+
+  const duplicates = files.flatMap((file) => {
+    const path = join(office.dir, file);
+    const pins = existsSync(path) ? toolPins(readFileSync(path, "utf8")).filter((pin) => officeToolNamed(pin.tool) !== undefined) : [];
+
+    return pins.length === 0 ? [] : [`${file} pins ${pins.map((pin) => `${pin.tool} ${pin.version}`).join(" and ")}`];
+  });
+
+  if (duplicates.length > 0) {
+    report("warn", "office tools", `${duplicates.join("; ")}, which the office package now provides in .office/mise/office.toml; you can remove these pins. Where such a pin applies it wins over the package's, so agents can run another version than the office CLI does`);
+  }
+}
+
 /** The office's services that are running, whichever mode started them. */
 function servicesRunning(office: Office): string[] {
   return compose(office, ["ps", "--status", "running", "--format", "{{.Service}}"], { capture: true, profiles: "container" }).split("\n").filter(Boolean);
@@ -780,6 +820,8 @@ export async function check(office: Office): Promise<boolean> {
   for (const problem of problems) console.log(`     - ${problem}`);
 
   await packageChecks(office, report);
+
+  officeToolChecks(office, report);
 
   firewallChecks(office, report);
 
