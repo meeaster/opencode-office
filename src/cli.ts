@@ -17,6 +17,7 @@ import { init } from "./commands/init.ts";
 import { pair } from "./commands/pair.ts";
 import { pin } from "./commands/pin.ts";
 import { setup } from "./commands/setup.ts";
+import { sessionInstructions } from "./commands/session-instructions.ts";
 import { runInContainer } from "./commands/shell.ts";
 import { sync } from "./commands/sync.ts";
 import { update } from "./commands/update.ts";
@@ -51,6 +52,7 @@ const usage = `usage: office <command> [--office <dir>]
   check                        report drift from office.yaml and the tool, the running
                                containers and opted-in managed OpenCode
   instructions [folder]        print the office guidance a session started in <folder> gets
+  instructions --session <id>  print each stored instruction entry from a running OpenCode server
   up [--upgrade] [--refresh] | down
                                start or stop this office's containers. up runs the versions it
                                last applied; --upgrade applies office.yaml's newer ones;
@@ -135,6 +137,7 @@ async function main(): Promise<void> {
     allowPositionals: true,
     options: {
       office: { type: "string" },
+      session: { type: "string" },
       name: { type: "string" },
       "owner-email": { type: "string" },
       "generate-age-key": { type: "boolean" },
@@ -166,6 +169,8 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (flags.session !== undefined && command !== "instructions") throw new OfficeError("--session is an option for office instructions");
+
   if (command === "init") {
     if (rest[0] === undefined) throw new OfficeError("usage: office init <dir> [--name <name>]");
 
@@ -175,8 +180,11 @@ async function main(): Promise<void> {
 
     console.log(`created the office in ${dir}`);
   } else if (command === "instructions") {
-    // The same code the office package's plugin runs; `office check` reports a copy that differs.
-    const text = officeInstructions(resolve(rest[0] ?? flags.office ?? process.cwd()));
+    if (rest.length > (flags.session === undefined ? 1 : 0)) throw new OfficeError("usage: office instructions [folder] | office instructions --session <id>");
+
+    const text = flags.session === undefined
+      ? officeInstructions(resolve(rest[0] ?? flags.office ?? process.cwd()))
+      : await sessionInstructions(currentOffice(flags), flags.session);
 
     if (text !== "") console.log(text);
   } else if (command === "sync") {
