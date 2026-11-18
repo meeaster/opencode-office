@@ -32,6 +32,8 @@ import { newestRelease, type Candidate } from "./releases.ts";
 import { check, packageManifestSchema } from "./schema.ts";
 import { toolPath } from "./tool.ts";
 import { compareVersions } from "./versions.ts";
+import { currentReporter, progress, say, stream, warn } from "./report/index.ts";
+import { displayLines } from "./report/reporter.ts";
 
 /** A command the office CLI runs that comes from the office package's tools. */
 export type OfficeCommand = "sops" | "age" | "age-keygen" | "gh" | "pre-commit";
@@ -114,24 +116,28 @@ export function hostTool(tool: "mise"): string {
  * Runs mise outside any office and without its config files: `which --tool` and `ls` read only its
  * installs, which no config selects, and `install` of exact versions selects nothing.
  */
-function runMise(mise: string, args: string[]): string {
-  return execFileSync(mise, args, {
-    cwd: "/", encoding: "utf8", timeout: 600_000, stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, MISE_NO_CONFIG: "1", MISE_YES: "1", MISE_NO_AUTO_UPDATE: "1" },
-  }).trim();
+/** mise without any config, answering yes and never updating itself. */
+function miseEnvironment(): NodeJS.ProcessEnv {
+  return { ...process.env, MISE_NO_CONFIG: "1", MISE_YES: "1", MISE_NO_AUTO_UPDATE: "1" };
 }
 
-/** `command` from mise's install of `tool` at `version`, or undefined when that version isn't installed. */
-function miseCopy(mise: string, command: OfficeCommand, version: string): InstalledTool | undefined {
-  let path;
+function runMise(mise: string, args: string[]): string {
+  return execFileSync(mise, args, { cwd: "/", encoding: "utf8", timeout: 600_000, stdio: ["ignore", "pipe", "pipe"], env: miseEnvironment() }).trim();
+}
 
+/** Where mise installed `command` of `tool` at `version`, or undefined when that version isn't installed. */
+function misePath(mise: string, command: OfficeCommand, version: string): string | undefined {
   try {
-    path = runMise(mise, ["which", command, `--tool=${packageTool[command]}@${version}`]);
+    return runMise(mise, ["which", command, `--tool=${packageTool[command]}@${version}`]);
   } catch {
     return undefined;
   }
+}
 
-  const found = reported(command, path);
+/** `command` from mise's install of `tool` at `version`, or undefined when that version isn't installed or doesn't run. */
+function miseCopy(mise: string, command: OfficeCommand, version: string): InstalledTool | undefined {
+  const path = misePath(mise, command, version);
+  const found = path === undefined ? undefined : reported(command, path);
 
   return found?.version === version ? found : undefined;
 }
@@ -337,7 +343,7 @@ function retirePrivateCopies(installed: Map<OfficeCommand, InstalledTool>): stri
 }
 
 function describe(tool: string, installed: InstalledTool | undefined, version: string): void {
-  console.log(`${tool}: ${installed?.version ?? "missing"} -> ${version}${installed === undefined ? "" : ` (current: ${installed.path})`}`);
+  say(`${tool}: ${installed?.version ?? "missing"} -> ${version}${installed === undefined ? "" : ` (current: ${installed.path})`}`);
 }
 
 type OnboardOptions = {
@@ -374,11 +380,12 @@ export async function onboardHostTools(
   // Bootstrap/update mise first: the office's tools install through it. One consent covers both.
   if (miseNeeded) {
     describe("mise", mise, candidate.version);
-    console.log(`Office can install verified mise ${candidate.version} (published ${candidate.published}) in ${hostToolsRoot()}, then the tools this office pins in .office/mise/office.toml (${names}) with it, into mise's own install folder. No mise config, global selection or shell profile changes.`);
+    say(`Office can install verified mise ${candidate.version} (published ${candidate.published}) in ${hostToolsRoot()}, then the tools this office pins in .office/mise/office.toml (${names}) with it, into mise's own install folder. No mise config, global selection or shell profile changes.`);
 
     if (!authorized && confirm !== undefined) authorized = (await confirm("Install these host dependencies? [yes/no]")) === "yes";
 
     if (authorized) {
+      progress(`installing mise ${candidate.version}`);
       await installMise(candidate);
       mise = installedTool("mise");
     }
@@ -401,7 +408,7 @@ export async function onboardHostTools(
     for (const proposal of proposals) describe(proposal.tool, proposal.current, proposal.version);
 
     if (!authorized) {
-      console.log(`mise (${mise?.path ?? "missing"}) installs them into its own install folder; no mise config, global selection or shell profile changes.`);
+      say(`mise (${mise?.path ?? "missing"}) installs them into its own install folder; no mise config, global selection or shell profile changes.`);
 
       if (confirm !== undefined) authorized = (await confirm("Install the office's tools? [yes/no]")) === "yes";
     }
@@ -412,47 +419,61 @@ export async function onboardHostTools(
 
     if (missing.length > 0) throw new OfficeError(`required host dependencies (${missing.join(", ")}) are missing; rerun office setup --install-deps, or install them manually on PATH`);
 
-    console.log("Installation not authorized; continuing with the installed tools. Nothing was changed.");
+    say("Installation not authorized; continuing with the installed tools. Nothing was changed.");
 
     return;
   }
 
-  if (miseNeeded && !authorized) console.log(`Keeping mise ${mise.version}; its update wasn't authorized.`);
+  if (miseNeeded && !authorized) say(`Keeping mise ${mise.version}; its update wasn't authorized.`);
+
+  // mise's last lines when it failed, for a reporter to show with the warning.
+  let said: string[] = [];
 
   if (proposals.length > 0) {
     requireHostPlatform(process.platform, process.arch);
 
-    try {
-      runMise(installer(), ["install", ...proposals.map((proposal) => `${proposal.tool}@${proposal.version}`)]);
-    } catch {
-      // Checked command by command below; a required one missing fails setup.
-    }
+    progress(`installing ${proposals.map((proposal) => `${proposal.tool} ${proposal.version}`).join(", ")} with mise`);
+
+    // Checked command by command below; a required one missing fails setup.
+    const result = await stream(installer(), ["install", ...proposals.map((proposal) => `${proposal.tool}@${proposal.version}`)], { cwd: "/", timeout: 600_000, env: miseEnvironment() });
+
+    if (result.status !== 0) said = displayLines(`${result.stdout}\n${result.stderr}`).slice(-5);
   }
 
   const installed = new Map<OfficeCommand, InstalledTool>();
   const failed: string[] = [];
+  // Installed by mise, but `--version` doesn't run, such as pre-commit without Python 3.
+  const broken: string[] = [];
 
   for (const [tool, version] of Object.entries(wanted)) {
     for (const command of commandsOf(tool)) {
       const found = miseCopy(mise.path, command, version);
 
-      if (found === undefined) failed.push(`${command} ${version}`);
-      else installed.set(command, found);
+      if (found !== undefined) installed.set(command, found);
+      else if (misePath(mise.path, command, version) !== undefined) broken.push(command === "pre-commit" ? `${command} ${version} (it needs Python 3)` : `${command} ${version}`);
+      else failed.push(`${command} ${version}`);
     }
   }
 
-  for (const line of retirePrivateCopies(installed)) console.log(line);
+  for (const line of retirePrivateCopies(installed)) say(line);
 
-  if (failed.length === 0) {
-    console.log(`The office's tools: ${names}, installed by mise`);
+  if (failed.length === 0 && broken.length === 0) {
+    say(`The office's tools: ${names}, installed by mise`);
 
     return;
   }
 
   const missing = required.filter((command) => !installed.has(command) && officeTool(office, command) === undefined);
-  const message = `mise didn't install ${failed.join(", ")}; check network access and rerun office setup --install-deps (mise's output withheld)`;
 
-  if (missing.length > 0) throw new OfficeError(message);
+  const message = [
+    failed.length > 0 ? `mise didn't install ${failed.join(", ")}; check network access and rerun office setup --install-deps` : "",
+    broken.length > 0 ? `mise installed ${broken.join(", ")}, but it doesn't run on this host (\`--version\` fails); install what it needs and rerun office setup` : "",
+  ].filter(Boolean).join(". ");
 
-  console.log(`Warning: ${message}`);
+  // A reporter keeps mise's output with the stage, shown if it fails; the console gets none of it.
+  const withheld = failed.length > 0 ? `${message} (mise's output withheld)` : message;
+
+  if (missing.length > 0) throw new OfficeError(currentReporter() === undefined ? withheld : message);
+
+  warn(said.length > 0 && currentReporter() !== undefined ? `${message}. mise said:\n${said.join("\n")}` : message, `Warning: ${withheld}`);
 }

@@ -259,6 +259,29 @@ test("a required tool mise didn't install fails setup; an optional one only warn
   expect(existsSync(ghLink())).toBe(false);
 });
 
+test("a tool mise installed that doesn't run is named as such, not as a failed download", async () => {
+  fakeMise(undefined, undefined, { fail: "pre-commit" });
+
+  // What mise leaves without Python 3: the command is there, but it can't run.
+  const broken = join(installs(), "pre-commit", pins["pre-commit"], "pre-commit");
+
+  mkdirSync(dirname(broken), { recursive: true });
+  writeFileSync(broken, "#!/nonexistent/python3\n", { mode: 0o755 });
+
+  const printed: string[] = [];
+  const log = console.log;
+
+  console.log = (line: string) => printed.push(line);
+
+  try {
+    await onboardHostTools(office(pins), true, undefined, { lookupMise: async () => candidate() });
+  } finally {
+    console.log = log;
+  }
+
+  expect(printed.at(-1)).toBe(`Warning: mise installed pre-commit ${pins["pre-commit"]} (it needs Python 3), but it doesn't run on this host (\`--version\` fails); install what it needs and rerun office setup`);
+});
+
 test("PATH wins ties against host-tools' private mise, which wins when newer", () => {
   const bin = join(hostToolsRoot(), "bin");
 

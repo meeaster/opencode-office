@@ -19,6 +19,7 @@ import { installedPackages } from "./layout.ts";
 import { type Office, OfficeError, readEnvFile } from "./office.ts";
 import { type InstalledPackage, resolvePackages } from "./packages.ts";
 import { check, type ComposeFile, composeFileSchema, type PackageManifest, type Parsed, scalarSetting, settingVariable } from "./schema.ts";
+import { say } from "./report/index.ts";
 
 /** The file at a package's root that gives it services. */
 export const packageComposeFile = "compose.yaml";
@@ -255,8 +256,9 @@ export function preparePackageServices(office: Office, upgrade: boolean) {
   if (plan.pending.length > 0) {
     const invalid = plan.pending.filter((name) => composeProblems(namespaceOf(name), current.get(name) ?? "").length > 0);
 
-    console.log(
-      `office: running the applied compose files of packages ${plan.pending.join(", ")}; office up --upgrade applies their changes${invalid.length > 0 ? ` (${invalid.join(", ")} must be fixed first; office check names the problems)` : ""}`,
+    say(
+      `running the applied compose files of packages ${plan.pending.join(", ")}; office up --upgrade applies their changes${invalid.length > 0 ? ` (${invalid.join(", ")} must be fixed first; office check names the problems)` : ""}`,
+      "office: ",
     );
   }
 
@@ -278,10 +280,11 @@ export function preparePackageServices(office: Office, upgrade: boolean) {
 
       if (change.to === undefined) {
         rmSync(dir, { recursive: true, force: true });
-        console.log(
+        say(
           listed.has(change.name)
-            ? `office: package ${change.name} no longer has a ${packageComposeFile}, so its services stop; their volumes stay`
-            : `office: package ${change.name} left office.yaml, so its services stop; their volumes and ${secretsPath(office, change.name)} stay`,
+            ? `package ${change.name} no longer has a ${packageComposeFile}, so its services stop; their volumes stay`
+            : `package ${change.name} left office.yaml, so its services stop; their volumes and ${secretsPath(office, change.name)} stay`,
+          "office: ",
         );
 
         continue;
@@ -289,7 +292,7 @@ export function preparePackageServices(office: Office, upgrade: boolean) {
 
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, packageComposeFile), change.to);
-      console.log(`office: applied package ${change.name}'s ${packageComposeFile}${change.from === undefined ? "" : " (upgraded)"}`);
+      say(`applied package ${change.name}'s ${packageComposeFile}${change.from === undefined ? "" : " (upgraded)"}`, "office: ");
     }
 
     const running = appliedServices(office);
@@ -301,7 +304,7 @@ export function preparePackageServices(office: Office, upgrade: boolean) {
       const secrets = secretsPath(office, item.entry.name);
       const settings = join(dir, "settings.env");
 
-      for (const key of ensureSecrets(secrets, item.manifest.secrets)) console.log(`office: generated ${key} for package ${item.entry.name} in ${secrets}`);
+      for (const key of ensureSecrets(secrets, item.manifest.secrets)) say(`generated ${key} for package ${item.entry.name} in ${secrets}`, "office: ");
 
       writeFileSync(settings, settingsEnv(item));
       writeFileSync(

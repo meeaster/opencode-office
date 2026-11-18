@@ -45,6 +45,7 @@ import { check, type Lock } from "./schema.ts";
 import { atomicWrite } from "./secrets.ts";
 import { envScript, wrapperFiles } from "./sfw.ts";
 import { defaultPins, hostPlatform, readApplied, wantedPins } from "./versions.ts";
+import { say } from "./report/index.ts";
 
 /** Replace the machine record's path and the global mise config folder, for tests and scratch offices. */
 export const machineRecordVariable = "OFFICE_MACHINE_RECORD";
@@ -171,11 +172,11 @@ export function grantConsent(office: Office): string {
 
   if (current.kind === "other") throw new OfficeError(ownedElsewhere(current.record));
 
-  if (current.kind === "ours") return `Machine: office ${office.name} already manages this machine (${machineRecordPath()})`;
+  if (current.kind === "ours") return `office ${office.name} already manages this machine (${machineRecordPath()})`;
 
   writeMachine({ office: { name: office.name, dir: office.dir }, consented: new Date().toISOString(), files: [] });
 
-  return `Machine: office ${office.name} now manages this machine; office sync links its tools into ${globalConfD()} and records them in ${machineRecordPath()}`;
+  return `office ${office.name} now manages this machine; office sync links its tools into ${globalConfD()} and records them in ${machineRecordPath()}`;
 }
 
 /**
@@ -537,7 +538,7 @@ export function writeServerUnit(office: Office, plan: ServerPlan): boolean {
 
   atomicWrite(file.path, plan.text, 0o644);
   writeMachine({ ...record, files: [...record.files.filter((entry) => entry !== previous), file] });
-  console.log(`office: ${previous === undefined ? "wrote" : "updated"} ${file.path}`);
+  say(`${previous === undefined ? "wrote" : "updated"} ${file.path}`, "office: ");
 
   return true;
 }
@@ -570,7 +571,7 @@ export function removeUnwantedServer(office: Office): void {
     files = files.filter((entry) => entry !== file);
     writeMachine({ ...current.record, files });
 
-    if (result.line !== undefined) console.log(result.line);
+    if (result.line !== undefined) say(result.line);
   }
 }
 

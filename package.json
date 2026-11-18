@@ -13,6 +13,7 @@
     "vendor-artifact-share": "bun src/vendor-artifact-share.ts"
   },
   "dependencies": {
+    "@clack/prompts": "1.8.0",
     "ajv": "8.20.0",
     "valibot": "1.5.0",
     "yaml": "2.9.1"

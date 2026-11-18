@@ -3,6 +3,7 @@
 // can't be reached; it logs instead.
 import { type ExecutorApp, client, connection } from "./commands/apps.ts";
 import type { Office } from "./office.ts";
+import { say } from "./report/index.ts";
 
 export async function notify(office: Office, { title, body }: { title: string; body: string }): Promise<void> {
   const desk = office.desks.find((candidate) => candidate.app)?.name;
@@ -17,8 +18,8 @@ export async function notify(office: Office, { title, body }: { title: string; b
     if (app === undefined) throw new Error(`no Executor app for the ${desk} desk`);
 
     await call("POST", `/api/organizations/${organization}/apps/${app.id}/tools/call`, { tool: "notifications.send", input: { title, body } });
-    console.log(`notified the ${desk} desk: ${title}`);
+    say(`notified the ${desk} desk: ${title}`);
   } catch (error) {
-    console.log(`couldn't notify (${error instanceof Error ? error.message : String(error)}): ${title}\n${body}`);
+    say(`couldn't notify (${error instanceof Error ? error.message : String(error)}): ${title}\n${body}`);
   }
 }

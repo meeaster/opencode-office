@@ -6,6 +6,7 @@ import * as v from "valibot";
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
 import { atomicWrite, ownerRecord, parsed, saveOwner, source } from "../secrets.ts";
 import { ports } from "./compose.ts";
+import { currentReporter, progress, say } from "../report/index.ts";
 
 export function executorUrl(): string {
   return `http://localhost:${ports().executor}`;
@@ -73,7 +74,7 @@ export async function bootstrapExecutor(office: Office, email?: string): Promise
     // A key saved before the file held its organization; the key itself tells which one it is.
     if (saved.EXECUTOR_ORGANIZATION !== working) saveKey(office, saved.EXECUTOR_TOKEN, working);
 
-    console.log("Executor: reusing the working local office key");
+    say("reusing the working local office key", "Executor: ");
 
     return;
   }
@@ -102,12 +103,17 @@ export async function bootstrapExecutor(office: Office, email?: string): Promise
     };
 
     saveOwner(office, file, owner);
-    console.log(`Encrypted owner credentials saved to ${file}; review and commit this file with .sops.yaml and office.yaml`);
+    say(`Encrypted owner credentials saved to ${file}; review and commit this file with .sops.yaml and office.yaml`);
 
     // Deliberate terminal-only reveal; never send it to redirected logs or an agent transcript.
-    if (process.stdout.isTTY && process.stdin.isTTY) process.stdout.write(`Generated Executor owner password (copy now): ${owner.password}\n`);
-    else console.log("Owner password withheld from noninteractive output; retrieve deliberately with office executor credentials");
+    // A reporter on a terminal shows it among the stage's notes.
+    if (process.stdout.isTTY && process.stdin.isTTY) {
+      if (currentReporter()?.interactive) say(`Generated Executor owner password (copy now): ${owner.password}`);
+      else process.stdout.write(`Generated Executor owner password (copy now): ${owner.password}\n`);
+    } else say("Owner password withheld from noninteractive output; retrieve deliberately with office executor credentials");
   }
+
+  progress(configuration.setup ? `creating the Executor owner (${owner.email}) and its key` : "signing in to Executor for a new key");
 
   const path = configuration.setup ? "/api/auth/self-host/setup" : "/api/auth/sign-in/email";
 
@@ -126,7 +132,7 @@ export async function bootstrapExecutor(office: Office, email?: string): Promise
   const { key } = parsed(tokenSchema, await response.text(), "Executor token");
 
   saveKey(office, key, organization.id);
-  console.log("Executor: saved the instance-local office key");
+  say("saved the instance-local office key", "Executor: ");
 }
 
 export function credentials(office: Office, passwordOnly: boolean): void {

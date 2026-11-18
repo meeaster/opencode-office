@@ -17,6 +17,7 @@ import { clones } from "./layout.ts";
 import { type Office, OfficeError, updateConfig } from "./office.ts";
 import { check } from "./schema.ts";
 import { compareVersions } from "./versions.ts";
+import { inherit, progress, say, stream, warn } from "./report/index.ts";
 
 /** A declared clone source: a reference, desk repository, plugin, copied skill or package. */
 export type Source = { what: string; url: string; pushes: boolean };
@@ -82,16 +83,20 @@ function redact(url: string): string {
 }
 
 /** Whether git reads `url`; with `anonymous`, without any credential helper. Never prompts. */
-function reach(url: string, { anonymous = false } = {}) {
-  const result = spawnSync("git", [...(anonymous ? ["-c", "credential.helper="] : []), "ls-remote", url, "HEAD"], {
-    encoding: "utf8",
+async function reach(url: string, { anonymous = false } = {}) {
+  const result = await stream("git", [...(anonymous ? ["-c", "credential.helper="] : []), "ls-remote", url, "HEAD"], {
     timeout: 60_000,
-    stdio: ["ignore", "ignore", "pipe"],
+    line: () => {},
     // No terminal prompt, and no Git Credential Manager window either.
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" },
   });
 
-  return { ok: result.status === 0, error: result.stderr ?? "" };
+  return { ok: result.status === 0, error: result.stderr };
+}
+
+/** Reads each source at once, without blocking; one result per source, in order. */
+function reachAll(urls: string[], options: { anonymous?: boolean } = {}) {
+  return Promise.all(urls.map((url) => reach(url, options)));
 }
 
 /** What the office needs from GitHub: from office.yaml, and anonymous reads of its sources. */
@@ -130,9 +135,10 @@ export function githubHosts(office: Office): string[] {
   return known.length > 0 ? known : ["github.com"];
 }
 
-export function planGithub(office: Office): GithubPlan {
+export async function planGithub(office: Office): Promise<GithubPlan> {
   const onGithub = githubSources(office);
-  const unreadable = onGithub.filter((source) => !reach(source.url, { anonymous: true }).ok);
+  const reads = await reachAll(onGithub.map((source) => source.url), { anonymous: true });
+  const unreadable = onGithub.filter((_, index) => !reads[index].ok);
 
   return { hosts: githubHosts(office), private: unreadable, pushes: onGithub.filter((source) => source.pushes), needed: office.git?.credentials === "gh" || unreadable.length > 0 };
 }
@@ -246,7 +252,7 @@ export async function githubStep(office: Office, plan: GithubPlan, ask: Ask): Pr
     const readers = plan.pushes.filter((source) => !plan.private.includes(source));
 
     if (plan.private.length === 0) {
-      if (readers.length > 0) console.log(`GitHub: ${readers.map((source) => source.what).join(", ")} reads without a login, but agents can't push to it without one; to use your gh login, add \`credentials: gh\` under \`git:\` in office.yaml and rerun office setup`);
+      if (readers.length > 0) say(`${readers.map((source) => source.what).join(", ")} reads without a login, but agents can't push to it without one; to use your gh login, add \`credentials: gh\` under \`git:\` in office.yaml and rerun office setup`, "GitHub: ");
 
       return office;
     }
@@ -256,13 +262,13 @@ export async function githubStep(office: Office, plan: GithubPlan, ask: Ask): Pr
 
     if (ask === undefined) throw new OfficeError(guidance);
 
-    console.log(`GitHub (${plan.hosts.join(", ")}): ${reasons}`);
-    console.log(`Setting up GitHub uses one gh login made on this host: gh as git's HTTPS credential helper (gh auth setup-git, which writes your global git config)${office.opencode.mode === "container" ? ", and the host's gh configuration shared read-only with the opencode container" : ""}.`);
+    say(`GitHub (${plan.hosts.join(", ")}): ${reasons}`);
+    say(`Setting up GitHub uses one gh login made on this host: gh as git's HTTPS credential helper (gh auth setup-git, which writes your global git config)${office.opencode.mode === "container" ? ", and the host's gh configuration shared read-only with the opencode container" : ""}.`);
 
     if ((await ask("Set up GitHub and record git.credentials: gh in office.yaml? [yes/no]")) !== "yes") throw new OfficeError(guidance);
 
     current = updateConfig(office, [[["git", "credentials"], "gh"]]);
-    console.log("GitHub: recorded git.credentials: gh in office.yaml (review and commit it)");
+    say("recorded git.credentials: gh in office.yaml (review and commit it)", "GitHub: ");
   }
 
   const container = current.opencode.mode === "container";
@@ -270,14 +276,14 @@ export async function githubStep(office: Office, plan: GithubPlan, ask: Ask): Pr
 
   if (gh === undefined) throw new OfficeError("office.yaml uses GitHub through gh (git.credentials: gh), but gh isn't installed on this host: rerun office setup --install-deps, which installs the office package's gh, or install gh on PATH");
 
-  if (container && process.getuid?.() !== 1000) console.log(`GitHub: warning: the container user is uid 1000 and this host user is uid ${process.getuid?.()}, so the container can't read ${ghConfigDir()}`);
+  if (container && process.getuid?.() !== 1000) warn(`the container user is uid 1000 and this host user is uid ${process.getuid?.()}, so the container can't read ${ghConfigDir()}`, `GitHub: warning: the container user is uid 1000 and this host user is uid ${process.getuid?.()}, so the container can't read ${ghConfigDir()}`);
 
   for (const host of plan.hosts) {
     const login = ghLogin(gh, host);
     const problem = login?.state !== "success" ? loginProblem(login) : container ? unshareable(login) : undefined;
 
     if (problem === undefined) {
-      console.log(`GitHub: logged in to ${host} as ${login?.account ?? "?"}`);
+      say(`logged in to ${host} as ${login?.account ?? "?"}`, "GitHub: ");
       continue;
     }
 
@@ -286,9 +292,9 @@ export async function githubStep(office: Office, plan: GithubPlan, ask: Ask): Pr
     // A browser login needs a person: setup runs it in their terminal, or stops with the command.
     if (ask === undefined) throw new OfficeError(`GitHub: ${host}: ${problem}. Logging in needs you in a browser: run ${command} in a terminal, then rerun office setup`);
 
-    console.log(`GitHub: ${host}: ${problem}; logging in with ${command}${container ? ` (the token is stored in ${join(ghConfigDir(), "hosts.yml")}, mode 600, so the container can read it)` : ""}`);
-
-    const result = spawnSync(gh.path, loginCommand(gh, host, container), { stdio: "inherit", env: ghEnvironment(gh, { prompts: true }) });
+    const what = `${host}: ${problem}; logging in with ${command}${container ? ` (the token is stored in ${join(ghConfigDir(), "hosts.yml")}, mode 600, so the container can read it)` : ""}`;
+    // A browser login is the user's: gh gets the terminal, with any live display paused.
+    const result = await inherit(what, () => spawnSync(gh.path, loginCommand(gh, host, container), { stdio: "inherit", env: ghEnvironment(gh, { prompts: true }) }));
     const after = ghLogin(gh, host);
 
     if (result.status !== 0 || after?.state !== "success") throw new OfficeError(`gh auth login didn't complete for ${host}; rerun office setup`);
@@ -297,16 +303,17 @@ export async function githubStep(office: Office, plan: GithubPlan, ask: Ask): Pr
   }
 
   for (const host of plan.hosts.filter((candidate) => !isGhHelper(gitHelper(candidate)))) {
-    console.log(`GitHub: making git on this host use gh for https://${host} (gh auth setup-git, which writes your global git config)`);
-    execFileSync(gh.path, ["auth", "setup-git", "--hostname", host], { stdio: "inherit", env: ghEnvironment(gh) });
+    say(`making git on this host use gh for https://${host} (gh auth setup-git, which writes your global git config)`, "GitHub: ");
+    progress(`gh auth setup-git --hostname ${host}`);
+    execFileSync(gh.path, ["auth", "setup-git", "--hostname", host], { stdio: ["ignore", "pipe", "pipe"], env: ghEnvironment(gh) });
 
     if (!isGhHelper(gitHelper(host))) throw new OfficeError(`gh auth setup-git ran, but git's helper for https://${host} is ${gitHelper(host) ?? "unset"}; fix your git config and rerun office setup`);
 
-    console.log(`GitHub: git uses ${gitHelper(host)} for https://${host}`);
+    say(`git uses ${gitHelper(host)} for https://${host}`, "GitHub: ");
   }
 
-  if (container) console.log(`GitHub: ready; office up shares ${ghConfigDir()} read-only with the opencode container`);
-  else console.log("GitHub: ready");
+  if (container) say(`ready; office up shares ${ghConfigDir()} read-only with the opencode container`, "GitHub: ");
+  else say("ready", "GitHub: ");
 
   return current;
 }
@@ -331,11 +338,13 @@ function cause(error: string, loggedIn: boolean | undefined): string {
  * Reads every declared source with this host's git credentials, as sync will; returns one line
  * per source that doesn't read, with the likely cause.
  */
-export function unreachableSources(office: Office): string[] {
+export async function unreachableSources(office: Office): Promise<string[]> {
   const gh = officeTool(office, "gh");
+  const all = sources(office);
+  const reads = await reachAll(all.map((source) => source.url));
 
-  return sources(office).flatMap((source) => {
-    const result = reach(source.url);
+  return all.flatMap((source, index) => {
+    const result = reads[index];
 
     if (result.ok) return [];
 

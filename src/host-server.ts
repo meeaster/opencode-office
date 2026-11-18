@@ -16,6 +16,7 @@ import { check, type Parsed, version as releaseVersion } from "./schema.ts";
 import { requireHostIdentity, source, validateServerSecrets } from "./secrets.ts";
 import { shellQuote } from "./sfw.ts";
 import { compareVersions } from "./versions.ts";
+import { say } from "./report/index.ts";
 
 export { unitDirVariable } from "./cron/host.ts";
 
@@ -426,12 +427,12 @@ export async function startServer(office: Office, plan: ServerPlan, upgrade: boo
   if (existing === undefined) writeFileSync(marker, "", { flag: "wx", mode: 0o600 });
   else if (!existing.isFile()) throw new OfficeError(`${marker} is not an office state file`);
 
-  console.log(`office: ${unit} runs ${program}`);
+  say(`${unit} runs ${program}`, "office: ");
 
   if (upgrade && (active || incumbent.legacy || incumbent.stray !== undefined)) {
-    if (incumbent.legacy) console.log(`office: taking over ${legacyUnit}; disable it and any restart timer for it yourself`);
+    if (incumbent.legacy) say(`taking over ${legacyUnit}; disable it and any restart timer for it yourself`, "office: ");
 
-    console.log(`office: queueing OpenCode restart independently of this terminal; verify with office check or journalctl --user -u ${unit.replace(/\.service$/, "-restart.service")} -u ${unit}`);
+    say(`queueing OpenCode restart independently of this terminal; verify with office check or journalctl --user -u ${unit.replace(/\.service$/, "-restart.service")} -u ${unit}`, "office: ");
     queueRestart(office, plan, incumbent);
 
     return;
@@ -443,7 +444,7 @@ export async function startServer(office: Office, plan: ServerPlan, upgrade: boo
     const pid = await serverPid(office);
 
     if (pid !== undefined && pid === mainPid(unit)) {
-      if (runningRevision(pid) !== plan.revision) console.log("office: OpenCode restart pending, to apply changed settings: office setup offers it (office up --upgrade also restarts it)");
+      if (runningRevision(pid) !== plan.revision) say("OpenCode restart pending, to apply changed settings: office setup offers it (office up --upgrade also restarts it)", "office: ");
 
       return;
     }

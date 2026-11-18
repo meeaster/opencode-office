@@ -9,6 +9,7 @@ import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../offic
 import { ports } from "./compose.ts";
 import { oldExecutorAppDirs } from "../executor-app-layout.ts";
 import { adoptionMarker, adoptCatalog, catalogPlan, installedApps, installMissing } from "./catalog-apps.ts";
+import { output, progress, say, streamChecked } from "../report/index.ts";
 
 /** An app as Executor's API lists it, with only the fields the office reads. */
 export type ExecutorApp = {
@@ -193,9 +194,12 @@ async function linkOpencode(office: Office, call: Call, org: string, apps: Execu
 /** The TypeScript the apps are checked with, as the template's apps are. */
 const typescriptVersion = "7.0.2";
 
-/** Runs the Bun CLI: this executable acting as Bun, or Bun itself when run from a checkout. */
-function bun(args: string[], cwd: string): void {
-  execFileSync(process.execPath, args, { cwd, env: { ...process.env, BUN_BE_BUN: "1" }, stdio: ["ignore", "inherit", "inherit"] });
+/**
+ * Runs the Bun CLI: this executable acting as Bun, or Bun itself when run from a checkout. Its
+ * output goes to the running stage, or the console without one; it throws unless Bun succeeds.
+ */
+async function bun(args: string[], cwd: string): Promise<void> {
+  await streamChecked(process.execPath, args, { cwd, env: { ...process.env, BUN_BE_BUN: "1" }, line: output });
 }
 
 /**
@@ -203,14 +207,15 @@ function bun(args: string[], cwd: string): void {
  * installed once per version under ~/.cache/office/. Throws, naming the app, on the first error,
  * before any app's package.json is changed.
  */
-function typecheck(office: Office, folders: AppFolder[], version: string): void {
+async function typecheck(office: Office, folders: AppFolder[], version: string): Promise<void> {
   const cache = join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "office", `apps-${version}`);
   const tsc = join(cache, "node_modules/typescript/bin/tsc");
 
   if (!existsSync(tsc)) {
     mkdirSync(cache, { recursive: true });
     writeFileSync(join(cache, "package.json"), `${JSON.stringify({ private: true, dependencies: { apps: version, typescript: typescriptVersion } }, null, 2)}\n`);
-    bun(["install", "--silent"], cache);
+    progress(`installing apps@${version} and TypeScript to type-check the apps`);
+    await bun(["install", "--silent"], cache);
   }
 
   for (const folder of folders) {
@@ -237,7 +242,8 @@ function typecheck(office: Office, folders: AppFolder[], version: string): void 
         symlinkSync(join(cache, "node_modules"), join(copy, "node_modules"));
       }
 
-      bun([tsc, "--ignoreConfig", "--noEmit", "--strict", "--skipLibCheck", "--module", "nodenext", "--moduleResolution", "nodenext", "--target", "es2022", "index.ts"], copy);
+      progress(`type-checking ${relative(office.dir, folder.dir)}`);
+      await bun([tsc, "--ignoreConfig", "--noEmit", "--strict", "--skipLibCheck", "--module", "nodenext", "--moduleResolution", "nodenext", "--target", "es2022", "index.ts"], copy);
     } catch {
       throw new OfficeError(`${relative(office.dir, folder.dir)} doesn't type-check against apps@${version}; nothing was deployed${folder.adopted ? "; install any extra dependencies in the app folder before deploying" : ""}`);
     } finally {
@@ -255,7 +261,7 @@ function matchFramework(office: Office, folders: AppFolder[], version: string): 
     if (before === version) continue;
 
     writeFileSync(path, readFileSync(path, "utf8").replace(/("apps"\s*:\s*")[^"]*(")/, `$1${version}$2`));
-    console.log(`updated ${relative(office.dir, path)}: apps ${before ?? "(none)"} → ${version}`);
+    say(`updated ${relative(office.dir, path)}: apps ${before ?? "(none)"} → ${version}`);
   }
 }
 
@@ -291,7 +297,7 @@ export async function adopt(office: Office, id: string) {
  * version Executor serves (after an Executor upgrade it moves) and every app is type-checked
  * against it, so nothing is deployed if any app would break.
  */
-export async function deploy(office: Office): Promise<void> {
+export async function deploy(office: Office): Promise<string[]> {
   const call = client(connection(office));
   const { organization } = await call<{ organization: string }>("GET", "/api/context");
   const { version } = await call<{ version: string }>("GET", `/api/organizations/${organization}/framework/release`);
@@ -308,7 +314,7 @@ export async function deploy(office: Office): Promise<void> {
     }
   }
 
-  if (folders.length) typecheck(office, folders, version);
+  if (folders.length) await typecheck(office, folders, version);
   matchFramework(office, authored, version);
   await installMissing(call, base, plan, existing);
   const deployed: ExecutorApp[] = [];
@@ -320,15 +326,19 @@ export async function deploy(office: Office): Promise<void> {
 
     if (app === undefined) {
       app = await call<ExecutorApp>("POST", `/api/organizations/${organization}/apps`, { name: manifest.executor?.title ?? folder.slug, files });
-      console.log(`created ${app.slug} (${app.id})`);
+      say(`created ${app.slug} (${app.id})`);
     }
+
+    progress(`deploying ${relative(office.dir, folder.dir)}`);
 
     const result = await call<{ app: ExecutorApp }>("POST", `/api/organizations/${organization}/apps/${app.id}/deploy`, { files });
 
-    console.log(`deployed ${relative(office.dir, folder.dir)} → ${app.slug} (${app.id}) version ${result.app.activeVersion}`);
+    say(`deployed ${relative(office.dir, folder.dir)} → ${app.slug} (${app.id}) version ${result.app.activeVersion}`);
 
     if (!folder.adopted) deployed.push(result.app);
   }
 
-  for (const line of await linkOpencode(office, call, organization, deployed)) console.log(line);
+  for (const line of await linkOpencode(office, call, organization, deployed)) say(line);
+
+  return folders.map((folder) => folder.slug);
 }

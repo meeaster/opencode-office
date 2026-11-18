@@ -5,6 +5,7 @@ import * as v from "valibot";
 import { OfficeError, type Office } from "../office.ts";
 import { check } from "../schema.ts";
 import type { AppFolder, Call, ExecutorApp } from "./apps.ts";
+import { say } from "../report/index.ts";
 
 export const adoptionMarker = ".office-catalog";
 
@@ -57,7 +58,7 @@ export async function installMissing(call: Call, base: string, plan: Awaited<Ret
     if (app.slug !== id || app.copiedFrom?.name !== pkg) throw new OfficeError(`Executor installed ${app.slug} instead of the expected ${id} from ${pkg}; inspect the apps before retrying`);
 
     apps.push(app);
-    console.log(`installed catalog app ${id} (${app.id})`);
+    say(`installed catalog app ${id} (${app.id})`);
   }
 }
 

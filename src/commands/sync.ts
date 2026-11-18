@@ -14,12 +14,13 @@ import { join, relative } from "node:path";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { collectJobs } from "../cron/jobs.ts";
 import { syncMachine } from "../machine.ts";
-import { cloneOrFetch, cloneShallow, copyFromRepository, isClone, refreshClone } from "../git.ts";
+import { cloneOrFetchStreamed, cloneShallowStreamed, copyFromRepository, discardFailedClone, isClone, refreshCloneStreamed } from "../git.ts";
 import { clones, installedPackages, oldKnowledgePlugin, packageLink, pluginLinks, skillSelections } from "../layout.ts";
 import { migrate } from "../migrate.ts";
 import { packageComposeFile } from "../package-services.ts";
 import { syncTools } from "../package-tools.ts";
 import type { CopiedSkill, Desk, Office } from "../office.ts";
+import { silentStage, type Stage } from "../report/index.ts";
 import { fetchPackage, installBuiltin, type InstalledPackage, installPackage, pulledDir, pulledFolders, removePackage, resolvePackages, sourceFile } from "../packages.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
 
@@ -174,35 +175,130 @@ function removeOldKnowledgePlugin(office: Office): string[] {
   return [`${removed}. Sessions no longer list knowledge/ articles; to keep that, add \`- name: knowledge\` under packages: in office.yaml and run office sync again`];
 }
 
-/** Runs the sync and returns one line per change. With `referencesOnly`, it only updates references. */
-export async function sync(loaded: Office, { referencesOnly = false } = {}): Promise<string[]> {
-  let office = loaded;
-  const changes: string[] = [];
+/** How many clones and fetches run at once. */
+const concurrency = 4;
 
-  for (const clone of clones(office)) {
-    if (referencesOnly && clone.kind !== "reference") continue;
+/** Runs `work` on each item, at most `limit` at once. */
+async function pool<T>(items: T[], limit: number, work: (item: T, index: number) => Promise<void>): Promise<void> {
+  let next = 0;
 
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      for (let index = next++; index < items.length; index = next++) await work(items[index], index);
+    }),
+  );
+}
+
+/**
+ * Clones and updates the office's repositories, references and plugin clones, `concurrency` at
+ * once, each reported as a part of `stage` as it runs. Returns one line per change, in office.yaml's
+ * order, with a FAILED line for each that failed.
+ */
+async function syncClones(office: Office, referencesOnly: boolean, stage: Stage, verbose: boolean): Promise<string[]> {
+  const work = clones(office).filter((clone) => !referencesOnly || clone.kind === "reference");
+  const lines: string[][] = work.map(() => []);
+
+  if (work.length === 0) return [];
+
+  stage.detail(`cloning and updating ${work.length} ${work.length === 1 ? "source" : "sources"}, ${concurrency} at a time`);
+  stage.expect(work.length);
+
+  await pool(work, concurrency, async (clone, index) => {
     const where = relative(office.dir, clone.dir);
 
     // A package plugin's link can stand where a plugins: entry of the same name is cloned; the
     // entry wins, so git never runs through the link in the office's own repository.
     if (clone.kind === "plugin" && packageLink(clone.dir) !== undefined) unlinkSync(clone.dir);
 
+    let part;
+
     try {
+      // A shallow clone that failed under an earlier release left a .git with no commit; clone again.
+      const shallow = clone.kind === "reference" || clone.kind === "plugin";
+
+      if (shallow) discardFailedClone(clone.dir);
+
+      const present = isClone(clone.dir);
+
+      part = stage.part(where, present ? "updating" : "cloning");
+
+      const options = { line: part.output, verbose };
+
       const result =
-        clone.kind === "reference" || clone.kind === "plugin"
-          ? isClone(clone.dir)
-            ? refreshClone(clone.ref, clone.dir)
-            : cloneShallow(clone.url, clone.ref, clone.dir)
-          : cloneOrFetch(clone.url, clone.ref, clone.dir);
+        shallow
+          ? present
+            ? await refreshCloneStreamed(clone.ref, clone.dir, options)
+            : await cloneShallowStreamed(clone.url, clone.ref, clone.dir, options)
+          : await cloneOrFetchStreamed(clone.url, clone.ref, clone.dir, options);
 
-      if (result !== "current" && result !== "fetched") changes.push(`${result} ${clone.kind} ${where}`);
+      part.done(result);
+
+      if (result !== "current" && result !== "fetched") lines[index].push(`${result} ${clone.kind} ${where}`);
     } catch (error) {
-      changes.push(`FAILED ${clone.kind} ${where}: ${error instanceof Error ? error.message.trim() : String(error)}`);
-    }
-  }
+      const message = error instanceof Error ? error.message.trim() : String(error);
 
-  if (referencesOnly) return changes;
+      (part ?? stage.part(where, "checking")).fail(message);
+      lines[index].push(`FAILED ${clone.kind} ${where}: ${message}`);
+    }
+  });
+
+  return lines.flat();
+}
+
+/** One line for a stage's result from sync's lines: what it cloned and updated, and how many other changes. */
+export function summarize(changes: string[]): string {
+  const count = (pattern: RegExp) => changes.filter((line) => pattern.test(line)).length;
+  const failed = count(/^FAILED/);
+  // Clone lines name a kind: reference, plugin or "<desk> repo".
+  const cloned = count(/^cloned (reference|plugin|\S+ repo) /);
+  const updated = count(/^updated (reference|plugin|\S+ repo) /);
+  const other = changes.length - failed - cloned - updated;
+
+  const parts = [
+    cloned > 0 ? `${cloned} cloned` : "",
+    updated > 0 ? `${updated} updated` : "",
+    other > 0 ? `${other} other ${other === 1 ? "change" : "changes"}` : "",
+    failed > 0 ? `${failed} failed` : "",
+  ].filter(Boolean);
+
+  return parts.length === 0 ? "already in sync" : parts.join(", ");
+}
+
+type SyncOptions = {
+  /** Only update references. */
+  referencesOnly?: boolean;
+  /** Where the sync reports as it goes: each clone as a part, then each change line. */
+  stage?: Stage;
+  /** Ask git for its progress, for a verbose plain run. */
+  verbose?: boolean;
+};
+
+/**
+ * Runs the sync and returns one line per change, each also reported to `stage` as it happens
+ * (clones as parts, a line starting with FAILED as an error, the rest as notes). With
+ * `referencesOnly`, it only updates references.
+ */
+export async function sync(loaded: Office, { referencesOnly = false, stage = silentStage, verbose = false }: SyncOptions = {}): Promise<string[]> {
+  let office = loaded;
+  const reported: string[] = [];
+
+  // Every line reported except the clones', which their parts already showed.
+  const changes = {
+    push(...lines: string[]) {
+      for (const line of lines) {
+        reported.push(line);
+
+        if (line.startsWith("FAILED")) stage.error(line);
+        else stage.note(line);
+      }
+    },
+  };
+
+  reported.push(...(await syncClones(office, referencesOnly, stage, verbose)));
+
+  if (referencesOnly) return reported;
+
+  stage.detail("migrating, scaffolding desks, copying skills and installing packages");
 
   const migrated = migrate(office);
 
@@ -268,6 +364,7 @@ export async function sync(loaded: Office, { referencesOnly = false } = {}): Pro
 
   for (const item of installed.installed) changes.push(...installPackage(office, item));
 
+  stage.detail("writing the packages' tools and linking skills and plugins");
   changes.push(...syncTools(office, installed.installed, packages.map((item) => item.entry.name)));
   changes.push(...syncMachine(office));
 
@@ -276,7 +373,7 @@ export async function sync(loaded: Office, { referencesOnly = false } = {}): Pro
   changes.push(...excludePluginClones(office));
   changes.push(...installPanels(office, installed.installed, removedPanels));
 
-  return changes;
+  return reported;
 }
 
 /**

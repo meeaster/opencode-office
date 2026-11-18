@@ -10,6 +10,7 @@ import * as v from "valibot";
 import { requireOfficeTool } from "./host-tools.ts";
 import { type Office, OfficeError } from "./office.ts";
 import { check, serverVariable } from "./schema.ts";
+import { say } from "./report/index.ts";
 
 function identityFile(): string {
   return process.env.SOPS_AGE_KEY_FILE ?? join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "sops/age/keys.txt");
@@ -169,14 +170,14 @@ export function initializeIdentity(office: Office): void {
     throw new OfficeError("cannot derive a public recipient from the selected age identity (contents withheld)");
   }
 
-  console.log(`Public age recipient: ${recipient}`);
+  say(`Public age recipient: ${recipient}`);
 
   const config = join(office.dir, ".sops.yaml");
 
   if (!existsSync(config)) {
     atomicWrite(config, `creation_rules:\n  - path_regex: secrets/.*\\.enc\\.(json|yaml)$\n    age: ${recipient}\n`, 0o644);
   } else {
-    console.log("Existing .sops.yaml preserved. An authorized host must enroll this public recipient and run sops updatekeys on every selected encrypted file.");
+    say("Existing .sops.yaml preserved. An authorized host must enroll this public recipient and run sops updatekeys on every selected encrypted file.");
   }
 }
 

@@ -16,6 +16,7 @@ import { type Office, OfficeError } from "../office.ts";
 import { officeCommand } from "../tool.ts";
 import type { CronJob } from "./jobs.ts";
 import type { ScheduleFields } from "./schedule.ts";
+import { say } from "../report/index.ts";
 
 /** A systemd timer: its unit name, OnCalendar value, a description, and the `office` arguments its service runs. */
 type Timer = { unit: string; calendar: string; description: string; args: string[] };
@@ -224,7 +225,7 @@ export function installTimers(office: Office, wanted: Timer[]): void {
 
   if (wanted.length > 0) systemctl(["enable", "--now", ...wanted.map((timer) => `${timer.unit}.timer`)]);
 
-  for (const timer of wanted) console.log(`timer ${timer.unit}: ${timer.calendar}, ${timer.description}`);
+  for (const timer of wanted) say(`timer ${timer.unit}: ${timer.calendar}, ${timer.description}`);
 }
 
 function stopTimers(files: string[]): void {
@@ -239,7 +240,7 @@ function stopTimers(files: string[]): void {
 
   for (const file of files) rmSync(join(unitDir(), file));
 
-  if (files.length > 0) console.log(`removed ${files.join(", ")}`);
+  if (files.length > 0) say(`removed ${files.join(", ")}`);
 }
 
 /** Stops and removes every timer `office up` generated for the office. */

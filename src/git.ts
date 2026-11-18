@@ -5,6 +5,8 @@ import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rea
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { streamChecked } from "./report/index.ts";
+
 export function git(args: string[], cwd?: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
@@ -38,15 +40,68 @@ export function isClone(dir: string): boolean {
 }
 
 /**
+ * Whether `dir` holds only a `.git` whose HEAD names no commit: what a shallow clone that failed
+ * left before clones cleaned up after themselves. Nothing is lost by removing it.
+ */
+function unbornClone(dir: string): boolean {
+  if (!existsSync(join(dir, ".git")) || readdirSync(dir).some((name) => name !== ".git")) return false;
+
+  try {
+    git(["rev-parse", "--verify", "--quiet", "HEAD"], dir);
+
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Removes what a failed shallow clone left in `dir`, so the next sync clones again and reports
+ * the real error. Returns whether there was one.
+ */
+export function discardFailedClone(dir: string): boolean {
+  if (!unbornClone(dir)) return false;
+
+  rmSync(join(dir, ".git"), { recursive: true, force: true });
+
+  return true;
+}
+
+/**
+ * Runs a shallow clone's steps in `dir`, which isClone found missing or empty; when one fails it
+ * removes what the clone made, so no half-initialised `.git` is left for the next sync.
+ */
+async function shallowInto<T>(dir: string, steps: () => T | Promise<T>): Promise<T> {
+  const existed = existsSync(dir);
+
+  try {
+    return await steps();
+  } catch (error) {
+    rmSync(existed ? join(dir, ".git") : dir, { recursive: true, force: true });
+
+    throw error;
+  }
+}
+
+/**
  * Clones `url` at `ref` (a branch, tag or commit; the default branch when undefined) into `dir`,
- * shallowly. Returns "cloned".
+ * shallowly. Returns "cloned"; a failed clone leaves nothing behind.
  */
 export function cloneShallow(url: string, ref: string | undefined, dir: string): "cloned" {
+  const existed = existsSync(dir);
+
   mkdirSync(dirname(dir), { recursive: true });
-  git(["init", "--quiet", dir]);
-  git(["remote", "add", "origin", url], dir);
-  git(["fetch", "--quiet", "--depth", "1", "origin", ref ?? "HEAD"], dir);
-  git(["checkout", "--quiet", "--detach", "FETCH_HEAD"], dir);
+
+  try {
+    git(["init", "--quiet", dir]);
+    git(["remote", "add", "origin", url], dir);
+    git(["fetch", "--quiet", "--depth", "1", "origin", ref ?? "HEAD"], dir);
+    git(["checkout", "--quiet", "--detach", "FETCH_HEAD"], dir);
+  } catch (error) {
+    rmSync(existed ? join(dir, ".git") : dir, { recursive: true, force: true });
+
+    throw error;
+  }
 
   return "cloned";
 }
@@ -110,6 +165,57 @@ export function cloneOrFetch(url: string, ref: string | undefined, dir: string):
   }
 
   git(["fetch", "--quiet", "origin"], dir);
+
+  return "fetched";
+}
+
+// The same operations without blocking, for sync, which runs several at once while a spinner
+// shows them. Each line git prints goes to `line`; on failure the error carries git's stderr, as
+// execFileSync's does. `verbose` asks git for its progress meter, which it prints only on request
+// when its output isn't a terminal; otherwise git stays quiet and prints only what went wrong.
+type GitOptions = { line?: (text: string) => void; verbose?: boolean };
+
+async function gitStreamed(args: string[], cwd: string | undefined, { line = () => {}, verbose = false }: GitOptions): Promise<void> {
+  const [command, ...rest] = args;
+  const flags = verbose && (command === "fetch" || command === "clone") ? ["--progress"] : command === "fetch" || command === "clone" ? ["--quiet"] : [];
+
+  await streamChecked("git", [command, ...flags, ...rest], { cwd, line, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+}
+
+/** `cloneShallow`, without blocking. */
+export async function cloneShallowStreamed(url: string, ref: string | undefined, dir: string, options: GitOptions = {}): Promise<"cloned"> {
+  mkdirSync(dirname(dir), { recursive: true });
+
+  return shallowInto(dir, async () => {
+    git(["init", "--quiet", dir]);
+    git(["remote", "add", "origin", url], dir);
+    await gitStreamed(["fetch", "--depth", "1", "origin", ref ?? "HEAD"], dir, options);
+    git(["checkout", "--quiet", "--detach", "FETCH_HEAD"], dir);
+
+    return "cloned" as const;
+  });
+}
+
+/** `refreshClone`, without blocking. */
+export async function refreshCloneStreamed(ref: string | undefined, dir: string, options: GitOptions = {}): Promise<"updated" | "current"> {
+  const before = head(dir);
+
+  await gitStreamed(["fetch", "--depth", "1", "origin", ref ?? "HEAD"], dir, options);
+  git(["checkout", "--quiet", "--force", "--detach", "FETCH_HEAD"], dir);
+
+  return head(dir) === before ? "current" : "updated";
+}
+
+/** `cloneOrFetch`, without blocking. */
+export async function cloneOrFetchStreamed(url: string, ref: string | undefined, dir: string, options: GitOptions = {}): Promise<"cloned" | "fetched"> {
+  if (!isClone(dir)) {
+    mkdirSync(dirname(dir), { recursive: true });
+    await gitStreamed(["clone", ...(ref === undefined ? [] : ["--branch", ref]), url, dir], undefined, options);
+
+    return "cloned";
+  }
+
+  await gitStreamed(["fetch", "origin"], dir, options);
 
   return "fetched";
 }

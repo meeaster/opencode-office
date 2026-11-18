@@ -38,6 +38,7 @@ import { systemApplies } from "./package-system.ts";
 import { machineFiles } from "./package-tools.ts";
 import type { InstalledPackage } from "./packages.ts";
 import { check } from "./schema.ts";
+import { inherit, progress, say, warn } from "./report/index.ts";
 
 /** A command's outcome: its exit status and what it printed, when it didn't print to the terminal. */
 export type RunResult = { status: number; stdout: string; stderr: string };
@@ -177,6 +178,9 @@ export function systemStatus(office: Office, installed: InstalledPackage[], mise
 /** What the system step did: nothing to do, applied, left for later, or not this office's to do. */
 export type SystemOutcome = "ready" | "applied" | "deferred" | "skipped";
 
+/** A warning that the system setup waits, under its old name when no reporter runs. */
+const deferred = (text: string) => warn(text, `System setup: ${text}`);
+
 const list = (lines: string[]) => lines.map((line) => `  - ${line}`).join("\n");
 
 /**
@@ -185,10 +189,12 @@ const list = (lines: string[]) => lines.map((line) => `  - ${line}`).join("\n");
  * checks that nothing is left. Throws when a check fails or the apply leaves something undone.
  */
 export async function systemStep(office: Office, installed: InstalledPackage[], { mise, ask, run = runCommand }: { mise: string; ask: Ask | undefined; run?: Run }): Promise<SystemOutcome> {
+  progress("asking mise what would change (no sudo, no network)");
+
   const status = systemStatus(office, installed, mise, run);
 
   if (status.kind === "skipped") {
-    console.log(`System setup: none here (${status.reason})`);
+    say(`none here (${status.reason})`, "System setup: ");
 
     return "skipped";
   }
@@ -196,15 +202,15 @@ export async function systemStep(office: Office, installed: InstalledPackage[], 
   if (status.kind === "failed") throw new OfficeError(`System setup: couldn't tell what is pending:\n${list(status.problems)}`);
 
   if (status.kind === "ready") {
-    console.log(`System setup: nothing to do; the ${status.unchanged} packages and files this office declares are in place`);
+    say(`nothing to do; the ${status.unchanged} packages and files this office declares are in place`, "System setup: ");
 
     return "ready";
   }
 
-  console.log(`System setup: the office's packages and machine.toml declare system packages and files this machine lacks:\n${list(status.pending)}`);
+  say(`the office's packages and machine.toml declare system packages and files this machine lacks:\n${list(status.pending)}`, "System setup: ");
 
   if (ask === undefined) {
-    console.log("System setup: not applied without a terminal, as it needs sudo; rerun office setup in a terminal to apply it. Tools that build against these packages can fail to install until then");
+    deferred("not applied without a terminal, as it needs sudo; rerun office setup in a terminal to apply it. Tools that build against these packages can fail to install until then");
 
     return "deferred";
   }
@@ -212,12 +218,16 @@ export async function systemStep(office: Office, installed: InstalledPackage[], 
   const answer = await ask("Apply it now? mise installs them from this terminal, reading only this office's files, and asks for your sudo password itself. [yes/no]");
 
   if (answer !== "yes") {
-    console.log("System setup: left as it is; rerun office setup to apply it. Tools that build against these packages can fail to install until then");
+    deferred("left as it is; rerun office setup to apply it. Tools that build against these packages can fail to install until then");
 
     return "deferred";
   }
 
-  const applied = inScope(office, (env) => run([mise, "bootstrap", "--only", "packages,files", "--yes"], { env, cwd: "/", terminal: true }));
+  // mise and the prepare scripts ask for sudo's password on this terminal, and mise refuses sudo
+  // when its output isn't one; so mise gets the terminal itself, with the live display paused.
+  const applied = await inherit("mise bootstrap --only packages,files: mise asks for your sudo password itself; its output follows", () =>
+    inScope(office, (env) => run([mise, "bootstrap", "--only", "packages,files", "--yes"], { env, cwd: "/", terminal: true })),
+  );
 
   if (applied.status !== 0) throw new OfficeError("System setup: mise bootstrap failed (above); fix it and rerun office setup");
 
@@ -227,7 +237,7 @@ export async function systemStep(office: Office, installed: InstalledPackage[], 
 
   if (after.kind === "pending") throw new OfficeError(`System setup: applied, but these are still pending:\n${list(after.pending)}`);
 
-  console.log("System setup: applied, and nothing is left to do");
+  say("applied, and nothing is left to do", "System setup: ");
 
   return "applied";
 }
@@ -282,7 +292,7 @@ export async function offerRestart(ask: Ask | undefined, ops: RestartOps): Promi
   const later = "rerun office setup to restart it; until then it keeps serving as before (office check shows the restart as pending, not as a failure)";
 
   if (ask === undefined) {
-    console.log(`OpenCode: ${what}. Not restarted without a terminal: ${later}`);
+    say(`OpenCode: ${what}. Not restarted without a terminal: ${later}`);
 
     return;
   }
@@ -291,16 +301,18 @@ export async function offerRestart(ask: Ask | undefined, ops: RestartOps): Promi
   const answer = await ask(`${what}. Restart it now? Its sessions disconnect and reconnect.${inside} [yes/no]`);
 
   if (answer !== "yes") {
-    console.log(`OpenCode: restart deferred; ${later}`);
+    say(`OpenCode: restart deferred; ${later}`);
 
     return;
   }
 
   if (stale.inside) return "queue";
 
+  progress("restarting OpenCode");
+
   const pid = await ops.restart(stale);
 
-  console.log(`OpenCode: restarted; PID ${pid} serves with the current settings`);
+  say(`OpenCode: restarted; PID ${pid} serves with the current settings`);
 
   return;
 }

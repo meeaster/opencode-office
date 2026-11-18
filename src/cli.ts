@@ -19,7 +19,7 @@ import { pin } from "./commands/pin.ts";
 import { setup } from "./commands/setup.ts";
 import { sessionInstructions } from "./commands/session-instructions.ts";
 import { runInContainer } from "./commands/shell.ts";
-import { sync } from "./commands/sync.ts";
+import { summarize, sync } from "./commands/sync.ts";
 import { update } from "./commands/update.ts";
 import { upgradeTools } from "./commands/upgrade.ts";
 import { catchUp, runContainerJob, supercronicInput } from "./cron/container.ts";
@@ -27,6 +27,7 @@ import { executeJob, requireJobs } from "./cron/jobs.ts";
 import { migrateHome } from "./home-migration.ts";
 import { releaseMachine } from "./machine.ts";
 import { currentOffice, type Office, OfficeError } from "./office.ts";
+import { reported } from "./report/index.ts";
 import { age } from "./schema.ts";
 import { writeContainerWrappers } from "./sfw.ts";
 import { version } from "./tool.ts";
@@ -89,6 +90,8 @@ const usage = `usage: office <command> [--office <dir>]
                                /usr/local/lib/office/sfw
 
   --version                    print the version and the commit this office was built from
+  --verbose                    setup, sync and up without a terminal: print every line of the
+                               commands they run, not only a failed command's last lines
 
 Commands other than init and update act on the office in the current folder or above it, or
 --office.`;
@@ -153,6 +156,7 @@ async function main(): Promise<void> {
       container: { type: "boolean" },
       origin: { type: "string" },
       version: { type: "boolean" },
+      verbose: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -192,19 +196,51 @@ async function main(): Promise<void> {
   } else if (command === "sync") {
     if (flags["release-machine"] && flags.references) throw new OfficeError("usage: office sync [--references | --release-machine]");
 
-    const changes = flags["release-machine"] ? releaseMachine(currentOffice(flags)) : await sync(currentOffice(flags), { referencesOnly: flags.references === true });
+    if (flags["release-machine"]) {
+      const changes = releaseMachine(currentOffice(flags));
 
-    for (const line of changes) console.log(line);
+      for (const line of changes) console.log(line);
 
-    if (changes.length === 0) console.log("already in sync");
+      if (changes.length === 0) console.log("already in sync");
 
-    if (changes.some((line) => line.startsWith("FAILED"))) process.exitCode = 1;
+      if (changes.some((line) => line.startsWith("FAILED"))) process.exitCode = 1;
+
+      return;
+    }
+
+    const office = currentOffice(flags);
+    const verbose = flags.verbose === true;
+
+    await reported("sync", officeContext(office), async (reporter) => {
+      const stage = reporter.stage("Repositories and packages", { key: "repos" });
+      const changes = await sync(office, { referencesOnly: flags.references === true, stage, verbose });
+      const failed = changes.filter((line) => line.startsWith("FAILED")).length;
+
+      if (failed > 0) {
+        stage.fail(summarize(changes));
+
+        throw new OfficeError(`${failed} of the changes failed (above); fix them and run office sync again`);
+      }
+
+      stage.done(summarize(changes));
+      reporter.finish([]);
+    }, { verbose });
   } else if (command === "check") {
     if (!(await check(currentOffice(flags)))) process.exitCode = 1;
   } else if (command === "up") {
-    await up(currentOffice(flags), { upgrade: flags.upgrade === true, refresh: flags.refresh === true });
+    const office = currentOffice(flags);
+
+    await reported("up", officeContext(office), async (reporter) => {
+      const stage = reporter.stage("Services", { key: "services" });
+
+      stage.done(await up(office, { upgrade: flags.upgrade === true, refresh: flags.refresh === true }));
+      reporter.finish([]);
+    }, { verbose: flags.verbose === true });
   } else if (command === "setup") {
-    await setup(currentOffice(flags), { ownerEmail: flags["owner-email"], generateAgeKey: flags["generate-age-key"] === true, installDeps: flags["install-deps"] === true, manageMachine: flags["manage-machine"] === true });
+    const office = currentOffice(flags);
+    const options = { ownerEmail: flags["owner-email"], generateAgeKey: flags["generate-age-key"] === true, installDeps: flags["install-deps"] === true, manageMachine: flags["manage-machine"] === true, verbose: flags.verbose === true };
+
+    await reported("setup", officeContext(office), (reporter) => setup(office, options, reporter), { verbose: flags.verbose === true });
   } else if (command === "shell") {
     if (rest.length > 0) throw new OfficeError("usage: office shell (to run a command: office exec -- <command...>)");
 
@@ -267,6 +303,14 @@ async function main(): Promise<void> {
     console.error(usage);
     process.exitCode = 2;
   }
+}
+
+/** What setup, sync and up show first: the office, its mode and its folder. */
+function officeContext(office: Office): string {
+  const home = homedir();
+  const dir = office.dir === home || office.dir.startsWith(`${home}/`) ? `~${office.dir.slice(home.length)}` : office.dir;
+
+  return `office ${office.name} · ${office.opencode.mode} mode · ${dir}`;
 }
 
 /**

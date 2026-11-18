@@ -20,6 +20,8 @@ import { requireJobs } from "../cron/jobs.ts";
 import { ghConfigDir, ghHosts } from "../github.ts";
 import { hostTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";
+import { CommandFailed, progress, say, streamChecked, warn } from "../report/index.ts";
+import { displayLines } from "../report/reporter.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
 import { hostLayout, hostWrappers } from "../host-env.ts";
 import { markServerStopped, planServer, serverIncumbent, startServer } from "../host-server.ts";
@@ -108,6 +110,14 @@ export function compose(office: Office, args: string[], { capture = false, profi
   ).trim();
 }
 
+/**
+ * `docker compose` for the office without blocking, its output to the running stage (Compose's
+ * progress goes to a taskLog on a terminal, and is kept back without one unless it fails).
+ */
+async function composeStreamed(office: Office, args: string[], { profiles = office.opencode.mode, pins = runningPins(office), cronRevision }: Omit<ComposeOptions, "capture"> = {}): Promise<void> {
+  await streamChecked("docker", composeArguments(office, args), { env: environment(office, profiles, pins, cronRevision) });
+}
+
 /** `docker compose` for the office with the terminal attached; returns the command's exit status. */
 export function composeAttached(office: Office, args: string[]): number {
   const result = spawnSync("docker", composeArguments(office, args), { env: environment(office, office.opencode.mode, runningPins(office)), stdio: "inherit" });
@@ -154,7 +164,7 @@ function prepareState(office: Office): void {
 
   if (!existsSync(secrets)) {
     writeFileSync(secrets, `OPENCODE_PASSWORD=${randomBytes(18).toString("base64url")}\n`, { mode: 0o600 });
-    console.log(`created ${secrets}`);
+    say(`created ${secrets}`);
   }
 }
 
@@ -170,7 +180,7 @@ function writeExecutorFiles(office: Office): void {
   try {
     executor = connection(office);
   } catch {
-    console.log("office: no Executor token yet, so sessions can't reach the office-executor MCP server; see README.md");
+    say("no Executor token yet, so sessions can't reach the office-executor MCP server; see README.md", "office: ");
 
     return;
   }
@@ -193,14 +203,22 @@ export function installingMise(office: Office): string {
   return office.socketFirewall && claim(office).kind === "ours" && existsSync(wrapper) && existsSync(hostLayout("").sfw) ? wrapper : hostTool("mise");
 }
 
-/** Runs `mise install` in `dir`, through sfw where it applies; as in the container, a failure must not keep the office from starting. */
-function miseInstall(office: Office, dir: string, trust: string[] = []): void {
-  try {
-    for (const config of trust) execFileSync(hostTool("mise"), ["trust", "--quiet", config], { stdio: "inherit" });
+/**
+ * Runs `mise install` in `dir`, through sfw where it applies, its output to the running stage; as
+ * in the container, a failure must not keep the office from starting, so it is a warning with
+ * mise's last lines.
+ */
+async function miseInstall(office: Office, dir: string, trust: string[] = []): Promise<void> {
+  progress(`installing tools with mise in ${dir}`);
 
-    execFileSync(installingMise(office), ["install", "--quiet"], { cwd: dir, stdio: "inherit" });
-  } catch {
-    console.error(`office: mise install failed in ${dir}`);
+  try {
+    for (const config of trust) await streamChecked(hostTool("mise"), ["trust", "--quiet", config]);
+
+    await streamChecked(installingMise(office), ["install", "--quiet"], { cwd: dir });
+  } catch (error) {
+    const lines = error instanceof CommandFailed ? displayLines(`${error.result.stdout}\n${error.result.stderr}`).slice(-5) : [String(error)];
+
+    warn(`mise install failed in ${dir}${lines.length > 0 ? `:\n${lines.join("\n")}` : ""}`, `office: mise install failed in ${dir}`);
   }
 }
 
@@ -211,26 +229,27 @@ function miseInstall(office: Office, dir: string, trust: string[] = []): void {
  * mise.toml in the office may pin the same tool at another version, so they install from the
  * filesystem root, where only global config applies; their postinstall hooks run there.
  */
-function installTools(office: Office): void {
+async function installTools(office: Office): Promise<void> {
   for (const dir of [office.dir, ...office.desks.map((desk) => join(office.dir, desk.name))]) {
     const config = join(dir, "mise.toml");
 
-    if (existsSync(config)) miseInstall(office, dir, [config]);
+    if (existsSync(config)) await miseInstall(office, dir, [config]);
   }
 
   if (machineFiles(office).length === 0) return;
 
   if (claim(office).kind !== "ours") {
-    console.log(`office: machine.toml and the packages' tools aren't linked into ${globalConfD()}, so they apply nowhere and nothing installs them; run office setup (unattended: office setup --manage-machine), then office sync and office up`);
+    say(`machine.toml and the packages' tools aren't linked into ${globalConfD()}, so they apply nowhere and nothing installs them; run office setup (unattended: office setup --manage-machine), then office sync and office up`, "office: ");
 
     return;
   }
 
-  miseInstall(office, "/");
+  await miseInstall(office, "/");
 }
 
-function docker(args: string[]): void {
-  execFileSync("docker", args, { stdio: "inherit" });
+/** Runs docker without blocking, its output (such as BuildKit's plain progress) to the running stage. */
+async function docker(args: string[]): Promise<void> {
+  await streamChecked("docker", args);
 }
 
 /**
@@ -256,10 +275,12 @@ async function buildImages(office: Office, pins: Lock, refreshed: string): Promi
   };
 
   await placeExecutable(context);
-  docker(["build", "-t", baseImage(pins), ...Object.entries(args).flatMap(([key, value]) => ["--build-arg", `${key}=${value}`]), context]);
+  progress(`building the opencode image ${baseImage(pins)}`);
+  await docker(["build", "-t", baseImage(pins), ...Object.entries(args).flatMap(([key, value]) => ["--build-arg", `${key}=${value}`]), context]);
 
   if (existsSync(join(office.dir, "Dockerfile"))) {
-    docker(["build", "-t", officeImage(office, pins), "--build-arg", `BASE_IMAGE=${baseImage(pins)}`, office.dir]);
+    progress(`building the office's image ${officeImage(office, pins)} from its Dockerfile`);
+    await docker(["build", "-t", officeImage(office, pins), "--build-arg", `BASE_IMAGE=${baseImage(pins)}`, office.dir]);
   }
 }
 
@@ -298,7 +319,7 @@ function installRefreshTimer(office: Office): void {
     return;
   }
 
-  console.log("office: no systemd user manager, so nothing refreshes the opencode image's Debian packages weekly; run office up --refresh yourself");
+  say("no systemd user manager, so nothing refreshes the opencode image's Debian packages weekly; run office up --refresh yourself", "office: ");
 }
 
 /** The Debian image the base image starts from, which also runs the backup of Executor's volume. */
@@ -315,8 +336,9 @@ function stamp(): string {
 }
 
 /** Writes a Docker volume as the tarball `file` in the backups folder `dir`, owned by the user; returns its path. */
-function backUpVolume(dir: string, volume: string, file: string): string {
-  docker(["run", "--rm", "-v", `${volume}:/data:ro`, "-v", `${dir}:/backup`, debianImage(), "sh", "-c", `tar -czf /backup/${file} -C /data . && chown ${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0} /backup/${file}`]);
+async function backUpVolume(dir: string, volume: string, file: string): Promise<string> {
+  progress(`backing up the volume ${volume}`);
+  await docker(["run", "--rm", "-v", `${volume}:/data:ro`, "-v", `${dir}:/backup`, debianImage(), "sh", "-c", `tar -czf /backup/${file} -C /data . && chown ${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0} /backup/${file}`]);
 
   return join(dir, file);
 }
@@ -326,18 +348,18 @@ function backUpVolume(dir: string, volume: string, file: string): string {
  * volumes its applied file declares. A volume the services never created has nothing to save.
  * Returns where each went.
  */
-function backUpPackages(office: Office, upgraded: UpgradedServices[]): string[] {
+async function backUpPackages(office: Office, upgraded: UpgradedServices[]): Promise<string[]> {
   const dir = join(office.state, "backups");
   const written: string[] = [];
 
   for (const item of upgraded) {
-    if (item.services.length > 0) compose(office, ["stop", ...item.services]);
+    if (item.services.length > 0) await composeStreamed(office, ["stop", ...item.services]);
 
     for (const volume of item.volumes) {
       if (spawnSync("docker", ["volume", "inspect", volume], { stdio: "ignore" }).status !== 0) continue;
 
       mkdirSync(dir, { recursive: true });
-      written.push(backUpVolume(dir, volume, `${stamp()}-package-${item.name}-${volume}.tar.gz`));
+      written.push(await backUpVolume(dir, volume, `${stamp()}-package-${item.name}-${volume}.tar.gz`));
     }
   }
 
@@ -348,15 +370,15 @@ function backUpPackages(office: Office, upgraded: UpgradedServices[]): string[] 
  * Backs up what an upgrade migrates, with the containers stopped so the files are consistent:
  * Executor's data volume as a tarball, and OpenCode's database files. Returns where each went.
  */
-function backUp(office: Office, tools: Set<string>, from: Lock): string[] {
+async function backUp(office: Office, tools: Set<string>, from: Lock): Promise<string[]> {
   const dir = join(office.state, "backups");
   const written: string[] = [];
 
   mkdirSync(dir, { recursive: true });
 
   if (tools.has("executor")) {
-    compose(office, ["stop", "executor"], { pins: from });
-    written.push(backUpVolume(dir, `office-${office.name}_executor-data`, `${stamp()}-executor-${from.executor.version}.tar.gz`));
+    await composeStreamed(office, ["stop", "executor"], { pins: from });
+    written.push(await backUpVolume(dir, `office-${office.name}_executor-data`, `${stamp()}-executor-${from.executor.version}.tar.gz`));
   }
 
   const database = join(office.state, "opencode-home/.local/share/opencode");
@@ -364,7 +386,7 @@ function backUp(office: Office, tools: Set<string>, from: Lock): string[] {
   if (tools.has("opencode") && existsSync(database)) {
     const target = join(dir, `${stamp()}-opencode-${from.opencode.version}`);
 
-    compose(office, ["stop", "opencode"], { pins: from });
+    await composeStreamed(office, ["stop", "opencode"], { pins: from });
     mkdirSync(target);
 
     for (const file of readdirSync(database).filter((name) => name.startsWith("opencode.db"))) copyFileSync(join(database, file), join(target, file));
@@ -418,9 +440,9 @@ function choosePins(office: Office, upgrade: boolean) {
     try {
       const pending = changes(office, applied.pins, wantedPins(office));
 
-      if (pending.length > 0) console.log(`office: running the applied versions; office up --upgrade applies ${pending.map((move) => describeMove(office, move)).join(", ")}`);
+      if (pending.length > 0) say(`running the applied versions; office up --upgrade applies ${pending.map((move) => describeMove(office, move)).join(", ")}`, "office: ");
     } catch (error) {
-      console.log(`office: running the applied versions; ${error instanceof Error ? error.message : String(error)}`);
+      say(`running the applied versions; ${error instanceof Error ? error.message : String(error)}`, "office: ");
     }
 
     return { pins: applied.pins, moved: [] };
@@ -431,13 +453,15 @@ function choosePins(office: Office, upgrade: boolean) {
   return { pins, moved: changes(office, applied.pins, pins) };
 }
 
-export async function up(office: Office, { upgrade = false, refresh = false } = {}): Promise<void> {
+/** Starts the office's services; returns a one-line summary of what runs. */
+export async function up(office: Office, { upgrade = false, refresh = false } = {}): Promise<string> {
   const managed = office.opencode.managed !== undefined;
   const jobs = requireJobs(office);
   const timers = office.opencode.mode === "host" ? cronTimers(office, jobs) : [];
 
   if (managed) requireServerConsent(office);
 
+  progress("checking secrets, state and versions");
   prepareSecrets(office);
   prepareState(office);
 
@@ -461,32 +485,35 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
   if (upgrade) {
     const what = [...moved.map((move) => `${move.tool} ${move.from} → ${move.to}`), ...services.upgraded.map((item) => `package ${item.name}'s ${packageComposeFile}`)];
 
-    console.log(what.length === 0 ? "office: nothing to upgrade" : `office: upgrading ${what.join(", ")}`);
+    say(what.length === 0 ? "nothing to upgrade" : `upgrading ${what.join(", ")}`, "office: ");
 
     if (moved.length > 0 && from !== undefined) {
-      for (const path of backUp(office, new Set(moved.map((move) => move.tool)), from)) console.log(`office: backed up to ${path}`);
+      for (const path of await backUp(office, new Set(moved.map((move) => move.tool)), from)) say(`backed up to ${path}`, "office: ");
     }
 
-    for (const path of backUpPackages(office, services.upgraded)) console.log(`office: backed up to ${path}`);
+    for (const path of await backUpPackages(office, services.upgraded)) say(`backed up to ${path}`, "office: ");
   }
 
   services.apply();
 
   if (office.opencode.mode === "host") {
     // An opencode container left from container mode would answer on the old port.
-    compose(office, ["rm", "--stop", "--force", "opencode"], { profiles: "container", pins });
-    compose(office, ["up", "-d", "--build", "--remove-orphans"], { pins });
+    progress("starting the containers");
+    await composeStreamed(office, ["rm", "--stop", "--force", "opencode"], { profiles: "container", pins });
+    await composeStreamed(office, ["up", "-d", "--build", "--remove-orphans"], { pins });
     writeExecutorFiles(office);
 
     // Before the tools, so their installs go through it.
-    for (const line of await installSfw(office, pins.sfw)) console.log(line);
+    progress("installing Socket Firewall");
 
-    installTools(office);
+    for (const line of await installSfw(office, pins.sfw)) say(line);
 
-    if (refresh) console.log("office: host mode has no opencode image to refresh");
+    await installTools(office);
+
+    if (refresh) say("host mode has no opencode image to refresh", "office: ");
   } else {
     if (office.git?.credentials === "gh" && !sharesGithubLogin(office)) {
-      console.log(`office: office.yaml shares the host's gh login, but ${join(ghConfigDir(), "hosts.yml")} doesn't exist, so the container gets none. Log in with office setup, or gh auth login --git-protocol https --web --insecure-storage`);
+      say(`office.yaml shares the host's gh login, but ${join(ghConfigDir(), "hosts.yml")} doesn't exist, so the container gets none. Log in with office setup, or gh auth login --git-protocol https --web --insecure-storage`, "office: ");
     }
 
     if (refresh) await refreshImages(office, pins, refreshed);
@@ -496,7 +523,8 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
     // the jobs twice.
     installRefreshTimer(office);
     // A changed schedule or enabled set needs a new container even when its image is unchanged.
-    compose(office, ["up", "-d", "--build", "--remove-orphans"], { pins, cronRevision: cronRevision(jobs) });
+    progress("starting the containers");
+    await composeStreamed(office, ["up", "-d", "--build", "--remove-orphans"], { pins, cronRevision: cronRevision(jobs) });
     writeExecutorFiles(office);
   }
 
@@ -504,6 +532,8 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
 
   // A new Executor serves a new apps framework; every app must match it.
   if (moved.some((move) => move.tool === "executor")) {
+    progress("waiting for the upgraded Executor, to deploy the apps");
+
     if (!(await waitForExecutor())) throw new OfficeError("Executor didn't become ready; run office apps deploy once it is");
 
     let ready = false;
@@ -512,13 +542,15 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
       connection(office);
       ready = true;
     } catch {
-      console.log("office: Executor was upgraded; run office apps deploy once it has a token, so the apps match its framework");
+      say("Executor was upgraded; run office apps deploy once it has a token, so the apps match its framework", "office: ");
     }
 
     if (ready) await deploy(office);
   }
 
   if (managed) {
+    progress("starting the managed OpenCode server");
+
     // Tools installed above can change the resolved path of the office's gh or SOPS.
     const plan = planServer(office);
 
@@ -528,6 +560,13 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
   }
 
   if (office.opencode.mode === "host") installTimers(office, timers);
+
+  const packaged = serviceFiles(office).length;
+  const executor = `Executor${packaged > 0 ? ` and the services of ${packaged} ${packaged === 1 ? "package" : "packages"}` : ""}`;
+
+  if (office.opencode.mode === "container") return `${executor} and OpenCode running in containers`;
+
+  return `${executor} running; OpenCode ${managed ? "served by this machine's managed service" : `at ${office.opencode.url}, which office doesn't manage`}`;
 }
 
 /** Setup starts only Executor until its local token exists; OpenCode then starts once. */
@@ -538,7 +577,9 @@ export async function startExecutor(office: Office): Promise<void> {
   const { pins } = choosePins(office, false);
 
   guardDowngrade(office, pins);
-  compose(office, ["up", "-d", "executor"], { pins });
+  progress("starting Executor");
+  await composeStreamed(office, ["up", "-d", "executor"], { pins });
+  progress("waiting for Executor to answer");
 
   if (!(await waitForExecutor())) throw new OfficeError("Executor didn't become ready; fix its startup and rerun office setup");
 }
