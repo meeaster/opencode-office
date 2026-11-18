@@ -23,7 +23,7 @@ packages:
   - name: browser
 ```
 
-Then run `office sync` and commit what it wrote: the package in `.office/packages/browser/`, which updates with `office` and is read-only there, and `.mise/conf.d/browser.toml`, the office's mise fragment for it.
+Then run `office sync` and commit what it wrote: the package in `.office/packages/browser/`, which updates with `office` and is read-only there, and `.office/mise/browser.toml`, the mise fragment sync keeps for it.
 
 | Setting | |
 |---|---|
@@ -34,7 +34,7 @@ A change reaches sessions when `office sync` writes the resolved settings, witho
 
 ## agent-browser
 
-`package.yaml` declares it as a mise tool, `npm:agent-browser`, at the version an office starts at. The fragment pins it from then on: `office upgrade-tools` bumps it with the office's other pins, and sync never changes it. To pin another version, change it there, or set `"npm:agent-browser"` in the office's `mise.toml`, which wins over the fragment. It needs Node, which the template's `mise.toml` pins.
+`package.yaml` declares it as a mise tool, `npm:agent-browser`, at the version an office starts at. The fragment pins it from then on: `office upgrade-tools` bumps it with the office's other pins, and sync never changes it. To pin another version, change it there, or set `"npm:agent-browser"` in the office's `machine.toml`, which wins over the fragment everywhere, or its `mise.toml`, which wins in the office's folders. It needs Node to run: the template's `mise.toml` pins it for the office's folders, so for `agent-browser` in other folders too, pin `node` in `machine.toml`.
 
 The container installs it at start, and in host mode `office up` does. The plugin registers `agent-browser mcp --tools <profiles>` when `agent-browser` is on the OpenCode server's PATH: mise's shims put it there in the container; a host server needs mise's shims or activation on its PATH.
 
@@ -51,7 +51,7 @@ env = { OFFICE_ROOT = "{{ config_source | canonicalize | dirname }}/../.." }
 run = "bun \"$OFFICE_ROOT/.office/packages/browser/scripts/install-browse.ts\""
 ```
 
-Both find the script from the fragment's own path, so they work in the office and, once sync has linked the fragment into mise's global conf.d, from any folder. So the first `mise install` (`office up` runs it in host mode) installs Browse, and later ones leave it alone. `mise run browser:install` reinstalls it, from any folder, to repair a broken binary. `scripts/install-browse.ts` does what Browse's own installer does without its setup step: it reads the stable channel's manifest from Anomaly's release service, picks this machine's build (Linux or macOS, x64 or arm64, the baseline build without AVX2, musl), checks the download's size and SHA-256 against the manifest, and renames `package/bin/browse` over `~/.local/bin/browse`. It runs no `browse install`, edits no agent configs and pairs nothing. Then pair Chrome once:
+mise reads the fragment only through the link sync makes in its global conf.d, and both find the script from the fragment's own path, so they work from any folder. So the first `mise install` (`office up` runs it in host mode) installs Browse, and later ones leave it alone. `mise run browser:install` reinstalls it, from any folder, to repair a broken binary. `scripts/install-browse.ts` does what Browse's own installer does without its setup step: it reads the stable channel's manifest from Anomaly's release service, picks this machine's build (Linux or macOS, x64 or arm64, the baseline build without AVX2, musl), checks the download's size and SHA-256 against the manifest, and renames `package/bin/browse` over `~/.local/bin/browse`. It runs no `browse install`, edits no agent configs and pairs nothing. Then pair Chrome once:
 
 ```sh
 ~/.local/bin/browse pair
