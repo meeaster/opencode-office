@@ -8,7 +8,7 @@ import * as v from "valibot";
 
 import { sync } from "./commands/sync.ts";
 import { envFilePath, hostWrappers, machineDirVariable, sourcedBy, sourceLine } from "./host-env.ts";
-import { grantConsent, installSfw, machineRecordVariable, machineReport, miseConfigVariable, readMachine, releaseMachine } from "./machine.ts";
+import { globalConfD, grantConsent, installSfw, machineRecordVariable, machineReport, miseConfigVariable, readMachine, releaseMachine } from "./machine.ts";
 import { loadOffice } from "./office.ts";
 import { check, packageManifestSchema } from "./schema.ts";
 import { wrappedCommands } from "./sfw.ts";
@@ -134,7 +134,7 @@ test("turning the firewall off removes sfw and its wrappers and rewrites the env
   expect(changes).toContain(`rewrote ${envFilePath()}, the office's environment file`);
   expect(existsSync(join(data(), "sfw"))).toBe(false);
   expect(readFileSync(envFilePath(), "utf8")).not.toContain(hostWrappers());
-  expect(readMachine()?.files.map((file) => file.path)).toEqual([envFilePath()]);
+  expect(readMachine()?.files.map((file) => file.path)).toEqual([join(globalConfD(), "office-t-0-office.toml"), envFilePath()]);
 
   makeOffice({ firewall: true });
   await sync(loadOffice(office));

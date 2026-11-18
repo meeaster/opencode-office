@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -112,12 +112,12 @@ test("sync deletes the fragment when the package leaves office.yaml or declares 
   write(join(office, "machine.toml"), '[tools]\njq = "1.7.1"\n');
   await sync(loadOffice(office));
 
-  expect(machineFiles(loadOffice(office)).map((path) => path.slice(office.length + 1))).toEqual([".office/mise/demo.toml", "machine.toml"]);
+  expect(machineFiles(loadOffice(office)).map((path) => path.slice(office.length + 1))).toEqual([".office/mise/demo.toml", ".office/mise/office.toml", "machine.toml"]);
   expect(strayFragments(loadOffice(office))).toEqual([".office/mise/own.toml isn't a fragment office sync wrote, and .office/ is the tool's, so nothing links it; move its tools to machine.toml"]);
 
   write(join(office, "office.yaml"), "name: t\n");
 
-  expect(orphanFragments(loadOffice(office), [])).toEqual([".office/mise/demo.toml holds the tools of package demo, which office.yaml no longer lists (office sync deletes it)"]);
+  expect(orphanFragments(loadOffice(office), ["office"])).toEqual([".office/mise/demo.toml holds the tools of package demo, which office.yaml no longer lists (office sync deletes it)"]);
   expect(await sync(loadOffice(office))).toContain("deleted .office/mise/demo.toml, the tools of package demo, which office.yaml no longer lists");
   expect(existsSync(fragment())).toBe(false);
   expect(existsSync(join(office, ".office/mise/own.toml"))).toBe(true);
@@ -128,7 +128,7 @@ test("sync deletes the fragment when the package leaves office.yaml or declares 
   demo("");
 
   expect(await sync(loadOffice(office))).toContain("deleted .office/mise/demo.toml, as package demo declares no tools");
-  expect(existsSync(join(office, ".office/mise"))).toBe(false);
+  expect(existsSync(fragment())).toBe(false);
 });
 
 test("sync refuses to write a package's tools over a fragment it didn't write", async () => {
@@ -266,7 +266,20 @@ test("check reports a host part sync would rewrite, and removing the package del
   write(join(office, "office.yaml"), "name: t\nopencode:\n  mode: host\n  url: http://127.0.0.1:49999\n");
 
   expect(await sync(loadOffice(office))).toContain("deleted .office/mise/demo.toml, the tools of package demo, which office.yaml no longer lists");
-  expect(existsSync(join(office, ".office/mise"))).toBe(false);
+  expect(readdirSync(join(office, ".office/mise"))).toEqual(["office.toml"]);
+});
+
+test("the required office package, which office.yaml never lists, gets its fragment like any package and keeps it", async () => {
+  write(join(office, "office.yaml"), "name: t\n");
+
+  const changes = await sync(loadOffice(office));
+  const path = join(office, ".office/mise/office.toml");
+
+  expect(changes).toEqual(expect.arrayContaining([expect.stringMatching(/^created \.office\/mise\/office\.toml with package office's tools: sops \S+, age \S+, gh \S+, pre-commit \S+$/)]));
+  expect(toolPins(readFileSync(path, "utf8")).map((pin) => pin.tool)).toEqual(["sops", "age", "gh", "pre-commit"]);
+  expect(orphanFragments(loadOffice(office), ["office"])).toEqual([]);
+  expect(await sync(loadOffice(office))).toEqual([]);
+  expect(existsSync(path)).toBe(true);
 });
 
 test("host: setting must name a true/false setting", async () => {

@@ -39,6 +39,7 @@ import { installedPackages } from "./layout.ts";
 import { oldFragments, oldMiseFiles } from "./migrate.ts";
 import { type Office, OfficeError, readConfig } from "./office.ts";
 import { fragmentOwner, machineFile, machineFiles } from "./package-tools.ts";
+import { requiredPackages } from "./packages.ts";
 import { platformAsset } from "./releases.ts";
 import { check, type Lock } from "./schema.ts";
 import { envScript, wrapperFiles } from "./sfw.ts";
@@ -175,9 +176,17 @@ export function grantConsent(office: Office): string {
   return `Machine: office ${office.name} now manages this machine; office sync links its tools into ${globalConfD()} and records them in ${machineRecordPath()}`;
 }
 
-/** A link's name in the global conf.d. Package fragments come first and machine.toml last, so it wins over them (mise loads conf.d by name, the last winning). */
+/**
+ * A link's name in the global conf.d, where mise loads files by name and the last wins: the
+ * required packages' fragments first (the office CLI's own tools, the base every office has), then
+ * the other packages', then machine.toml, so the owner's choices win over every package's.
+ */
 export function linkName(office: Office, file: string): string {
-  return file === join(office.dir, machineFile) ? `office-${office.name}-2-machine.toml` : `office-${office.name}-1-${basename(file, ".toml")}.toml`;
+  if (file === join(office.dir, machineFile)) return `office-${office.name}-2-machine.toml`;
+
+  const name = basename(file, ".toml");
+
+  return `office-${office.name}-${requiredPackages.includes(name) ? 0 : 1}-${name}.toml`;
 }
 
 type LinkFile = Extract<MachineFile, { kind: "link" }>;
