@@ -21,6 +21,7 @@ export async function init(target: string, name: string | undefined) {
     CLAUDE_VERSION: defaultPins.claude.version,
     EXECUTOR_VERSION: defaultPins.executor.version,
     MISE_VERSION: defaultPins.mise.version,
+    SFW_VERSION: defaultPins.sfw.version,
   });
   writeLock(dir, defaultPins);
 

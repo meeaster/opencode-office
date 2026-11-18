@@ -7,11 +7,12 @@ import { join, relative } from "node:path";
 
 import * as v from "valibot";
 
-import { editConfig, type Office, withoutItem, withoutKeys } from "./office.ts";
+import { editConfig, type Office, updateConfig, withoutItem, withoutKeys } from "./office.ts";
 import { fragmentOwner, fragmentsFolder, machineFile } from "./package-tools.ts";
 import { isToolRepository, localDir, localFolders, pulledDir, readRecord, sourceFile } from "./packages.ts";
 import { check } from "./schema.ts";
 import { builtinPackages, toolPath } from "./tool.ts";
+import { defaultPins, lockFile, lockLacksSfw, readLock, writeLock } from "./versions.ts";
 
 const oldPlugin = ".opencode/plugins/office";
 
@@ -379,12 +380,41 @@ function moveMiseFiles(office: Office): string[] {
   return changes;
 }
 
+/** Whether office.yaml pins versions but not sfw, which earlier releases didn't pin. */
+export function versionsLackSfw(office: Office): boolean {
+  return office.versions !== undefined && office.versions.sfw === undefined;
+}
+
+/**
+ * Pins sfw where earlier releases pinned four tools: office.yaml's versions block gets the tool's
+ * default sfw, and office.lock its entry, so the office pins it explicitly and upgrade-tools bumps
+ * it. Until then both read as the default. An office without a versions block keeps the defaults.
+ */
+function pinSfw(office: Office): Migrated {
+  const changes: string[] = [];
+  let current = office;
+
+  if (versionsLackSfw(current)) {
+    current = updateConfig(current, [[["versions", "sfw"], defaultPins.sfw.version]]);
+    changes.push(`pinned sfw ${defaultPins.sfw.version} (Socket Firewall) in office.yaml's versions, the tool's default, which the office ran without a pin`);
+  }
+
+  const lock = readLock(current.dir);
+
+  if (lock !== undefined && lockLacksSfw(current.dir) && current.versions?.sfw === defaultPins.sfw.version) {
+    writeLock(current.dir, lock);
+    changes.push(`added sfw ${defaultPins.sfw.version} to ${lockFile}, with the SHA-256 of each platform's release file`);
+  }
+
+  return { office: current, changes };
+}
+
 /** Runs every step, returning the office as office.yaml now describes it and one line per change. */
 export function migrate(office: Office): Migrated {
   const changes: string[] = [];
   let current = office;
 
-  for (const step of [builtinEntries, removeOfficeSkill]) {
+  for (const step of [builtinEntries, removeOfficeSkill, pinSfw]) {
     try {
       const result = step(current);
 

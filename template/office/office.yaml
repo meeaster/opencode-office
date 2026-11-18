@@ -26,19 +26,29 @@ opencode: container
 # The versions this office runs in its containers. office.lock (written by `office pin`; don't
 # edit it) holds their checksums: run `office pin` after changing a version by hand. The daily
 # upgrade-tools job bumps them; `office up --upgrade` applies a bump, `office up` never does. In
-# host mode only Executor's applies.
+# host mode only Executor's applies, and sfw's, which office sync installs on the machine.
 versions:
   opencode: __OPENCODE_VERSION__
   claude: __CLAUDE_VERSION__
   executor: __EXECUTOR_VERSION__
   mise: __MISE_VERSION__
+  # Socket Firewall, which every package download goes through (see socket_firewall below).
+  sfw: __SFW_VERSION__
 
 # How old a release must be before the upgrade-tools job moves to it: one default, and per-tool
 # ages for the versions above or any tool in a mise.toml. Executor publishes a beta almost daily,
-# and each upgrade means a backup, a restart and redeploying every app, so it waits longer.
+# and each upgrade means a backup, a restart and redeploying every app, so it waits longer. sfw
+# waits at least three days unless it has its own age here.
 upgrades:
   minimum_release_age: 1d
   executor: 7d
+
+# Socket Firewall (sfw, pinned above) checks every package download against Socket's list of
+# malicious packages: npm, npx, pnpm, pip, pip3, uv, uvx and cargo run through wrappers first on
+# PATH, and mise's installs go through it too, in the container and, in host mode, on the machine
+# (through ~/.local/share/office/env.sh, which you source from your shell). Package managers also
+# wait three days before taking a new release. Set to false to turn the firewall off.
+socket_firewall: true
 
 # Read-only clones under references/, listed for every session.
 references: []

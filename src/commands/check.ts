@@ -12,7 +12,7 @@ import { configFile, installedPanelNames, locate, panelDir, panelId, panelState,
 import { ghConfigDir, ghLogin, ghPin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
 import { installedTool } from "../host-tools.ts";
 import { clones, installedPackages, library, oldKnowledgePlugin, pluginLinks, skillSelections } from "../layout.ts";
-import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, oldMiseFiles, pulledLocalFolders } from "../migrate.ts";
+import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, oldMiseFiles, pulledLocalFolders, versionsLackSfw } from "../migrate.ts";
 import { executorEnvFile, type Office, readEnvFile } from "../office.ts";
 import { packageComposeFile, serviceStatus, sharedNamespaces } from "../package-services.ts";
 import { machineReport } from "../machine.ts";
@@ -20,7 +20,7 @@ import { fragmentNotes, orphanFragments, strayFragments } from "../package-tools
 import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
 import { pinnedTools } from "../schema.ts";
 import { builtinFiles, builtinPackages, version } from "../tool.ts";
-import { changes, defaultPins, describeMove, executorImage, isTested, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
+import { changes, defaultPins, describeMove, executorImage, isTested, lockFile, lockLacksSfw, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
 import { appFolders, deployedFrameworks } from "./apps.ts";
 import { compose, officeImage, ports, runningPins } from "./compose.ts";
 import { keyOrganization } from "./executor.ts";
@@ -118,6 +118,9 @@ async function drift(office: Office): Promise<string[]> {
   }
 
   problems.push(...orphanFragments(office, packages.map((item) => item.entry.name)), ...strayFragments(office));
+
+  if (versionsLackSfw(office)) problems.push("office.yaml's versions don't pin sfw (Socket Firewall), which earlier releases didn't pin, so the tool's default applies (office sync pins it)");
+  else if (office.versions?.sfw === defaultPins.sfw.version && lockLacksSfw(office.dir)) problems.push(`${lockFile} has no sfw entry, as earlier releases wrote it (office sync adds it)`);
 
   for (const { from, to } of oldMiseFiles(office)) {
     problems.push(`${relative(office.dir, from)} is where earlier releases kept it, and mise loads it there as the office's project config (office sync moves it to ${relative(office.dir, to)})`);

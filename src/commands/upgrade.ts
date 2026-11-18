@@ -1,9 +1,9 @@
 // `office upgrade-tools`: bumps each exact pin in the office's own mise.toml files (the root's and
 // each desk's), its machine-wide mise files (machine.toml and the packages' fragments in
-// .office/mise/), and the four versions office.yaml pins, to the newest release at least the
+// .office/mise/), and the five versions office.yaml pins, to the newest release at least the
 // office's minimum release age old, and commits the changed files alone under the office's git
 // identity (office.yaml's `git`), else "office cron". mise.toml pins are looked up and installed
-// through mise; the four versions on GitHub (and Executor's image on its registry), and only
+// through mise; the five versions on GitHub (and Executor's image on its registry), and only
 // recorded: `office up --upgrade` applies them. Files with uncommitted changes are left for the
 // user. A failed install or lookup keeps the old pin. Never pushes.
 import { spawnSync } from "node:child_process";
@@ -18,13 +18,23 @@ import { machineFiles } from "../package-tools.ts";
 import { isScalar, parseDocument } from "yaml";
 
 import type { Office } from "../office.ts";
-import { newestRelease, pinFor } from "../releases.ts";
+import { ageMs, newestRelease, pinFor } from "../releases.ts";
+import { packageAge } from "../sfw.ts";
 import { pinnedTools } from "../schema.ts";
 import { compareVersions as compareSemver, lockFile, wantedPins, writeLock } from "../versions.ts";
 
-/** How old a tool's release must be: its own age in office.yaml's `upgrades`, else the default there, else a day. */
-function ageFor(office: Office, tool: string): string {
-  return office.upgrades[tool] ?? office.upgrades.minimum_release_age ?? "1d";
+/**
+ * How old a tool's release must be: its own age in office.yaml's `upgrades`, else the default
+ * there, else a day. Socket Firewall sits in the path of every package download, so without its own
+ * age it waits at least the three days packages do.
+ */
+export function ageFor(office: Office, tool: string): string {
+  const own = office.upgrades[tool];
+  const general = office.upgrades.minimum_release_age ?? "1d";
+
+  if (own !== undefined) return own;
+
+  return tool === "sfw" && ageMs(general) < ageMs(packageAge) ? packageAge : general;
 }
 
 /**
@@ -129,7 +139,7 @@ function setVersions(text: string, moves: Move[]): string {
 }
 
 /**
- * Bumps the four versions office.yaml pins to the highest release of each line at least its age
+ * Bumps the five versions office.yaml pins to the highest release of each line at least its age
  * old, rewriting office.yaml (keeping its comments and layout) and office.lock. A lookup that
  * fails (GitHub's rate limit, no network) skips that tool and is reported.
  */

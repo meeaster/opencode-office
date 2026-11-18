@@ -1,10 +1,10 @@
-// Looks up the releases of the four tools office.yaml pins, on GitHub and (for Executor's image)
+// Looks up the releases of the five tools office.yaml pins, on GitHub and (for Executor's image)
 // its registry, without a login. Each tool's releases are filtered by tag to the line the office
 // runs, aged against the office's minimum release age, and the highest version wins.
 import * as v from "valibot";
 
 import { OfficeError } from "./office.ts";
-import { check, type PinnedTool } from "./schema.ts";
+import { check, type HostPlatform, type PinnedTool } from "./schema.ts";
 import { compareVersions, type Pin } from "./versions.ts";
 
 type Source = {
@@ -15,13 +15,23 @@ type Source = {
   prereleases: boolean;
   /** The release file the image downloads, whose digest GitHub reports; Executor is an image instead. */
   asset: ((version: string) => string) | undefined;
+  /** For a tool a host-mode office also installs on its machine, each platform's release file. */
+  platforms: Record<HostPlatform, string> | undefined;
 };
 
 export const sources: Record<PinnedTool, Source> = {
-  opencode: { repo: "anomalyco/opencode", tag: /^v(\d+\.\d+\.\d+)$/, prereleases: false, asset: () => "opencode-linux-x64.tar.gz" },
-  claude: { repo: "anthropics/claude-code", tag: /^v(\d+\.\d+\.\d+)$/, prereleases: false, asset: () => "claude-linux-x64.tar.gz" },
-  mise: { repo: "jdx/mise", tag: /^v(\d+\.\d+\.\d+)$/, prereleases: false, asset: (version) => `mise-v${version}-linux-x64` },
-  executor: { repo: "UsefulSoftwareCo/executor", tag: /^executor@(2\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)$/, prereleases: true, asset: undefined },
+  opencode: { repo: "anomalyco/opencode", tag: /^v(\d+\.\d+\.\d+)$/, prereleases: false, asset: () => "opencode-linux-x64.tar.gz", platforms: undefined },
+  claude: { repo: "anthropics/claude-code", tag: /^v(\d+\.\d+\.\d+)$/, prereleases: false, asset: () => "claude-linux-x64.tar.gz", platforms: undefined },
+  mise: { repo: "jdx/mise", tag: /^v(\d+\.\d+\.\d+)$/, prereleases: false, asset: (version) => `mise-v${version}-linux-x64`, platforms: undefined },
+  executor: { repo: "UsefulSoftwareCo/executor", tag: /^executor@(2\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)$/, prereleases: true, asset: undefined, platforms: undefined },
+  // Socket Firewall publishes no checksum file; GitHub's digest of each release file is what the lock holds.
+  sfw: {
+    repo: "SocketDev/sfw-free",
+    tag: /^v(\d+\.\d+\.\d+)$/,
+    prereleases: false,
+    asset: () => "sfw-free-linux-x86_64",
+    platforms: { "linux-x64": "sfw-free-linux-x86_64", "linux-arm64": "sfw-free-linux-arm64", "darwin-x64": "sfw-free-macos-x86_64", "darwin-arm64": "sfw-free-macos-arm64" },
+  },
 };
 
 const executorImage = "usefulsoftwareco/executor-selfhost";
@@ -199,12 +209,34 @@ export async function pinFor(tool: PinnedTool, version: string, release?: Releas
   }
 
   const found = release ?? (await releases(source.repo)).find((entry) => source.tag.exec(entry.tag_name)?.[1] === version);
-  const name = source.asset(version);
-  const asset = found?.assets.find((entry) => entry.name === name && entry.state === "uploaded");
 
   if (found === undefined) throw new OfficeError(`${source.repo} has no release ${version} among its newest hundred`);
 
-  if (asset?.digest === undefined || asset.digest === null) throw new OfficeError(`${source.repo} ${version} has no uploaded ${name} with a digest`);
+  const digestOf = (name: string): string => {
+    const asset = found.assets.find((entry) => entry.name === name && entry.state === "uploaded");
 
-  return { version, digest: asset.digest };
+    if (asset?.digest === undefined || asset.digest === null) throw new OfficeError(`${source.repo} ${version} has no uploaded ${name} with a digest`);
+
+    return asset.digest;
+  };
+
+  const digest = digestOf(source.asset(version));
+  const { platforms } = source;
+
+  if (platforms === undefined) return { version, digest };
+
+  return {
+    version,
+    digest,
+    platforms: { "linux-x64": digestOf(platforms["linux-x64"]), "linux-arm64": digestOf(platforms["linux-arm64"]), "darwin-x64": digestOf(platforms["darwin-x64"]), "darwin-arm64": digestOf(platforms["darwin-arm64"]) },
+  };
+}
+
+/** The download URL of a pinned tool's release file for a platform, which its lock entry's `platforms` verifies. */
+export function platformAsset(tool: PinnedTool, version: string, platform: HostPlatform): string {
+  const name = sources[tool].platforms?.[platform];
+
+  if (name === undefined) throw new OfficeError(`office installs no ${tool} on a host`);
+
+  return `https://github.com/${sources[tool].repo}/releases/download/v${version}/${name}`;
 }

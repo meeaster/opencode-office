@@ -44,6 +44,8 @@ export type Office = {
   versions: Partial<Record<PinnedTool, string>> | undefined;
   /** `upgrades` from office.yaml: `minimum_release_age` and per-tool ages. */
   upgrades: Record<string, string>;
+  /** Whether package downloads go through Socket Firewall (`socket_firewall`, on unless false). */
+  socketFirewall: boolean;
   references: Repository[];
   desks: Desk[];
   skills: OfficeConfig["skills"];
@@ -117,6 +119,7 @@ export function loadOffice(dir: string): Office {
     claude: config.claude,
     versions: config.versions,
     upgrades: config.upgrades,
+    socketFirewall: config.socket_firewall,
     references: config.references,
     desks: Object.entries(config.desks).map(([deskName, desk]) => ({ name: deskName, ...desk })),
     skills: config.skills,

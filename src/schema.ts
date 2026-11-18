@@ -73,8 +73,11 @@ const opencode = v.nullish(
   "container",
 );
 
-/** The tools whose versions an office pins in office.yaml. */
-export const pinnedTools = ["opencode", "claude", "executor", "mise"] as const;
+/**
+ * The tools whose versions an office pins in office.yaml. sfw is Socket Firewall, which every
+ * package download goes through (src/sfw.ts).
+ */
+export const pinnedTools = ["opencode", "claude", "executor", "mise", "sfw"] as const;
 
 export type PinnedTool = (typeof pinnedTools)[number];
 
@@ -85,13 +88,14 @@ const versions = v.optional(
       claude: v.optional(version),
       executor: v.optional(version),
       mise: v.optional(version),
+      sfw: v.optional(version),
     },
-    "must map opencode, claude, executor and mise to versions",
+    "must map opencode, claude, executor, mise and sfw to versions",
   ),
 );
 
 // `minimum_release_age` is the default for everything the upgrade job bumps; any other key is a
-// tool (one of the pinned four, or a tool in a mise.toml) with its own age.
+// tool (one of the pinned five, or a tool in a mise.toml) with its own age.
 const upgrades = v.nullish(v.record(text, age, "must map minimum_release_age or a tool to an age such as 1d"), {});
 
 const skills = v.nullish(
@@ -168,13 +172,16 @@ export const officeSchema = v.strictObject(
     claude: v.optional(v.strictObject({ credential: text, settings: text })),
     versions,
     upgrades,
+    // Whether package downloads (npm, pnpm, pip, uv, cargo and mise installs) go through Socket
+    // Firewall, in the container and, in host mode, on the machine. On unless set to false.
+    socket_firewall: v.optional(v.boolean("must be true or false"), true),
     references: repositories,
     desks: v.nullish(v.record(name, desk, "must map desk names to desks"), {}),
     skills,
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
     packages: v.pipe(v.nullish(v.array(packageEntry, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
   },
-  "must be a mapping of name, state, opencode, git, secrets, claude, versions, upgrades, references, desks, skills, plugins and packages",
+  "must be a mapping of name, state, opencode, git, secrets, claude, versions, upgrades, socket_firewall, references, desks, skills, plugins and packages",
 );
 
 export type OfficeConfig = v.InferOutput<typeof officeSchema>;
@@ -317,15 +324,30 @@ export type PackageManifest = v.InferOutput<typeof packageManifestSchema>;
 
 export type SettingValue = v.InferOutput<typeof settingValue>;
 
-/** One locked pin: a version and the SHA-256 of what the image downloads (Executor: its image digest). */
-const lockEntry = v.strictObject({ version, digest: v.pipe(v.string(), v.regex(/^sha256:[0-9a-f]{64}$/, "must be sha256:<64 hex digits>")) });
+const digest = v.pipe(v.string(), v.regex(/^sha256:[0-9a-f]{64}$/, "must be sha256:<64 hex digits>"));
 
-export const lockSchema = v.strictObject({
-  opencode: lockEntry,
-  claude: lockEntry,
-  executor: lockEntry,
-  mise: lockEntry,
+/** The machines a host-mode office installs a pinned tool on: Linux and macOS, x64 and arm64, by Node's names. */
+export const hostPlatforms = ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"] as const;
+
+export type HostPlatform = (typeof hostPlatforms)[number];
+
+/**
+ * One locked pin: a version and the SHA-256 of what the image downloads (Executor: its image
+ * digest). A tool the office also installs on a host-mode office's machine (sfw) adds the SHA-256
+ * of each platform's release file.
+ */
+const lockEntry = v.strictObject({
+  version,
+  digest,
+  platforms: v.optional(v.strictObject({ "linux-x64": digest, "linux-arm64": digest, "darwin-x64": digest, "darwin-arm64": digest }, "must map linux-x64, linux-arm64, darwin-x64 and darwin-arm64 to digests")),
 });
+
+const lockEntries = { opencode: lockEntry, claude: lockEntry, executor: lockEntry, mise: lockEntry, sfw: lockEntry };
+
+export const lockSchema = v.strictObject(lockEntries);
+
+/** office.lock and applied.json as stored: those written before sfw was pinned lack it, and the tool's default fills it in. */
+export const storedLockSchema = v.strictObject({ ...lockEntries, sfw: v.optional(lockEntry) });
 
 export type Lock = v.InferOutput<typeof lockSchema>;
 

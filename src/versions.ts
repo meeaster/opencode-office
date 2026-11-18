@@ -1,4 +1,4 @@
-// The versions an office runs. office.yaml pins OpenCode, Claude Code, Executor and mise; office.lock
+// The versions an office runs. office.yaml pins OpenCode, Claude Code, Executor, mise and sfw; office.lock
 // (written only by the tool) holds what makes each verifiable; the state folder's applied.json
 // records what `office up` last applied. The tool supplies the versions a new office starts at, and
 // the range it was tested with.
@@ -9,7 +9,7 @@ import * as v from "valibot";
 import { parse } from "yaml";
 
 import { type Office, OfficeError } from "./office.ts";
-import { check, type Lock, lockSchema, type PinnedTool, pinnedTools, version } from "./schema.ts";
+import { check, type HostPlatform, type Lock, type PinnedTool, pinnedTools, storedLockSchema, version } from "./schema.ts";
 
 export type Pin = Lock[PinnedTool];
 
@@ -19,6 +19,16 @@ export const defaultPins: Lock = {
   claude: { version: "2.1.322", digest: "sha256:3d2bc5ae54d4d4cd63510e9fcca5b6d48d2b18806708df8c8f691aa486c5dca8" },
   executor: { version: "2.0.0-beta.49", digest: "sha256:cc693691db13635ad5abb456fa132634816ec7acc73f04bd6b8932e0a8c45038" },
   mise: { version: "2026.11.7", digest: "sha256:8f5426d9971eaf713b37509749174ca69cf2f08b8b25e389168dcfcab9cd1a4d" },
+  sfw: {
+    version: "1.16.0",
+    digest: "sha256:1f24d2628aeb3995f1f2651509e37641c7c41d07749ac68594ecb5bb2dd44d8a",
+    platforms: {
+      "linux-x64": "sha256:1f24d2628aeb3995f1f2651509e37641c7c41d07749ac68594ecb5bb2dd44d8a",
+      "linux-arm64": "sha256:474cdb684e42d33d4b697dedd7d90c159d71380be0e53c496f0e7097c3617a6c",
+      "darwin-x64": "sha256:b574931bc2b3c36a9bf07ac07b9c07894f8cd314efc91bc5e4fe1c371b56adca",
+      "darwin-arm64": "sha256:29df049df2ef705a8ce726c6c41fe73a6034f6b1cd0d87f3f15a780d074b6d83",
+    },
+  },
 };
 
 /** The versions this release of the tool was tested with, lowest and highest. */
@@ -27,9 +37,14 @@ export const tested: Record<PinnedTool, { from: string; to: string }> = {
   claude: { from: "2.1.322", to: "2.1.322" },
   executor: { from: "2.0.0-beta.49", to: "2.0.0-beta.49" },
   mise: { from: "2026.11.7", to: "2026.11.7" },
+  sfw: { from: "1.16.0", to: "1.16.0" },
 };
 
-/** The tools that run in the office's own containers in each OpenCode mode. */
+/**
+ * The tools that run in the office's own containers in each OpenCode mode, which `office up`
+ * applies. A host-mode office's sfw isn't among them: `office sync` installs it on the machine at
+ * the version office.yaml pins (src/sfw.ts).
+ */
 export function toolsFor(office: Office): PinnedTool[] {
   return office.opencode.mode === "host" ? ["executor"] : [...pinnedTools];
 }
@@ -74,28 +89,59 @@ export function wantedVersion(office: Office, tool: PinnedTool): string {
 
 export const lockFile = "office.lock";
 
-/** office.lock, or undefined when the office has none. */
-export function readLock(dir: string): Lock | undefined {
+/** A stored lock with the tool's default sfw where it was written before sfw was pinned. */
+function withSfw(stored: v.InferOutput<typeof storedLockSchema>): Lock {
+  return { ...stored, sfw: stored.sfw ?? defaultPins.sfw };
+}
+
+/** office.lock as written, or undefined when the office has none. */
+function readStoredLock(dir: string): v.InferOutput<typeof storedLockSchema> | undefined {
   const path = join(dir, lockFile);
 
   if (!existsSync(path)) return undefined;
 
-  const result = check(v.safeParse(lockSchema, parse(readFileSync(path, "utf8"))));
+  const result = check(v.safeParse(storedLockSchema, parse(readFileSync(path, "utf8"))));
 
   if (!result.ok) throw new OfficeError(`${lockFile} is not valid (run office pin to rewrite it):\n${result.errors.map((line) => `  ${line}`).join("\n")}`);
 
   return result.value;
 }
 
+/** office.lock, or undefined when the office has none. A lock from before sfw was pinned gets the tool's default sfw. */
+export function readLock(dir: string): Lock | undefined {
+  const stored = readStoredLock(dir);
+
+  return stored === undefined ? undefined : withSfw(stored);
+}
+
+/** Whether office.lock exists but was written before sfw was pinned, which `office sync` moves on. */
+export function lockLacksSfw(dir: string): boolean {
+  const stored = readStoredLock(dir);
+
+  return stored !== undefined && stored.sfw === undefined;
+}
+
 export function writeLock(dir: string, lock: Lock): void {
   const lines = [
     "# Written by `office pin` from office.yaml's versions; don't edit. For each tool, the SHA-256 of",
-    "# the release file the image downloads (Executor: the image's digest).",
-    ...pinnedTools.flatMap((tool) => [`${tool}:`, `  version: ${lock[tool].version}`, `  digest: ${lock[tool].digest}`]),
+    "# the release file the image downloads (Executor: the image's digest), and for sfw, which a",
+    "# host-mode office also installs on its machine, that of each platform's release file.",
+    ...pinnedTools.flatMap((tool) => {
+      const { version: pinned, digest, platforms } = lock[tool];
+
+      return [`${tool}:`, `  version: ${pinned}`, `  digest: ${digest}`, ...(platforms === undefined ? [] : ["  platforms:", ...Object.entries(platforms).map(([platform, value]) => `    ${platform}: ${value}`)])];
+    }),
     "",
   ];
 
   writeFileSync(join(dir, lockFile), lines.join("\n"));
+}
+
+/** This machine's platform as office.lock names it, or undefined where the office installs nothing. */
+export function hostPlatform(platform = process.platform, arch = process.arch): HostPlatform | undefined {
+  const name = `${platform}-${arch}`;
+
+  return name === "linux-x64" || name === "linux-arm64" || name === "darwin-x64" || name === "darwin-arm64" ? name : undefined;
 }
 
 /**
@@ -123,12 +169,12 @@ export function wantedPins(office: Office): Lock {
  * the opencode image last took current Debian packages (container mode; `office up --refresh`).
  */
 const appliedSchema = v.strictObject({
-  pins: lockSchema,
+  pins: storedLockSchema,
   highest: v.strictObject({ opencode: version, executor: version }),
   refreshed: v.optional(v.pipe(v.string(), v.isoTimestamp())),
 });
 
-export type Applied = v.InferOutput<typeof appliedSchema>;
+export type Applied = Omit<v.InferOutput<typeof appliedSchema>, "pins"> & { pins: Lock };
 
 function appliedPath(office: Office): string {
   return join(office.state, "applied.json");
@@ -143,7 +189,8 @@ export function readApplied(office: Office): Applied | undefined {
 
   if (!result.ok) throw new OfficeError(`${path} is not valid: ${result.errors.join("; ")}`);
 
-  return result.value;
+  // An office applied before sfw was pinned builds its next image with the tool's default.
+  return { ...result.value, pins: withSfw(result.value.pins) };
 }
 
 export function writeApplied(office: Office, pins: Lock, refreshed: string | undefined): void {
@@ -166,7 +213,7 @@ export function changes(office: Office, from: Lock, to: Lock): { tool: PinnedToo
 
 /** The base image for a set of pins: its name carries the versions, so offices on different ones never share it. */
 export function baseImage(pins: Lock): string {
-  return `office-opencode:${pins.opencode.version}-claude${pins.claude.version}-mise${pins.mise.version}`;
+  return `office-opencode:${pins.opencode.version}-claude${pins.claude.version}-mise${pins.mise.version}-sfw${pins.sfw.version}`;
 }
 
 export function executorImage(pin: Pin): string {
