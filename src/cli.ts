@@ -35,8 +35,8 @@ const usage = `usage: office <command> [--office <dir>]
                                --install-deps authorizes host mise/SOPS/age (and gh) installs and
                                updates, using exact stable releases at least 3d old. office.yaml's
                                git block declares the commit identity and GitHub (credentials: gh).
-                               --manage-machine lets a host-mode office link its tools into mise's
-                               global conf.d, as interactive setup asks
+                               --manage-machine lets a host-mode office link machine.toml and its
+                               packages' tools into mise's global conf.d, as interactive setup asks
   executor credentials [--password-only]
                                deliberately reveal the stored encrypted owner login, even offline
   sync [--references | --release-machine]
@@ -61,8 +61,8 @@ const usage = `usage: office <command> [--office <dir>]
   apps deploy                  deploy every Executor app in the office from its files
   gui dev <package>            install a local package's panel on the desktop app's machine each
                                time its build writes the bundle
-  upgrade-tools                bump exact pins in mise.toml files and office.yaml's versions,
-                               and commit them
+  upgrade-tools                bump exact pins in mise.toml files, machine.toml, .office/mise/
+                               and office.yaml's versions, and commit them
   update [--check] [--minimum-release-age <age> | --version <release>]
                                replace this office executable with the newest release at least
                                1d old (or <age>), or exactly <release>; --check only reports.

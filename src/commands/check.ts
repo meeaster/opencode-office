@@ -16,7 +16,7 @@ import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillS
 import { executorEnvFile, type Office, readEnvFile } from "../office.ts";
 import { packageComposeFile, serviceStatus, sharedNamespaces } from "../package-services.ts";
 import { machineReport } from "../machine.ts";
-import { fragmentNotes, orphanFragments } from "../package-tools.ts";
+import { fragmentNotes, orphanFragments, strayFragments } from "../package-tools.ts";
 import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
 import { pinnedTools } from "../schema.ts";
 import { builtinFiles, builtinPackages, version } from "../tool.ts";
@@ -117,7 +117,7 @@ async function drift(office: Office): Promise<string[]> {
     if (!packages.some((item) => item.kind !== "local" && item.entry.name === folder)) problems.push(`.office/packages/${folder}/ is a package office.yaml no longer lists (office sync removes it)`);
   }
 
-  problems.push(...orphanFragments(office, packages.map((item) => item.entry.name)));
+  problems.push(...orphanFragments(office, packages.map((item) => item.entry.name)), ...strayFragments(office));
 
   return problems;
 }

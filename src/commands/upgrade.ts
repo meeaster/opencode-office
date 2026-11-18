@@ -1,5 +1,6 @@
 // `office upgrade-tools`: bumps each exact pin in the office's own mise.toml files (the root's and
-// each desk's) and in the root's .mise/conf.d/ fragments (packages' tools among them), and the four versions office.yaml pins, to the newest release at least the
+// each desk's), its machine-wide mise files (machine.toml and the packages' fragments in
+// .office/mise/), and the four versions office.yaml pins, to the newest release at least the
 // office's minimum release age old, and commits the changed files alone under the office's git
 // identity (office.yaml's `git`), else "office cron". mise.toml pins are looked up and installed
 // through mise; the four versions on GitHub (and Executor's image on its registry), and only
@@ -13,7 +14,7 @@ import { git } from "../git.ts";
 import { entryPattern, toolPins } from "../mise-toml.ts";
 import { installedTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";
-import { fragmentFiles } from "../package-tools.ts";
+import { machineFiles } from "../package-tools.ts";
 import { isScalar, parseDocument } from "yaml";
 
 import type { Office } from "../office.ts";
@@ -185,13 +186,13 @@ async function upgradeVersions(office: Office): Promise<{ moves: Move[]; failure
 export async function upgradeTools(office: Office): Promise<boolean> {
   // The office's own files only: never one inside a desk's repos or under references/. Fragments
   // a package's tools started in are the office's too, with the same ages.
-  const files = [
-    ...["mise.toml", ...office.desks.map((desk) => join(desk.name, "mise.toml"))]
-      .values()
-      .map((name) => join(office.dir, name))
-      .filter((path) => existsSync(path)),
-    ...fragmentFiles(office),
-  ];
+  const projects = ["mise.toml", ...office.desks.map((desk) => join(desk.name, "mise.toml"))]
+    .values()
+    .map((name) => join(office.dir, name))
+    .filter((path) => existsSync(path))
+    .toArray();
+
+  const files = [...projects, ...machineFiles(office)];
 
   const changed: string[] = [];
   const report: (Move & { file: string })[] = [];
@@ -213,12 +214,12 @@ export async function upgradeTools(office: Office): Promise<boolean> {
 
     changed.push(name);
 
-    // The lock file, when the office uses one, follows the pins it records. A fragment's tools
-    // share the root's.
-    const project = name.startsWith(".mise/") ? office.dir : dirname(path);
+    // The lock file, when the office uses one, follows the pins of the mise.toml beside it. The
+    // machine-wide files apply through the global conf.d, which no lock in the office covers.
+    const project = dirname(path);
     const lock = join(project, "mise.lock");
 
-    if (existsSync(lock)) {
+    if (projects.includes(path) && existsSync(lock)) {
       mise(["lock"], project);
 
       if (!changed.includes(relative(office.dir, lock))) changed.push(relative(office.dir, lock));
@@ -235,7 +236,7 @@ export async function upgradeTools(office: Office): Promise<boolean> {
   report.push(...versions.moves.map((move) => ({ ...move, file: "office.yaml" })));
 
   if (report.length > 0) {
-    const where = (move: { file: string }) => (move.file === "mise.toml" || move.file === "office.yaml" ? "" : ` in ${move.file.startsWith(".mise/") ? move.file : dirname(move.file)}`);
+    const where = (move: { file: string }) => (move.file === "mise.toml" || move.file === "office.yaml" ? "" : ` in ${move.file.endsWith("/mise.toml") ? dirname(move.file) : move.file}`);
     const subject = `chore: bump ${report.map((move) => `${move.tool} ${move.from} → ${move.to}${where(move)}`).join(", ")}`;
     const body = report.map((move) => `- ${move.file}: ${move.tool} ${move.from} → ${move.to}`).join("\n");
 

@@ -1,11 +1,12 @@
 // The mise tools packages declare (`tools:` in package.yaml, and `host.tools` in a host-mode
 // office), and a package's host install (`host.install`). `office sync` writes each package's into
-// its own fragment, `.mise/conf.d/<package>.toml` in the office root, which mise loads in the
-// office and every folder below it, on the host and in the container. The office's own mise.toml
-// in the same folder wins over a fragment, and so does a desk's. In a host-mode office every file
-// in that folder is also linked into mise's global conf.d (src/machine.ts), so it applies in every
-// folder on the machine; `machine.toml` there is the office's own machine-wide file, never a
-// package's.
+// its own fragment, `.office/mise/<package>.toml`, beside `.office/packages/`: the tool's folder,
+// where mise loads nothing by itself. A fragment takes effect only through its link in mise's
+// global conf.d (src/machine.ts: a host-mode office's machine, or the container), as does the
+// office's own `machine.toml` at its root, so both apply in every folder alike; a mise.toml (the
+// office's, a desk's, a project's) wins over them in its folder, as project config wins over
+// global. mise does load `mise/config.toml` and `mise.toml` in place below `.office/`, so `config`
+// and `mise` are reserved package names, as is `machine`.
 //
 // The fragment is the office's file, committed with it. Its [tools] table is the office's: sync
 // adds a tool the package declares, at the version the package starts it at, and removes one it no
@@ -13,20 +14,18 @@
 // office's own pins. Everything after that table is sync's alone: the [hooks] postinstall and the
 // `<package>:install` task of a host install, written only in a host-mode office (with the
 // package's switch on), and rewritten or removed as that changes.
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 
-import { installedTool } from "./host-tools.ts";
 import type { Office } from "./office.ts";
 import type { InstalledPackage } from "./packages.ts";
 
-/** Where mise loads fragments from in a project folder, beside its mise.toml. */
-export const fragmentsFolder = ".mise/conf.d";
+/** Where sync writes packages' fragments: in the tool's `.office/`, where mise loads nothing by itself. */
+export const fragmentsFolder = ".office/mise";
 
-/** The office's own machine-wide fragment, `.mise/conf.d/machine.toml`: so `machine` can't be a package's name. */
-export const machineFragment = "machine";
+/** The office's own machine-wide mise file, at its root, which mise doesn't load by itself either. */
+export const machineFile = "machine.toml";
 
 /** The fragment that holds a package's tools. */
 export function fragmentPath(office: Office, name: string): string {
@@ -42,10 +41,11 @@ function header(name: string): string[] {
     `# The mise tools of package ${name}. office sync owns which tools are here: it adds a tool the`,
     "# package declares, at the version it starts at, and removes one it no longer declares (office",
     "# check reports a tool added or removed by hand). The versions are the office's: sync never changes",
-    "# one, and office upgrade-tools bumps them. In a host-mode office this file is linked into mise's",
-    "# global conf.d, so it applies on the whole machine; machine.toml beside it is the office's own",
-    "# and wins over it there, and the same tool in a mise.toml wins in that mise.toml's folder. These",
-    "# comment lines and anything after the [tools] table are office sync's, rewritten on every sync.",
+    "# one, and office upgrade-tools bumps them. mise doesn't load this file where it is: in a host-mode",
+    "# office, office sync links it into mise's global conf.d, and the container links it inside",
+    "# itself, so it applies in every folder. machine.toml at the office root is the office's own and",
+    "# wins over it, and the same tool in a mise.toml wins in that mise.toml's folder. These comment",
+    "# lines and anything after the [tools] table are office sync's, rewritten on every sync.",
   ];
 }
 
@@ -54,7 +54,7 @@ function fragmentPackage(text: string): string | undefined {
   return marker.exec(text)?.[1];
 }
 
-/** The package whose tools the fragment at `path` holds, or undefined for the office's own file. */
+/** The package whose tools the file at `path` holds, or undefined for one sync didn't write, such as machine.toml. */
 export function fragmentOwner(path: string): string | undefined {
   return fragmentPackage(readFileSync(path, "utf8"));
 }
@@ -76,10 +76,10 @@ function wantedTools(office: Office, item: InstalledPackage): Record<string, str
   return hostApplies(office, item) ? { ...item.manifest.tools, ...item.manifest.host?.tools } : item.manifest.tools;
 }
 
-// The office root as a fragment's hook and task find it: the fragment's real folder, two levels
-// down, whether mise reads the fragment in place or through its link in the global conf.d. mise runs
-// a linked file's hooks and tasks from the home folder, so a path relative to the office breaks
-// there. A task's `run` and `dir` don't get `config_source`, so the task takes it through `env`.
+// The office root as a fragment's hook and task find it: two levels up from the fragment's real
+// folder, `.office/mise/`, read through its link in the global conf.d. mise runs a linked file's
+// hooks and tasks from whatever folder it runs in, so a path relative to the office breaks. A
+// task's `run` and `dir` don't get `config_source`, so the task takes it through `env`.
 const officeRoot = "{{ config_source | canonicalize | dirname }}/../..";
 
 /**
@@ -98,7 +98,7 @@ export function hostSection(office: Office, item: InstalledPackage): string | un
 
   return [
     "[hooks]",
-    `# ${install.description}, in ${install.creates}: installed by mise install in this host-mode office when it is missing; it updates itself.`,
+    `# ${install.description}, in ${install.creates}: installed by mise install on this host-mode office's machine when it is missing; it updates itself.`,
     `postinstall = ${JSON.stringify(`test -x "${creates}" || bun "${officeRoot}/${script}"`)}`,
     "",
     `[tasks.${JSON.stringify(`${item.entry.name}:install`)}]`,
@@ -202,7 +202,7 @@ export function updateFragment(text: string | undefined, name: string, tools: Re
   return { text: `${[...result, ...tail].join("\n")}\n`, added, removed, section: [...parts.rest].join("\n") !== tail.slice(1).join("\n") };
 }
 
-/** The fragments in the office's `.mise/conf.d/` that sync wrote, by the package each names. */
+/** The fragments in `.office/mise/` that sync wrote, by the package each names. */
 function packageFragments(office: Office): Map<string, string> {
   const folder = join(office.dir, fragmentsFolder);
   const found = new Map<string, string>();
@@ -220,31 +220,13 @@ function packageFragments(office: Office): Map<string, string> {
   return found;
 }
 
-/** Removes `.mise/conf.d/` and `.mise/` when deleting fragments left them empty. */
+/** Removes `.office/mise/`, and `.office/` with it, when deleting fragments left them empty. */
 function removeEmptyFolders(office: Office): void {
-  for (const folder of [fragmentsFolder, ".mise"]) {
+  for (const folder of [fragmentsFolder, ".office"]) {
     const path = join(office.dir, folder);
 
     if (existsSync(path) && readdirSync(path).length === 0) rmdirSync(path);
   }
-}
-
-/**
- * Trusts a fragment that now holds a hook, with this machine's mise. mise runs `mise install`'s
- * hooks from an untrusted file, but until it is trusted, `mise env` (shell activation) and `mise ls`
- * refuse the office's config. Trust is by path, so later version bumps keep it.
- */
-function trustFragment(office: Office, path: string): string {
-  const where = relative(office.dir, path);
-  const mise = installedTool("mise");
-
-  if (mise === undefined) return `FAILED to trust ${where}: mise isn't installed here; run mise trust ${where} once it is, or office up does`;
-
-  const result = spawnSync(mise.path, ["trust", "--quiet", path], { encoding: "utf8" });
-
-  if (result.status !== 0) return `FAILED to trust ${where}: ${(result.stderr ?? "").trim() || "mise trust failed"}; run mise trust ${where}`;
-
-  return `trusted ${where} with this machine's mise, which runs and loads a fragment's hook only once it is trusted`;
 }
 
 /** Why a package's host install isn't in its fragment, for messages. */
@@ -304,9 +286,7 @@ export function syncTools(office: Office, installed: InstalledPackage[], declare
     if (next.section) {
       const description = item.manifest.host?.install?.description ?? "its host install";
 
-      changes.push(section === undefined ? `removed package ${name}'s install of ${description} from ${where}: ${hostAbsence(office, item)}` : `wrote package ${name}'s install of ${description} to ${where}: mise install in the office installs it once (or mise run ${name}:install)`);
-
-      if (section !== undefined) changes.push(trustFragment(office, path));
+      changes.push(section === undefined ? `removed package ${name}'s install of ${description} from ${where}: ${hostAbsence(office, item)}` : `wrote package ${name}'s install of ${description} to ${where}: mise install installs it once, through the link (or mise run ${name}:install)`);
     }
   }
 
@@ -343,7 +323,7 @@ function hostNotes(office: Office, item: InstalledPackage): FragmentReport {
 
   return existsSync(path)
     ? { ok: true, notes: [`${what} installed in ${install.creates}; it updates itself`] }
-    : { ok: false, notes: [`${what} is missing from ${install.creates}; mise install in the office installs it (or mise run ${item.entry.name}:install)`] };
+    : { ok: false, notes: [`${what} is missing from ${install.creates}; office up installs it (or mise install, or mise run ${item.entry.name}:install, once the office's tools are linked)`] };
 }
 
 /** What `office check` says of a package's fragment and its host install. */
@@ -386,14 +366,27 @@ export function orphanFragments(office: Office, declared: string[]): string[] {
   return [...packageFragments(office)].flatMap(([path, owner]) => (declared.includes(owner) ? [] : [`${relative(office.dir, path)} holds the tools of package ${owner}, which office.yaml no longer lists (office sync deletes it)`]));
 }
 
-/** The fragments in the office root's `.mise/conf.d/`, the package's and the office's own, which `office upgrade-tools` bumps. */
-export function fragmentFiles(office: Office): string[] {
+/**
+ * The office's machine-wide mise files, which apply through links in mise's global conf.d: each
+ * package's fragment, by name, and the office's own machine.toml last. `office upgrade-tools` bumps
+ * them.
+ */
+export function machineFiles(office: Office): string[] {
+  const own = join(office.dir, machineFile);
+
+  return [...[...packageFragments(office).keys()].sort(), ...(existsSync(own) ? [own] : [])];
+}
+
+/** Files in `.office/mise/` sync didn't write, for `office check`: nothing links or bumps them. */
+export function strayFragments(office: Office): string[] {
   const folder = join(office.dir, fragmentsFolder);
 
   if (!existsSync(folder)) return [];
 
+  const ours = packageFragments(office);
+
   return readdirSync(folder)
-    .filter((file) => file.endsWith(".toml") && !file.startsWith("."))
-    .sort()
-    .map((file) => join(folder, file));
+    .map((file) => join(folder, file))
+    .filter((path) => !ours.has(path))
+    .map((path) => `${relative(office.dir, path)} isn't a fragment office sync wrote, and .office/ is the tool's, so nothing links it; move its tools to machine.toml`);
 }

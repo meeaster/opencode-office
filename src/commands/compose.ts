@@ -19,7 +19,8 @@ import { ghConfigDir, ghHosts } from "../github.ts";
 import { hostTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
-import { fragmentFiles } from "../package-tools.ts";
+import { claim, globalConfD } from "../machine.ts";
+import { machineFiles } from "../package-tools.ts";
 import { packageComposeFile, preparePackageServices, serviceFiles, serviceSettings, type UpgradedServices } from "../package-services.ts";
 import type { Lock } from "../schema.ts";
 import { prepareSecrets } from "../secrets.ts";
@@ -179,25 +180,40 @@ function removeExecutorFiles(office: Office): void {
   for (const file of Object.values(executorFiles)) rmSync(join(office.dir, file), { force: true });
 }
 
+/** Runs `mise install` with the host's mise in `dir`; as in the container, a failure must not keep the office from starting. */
+function miseInstall(dir: string, trust: string[] = []): void {
+  try {
+    for (const config of trust) execFileSync(hostTool("mise"), ["trust", "--quiet", config], { stdio: "inherit" });
+
+    execFileSync(hostTool("mise"), ["install", "--quiet"], { cwd: dir, stdio: "inherit" });
+  } catch {
+    console.error(`office: mise install failed in ${dir}`);
+  }
+}
+
 /**
- * Trusts and installs every office mise.toml, and the root's .mise/conf.d/ fragments (the tools
- * packages declare), with the host's mise, as the container does at start.
+ * Trusts and installs every office mise.toml with the host's mise, then the office's machine-wide
+ * tools (machine.toml and the packages' fragments in .office/mise/), as the container does at
+ * start. Those load only through their links in mise's global conf.d, which need no trust, and a
+ * mise.toml in the office may pin the same tool at another version, so they install from the
+ * filesystem root, where only global config applies; their postinstall hooks run there.
  */
 function installTools(office: Office): void {
   for (const dir of [office.dir, ...office.desks.map((desk) => join(office.dir, desk.name))]) {
-    const configs = [...(existsSync(join(dir, "mise.toml")) ? [join(dir, "mise.toml")] : []), ...(dir === office.dir ? fragmentFiles(office) : [])];
+    const config = join(dir, "mise.toml");
 
-    if (configs.length === 0) continue;
-
-    try {
-      for (const config of configs) execFileSync(hostTool("mise"), ["trust", "--quiet", config], { stdio: "inherit" });
-
-      execFileSync(hostTool("mise"), ["install", "--quiet"], { cwd: dir, stdio: "inherit" });
-    } catch {
-      // As in the container, a failed install must not keep the office from starting.
-      console.error(`office: mise install failed in ${dir}`);
-    }
+    if (existsSync(config)) miseInstall(dir, [config]);
   }
+
+  if (machineFiles(office).length === 0) return;
+
+  if (claim(office).kind !== "ours") {
+    console.log(`office: machine.toml and the packages' tools aren't linked into ${globalConfD()}, so they apply nowhere and nothing installs them; run office setup (unattended: office setup --manage-machine), then office sync and office up`);
+
+    return;
+  }
+
+  miseInstall("/");
 }
 
 function docker(args: string[]): void {

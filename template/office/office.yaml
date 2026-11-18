@@ -77,7 +77,7 @@ plugins: []
 # .office/packages/ is read-only: office sync restores edited files there. To change such a
 # package, copy it into packages/ under a name of your own. Settings aren't secrets: sync writes
 # them to the package's .settings.json, which is committed. A package's mise tools go in
-# .mise/conf.d/<name>.toml, whose versions are this office's to change. Commit what sync writes.
+# .office/mise/<name>.toml, whose versions are this office's to change. Commit what sync writes.
 # Removing an entry and syncing uninstalls a built-in or copied package, keeping template files you changed.
 packages:
   # Lists the articles in knowledge/ in every session.

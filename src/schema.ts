@@ -111,13 +111,21 @@ const skills = v.nullish(
 /** A package setting's value; settings are written to JSON for the package's scripts. */
 const settingValue = v.union([v.string(), v.number(), v.boolean()], "must be text, a number or true/false");
 
+/** Names no package may have, for the mise fragment sync writes as `.office/mise/<name>.toml`. */
+export const reservedPackageNames = ["machine", "config", "mise"];
+
 // A package copied from a folder of another repository at a ref, or, without `repo`, one of the
 // tool's built-in packages or a package authored in the office under packages/<name>/.
 const packageEntry = v.pipe(
   v.strictObject(
     {
-      // `machine` is the office's own machine-wide mise fragment, .mise/conf.d/machine.toml.
-      name: v.pipe(name, v.check((value) => value !== "machine", "is reserved: .mise/conf.d/machine.toml is the office's own machine-wide mise file")),
+      // A package's tools go in .office/mise/<name>.toml. mise loads mise/config.toml and mise.toml
+      // in place below .office/, which would make config and mise project config there, and machine
+      // would be read as the office's own machine.toml.
+      name: v.pipe(
+        name,
+        v.check((value) => !reservedPackageNames.includes(value), "is reserved: machine.toml at the office root is the office's own machine-wide mise file, and mise would load .office/mise/config.toml or mise.toml by itself"),
+      ),
       repo: v.optional(text),
       path: v.optional(text),
       ref: v.optional(text),
@@ -245,7 +253,7 @@ export const packageManifestSchema = v.pipe(
       settings: v.nullish(v.record(v.string(), packageSetting, "must map setting names to settings"), {}),
       secrets: v.nullish(v.record(v.pipe(v.string(), v.regex(/^[A-Z][A-Z0-9_]*$/, "must be an environment variable name in capitals")), packageSecret, "must map variable names to how each is generated"), {}),
       // mise tools the package needs, each at the version an office starts at; `office sync` writes
-      // them to the office's .mise/conf.d/<name>.toml, whose versions are the office's from then on.
+      // them to the office's .office/mise/<name>.toml, whose versions are the office's from then on.
       tools: miseTools,
       host: v.optional(hostBlock),
     },

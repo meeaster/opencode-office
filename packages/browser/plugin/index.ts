@@ -3,8 +3,9 @@
 // `browser` itself, for its in-app browser.)
 //
 // - agent-browser drives a headless Chromium of its own. The package declares it as a mise tool,
-//   so `office sync` writes it into the office's .mise/conf.d/browser.toml and it is on the PATH of
-//   the office's container (mise's shims) and of a host whose mise installs it.
+//   so `office sync` writes it into the office's .office/mise/browser.toml, which mise reads through
+//   a link in its global conf.d, and it is on the PATH of the office's container (mise's shims) and
+//   of a host whose mise installs it.
 // - Browse drives the user's own Chrome through its relay and extension. It is host-mode only, as the
 //   office declares (`.office.json`, which `office sync` writes from office.yaml's `opencode`): in a
 //   container-mode office it is never registered, even for a host session opened in the office.
@@ -115,7 +116,7 @@ function servers(settings: Settings, mode: Mode): Servers {
   const browse = findBrowse();
 
   if (settings.agentBrowserTools === "") absent.push("`agent-browser`: turned off (the package's `agent_browser_tools` setting is empty)");
-  else if (agentBrowser === undefined) absent.push("`agent-browser`: the command isn't on this server's PATH (the office's `.mise/conf.d/browser.toml` declares it; `mise install` in the office installs it)");
+  else if (agentBrowser === undefined) absent.push("`agent-browser`: the command isn't on this server's PATH (the office's `.office/mise/browser.toml` declares it, through a link in mise's global conf.d; `office up` installs it)");
   else present.set("agent-browser", [agentBrowser, "mcp", "--tools", settings.agentBrowserTools]);
 
   if (mode === "container") {
@@ -125,7 +126,7 @@ function servers(settings: Settings, mode: Mode): Servers {
   } else if (mode === undefined) absent.push("`browse`: the office's mode is unknown until `office sync` writes the package's `.office.json`");
   else if (!settings.browse) absent.push("`browse`: turned off (the package's `browse` setting is false)");
   else if (browse === undefined) {
-    absent.push("`browse`: not installed yet. `mise install` in the office installs it once (or `mise run browser:install`); it updates itself after that, and the user pairs Chrome once with `~/.local/bin/browse pair`");
+    absent.push("`browse`: not installed yet. `office up` installs it once (or `mise install`, or `mise run browser:install`); it updates itself after that, and the user pairs Chrome once with `~/.local/bin/browse pair`");
   } else present.set("browse", [browse, "mcp"]);
 
   return { present, absent };

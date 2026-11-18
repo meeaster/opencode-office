@@ -1,6 +1,7 @@
 // What a host-mode office writes on its machine, outside its folder and its state: for now, a link
-// in mise's global conf.d to each file in the office's `.mise/conf.d/`, so the office's tools apply
-// in every folder. The rules, for every such file:
+// in mise's global conf.d to each of the office's machine-wide mise files, its `machine.toml` and
+// the packages' fragments in `.office/mise/`, which mise loads nowhere else, so the office's tools
+// apply in every folder. The rules, for every such file:
 //
 // - Whole files only, each named `office-<office name>-…` (a real file also starts with a marker
 //   line). The office never edits a file it didn't write, and never replaces a path the machine
@@ -21,12 +22,12 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 
 import * as v from "valibot";
 
 import { type Office, OfficeError, readConfig } from "./office.ts";
-import { fragmentFiles, fragmentOwner, machineFragment } from "./package-tools.ts";
+import { fragmentOwner, machineFile, machineFiles } from "./package-tools.ts";
 import { check } from "./schema.ts";
 
 /** Replace the machine record's path and the global mise config folder, for tests and scratch offices. */
@@ -44,7 +45,7 @@ export function miseConfigDir(): string {
   return process.env[miseConfigVariable] || process.env.MISE_CONFIG_DIR || join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "mise");
 }
 
-/** Where the office's fragments are linked: the global conf.d, which mise loads in every folder. */
+/** Where the office's machine-wide files are linked: the global conf.d, which mise loads in every folder. */
 export function globalConfD(): string {
   return join(miseConfigDir(), "conf.d");
 }
@@ -139,7 +140,7 @@ export const consentCommand = "office setup (unattended: office setup --manage-m
 
 /** What the office will do on the machine once allowed, for the consent question. */
 export function consentQuestion(office: Office): string {
-  return `Office ${office.name} runs OpenCode on this machine (host mode), so it manages the machine: it links each file in its .mise/conf.d/ into ${globalConfD()} as office-${office.name}-…toml, so its tools apply in every folder, and lists each file it writes in ${machineRecordPath()}. It changes no file it didn't write; office sync --release-machine removes them all. Allow it? [yes/no]`;
+  return `Office ${office.name} runs OpenCode on this machine (host mode), so it manages the machine: it links its machine.toml and each package's tools in .office/mise/ into ${globalConfD()} as office-${office.name}-…toml, so its tools apply in every folder (without the links they apply nowhere), and lists each file it writes in ${machineRecordPath()}. It changes no file it didn't write; office sync --release-machine removes them all. Allow it? [yes/no]`;
 }
 
 /**
@@ -159,15 +160,13 @@ export function grantConsent(office: Office): string {
 }
 
 /** A link's name in the global conf.d. Package fragments come first and machine.toml last, so it wins over them (mise loads conf.d by name, the last winning). */
-export function linkName(office: Office, fragment: string): string {
-  const base = basename(fragment, ".toml");
-
-  return `office-${office.name}-${base === machineFragment ? "2" : "1"}-${base}.toml`;
+export function linkName(office: Office, file: string): string {
+  return file === join(office.dir, machineFile) ? `office-${office.name}-2-machine.toml` : `office-${office.name}-1-${basename(file, ".toml")}.toml`;
 }
 
-/** The links the office wants: one per file in its `.mise/conf.d/`. */
+/** The links the office wants: one per machine-wide file, machine.toml and each package's fragment. */
 function wantedLinks(office: Office): Extract<MachineFile, { kind: "link" }>[] {
-  return fragmentFiles(office).map((target) => ({ kind: "link", path: join(globalConfD(), linkName(office, target)), package: fragmentOwner(target) ?? null, target }));
+  return machineFiles(office).map((target) => ({ kind: "link", path: join(globalConfD(), linkName(office, target)), package: fragmentOwner(target) ?? null, target }));
 }
 
 /** A recorded file against what is on disk. */
@@ -223,6 +222,11 @@ function owner(file: MachineFile): string {
   return file.package === null ? "the office's own" : `package ${file.package}`;
 }
 
+/** Why sync removes a recorded file the office no longer wants, for messages. */
+function removalReason(file: MachineFile): string {
+  return file.package === null ? `as ${machineFile} is gone` : `as ${owner(file)} no longer has a fragment`;
+}
+
 /** Removes every file the record lists and the record itself, ending this office's management of the machine. */
 function release(record: MachineRecord, why: string): string[] {
   const lines: string[] = [];
@@ -262,8 +266,8 @@ export function releaseMachine(office: Office): string[] {
 type Placement = { line: string | undefined; file: MachineFile | undefined };
 
 /** Makes one wanted link: created, relinked from what the record says it was, or refused. */
-function placeLink(wanted: Extract<MachineFile, { kind: "link" }>, recorded: MachineFile | undefined): Placement {
-  const what = `.mise/conf.d/${basename(wanted.target)} (${owner(wanted)})`;
+function placeLink(office: Office, wanted: Extract<MachineFile, { kind: "link" }>, recorded: MachineFile | undefined): Placement {
+  const what = `${relative(office.dir, wanted.target)} (${owner(wanted)})`;
 
   if (recorded === undefined) {
     if (occupied(wanted.path)) return { line: `FAILED to link ${what}: ${wanted.path} exists and ${machineRecordPath()} doesn't list it, so office leaves it; move it away and run office sync`, file: undefined };
@@ -288,7 +292,7 @@ function placeLink(wanted: Extract<MachineFile, { kind: "link" }>, recorded: Mac
 
 /**
  * `office sync`'s part on the machine. In host mode, with consent, it makes the global conf.d hold
- * a link to each of the office's fragments, removes links whose fragment is gone, and repairs links
+ * a link to each of the office's machine-wide files, removes links whose file is gone, and repairs links
  * of an office that moved; in container mode it removes everything the office wrote and the record.
  * Returns one line per change; a refusal starts with FAILED.
  */
@@ -301,7 +305,7 @@ export function syncMachine(office: Office): string[] {
 
   const wanted = wantedLinks(office);
 
-  if (current.kind === "free") return wanted.length === 0 ? [] : [`not linking .mise/conf.d/ into ${globalConfD()} yet: office writes outside its folder only once you agree; run ${consentCommand}`];
+  if (current.kind === "free") return wanted.length === 0 ? [] : [`not linking machine.toml and .office/mise/ into ${globalConfD()} yet, so the office's tools apply nowhere: office writes outside its folder only once you agree; run ${consentCommand}`];
 
   const { record, movedFrom } = current;
   const lines = movedFrom === undefined ? [] : [`office ${office.name} moved from ${movedFrom}; ${machineRecordPath()} now names ${office.dir}`];
@@ -310,7 +314,7 @@ export function syncMachine(office: Office): string[] {
   for (const file of record.files) {
     if (wanted.some((link) => link.path === file.path)) continue;
 
-    const result = removeFile(file, file.package === null ? "as its file left .mise/conf.d/" : `as ${owner(file)} no longer has a fragment`);
+    const result = removeFile(file, removalReason(file));
 
     if (result.line !== undefined) lines.push(result.line);
 
@@ -320,7 +324,7 @@ export function syncMachine(office: Office): string[] {
   mkdirSync(globalConfD(), { recursive: true });
 
   for (const link of wanted) {
-    const result = placeLink(link, record.files.find((file) => file.path === link.path));
+    const result = placeLink(office, link, record.files.find((file) => file.path === link.path));
 
     if (result.line !== undefined) lines.push(result.line);
 
@@ -357,9 +361,10 @@ export function machineReport(office: Office): MachineLine[] {
   const wanted = wantedLinks(office);
 
   if (current.kind === "free") {
-    const detail = wanted.length === 0 ? "nothing to write outside the office yet" : `office sync writes nothing outside the office until you agree; run ${consentCommand}`;
+    if (wanted.length === 0) return [...lines, { ok: "warn", name: "machine", detail: "no consent for this office to manage this machine, and nothing to write outside the office yet" }];
 
-    return [...lines, { ok: "warn", name: "machine", detail: `no consent for this office to manage this machine: ${detail}` }];
+    // mise loads machine.toml and .office/mise/ only through the links, so without them a host-mode office has none of its tools.
+    return [...lines, { ok: false, name: "machine", detail: `no consent for this office to manage this machine, so machine.toml and the packages' tools in .office/mise/ apply nowhere; run ${consentCommand}, then office sync` }];
   }
 
   const { record, movedFrom } = current;
@@ -390,7 +395,7 @@ export function machineReport(office: Office): MachineLine[] {
   for (const link of wanted) {
     if (record.files.some((file) => file.path === link.path)) continue;
 
-    lines.push({ ok: false, name: `machine ${link.path}`, detail: occupied(link.path) ? `exists but isn't in the record, so office sync won't link .mise/conf.d/${basename(link.target)} there; move it away` : `not linked yet; office sync links .mise/conf.d/${basename(link.target)}` });
+    lines.push({ ok: false, name: `machine ${link.path}`, detail: occupied(link.path) ? `exists but isn't in the record, so office sync won't link ${relative(office.dir, link.target)} there; move it away` : `not linked yet; office sync links ${relative(office.dir, link.target)}` });
   }
 
   return lines;

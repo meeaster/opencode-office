@@ -13,7 +13,7 @@ let office: string;
 
 let confD: string;
 
-const saved = { record: process.env[machineRecordVariable], mise: process.env[miseConfigVariable], state: process.env.MISE_STATE_DIR };
+const saved = { record: process.env[machineRecordVariable], mise: process.env[miseConfigVariable] };
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "office-machine-"));
@@ -21,14 +21,12 @@ beforeEach(() => {
   confD = join(dir, "mise-config/conf.d");
   process.env[machineRecordVariable] = join(dir, "record/machine.json");
   process.env[miseConfigVariable] = join(dir, "mise-config");
-  // Sync trusts a fragment with a hook through this machine's mise: keep that out of its real state.
-  process.env.MISE_STATE_DIR = join(dir, "mise-state");
 });
 
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 
-  for (const [key, value] of [[machineRecordVariable, saved.record], [miseConfigVariable, saved.mise], ["MISE_STATE_DIR", saved.state]] as const) {
+  for (const [key, value] of [[machineRecordVariable, saved.record], [miseConfigVariable, saved.mise]] as const) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
@@ -45,20 +43,20 @@ const host = "opencode:\n  mode: host\n  url: http://127.0.0.1:49999\n";
 function makeOffice(at: string, { name = "t", opencode = host, packages = "packages:\n  - name: demo\n" } = {}): void {
   write(join(at, "office.yaml"), `name: ${name}\n${opencode}${packages}`);
   write(join(at, "packages/demo/package.yaml"), 'name: demo\ndescription: A demo package.\ntools:\n  jq: "1.7.1"\n');
-  write(join(at, ".mise/conf.d/machine.toml"), '# The office\'s own.\n[tools]\njq = "1.8.0"\n');
+  write(join(at, "machine.toml"), '# The office\'s own.\n[tools]\njq = "1.8.0"\n');
 }
 
 const links = () => (existsSync(confD) ? readdirSync(confD).sort() : []);
 
-test("without consent, sync writes nothing outside the office and says what to run; check warns", async () => {
+test("without consent, sync writes nothing outside the office and says what to run; check fails, as the office's tools apply nowhere", async () => {
   makeOffice(office);
 
   const changes = await sync(loadOffice(office));
 
-  expect(changes).toContain(`not linking .mise/conf.d/ into ${confD} yet: office writes outside its folder only once you agree; run office setup (unattended: office setup --manage-machine)`);
+  expect(changes).toContain(`not linking machine.toml and .office/mise/ into ${confD} yet, so the office's tools apply nowhere: office writes outside its folder only once you agree; run office setup (unattended: office setup --manage-machine)`);
   expect(existsSync(confD)).toBe(false);
   expect(readMachine()).toBeUndefined();
-  expect(machineReport(loadOffice(office))).toEqual([{ ok: "warn", name: "machine", detail: expect.stringContaining("no consent for this office to manage this machine") }]);
+  expect(machineReport(loadOffice(office))).toEqual([{ ok: false, name: "machine", detail: expect.stringContaining("no consent for this office to manage this machine, so machine.toml and the packages' tools in .office/mise/ apply nowhere; run office setup") }]);
 });
 
 test("with consent, sync links each fragment, machine.toml last, records them, and a second sync changes nothing", async () => {
@@ -67,17 +65,17 @@ test("with consent, sync links each fragment, machine.toml last, records them, a
 
   const changes = await sync(loadOffice(office));
 
-  expect(changes).toContain(`linked ${confD}/office-t-1-demo.toml to .mise/conf.d/demo.toml (package demo), so its tools apply in every folder on this machine`);
-  expect(changes).toContain(`linked ${confD}/office-t-2-machine.toml to .mise/conf.d/machine.toml (the office's own), so its tools apply in every folder on this machine`);
+  expect(changes).toContain(`linked ${confD}/office-t-1-demo.toml to .office/mise/demo.toml (package demo), so its tools apply in every folder on this machine`);
+  expect(changes).toContain(`linked ${confD}/office-t-2-machine.toml to machine.toml (the office's own), so its tools apply in every folder on this machine`);
   // mise loads conf.d by name and the last wins: after ordinary fragments, and machine.toml after the packages'.
   expect(["10-loose.toml", ...links()].sort()).toEqual(["10-loose.toml", "office-t-1-demo.toml", "office-t-2-machine.toml"]);
-  expect(readlinkSync(join(confD, "office-t-2-machine.toml"))).toBe(join(office, ".mise/conf.d/machine.toml"));
+  expect(readlinkSync(join(confD, "office-t-2-machine.toml"))).toBe(join(office, "machine.toml"));
   expect(readMachine()).toEqual({
     office: { name: "t", dir: office },
     consented: expect.any(String),
     files: [
-      { kind: "link", path: join(confD, "office-t-1-demo.toml"), package: "demo", target: join(office, ".mise/conf.d/demo.toml") },
-      { kind: "link", path: join(confD, "office-t-2-machine.toml"), package: null, target: join(office, ".mise/conf.d/machine.toml") },
+      { kind: "link", path: join(confD, "office-t-1-demo.toml"), package: "demo", target: join(office, ".office/mise/demo.toml") },
+      { kind: "link", path: join(confD, "office-t-2-machine.toml"), package: null, target: join(office, "machine.toml") },
     ],
   });
   expect(await sync(loadOffice(office))).toEqual([]);
@@ -159,15 +157,15 @@ test("an office that moved takes its record along and relinks its tools", async 
 
   expect(machineReport(loadOffice(moved)).map((line) => [line.ok, line.detail.split(";")[0]])).toEqual([
     [false, `the record names ${office}, where this office was`],
-    [false, `dangling: ${join(office, ".mise/conf.d/demo.toml")} is gone, so mise skips it silently`],
-    [false, `dangling: ${join(office, ".mise/conf.d/machine.toml")} is gone, so mise skips it silently`],
+    [false, `dangling: ${join(office, ".office/mise/demo.toml")} is gone, so mise skips it silently`],
+    [false, `dangling: ${join(office, "machine.toml")} is gone, so mise skips it silently`],
   ]);
 
   const changes = await sync(loadOffice(moved));
 
   expect(changes).toContain(`office t moved from ${office}; ${join(dir, "record/machine.json")} now names ${moved}`);
-  expect(changes).toContain(`relinked ${confD}/office-t-1-demo.toml to .mise/conf.d/demo.toml (package demo)`);
-  expect(readlinkSync(join(confD, "office-t-2-machine.toml"))).toBe(join(moved, ".mise/conf.d/machine.toml"));
+  expect(changes).toContain(`relinked ${confD}/office-t-1-demo.toml to .office/mise/demo.toml (package demo)`);
+  expect(readlinkSync(join(confD, "office-t-2-machine.toml"))).toBe(join(moved, "machine.toml"));
   expect(readMachine()?.office).toEqual({ name: "t", dir: moved });
   expect(machineReport(loadOffice(moved)).every((line) => line.ok === true)).toBe(true);
 });
@@ -178,7 +176,7 @@ test("sync never replaces a path the record doesn't list, and check reports dang
   mkdirSync(confD, { recursive: true });
   writeFileSync(join(confD, "office-t-1-demo.toml"), "# someone else's\n");
 
-  expect(await sync(loadOffice(office))).toContain(`FAILED to link .mise/conf.d/demo.toml (package demo): ${confD}/office-t-1-demo.toml exists and ${join(dir, "record/machine.json")} doesn't list it, so office leaves it; move it away and run office sync`);
+  expect(await sync(loadOffice(office))).toContain(`FAILED to link .office/mise/demo.toml (package demo): ${confD}/office-t-1-demo.toml exists and ${join(dir, "record/machine.json")} doesn't list it, so office leaves it; move it away and run office sync`);
   expect(readFileSync(join(confD, "office-t-1-demo.toml"), "utf8")).toBe("# someone else's\n");
   expect(machineReport(loadOffice(office)).find((line) => line.name.endsWith("office-t-1-demo.toml"))?.detail).toStartWith("exists but isn't in the record");
 
@@ -188,18 +186,17 @@ test("sync never replaces a path the record doesn't list, and check reports dang
   // Hand-edited: the link points somewhere else. Dangling: its target is gone.
   unlinkSync(join(confD, "office-t-1-demo.toml"));
   symlinkSync(join(dir, "elsewhere.toml"), join(confD, "office-t-1-demo.toml"));
-  rmSync(join(office, ".mise/conf.d/machine.toml"));
-  mkdirSync(join(office, ".mise/conf.d"), { recursive: true });
+  rmSync(join(office, "machine.toml"));
 
   const report = machineReport(loadOffice(office));
 
-  expect(report.find((line) => line.name.endsWith("office-t-1-demo.toml"))).toEqual({ ok: false, name: `machine ${confD}/office-t-1-demo.toml`, detail: `changed since office wrote it to ${join(office, ".mise/conf.d/demo.toml")}; office leaves it: delete it, then office sync` });
-  expect(report.find((line) => line.name.endsWith("office-t-2-machine.toml"))?.detail).toStartWith(`dangling: ${join(office, ".mise/conf.d/machine.toml")} is gone, so mise skips it silently; office sync removes it`);
+  expect(report.find((line) => line.name.endsWith("office-t-1-demo.toml"))).toEqual({ ok: false, name: `machine ${confD}/office-t-1-demo.toml`, detail: `changed since office wrote it to ${join(office, ".office/mise/demo.toml")}; office leaves it: delete it, then office sync` });
+  expect(report.find((line) => line.name.endsWith("office-t-2-machine.toml"))?.detail).toStartWith(`dangling: ${join(office, "machine.toml")} is gone, so mise skips it silently; office sync removes it`);
 
   const changes = await sync(loadOffice(office));
 
-  expect(changes).toContain(`removed ${confD}/office-t-2-machine.toml, as its file left .mise/conf.d/`);
-  expect(changes).toEqual(expect.arrayContaining([expect.stringMatching(/^FAILED to link .mise\/conf.d\/demo.toml \(package demo\): .* changed since office wrote it/)]));
+  expect(changes).toContain(`removed ${confD}/office-t-2-machine.toml, as machine.toml is gone`);
+  expect(changes).toEqual(expect.arrayContaining([expect.stringMatching(/^FAILED to link .office\/mise\/demo.toml \(package demo\): .* changed since office wrote it/)]));
   expect(lstatSync(join(confD, "office-t-1-demo.toml")).isSymbolicLink() && readlinkSync(join(confD, "office-t-1-demo.toml"))).toBe(join(dir, "elsewhere.toml"));
 });
 
@@ -210,8 +207,10 @@ test("syncMachine does nothing for a container-mode office that doesn't manage t
   expect(machineReport(loadOffice(office))).toEqual([]);
 });
 
-test("machine is a reserved package name", () => {
-  makeOffice(office, { packages: "packages:\n  - name: machine\n" });
+test("machine, config and mise are reserved package names", () => {
+  for (const name of ["machine", "config", "mise"]) {
+    makeOffice(office, { packages: `packages:\n  - name: ${name}\n` });
 
-  expect(() => readConfig(office)).toThrow("is reserved: .mise/conf.d/machine.toml is the office's own machine-wide mise file");
+    expect(() => readConfig(office)).toThrow("is reserved: machine.toml at the office root is the office's own machine-wide mise file, and mise would load .office/mise/config.toml or mise.toml by itself");
+  }
 });
