@@ -17,6 +17,7 @@ export type Pin = Lock[PinnedTool];
 export const defaultPins: Lock = {
   opencode: { version: "2.3.0", digest: "sha256:fc0f81522aceeabac47693d88389efa2bc517ce74c2c38fd6967819fcc6e4d3b" },
   claude: { version: "2.1.322", digest: "sha256:3d2bc5ae54d4d4cd63510e9fcca5b6d48d2b18806708df8c8f691aa486c5dca8" },
+  codex: { version: "0.170.0", digest: "sha256:a77ff87be7ba809d715728270a78f5ce3527dc07529416d1ef8929b90b8475eb" },
   executor: { version: "2.0.0-beta.49", digest: "sha256:cc693691db13635ad5abb456fa132634816ec7acc73f04bd6b8932e0a8c45038" },
   mise: { version: "2026.11.7", digest: "sha256:8f5426d9971eaf713b37509749174ca69cf2f08b8b25e389168dcfcab9cd1a4d" },
   sfw: {
@@ -35,6 +36,7 @@ export const defaultPins: Lock = {
 export const tested: Record<PinnedTool, { from: string; to: string }> = {
   opencode: { from: "2.2.7", to: "2.3.0" },
   claude: { from: "2.1.322", to: "2.1.322" },
+  codex: { from: "0.170.0", to: "0.170.0" },
   executor: { from: "2.0.0-beta.49", to: "2.0.0-beta.49" },
   mise: { from: "2026.11.7", to: "2026.11.7" },
   sfw: { from: "1.16.0", to: "1.16.0" },
@@ -91,8 +93,8 @@ export function wantedVersion(office: Office, tool: PinnedTool): string {
 export const lockFile = "office.lock";
 
 /** A stored lock with the tool's default sfw where it was written before sfw was pinned. */
-function withSfw(stored: v.InferOutput<typeof storedLockSchema>): Lock {
-  return { ...stored, sfw: stored.sfw ?? defaultPins.sfw };
+function withDefaults(stored: v.InferOutput<typeof storedLockSchema>): Lock {
+  return { ...stored, sfw: stored.sfw ?? defaultPins.sfw, codex: stored.codex ?? defaultPins.codex };
 }
 
 /** office.lock as written, or undefined when the office has none. */
@@ -112,7 +114,7 @@ function readStoredLock(dir: string): v.InferOutput<typeof storedLockSchema> | u
 export function readLock(dir: string): Lock | undefined {
   const stored = readStoredLock(dir);
 
-  return stored === undefined ? undefined : withSfw(stored);
+  return stored === undefined ? undefined : withDefaults(stored);
 }
 
 /** Whether office.lock exists but was written before sfw was pinned, which `office sync` moves on. */
@@ -191,7 +193,7 @@ export function readApplied(office: Office): Applied | undefined {
   if (!result.ok) throw new OfficeError(`${path} is not valid: ${result.errors.join("; ")}`);
 
   // An office applied before sfw was pinned builds its next image with the tool's default.
-  return { ...result.value, pins: withSfw(result.value.pins) };
+  return { ...result.value, pins: withDefaults(result.value.pins) };
 }
 
 export function writeApplied(office: Office, pins: Lock, refreshed: string | undefined): void {
@@ -214,7 +216,7 @@ export function changes(office: Office, from: Lock, to: Lock): { tool: PinnedToo
 
 /** The base image for a set of pins: its name carries the versions, so offices on different ones never share it. */
 export function baseImage(pins: Lock): string {
-  return `office-opencode:${pins.opencode.version}-claude${pins.claude.version}-mise${pins.mise.version}-sfw${pins.sfw.version}`;
+  return `office-opencode:${pins.opencode.version}-claude${pins.claude.version}-codex${pins.codex.version}-mise${pins.mise.version}-sfw${pins.sfw.version}`;
 }
 
 export function executorImage(pin: Pin): string {

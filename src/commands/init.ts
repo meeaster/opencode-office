@@ -20,6 +20,7 @@ export async function init(target: string, name: string | undefined) {
     OFFICE: officeName,
     OPENCODE_VERSION: defaultPins.opencode.version,
     CLAUDE_VERSION: defaultPins.claude.version,
+    CODEX_VERSION: defaultPins.codex.version,
     EXECUTOR_VERSION: defaultPins.executor.version,
     MISE_VERSION: defaultPins.mise.version,
     SFW_VERSION: defaultPins.sfw.version,

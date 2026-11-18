@@ -90,6 +90,10 @@ if [ -f "$r/claude-next" ]; then ln -sfn "$r/xdg-data/claude/versions/2.1.327" "
   copyFileSync(join(root, "xdg-data/claude/versions/2.1.325"), join(root, "xdg-data/claude/versions/2.1.327"));
   mkdirSync(join(root, "home/.local/bin"), { recursive: true });
   symlinkSync(join(root, "xdg-data/claude/versions/2.1.325"), join(root, "home/.local/bin/claude"));
+  const codex = "home/.codex/packages/standalone/current/bin/codex";
+
+  write(codex, `#!/bin/sh\nset -eu\ntest "$1" = update\nprintf 'codex update\\n' >> ${place}/calls\n`, 0o755);
+  symlinkSync(join(root, codex), join(root, "home/.local/bin/codex"));
   write("machine/sfw/sfw", `#!/bin/sh
 test "$#" = 2 && test "$1" = opencode && test "$2" = upgrade || exit 9
 printf 'screened\\n' >> ${place}/calls
@@ -167,7 +171,7 @@ test.skipIf(process.platform !== "linux")("manual package job screens the native
   const unchanged = await result();
 
   expect(unchanged).toMatchObject({ code: 0, out: expect.stringContaining("already current at PID 2200") });
-  expect(calls()).toEqual(["claude update", "screened", "opencode upgrade"]);
+  expect(calls()).toEqual(["claude update", "codex update", "screened", "opencode upgrade"]);
 
   write("next", "2.3.2\n");
   const changed = await result();
@@ -205,13 +209,21 @@ test.skipIf(process.platform !== "linux")("CLI failures are independent and miss
   const open = await result();
 
   expect(open).toMatchObject({ code: 1, error: expect.stringContaining("OpenCode update failed") });
-  expect(calls().slice(-3)).toEqual(["claude update", "screened", "opencode upgrade"]);
+  expect(calls().slice(-4)).toEqual(["claude update", "codex update", "screened", "opencode upgrade"]);
 
   rmSync(join(root, "machine/sfw/sfw"));
   const unavailable = await result();
 
   expect(unavailable).toMatchObject({ code: 1, error: expect.stringContaining("not upgraded without screening") });
-  expect(calls().slice(-4)).toEqual(["claude update", "screened", "opencode upgrade", "claude update"]);
+  expect(calls().slice(-2)).toEqual(["claude update", "codex update"]);
+});
+
+test.skipIf(process.platform !== "linux")("an unsupported Codex launcher fails independently without updating via PATH", async () => {
+  fixture();
+  rmSync(join(root, "home/.local/bin/codex"));
+  write("home/.local/bin/codex", "#!/bin/sh\nexit 0\n", 0o755);
+  expect(await result()).toMatchObject({ code: 1, error: expect.stringContaining("Codex needs its standalone") });
+  expect(calls()).toEqual(["claude update", "screened", "opencode upgrade"]);
 });
 
 test.skipIf(process.platform !== "linux")("stopped office, unregistered listener, and disabled override do not run either updater", async () => {
@@ -250,5 +262,5 @@ test.skipIf(process.platform !== "linux")("overlapping manual runs share one OS 
   }
 
   expect((await first).code).toBe(0);
-  expect(calls()).toEqual(["claude update", "screened", "opencode upgrade"]);
+  expect(calls()).toEqual(["claude update", "codex update", "screened", "opencode upgrade"]);
 }, 10_000);

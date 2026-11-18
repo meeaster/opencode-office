@@ -130,7 +130,7 @@ const opencode = v.nullish(
  * The tools whose versions an office pins in office.yaml. sfw is Socket Firewall, which every
  * package download goes through (src/sfw.ts).
  */
-export const pinnedTools = ["opencode", "claude", "executor", "mise", "sfw"] as const;
+export const pinnedTools = ["opencode", "claude", "codex", "executor", "mise", "sfw"] as const;
 
 export type PinnedTool = (typeof pinnedTools)[number];
 
@@ -139,11 +139,12 @@ const versions = v.optional(
     {
       opencode: v.optional(version),
       claude: v.optional(version),
+      codex: v.optional(version),
       executor: v.optional(version),
       mise: v.optional(version),
       sfw: v.optional(version),
     },
-    "must map opencode, claude, executor, mise and sfw to versions",
+    "must map opencode, claude, codex, executor, mise and sfw to versions",
   ),
 );
 
@@ -460,12 +461,12 @@ const lockEntry = v.strictObject({
   platforms: v.optional(v.strictObject({ "linux-x64": digest, "linux-arm64": digest, "darwin-x64": digest, "darwin-arm64": digest }, "must map linux-x64, linux-arm64, darwin-x64 and darwin-arm64 to digests")),
 });
 
-const lockEntries = { opencode: lockEntry, claude: lockEntry, executor: lockEntry, mise: lockEntry, sfw: lockEntry };
+const lockEntries = { opencode: lockEntry, claude: lockEntry, codex: lockEntry, executor: lockEntry, mise: lockEntry, sfw: lockEntry };
 
 export const lockSchema = v.strictObject(lockEntries);
 
 /** office.lock and applied.json as stored: those written before sfw was pinned lack it, and the tool's default fills it in. */
-export const storedLockSchema = v.strictObject({ ...lockEntries, sfw: v.optional(lockEntry) });
+export const storedLockSchema = v.strictObject({ ...lockEntries, sfw: v.optional(lockEntry), codex: v.optional(lockEntry) });
 
 export type Lock = v.InferOutput<typeof lockSchema>;
 

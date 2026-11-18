@@ -246,6 +246,8 @@ async function buildImages(office: Office, pins: Lock, refreshed: string): Promi
     OPENCODE_SHA256: hex(pins.opencode.digest),
     CLAUDE_VERSION: pins.claude.version,
     CLAUDE_SHA256: hex(pins.claude.digest),
+    CODEX_VERSION: pins.codex.version,
+    CODEX_SHA256: hex(pins.codex.digest),
     MISE_VERSION: pins.mise.version,
     MISE_SHA256: hex(pins.mise.digest),
     SFW_VERSION: pins.sfw.version,

@@ -38,6 +38,8 @@ ARG OPENCODE_VERSION
 ARG OPENCODE_SHA256
 ARG CLAUDE_VERSION
 ARG CLAUDE_SHA256
+ARG CODEX_VERSION
+ARG CODEX_SHA256
 ARG MISE_VERSION
 ARG MISE_SHA256
 ARG SFW_VERSION
@@ -51,6 +53,13 @@ RUN curl -fsSLo /tmp/opencode.tar.gz "https://github.com/anomalyco/opencode/rele
  && echo "${CLAUDE_SHA256}  /tmp/claude.tar.gz" | sha256sum -c - \
  && tar -xzf /tmp/claude.tar.gz -C /usr/local/bin claude \
  && rm /tmp/claude.tar.gz \
+ && curl -fsSLo /tmp/codex.tar.gz "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-package-x86_64-unknown-linux-musl.tar.gz" \
+ && echo "${CODEX_SHA256}  /tmp/codex.tar.gz" | sha256sum -c - \
+ && mkdir -p /opt/codex \
+ && tar -xzf /tmp/codex.tar.gz -C /opt/codex \
+ && ln -s /opt/codex/bin/codex /usr/local/bin/codex \
+ && codex --version \
+ && rm /tmp/codex.tar.gz \
  && curl -fsSLo /usr/local/bin/mise "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-x64" \
  && echo "${MISE_SHA256}  /usr/local/bin/mise" | sha256sum -c - \
  && chmod 755 /usr/local/bin/mise \

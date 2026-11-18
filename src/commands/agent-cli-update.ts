@@ -58,9 +58,24 @@ function nativeClaude(): string {
   throw new OfficeError("Claude Code needs its native ~/.local/bin/claude launcher for unattended updates");
 }
 
+function nativeCodex(): string {
+  const launcher = join(homedir(), ".local/bin/codex");
+  const current = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "packages/standalone/current");
+
+  for (const entry of ["bin/codex", "codex"]) {
+    try {
+      if (realpathSync(launcher) === realpathSync(join(current, entry))) return launcher;
+    } catch {
+      // Standalone releases use one of these two layouts.
+    }
+  }
+
+  throw new OfficeError("Codex needs its standalone ~/.local/bin/codex launcher for unattended updates");
+}
+
 function updateEnvironment(): NodeJS.ProcessEnv {
   const inherit = ["HOME", "PATH", "LANG", "LC_ALL", "USER", "LOGNAME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
-    "MISE_CONFIG_DIR", "MISE_DATA_DIR", "MISE_STATE_DIR", "MISE_CACHE_DIR"];
+    "MISE_CONFIG_DIR", "MISE_DATA_DIR", "MISE_STATE_DIR", "MISE_CACHE_DIR", "CODEX_HOME"];
 
   const env: NodeJS.ProcessEnv = { ...managedAgentEnvironment, CI: "1" };
 
@@ -122,6 +137,16 @@ export async function updateAgentClis(office: Office): Promise<number> {
       await executeUpdate(launch.env, dirname(claude), [claude, "update"]);
     } catch (error) {
       console.error(`office: Claude Code update failed: ${error instanceof Error ? error.message : "unknown error"}`);
+      failed = true;
+    }
+
+    try {
+      const codex = nativeCodex();
+
+      console.log("office: running codex update");
+      await executeUpdate(launch.env, dirname(codex), [codex, "update"]);
+    } catch (error) {
+      console.error(`office: Codex update failed: ${error instanceof Error ? error.message : "unknown error"}`);
       failed = true;
     }
 

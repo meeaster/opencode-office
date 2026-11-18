@@ -37,6 +37,7 @@ opencode: container
 versions:
   opencode: __OPENCODE_VERSION__
   claude: __CLAUDE_VERSION__
+  codex: __CODEX_VERSION__
   executor: __EXECUTOR_VERSION__
   mise: __MISE_VERSION__
   # Socket Firewall, which every package download goes through (see socket_firewall below).
