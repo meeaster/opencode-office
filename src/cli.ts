@@ -13,7 +13,7 @@ import { down, up } from "./commands/compose.ts";
 import { containerEnvText } from "./commands/env.ts";
 import { credentials } from "./commands/executor.ts";
 import { guiDev } from "./commands/gui.ts";
-import { init } from "./commands/init.ts";
+import { init, nextSteps } from "./commands/init.ts";
 import { pair } from "./commands/pair.ts";
 import { pin } from "./commands/pin.ts";
 import { setup } from "./commands/setup.ts";
@@ -185,6 +185,7 @@ async function main(): Promise<void> {
     for (const line of changes) console.log(line);
 
     console.log(`created the office in ${dir}`);
+    console.log(nextSteps(dir));
   } else if (command === "instructions") {
     if (rest.length > (flags.session === undefined ? 1 : 0)) throw new OfficeError("usage: office instructions [folder] | office instructions --session <id>");
 

@@ -2,6 +2,26 @@
 
 An **office** is a source-controlled folder of **desks** for OpenCode. The folder a session starts in decides what the agent knows and can do: every session loads the office root's instructions, config and skills, and a session in a desk also loads that desk's. Desks never load each other's.
 
+## Quick start
+
+You need Linux x64, Docker with Compose and Buildx, and Git.
+
+**With an AI agent** that can run terminal commands, such as Claude Code, OpenCode or Codex, paste this:
+
+> Install the `office` tool and set up an office for me by following https://raw.githubusercontent.com/meeaster/opencode-office/main/INSTALL.md. Ask me the questions it lists before you run anything.
+
+**By hand:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/meeaster/opencode-office/main/install.sh | sh
+office init ~/office --name <name>
+cd ~/office    # edit office.yaml: replace the example desk with your desks (then rm -rf example), add a git: identity
+office setup
+git add -A && git commit -m "Set up the office"   # setup never commits; on a fresh machine set a git identity first
+```
+
+[INSTALL.md](INSTALL.md) goes through the same steps with the decisions spelled out, and "First run" below covers setup's options.
+
 This repository holds the `office` command, the template `office init` copies, the built-in packages (the `office` package every office runs among them), the base image of the `opencode` container and the compose file for the two services every office runs:
 
 - **Executor** holds every service account and runs the office's schedules, webhooks and approvals. It always runs in a container.
@@ -23,13 +43,23 @@ An office keeps its own content: desks, skills, plugins, Executor apps, cron job
 
 `office` is one executable carrying the template, the built-in packages and image files. Put it on your PATH, such as at `~/.local/bin/office`. Docker with Compose and Buildx, and Git, are host prerequisites. Portable encrypted secrets also need host SOPS and age, and an office with private GitHub sources gh; no Node/npm runtime is needed. `office --version` prints its version and build commit.
 
-Every commit to `main` publishes a pre-release named `0.1.0-<UTC date and time>` on the [releases page](https://github.com/meeaster/opencode-office/releases), for Linux x64; the newest ten are kept. To install one:
+Every commit to `main` publishes a pre-release named `0.1.0-<UTC date and time>` on the [releases page](https://github.com/meeaster/opencode-office/releases), for Linux x64; the newest ten are kept. Since they are all pre-releases, GitHub has no `releases/latest`. [`install.sh`](install.sh) chooses one and installs it as `~/.local/bin/office`:
 
 ```sh
-curl -fsSLO https://github.com/meeaster/opencode-office/releases/download/<release>/office-linux-x64
-curl -fsSLO https://github.com/meeaster/opencode-office/releases/download/<release>/SHA256SUMS
-sha256sum -c SHA256SUMS
-install -m 755 office-linux-x64 ~/.local/bin/office
+curl -fsSL https://raw.githubusercontent.com/meeaster/opencode-office/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/meeaster/opencode-office/main/install.sh | OFFICE_VERSION=0.1.0-20261116T163238Z sh   # exactly this release
+```
+
+It installs the newest release that publishes the Linux x64 executable and a `SHA256SUMS`, whatever its age, and prints which; `office update` is what applies a minimum age, to later updates. It checks the download against the release's `SHA256SUMS` and runs it once with `--version` before it replaces an existing `office`. It never uses sudo, and it never edits shell startup files: if `~/.local/bin` isn't on your PATH, it prints the line to add. It is safe to rerun.
+
+To install a release by hand instead, take its name from the releases page:
+
+```sh
+release=0.1.0-20261116T163238Z
+curl -fsSLO https://github.com/meeaster/opencode-office/releases/download/$release/office-linux-x64
+curl -fsSLO https://github.com/meeaster/opencode-office/releases/download/$release/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+mkdir -p ~/.local/bin && install -m 755 office-linux-x64 ~/.local/bin/office
 office --version
 ```
 

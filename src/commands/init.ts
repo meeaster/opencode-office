@@ -2,13 +2,19 @@
 // knowledge and browser packages, as a git repository on branch main. Its office.yaml starts at the tool's
 // versions, which office.lock pins.
 import { existsSync, readdirSync } from "node:fs";
-import { basename, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 import { git } from "../git.ts";
 import { installHook } from "../hook.ts";
 import { loadOffice, OfficeError } from "../office.ts";
 import { defaultPins, writeLock } from "../versions.ts";
 import { copyTemplate, sync } from "./sync.ts";
+
+/** What `office init` prints last: what a new office needs before it runs. */
+export function nextSteps(dir: string): string {
+  return `Next: review ${join(dir, "office.yaml")} (rename or replace the example desk, choose container or host mode, add a git identity),
+then run office setup in ${dir}.`;
+}
 
 export async function init(target: string, name: string | undefined) {
   const dir = resolve(target);
