@@ -14,13 +14,14 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
+import { Ajv2020 } from "ajv/dist/2020.js";
 import * as v from "valibot";
 import { parse } from "yaml";
 
 import { panelBundle } from "./desktop.ts";
 import { copyFromRepository } from "./git.ts";
 import type { Office, PackageEntry } from "./office.ts";
-import { check, type PackageManifest, packageManifestSchema, type Parsed, type SettingValue } from "./schema.ts";
+import { check, type PackageManifest, packageManifestSchema, type Parsed, scalarSetting, type SettingValue, settingVariable } from "./schema.ts";
 import { build, buildCommit, builtinFiles, builtinPackages, toolRepository } from "./tool.ts";
 
 /** Where a pulled-in package records where it came from and the hash of each of its files. */
@@ -405,7 +406,7 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
   let document;
 
   try {
-    document = parse(readFileSync(join(dir, "package.yaml"), "utf8"));
+    document = parse(readFileSync(join(dir, "package.yaml"), "utf8"), { stringKeys: true });
   } catch (error) {
     return { ok: false, errors: [`${where}/package.yaml: ${error instanceof Error ? error.message : String(error)}`] };
   }
@@ -417,22 +418,47 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
   const manifest = read.value;
   const accepted = Object.keys(manifest.settings);
   const errors = manifest.name === entry.name ? [] : [`${where}/package.yaml names the package ${manifest.name}, not ${entry.name}`];
-  const settings: Record<string, SettingValue> = {};
+  const settings = structuredClone(entry.settings ?? {});
 
   for (const key of Object.keys(entry.cron)) {
     if (!Object.hasOwn(manifest.cron, key)) errors.push(`packages.${entry.name}.cron.${key}: no such job in ${where}/package.yaml`);
   }
 
-  for (const [key, value] of Object.entries(entry.settings)) {
-    if (accepted.includes(key)) settings[key] = value;
-    else errors.push(`settings.${key}: ${entry.name} has no such setting (it accepts ${accepted.join(", ") || "none"}); remove it from the entry in office.yaml`);
-  }
+  if (manifest.settings_schema !== undefined) {
+    try {
+      const ajv = new Ajv2020({ useDefaults: true, allErrors: true, ownProperties: true, strict: false, validateFormats: false });
+      const validate = ajv.compile(manifest.settings_schema);
 
-  for (const [key, setting] of Object.entries(manifest.settings)) {
-    if (settings[key] !== undefined) continue;
+      if ("$async" in validate) throw new Error("must be a synchronous schema");
 
-    if (setting.default === undefined) errors.push(`settings.${key} is required; add it to the entry in office.yaml: ${setting.description}`);
-    else settings[key] = setting.default;
+      if (!validate(settings)) {
+        for (const issue of validate.errors ?? []) {
+          errors.push(`${entry.name}.settings${issue.instancePath}: ${issue.message}${issue.keyword === "additionalProperties" ? `: ${issue.params.additionalProperty}` : ""}`);
+        }
+      }
+    } catch (error) {
+      errors.push(`${where}/package.yaml: settings_schema: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    for (const key of Object.keys(settings)) {
+      if (manifest.secrets[settingVariable(manifest.namespace, key)]) errors.push(`${entry.name}.settings.${key}: conflicts with a package secret`);
+    }
+
+    const gate = manifest.host?.setting;
+
+    if (gate !== undefined && !v.is(v.boolean(), settings[gate])) errors.push(`${entry.name}.settings.${gate}: host.setting requires a boolean`);
+  } else {
+    for (const [key, value] of Object.entries(settings)) {
+      if (!accepted.includes(key)) errors.push(`settings.${key}: ${entry.name} has no such setting (it accepts ${accepted.join(", ") || "none"}); remove it from the entry in office.yaml`);
+      else if (!v.is(scalarSetting, value)) errors.push(`settings.${key}: must be text, a number or true/false`);
+    }
+
+    for (const [key, setting] of Object.entries(manifest.settings)) {
+      if (Object.hasOwn(settings, key)) continue;
+
+      if (setting.default === undefined) errors.push(`settings.${key} is required; add it to the entry in office.yaml: ${setting.description}`);
+      else settings[key] = setting.default;
+    }
   }
 
   if (errors.length > 0) return { ok: false, errors };

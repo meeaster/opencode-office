@@ -94,7 +94,7 @@ export function readConfig(dir: string): OfficeConfig {
   let document;
 
   try {
-    document = parse(readFileSync(join(dir, "office.yaml"), "utf8"));
+    document = parse(readFileSync(join(dir, "office.yaml"), "utf8"), { stringKeys: true });
   } catch (error) {
     throw new OfficeError(`office.yaml: ${error instanceof Error ? error.message : String(error)}`);
   }

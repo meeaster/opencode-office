@@ -18,7 +18,7 @@ import { parse, stringify } from "yaml";
 import { installedPackages } from "./layout.ts";
 import { type Office, OfficeError, readEnvFile } from "./office.ts";
 import { type InstalledPackage, resolvePackages } from "./packages.ts";
-import { check, type ComposeFile, composeFileSchema, type PackageManifest, type Parsed, settingVariable } from "./schema.ts";
+import { check, type ComposeFile, composeFileSchema, type PackageManifest, type Parsed, scalarSetting, settingVariable } from "./schema.ts";
 
 /** The file at a package's root that gives it services. */
 export const packageComposeFile = "compose.yaml";
@@ -107,6 +107,8 @@ export function ensureSecrets(path: string, secrets: PackageManifest["secrets"])
 export function settingsEnv(installed: InstalledPackage): string {
   return Object.entries(installed.settings)
     .map(([key, value]) => {
+      if (!v.is(scalarSetting, value)) return "";
+
       const text = String(value);
 
       // A single-quoted value can't hold a quote or a line break.

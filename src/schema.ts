@@ -165,8 +165,28 @@ const skills = v.nullish(
   {},
 );
 
-/** A package setting's value; settings are written to JSON for the package's scripts. */
-const settingValue = v.union([v.string(), v.number(), v.boolean()], "must be text, a number or true/false");
+export const scalarSetting = v.union([v.string(), v.pipe(v.number(), v.finite()), v.boolean()], "must be text, a number or true/false");
+
+export type SettingValue = null | boolean | number | string | SettingValue[] | { [key: string]: SettingValue };
+
+/** YAML aliases may form cycles; only data that survives .settings.json belongs here. */
+function jsonValue(value: unknown, ancestors = new Set<object>()): value is SettingValue {
+  if (value === null || v.is(scalarSetting, value)) return true;
+
+  if ((!Array.isArray(value) && !v.is(v.object({}), value)) || ancestors.has(value)) return false;
+
+  if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return false;
+
+  ancestors.add(value);
+
+  const valid = Object.values(value).every((item) => jsonValue(item, ancestors));
+
+  ancestors.delete(value);
+
+  return valid;
+}
+
+const settingValue = v.custom<SettingValue>((value) => jsonValue(value), "must be JSON-compatible YAML");
 
 /** Names no package may have, for the mise fragment sync writes as `.office/mise/<name>.toml`. */
 export const reservedPackageNames = ["machine", "config", "mise"];
@@ -186,13 +206,13 @@ const packageEntry = v.pipe(
       repo: v.optional(text),
       path: v.optional(text),
       ref: v.optional(text),
-      settings: v.nullish(v.record(v.string(), settingValue, "must map setting names to values"), {}),
+      settings: v.pipe(v.nullish(v.record(v.string(), settingValue, "must map setting names to values")), v.transform((settings) => settings ?? {})),
       cron: cronOverrides,
     },
     mapping,
   ),
   v.check((entry) => (entry.repo === undefined ? entry.path === undefined && entry.ref === undefined : entry.path !== undefined && entry.ref !== undefined), "needs repo, path and ref together, or none of them for a built-in package or one in packages/<name>/"),
-  v.check((entry) => entry.name !== "office" || (entry.repo === undefined && Object.keys(entry.settings).length === 0), "the required office package entry can only configure cron"),
+  v.check((entry) => entry.name !== "office" || (entry.repo === undefined && Object.keys(entry.settings ?? {}).length === 0), "the required office package entry can only configure cron"),
   // The check above makes the three all present or all absent; `source` carries that as a type.
   v.transform(({ name: packageName, settings, cron, repo, path, ref }) => ({
     name: packageName,
@@ -247,7 +267,7 @@ export type OfficeConfig = v.InferOutput<typeof officeSchema>;
 
 /** A setting a package accepts: what it means, and a default or `required: true`. */
 const packageSetting = v.pipe(
-  v.strictObject({ description: text, default: v.optional(settingValue), required: v.optional(v.literal(true, "must be true, or left out with a default")) }, mapping),
+  v.strictObject({ description: text, default: v.optional(scalarSetting), required: v.optional(v.literal(true, "must be true, or left out with a default")) }, mapping),
   v.check((setting) => (setting.default === undefined) !== (setting.required === undefined), "needs a default or required: true, not both"),
 );
 
@@ -353,7 +373,8 @@ export const packageManifestSchema = v.pipe(
       // What its services, volumes and variables are named after, when that isn't its name.
       namespace: v.optional(name),
       description: text,
-      settings: v.nullish(v.record(v.string(), packageSetting, "must map setting names to settings"), {}),
+      settings: v.optional(v.record(v.string(), packageSetting, "must map setting names to settings")),
+      settings_schema: v.optional(v.union([v.boolean(), v.record(v.string(), settingValue)])),
       secrets: v.nullish(v.record(v.pipe(v.string(), v.regex(/^[A-Z][A-Z0-9_]*$/, "must be an environment variable name in capitals")), packageSecret, "must map variable names to how each is generated"), {}),
       // mise tools the package needs, each at the version an office starts at; `office sync` writes
       // them to the office's .office/mise/<name>.toml, whose versions are the office's from then on.
@@ -361,11 +382,12 @@ export const packageManifestSchema = v.pipe(
       host: v.optional(hostBlock),
       cron: packageCron,
     },
-    "must be a mapping of name, namespace, description, settings, secrets, tools, host and cron",
+    "must be a mapping of name, namespace, description, settings or settings_schema, secrets, tools, host and cron",
   ),
-  v.transform((manifest) => ({ ...manifest, namespace: manifest.namespace ?? manifest.name })),
+  v.check((manifest) => manifest.settings === undefined || manifest.settings_schema === undefined, "choose settings or settings_schema, not both"),
+  v.transform((manifest) => ({ ...manifest, settings: manifest.settings ?? {}, namespace: manifest.namespace ?? manifest.name })),
   v.forward(
-    v.check((manifest) => manifest.host?.setting === undefined || isTrueOrFalse(manifest.settings[manifest.host.setting]?.default), "must name one of the package's settings whose default is true or false"),
+    v.check((manifest) => manifest.settings_schema !== undefined || manifest.host?.setting === undefined || isTrueOrFalse(manifest.settings[manifest.host.setting]?.default), "must name one of the package's settings whose default is true or false"),
     ["host", "setting"],
   ),
   // Every compose file of the office is interpolated with the same process environment, which wins
@@ -419,7 +441,6 @@ export type ComposeFile = v.InferOutput<typeof composeFileSchema>;
 
 export type PackageManifest = v.InferOutput<typeof packageManifestSchema>;
 
-export type SettingValue = v.InferOutput<typeof settingValue>;
 
 const digest = v.pipe(v.string(), v.regex(/^sha256:[0-9a-f]{64}$/, "must be sha256:<64 hex digits>"));
 

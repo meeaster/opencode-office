@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { sync } from "./commands/sync.ts";
 import { git } from "./git.ts";
 import { loadOffice } from "./office.ts";
+import { settingsEnv } from "./package-services.ts";
 import { fetchPackage, installPackage, readPackage, resolvePackages } from "./packages.ts";
 
 let dir: string;
@@ -34,6 +35,44 @@ function read(office: string, name: string) {
 }
 
 const manifest = "name: demo\ndescription: A demo package.\nsettings:\n  url:\n    description: Where it publishes\n    required: true\n  title:\n    description: The index title\n    default: Shared\n";
+
+test("package-defined schemas validate nested settings and write defaults without flattening lists into environment variables", () => {
+  const path = join(dir, "packages/demo/package.yaml");
+
+  const schema = `name: demo
+description: Demo
+settings_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    enabled: { type: boolean, default: true }
+    roles:
+      type: object
+      properties:
+        review: { type: array, items: { $ref: '#/$defs/model' } }
+  $defs:
+    model: { enum: [fast, deep] }
+`;
+
+  const config = (models: string) => write(join(dir, "office.yaml"), `name: t\npackages:\n  - name: demo\n    settings: { roles: { review: ${models} } }\n`);
+
+  write(path, schema);
+  config("[fast, deep]");
+
+  const { loaded, result } = read(dir, "demo");
+
+  if (!result.ok) throw new Error(result.errors.join("\n"));
+
+  installPackage(loaded, result.value);
+  expect(JSON.parse(readFileSync(join(dir, "packages/demo/.settings.json"), "utf8"))).toEqual({ enabled: true, roles: { review: ["fast", "deep"] } });
+  expect(settingsEnv(result.value)).toBe("DEMO_ENABLED='true'\n");
+  config("[other]");
+  expect(read(dir, "demo").result).toMatchObject({ ok: false, errors: [expect.stringContaining("demo.settings/roles/review/0")] });
+  write(path, `${schema}settings: {}\n`);
+  expect(read(dir, "demo").result).toMatchObject({ ok: false, errors: [expect.stringContaining("not both")] });
+  write(path, schema.replace("type: boolean", "type: invalid"));
+  expect(read(dir, "demo").result).toMatchObject({ ok: false, errors: [expect.stringContaining("package.yaml: settings_schema")] });
+});
 
 test("settings the package doesn't declare, and required ones left out, are named; defaults fill the rest", () => {
   const office = join(dir, "office");

@@ -348,6 +348,19 @@ tools:                 # mise tools it needs, at the exact version an office sta
   "npm:agent-browser": "0.43.0"
 ```
 
+For structured settings, declare `settings_schema` **instead of** `settings` in `package.yaml`. This is a synchronous JSON Schema (draft 2020-12), written in YAML, for the entire settings mapping. For example:
+
+```yaml
+settings_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    enabled: { type: boolean, default: true }
+    reviewers: { type: array, items: { type: string }, minItems: 1 }
+```
+
+`office sync` and `office check` validate the settings. Property defaults fill missing values; input types are not coerced. Use `$defs` and local `$ref`s for reuse; schemas are not fetched from the network. `format` is an annotation. Lists, nested objects and null stay in `.settings.json`; only top-level scalar strings, numbers and booleans reach a service's settings environment.
+
 `office.yaml` lists the packages, each with its settings:
 
 ```yaml
