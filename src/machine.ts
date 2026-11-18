@@ -26,6 +26,7 @@ import { basename, dirname, join, relative } from "node:path";
 
 import * as v from "valibot";
 
+import { oldFragments, oldMiseFiles } from "./migrate.ts";
 import { type Office, OfficeError, readConfig } from "./office.ts";
 import { fragmentOwner, machineFile, machineFiles } from "./package-tools.ts";
 import { check } from "./schema.ts";
@@ -223,8 +224,15 @@ function owner(file: MachineFile): string {
 }
 
 /** Why sync removes a recorded file the office no longer wants, for messages. */
-function removalReason(file: MachineFile): string {
-  return file.package === null ? `as ${machineFile} is gone` : `as ${owner(file)} no longer has a fragment`;
+function removalReason(office: Office, file: MachineFile): string {
+  if (file.package !== null) return `as ${owner(file)} no longer has a fragment`;
+
+  // Earlier releases linked every file in .mise/conf.d/, the office's own fragments too, which are its project config now.
+  if (file.kind === "link" && file.target !== join(office.dir, machineFile) && file.target.startsWith(join(office.dir, oldFragments))) {
+    return `as ${relative(office.dir, file.target)} is the office's project config now: only machine.toml and the packages' fragments in .office/mise/ are linked`;
+  }
+
+  return `as ${machineFile} is gone`;
 }
 
 /** Removes every file the record lists and the record itself, ending this office's management of the machine. */
@@ -314,7 +322,7 @@ export function syncMachine(office: Office): string[] {
   for (const file of record.files) {
     if (wanted.some((link) => link.path === file.path)) continue;
 
-    const result = removeFile(file, removalReason(file));
+    const result = removeFile(file, removalReason(office, file));
 
     if (result.line !== undefined) lines.push(result.line);
 
@@ -359,6 +367,8 @@ export function machineReport(office: Office): MachineLine[] {
   if (current.kind === "other") return [...lines, { ok: false, name: "machine", detail: ownedElsewhere(current.record) }];
 
   const wanted = wantedLinks(office);
+  // Until sync moves an earlier release's files out of .mise/conf.d/, their links look unwanted; sync relinks most of them.
+  const unwanted = oldMiseFiles(office).length > 0 ? "relinks or removes it once it has moved the files out of .mise/conf.d/" : "removes it";
 
   if (current.kind === "free") {
     if (wanted.length === 0) return [...lines, { ok: "warn", name: "machine", detail: "no consent for this office to manage this machine, and nothing to write outside the office yet" }];
@@ -380,7 +390,7 @@ export function machineReport(office: Office): MachineLine[] {
     const target = file.kind === "link" ? ` to ${file.target}` : "";
     const want = wanted.find((link) => link.path === file.path);
     const retarget = want !== undefined && file.kind === "link" && want.target !== file.target;
-    const repair = want === undefined ? "removes it" : retarget ? `relinks it to ${want.target}` : "restores it";
+    const repair = want === undefined ? unwanted : retarget ? `relinks it to ${want.target}` : "restores it";
 
     const details: Record<FileState, string> = {
       present: want === undefined || retarget ? `links${target}, which the office no longer wants; office sync ${repair}` : `${file.kind === "link" ? "links" : "written"}${target} (${owner(file)})`,

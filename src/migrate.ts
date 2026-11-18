@@ -2,15 +2,16 @@
 // package, the tool's own `office` package included, reaches OpenCode through its plugin. `office
 // sync` runs each step and lists what it changed; `office check` reports what is left. Each step
 // changes nothing once done, so a second sync finds nothing to do.
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import * as v from "valibot";
 
 import { editConfig, type Office, withoutItem, withoutKeys } from "./office.ts";
+import { fragmentOwner, fragmentsFolder, machineFile } from "./package-tools.ts";
 import { isToolRepository, localDir, localFolders, pulledDir, readRecord, sourceFile } from "./packages.ts";
 import { check } from "./schema.ts";
-import { builtinPackages } from "./tool.ts";
+import { builtinPackages, toolPath } from "./tool.ts";
 
 const oldPlugin = ".opencode/plugins/office";
 
@@ -299,6 +300,85 @@ function removeExecutorEntry(office: Office): string[] {
   return [`removed the office-executor MCP server from ${opencodeConfig}; the office package registers it now`];
 }
 
+// Where earlier releases kept the office's machine-wide mise files: .mise/conf.d/, which mise also
+// loads in place inside the office, as project config. Sync's fragments move to .office/mise/ and
+// the office's machine.toml to the root, where mise loads them only through the links; a file the
+// office wrote there itself stays, as ordinary project config.
+export const oldFragments = ".mise/conf.d";
+
+// The header office init wrote into .mise/conf.d/machine.toml. A moved file that still starts with
+// it gets the template's current header, which says where the file is now; any other is the office's.
+const oldMachineHeader = `# This office's machine-wide mise config: tools, at exact versions, and settings it wants on the
+# whole machine rather than only in the office. It is the office's own file, edited freely; office
+# sync never rewrites it, and office upgrade-tools bumps its exact versions as it does mise.toml's.
+#
+# The other files in this folder are packages' fragments, whose tool lists office sync owns. In a
+# host-mode office, office sync links each file here into mise's global conf.d (once office setup
+# has your yes), and this one last, so it wins over the packages' there; the container links them
+# inside itself. In a folder with a mise.toml (the office's, a desk's, a project's), that file wins.
+`;
+
+/** A file in .mise/conf.d/ that belongs elsewhere now: a package's fragment, or the office's machine.toml. */
+type OldMiseFile = { from: string; to: string };
+
+/** The files of `.mise/conf.d/` an earlier release wrote, with where each goes now. */
+export function oldMiseFiles(office: Office): OldMiseFile[] {
+  const folder = join(office.dir, oldFragments);
+
+  if (!existsSync(folder)) return [];
+
+  return readdirSync(folder)
+    .filter((file) => file.endsWith(".toml"))
+    .sort()
+    .flatMap((file) => {
+      const from = join(folder, file);
+
+      if (file === machineFile) return [{ from, to: join(office.dir, machineFile) }];
+
+      return fragmentOwner(from) === undefined ? [] : [{ from, to: join(office.dir, fragmentsFolder, file) }];
+    });
+}
+
+/** The template's machine.toml header in place of the one office init wrote earlier, else the text as it is. */
+function currentMachineHeader(text: string): string {
+  if (!text.startsWith(oldMachineHeader)) return text;
+
+  const template = readFileSync(toolPath("template/office/machine.toml"), "utf8");
+  const header = template.slice(0, template.indexOf("\n[tools]") + 1);
+
+  return header + text.slice(oldMachineHeader.length);
+}
+
+/** Moves those files out of `.mise/conf.d/`, and removes it and `.mise/` when that leaves them empty. */
+function moveMiseFiles(office: Office): string[] {
+  const changes = oldMiseFiles(office).map(({ from, to }) => {
+    const [source, target] = [relative(office.dir, from), relative(office.dir, to)];
+
+    if (existsSync(to)) return `FAILED ${source} wasn't moved, because ${target} exists too; merge it into ${target} and delete it`;
+
+    mkdirSync(join(to, ".."), { recursive: true });
+
+    if (target === machineFile) {
+      writeFileSync(to, currentMachineHeader(readFileSync(from, "utf8")));
+      rmSync(from);
+
+      return `moved ${source} to ${target}, the office's own machine-wide mise file, which mise loads only through its link in the global conf.d`;
+    }
+
+    renameSync(from, to);
+
+    return `moved ${source} to ${target}, where office sync keeps packages' tools, which mise loads only through their links in the global conf.d`;
+  });
+
+  for (const folder of [oldFragments, ".mise"]) {
+    const path = join(office.dir, folder);
+
+    if (existsSync(path) && readdirSync(path).length === 0) rmdirSync(path);
+  }
+
+  return changes;
+}
+
 /** Runs every step, returning the office as office.yaml now describes it and one line per change. */
 export function migrate(office: Office): Migrated {
   const changes: string[] = [];
@@ -315,7 +395,7 @@ export function migrate(office: Office): Migrated {
     }
   }
 
-  changes.push(...removeExecutorEntry(current), ...removeOldOfficePlugin(current), ...movePulledPackages(current));
+  changes.push(...removeExecutorEntry(current), ...removeOldOfficePlugin(current), ...movePulledPackages(current), ...moveMiseFiles(current));
 
   return { office: current, changes };
 }

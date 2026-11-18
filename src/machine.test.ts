@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 
 import { sync } from "./commands/sync.ts";
 import { claim, grantConsent, machineRecordVariable, machineReport, miseConfigVariable, readMachine, releaseMachine, syncMachine } from "./machine.ts";
+import { oldMiseFiles } from "./migrate.ts";
 import { loadOffice, OfficeError, readConfig } from "./office.ts";
 
 let dir: string;
@@ -213,4 +214,83 @@ test("machine, config and mise are reserved package names", () => {
 
     expect(() => readConfig(office)).toThrow("is reserved: machine.toml at the office root is the office's own machine-wide mise file, and mise would load .office/mise/config.toml or mise.toml by itself");
   }
+});
+
+// The header office init wrote into .mise/conf.d/machine.toml before the files moved.
+const oldMachineHeader = `# This office's machine-wide mise config: tools, at exact versions, and settings it wants on the
+# whole machine rather than only in the office. It is the office's own file, edited freely; office
+# sync never rewrites it, and office upgrade-tools bumps its exact versions as it does mise.toml's.
+#
+# The other files in this folder are packages' fragments, whose tool lists office sync owns. In a
+# host-mode office, office sync links each file here into mise's global conf.d (once office setup
+# has your yes), and this one last, so it wins over the packages' there; the container links them
+# inside itself. In a folder with a mise.toml (the office's, a desk's, a project's), that file wins.
+`;
+
+/** An office laid out as earlier releases left it: sync's fragment and machine.toml in .mise/conf.d/, beside one of the office's own. */
+async function oldLayout(): Promise<void> {
+  makeOffice(office);
+  await sync(loadOffice(office));
+  rmSync(join(office, "machine.toml"));
+  mkdirSync(join(office, ".mise/conf.d"), { recursive: true });
+  renameSync(join(office, ".office/mise/demo.toml"), join(office, ".mise/conf.d/demo.toml"));
+  write(join(office, ".mise/conf.d/machine.toml"), `${oldMachineHeader}[tools]\njq = "1.8.0"\n`);
+  write(join(office, ".mise/conf.d/own.toml"), '[tools]\nnode = "26.13.1"\n');
+}
+
+test("sync moves an earlier release's .mise/conf.d/ files out, relinks recorded links, and leaves the office's own fragment", async () => {
+  await oldLayout();
+  grantConsent(loadOffice(office));
+
+  // The links as the earlier release recorded them.
+  mkdirSync(confD, { recursive: true });
+  symlinkSync(join(office, ".mise/conf.d/demo.toml"), join(confD, "office-t-1-demo.toml"));
+  symlinkSync(join(office, ".mise/conf.d/machine.toml"), join(confD, "office-t-2-machine.toml"));
+  symlinkSync(join(office, ".mise/conf.d/own.toml"), join(confD, "office-t-1-own.toml"));
+  write(join(dir, "record/machine.json"), JSON.stringify({ ...readMachine(), files: [
+    { kind: "link", path: join(confD, "office-t-1-demo.toml"), package: "demo", target: join(office, ".mise/conf.d/demo.toml") },
+    { kind: "link", path: join(confD, "office-t-2-machine.toml"), package: null, target: join(office, ".mise/conf.d/machine.toml") },
+    { kind: "link", path: join(confD, "office-t-1-own.toml"), package: null, target: join(office, ".mise/conf.d/own.toml") },
+  ] }));
+
+  expect(machineReport(loadOffice(office)).find((line) => line.name.endsWith("office-t-1-demo.toml"))?.detail).toEndWith("office sync relinks or removes it once it has moved the files out of .mise/conf.d/");
+
+  const changes = await sync(loadOffice(office));
+
+  expect(changes).toContain("moved .mise/conf.d/demo.toml to .office/mise/demo.toml, where office sync keeps packages' tools, which mise loads only through their links in the global conf.d");
+  expect(changes).toContain("moved .mise/conf.d/machine.toml to machine.toml, the office's own machine-wide mise file, which mise loads only through its link in the global conf.d");
+  expect(changes).toContain(`relinked ${confD}/office-t-1-demo.toml to .office/mise/demo.toml (package demo)`);
+  expect(changes).toContain(`relinked ${confD}/office-t-2-machine.toml to machine.toml (the office's own)`);
+  expect(changes).toContain(`removed ${confD}/office-t-1-own.toml, as .mise/conf.d/own.toml is the office's project config now: only machine.toml and the packages' fragments in .office/mise/ are linked`);
+  expect(links()).toEqual(["office-t-1-demo.toml", "office-t-2-machine.toml"]);
+  expect(readFileSync(join(office, ".mise/conf.d/own.toml"), "utf8")).toBe('[tools]\nnode = "26.13.1"\n');
+  expect(readlinkSync(join(confD, "office-t-2-machine.toml"))).toBe(join(office, "machine.toml"));
+
+  // The template's header replaces the one office init wrote; the office's tools stay.
+  const machine = readFileSync(join(office, "machine.toml"), "utf8");
+
+  expect(machine).toStartWith("# This office's machine-wide mise config: tools, at exact versions, and mise settings it wants in\n");
+  expect(machine).toEndWith('\n[tools]\njq = "1.8.0"\n');
+  expect(machineReport(loadOffice(office)).every((line) => line.ok === true)).toBe(true);
+  expect(await sync(loadOffice(office))).toEqual([]);
+});
+
+test("without links, sync moves the files and removes an emptied .mise/; a machine.toml at the root stays the office's", async () => {
+  await oldLayout();
+  rmSync(join(office, ".mise/conf.d/own.toml"));
+  write(join(office, "machine.toml"), "# mine\n[tools]\n");
+
+  expect(oldMiseFiles(loadOffice(office)).map((file) => file.from.slice(office.length + 1))).toEqual([".mise/conf.d/demo.toml", ".mise/conf.d/machine.toml"]);
+
+  const changes = await sync(loadOffice(office));
+
+  expect(changes).toContain("FAILED .mise/conf.d/machine.toml wasn't moved, because machine.toml exists too; merge it into machine.toml and delete it");
+  expect(readFileSync(join(office, "machine.toml"), "utf8")).toBe("# mine\n[tools]\n");
+
+  rmSync(join(office, ".mise/conf.d/machine.toml"));
+
+  expect((await sync(loadOffice(office))).filter((change) => change.includes(".mise"))).toEqual([]);
+  expect(existsSync(join(office, ".mise"))).toBe(false);
+  expect(existsSync(join(office, ".office/mise/demo.toml"))).toBe(true);
+  expect(oldMiseFiles(loadOffice(office))).toEqual([]);
 });
