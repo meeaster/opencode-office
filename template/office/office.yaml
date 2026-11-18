@@ -17,7 +17,7 @@ opencode: container
 # Optional: who the office commits as, the git default in the container and for its cron jobs (a
 # repository's own config overrides it), and `credentials: gh` to authenticate HTTPS remotes with
 # the host's gh login, which the container shares read-only. `credentials: gh` also authorizes
-# `office setup` to run `gh auth setup-git` and pin gh in mise.toml. Interactive setup offers both.
+# `office setup` to run `gh auth setup-git`. Interactive setup offers both.
 # git:
 #   name: Your Name
 #   email: you@example.com
