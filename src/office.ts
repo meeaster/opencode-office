@@ -39,7 +39,6 @@ export type Office = {
   /** The commit identity and HTTPS credentials office.yaml sets; undefined leaves git's own config. */
   git: OfficeConfig["git"];
   secrets?: OfficeConfig["secrets"];
-  claude?: OfficeConfig["claude"];
   /** The versions office.yaml pins; undefined when it has no `versions` block (the tool's defaults apply). */
   versions: Partial<Record<PinnedTool, string>> | undefined;
   /** `upgrades` from office.yaml: `minimum_release_age` and per-tool ages. */
@@ -116,7 +115,6 @@ export function loadOffice(dir: string): Office {
     opencode: opencodeMode(config.opencode, dir),
     git: config.git,
     secrets: config.secrets,
-    claude: config.claude,
     versions: config.versions,
     upgrades: config.upgrades,
     socketFirewall: config.socket_firewall,

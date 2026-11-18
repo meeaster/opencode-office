@@ -169,7 +169,9 @@ export const officeSchema = v.strictObject(
     opencode,
     git,
     secrets: v.optional(v.strictObject({ executor_owner: v.optional(text) })),
-    claude: v.optional(v.strictObject({ credential: text, settings: text })),
+    // The Claude gateway (a credential and settings for Claude Code in the container) was removed;
+    // an office.yaml that still has the block is told so instead of hearing of an unknown key.
+    claude: v.optional(v.never("was the Claude gateway, which office no longer has: delete the claude block from office.yaml")),
     versions,
     upgrades,
     // Whether package downloads (npm, pnpm, pip, uv, cargo and mise installs) go through Socket
@@ -181,7 +183,7 @@ export const officeSchema = v.strictObject(
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
     packages: v.pipe(v.nullish(v.array(packageEntry, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
   },
-  "must be a mapping of name, state, opencode, git, secrets, claude, versions, upgrades, socket_firewall, references, desks, skills, plugins and packages",
+  "must be a mapping of name, state, opencode, git, secrets, versions, upgrades, socket_firewall, references, desks, skills, plugins and packages",
 );
 
 export type OfficeConfig = v.InferOutput<typeof officeSchema>;

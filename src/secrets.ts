@@ -1,7 +1,7 @@
 // SOPS runs only on the host. Plaintext travels over stdin/stdout, never command arguments.
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
@@ -39,22 +39,6 @@ export const ownerSchema = v.strictObject({
   password: v.pipe(v.string(), v.nonEmpty()),
   name: nonempty,
   organization: nonempty,
-});
-
-export const credentialSchema = v.strictObject({ token: v.pipe(v.string(), v.regex(/^\S+$/)) });
-
-// Only documented model-routing environment is accepted, not arbitrary env, hooks or policy.
-export const claudeSettingsSchema = v.strictObject({
-  baseUrl: v.pipe(nonempty, v.url(), v.check((value) => {
-    const url = new URL(value);
-
-    return ["http:", "https:"].includes(url.protocol) && url.username === "" && url.password === "";
-  })),
-  models: v.optional(v.strictObject({
-    sonnet: v.optional(nonempty),
-    opus: v.optional(nonempty),
-    haiku: v.optional(nonempty),
-  })),
 });
 
 export type Owner = v.InferOutput<typeof ownerSchema>;
@@ -187,26 +171,9 @@ export function initializeIdentity(office: Office): void {
   }
 }
 
-/** Decrypt everything first. A failure never updates runtime plaintext or mutates services. */
+/** Decrypts the configured sources before any service changes, so a failure changes nothing. */
 export function prepareSecrets(office: Office, { allowMissingOwner = false } = {}): void {
   const owner = office.secrets?.executor_owner;
 
   if (owner !== undefined && (!allowMissingOwner || existsSync(source(office, owner)))) ownerRecord(office);
-
-  if (office.claude === undefined) return;
-
-  requireExternal(office, office.state, "Claude runtime state");
-
-  const credential = parsed(credentialSchema, decrypt(office, office.claude.credential), office.claude.credential);
-  const settings = parsed(claudeSettingsSchema, readFileSync(source(office, office.claude.settings), "utf8"), office.claude.settings);
-  const parent = join(office.state, "runtime");
-  const selected = join(parent, "claude");
-
-  // The private host-only parent protects plaintext on the host; the selected bind directory
-  // is traversable by container uid 1000 even when the host user has a different uid.
-  mkdirSync(parent, { recursive: true, mode: 0o700 });
-  chmodSync(parent, 0o700);
-  mkdirSync(selected, { recursive: true, mode: 0o755 });
-  chmodSync(selected, 0o755);
-  atomicWrite(join(selected, "gateway.json"), JSON.stringify({ ...settings, ...credential }), 0o444);
 }

@@ -3,8 +3,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 
-import * as v from "valibot";
-
 import { git } from "../git.ts";
 import { githubStep, planGithub, unreachableSources } from "../github.ts";
 import { installHook } from "../hook.ts";
@@ -12,10 +10,10 @@ import { onboardHostTools, requireOfficeTool } from "../host-tools.ts";
 import { envFilePath, sourceLine } from "../host-env.ts";
 import { claim, consentCommand, consentQuestion, grantConsent, ownedElsewhere } from "../machine.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile, updateConfig } from "../office.ts";
-import { decrypt, encrypt, initializeIdentity, parsed, prepareSecrets, requireTool } from "../secrets.ts";
+import { decrypt, encrypt, initializeIdentity, prepareSecrets, requireTool } from "../secrets.ts";
 import { deploy } from "./apps.ts";
 import { check } from "./check.ts";
-import { assertGatewayMode, installingMise, ports, startExecutor, up } from "./compose.ts";
+import { installingMise, ports, startExecutor, up } from "./compose.ts";
 import { bootstrapExecutor } from "./executor.ts";
 import { sync } from "./sync.ts";
 
@@ -91,7 +89,6 @@ export async function setup(initial: Office, options: SetupOptions): Promise<voi
   }
 
   prepareSecrets(office, { allowMissingOwner: true });
-  assertGatewayMode(office);
 
   office = await commitIdentity(office, ask);
   office = await githubStep(office, github, ask);
@@ -130,19 +127,13 @@ export async function setup(initial: Office, options: SetupOptions): Promise<voi
   await bootstrapExecutor(office, email);
   await up(office);
 
-  if (office.claude !== undefined) await connectClaude(office);
-
   await deploy(office);
 
   if (!(await check(office))) throw new OfficeError("setup checks need attention; fix the reported issues and rerun office setup");
 
   console.log(`Services and apps are ready. Next: office pair (Executor dashboard: http://localhost:${ports().executor}).`);
 
-  if (office.claude !== undefined) {
-    console.log("Claude gateway selected and Claude Agent connected: no Claude subscription login is needed; no model request has been made.");
-  } else {
-    console.log(`Provider authentication remains human-controlled: use /connect in OpenCode and /models. For Claude Agent in container mode: docker exec -it office-${office.name}-opencode-1 claude auth login, then connect Claude Agent in OpenCode. Other provider logins are independent.`);
-  }
+  console.log(`Provider authentication remains human-controlled: use /connect in OpenCode and /models. For Claude Agent in container mode: docker exec -it office-${office.name}-opencode-1 claude auth login, then connect Claude Agent in OpenCode. Other provider logins are independent.`);
 }
 
 /**
@@ -226,46 +217,4 @@ async function commitIdentity(office: Office, ask: ((text: string) => Promise<st
   console.log(`Git identity: saved ${name} <${email}> to office.yaml (review and commit it)`);
 
   return updated;
-}
-
-async function connectClaude(office: Office): Promise<void> {
-  const password = readEnvFile(join(office.state, "secrets.env")).OPENCODE_PASSWORD;
-  const url = `http://127.0.0.1:${ports().opencode}`;
-
-  const headers = {
-    authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`,
-    "content-type": "application/json",
-    "x-opencode-directory": office.opencode.directory,
-  };
-
-  const integrationSchema = v.object({ data: v.object({
-    methods: v.array(v.object({ id: v.optional(v.string()) })),
-    connections: v.array(v.object({ status: v.optional(v.object({ status: v.string() })) })),
-  }) });
-
-  for (let attempt = 0; attempt < 60; attempt++) {
-    const response = await fetch(`${url}/api/integration/claude-agent`, { headers, signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
-
-    if (response?.ok) {
-      const integration = parsed(integrationSchema, await response.text(), "Claude integration");
-
-      if (integration.data.connections.length > 0) {
-        if (integration.data.connections.some((connection) => connection.status?.status === "needs_auth")) throw new OfficeError("Claude Agent reports authentication needed; check the selected gateway launcher and rerun setup");
-
-        return;
-      }
-
-      if (integration.data.methods.some((method) => method.id === "claude-login")) break;
-    }
-
-    if (attempt === 59) throw new OfficeError("OpenCode did not become ready; rerun office setup");
-
-    await Bun.sleep(2_000);
-  }
-
-  const response = await fetch(`${url}/api/integration/claude-agent/connect/external`, {
-    method: "POST", headers, body: JSON.stringify({ methodID: "claude-login" }), signal: AbortSignal.timeout(60_000),
-  });
-
-  if (!response.ok) throw new OfficeError(`Claude Agent connection: HTTP ${response.status} (response withheld); rerun office setup after fixing the gateway launcher`);
 }

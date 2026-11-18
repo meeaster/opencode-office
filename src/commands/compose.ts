@@ -115,8 +115,6 @@ export function composeAttached(office: Office, args: string[]): number {
 export function composeArguments(office: Office, args: string[]): string[] {
   const files = ["-f", join(unpackedImage(), "compose.yaml")];
 
-  if (office.claude !== undefined && office.opencode.mode === "container") files.push("-f", join(unpackedImage(), "claude-compose.yaml"));
-
   if (sharesGithubLogin(office)) files.push("-f", join(unpackedImage(), "gh-compose.yaml"));
 
   // After the tool's files, so they can't change executor or opencode, and before the office's
@@ -429,7 +427,6 @@ function choosePins(office: Office, upgrade: boolean) {
 
 export async function up(office: Office, { upgrade = false, refresh = false } = {}): Promise<void> {
   prepareSecrets(office);
-  assertGatewayMode(office);
   prepareState(office);
 
   const { pins, moved } = choosePins(office, upgrade);
@@ -502,16 +499,9 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
   }
 }
 
-export function assertGatewayMode(office: Office): void {
-  if (office.claude !== undefined && office.opencode.mode === "host") {
-    throw new OfficeError("Claude gateway in host mode requires a dedicated host OpenCode process with a Claude launcher selected through OPENCODE_CLAUDE_PATH. office will not change a shared host server's environment or credentials. Use container mode for managed gateway delivery; host gateway setup is not complete");
-  }
-}
-
 /** Setup starts only Executor until its local token exists; OpenCode then starts once. */
 export async function startExecutor(office: Office): Promise<void> {
   prepareSecrets(office, { allowMissingOwner: true });
-  assertGatewayMode(office);
   prepareState(office);
 
   const { pins } = choosePins(office, false);

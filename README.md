@@ -567,7 +567,7 @@ office executor credentials --password-only | <clipboard-command>
 
 Review and commit `.sops.yaml`, `office.yaml` and encrypted credentials yourself; setup never commits or pushes. Back up the age identity separately. Setup installs git's pre-commit hook in the office, so commits run the gitleaks hook; in another clone, run `pre-commit install` there.
 
-**Model authentication remains human-controlled.** With the optional Claude gateway below, setup connects Claude Agent without subscription login. Otherwise log Claude Code in, then connect Claude Agent in OpenCode (or use `/connect` and `/models` for another provider):
+**Model authentication remains human-controlled.** Log Claude Code in, then connect Claude Agent in OpenCode (or use `/connect` and `/models` for another provider):
 
    ```sh
    docker exec -it office-mine-opencode-1 claude auth login
@@ -601,7 +601,7 @@ Every Executor API key acts with the owner's full authority in its organization,
 
 Upgrading from an `office` that kept the key as `opencode-executor.env`: the first command that needs the key renames the file to `office-executor.env`, and the next `office setup` adds `EXECUTOR_ORGANIZATION`, read with the key itself. Run `office up` so the containers read the new file. The key keeps its old name in Executor.
 
-## Portable secrets and the Claude gateway
+## Portable secrets
 
 `office setup` installs host mise and the office's [SOPS](https://getsops.io/docs/installation/) and [age](https://github.com/FiloSottile/age/releases), with gh and pre-commit, as "The office CLI's tools" describes. Office reads mise's official GitHub release metadata, takes the newest stable release published at least **three days** ago and verifies the downloaded executable against the asset's SHA-256 digest; mise verifies the tools' downloads. Setup shows installed and proposed versions and asks permission before changes; declining keeps working installed tools, and a missing SOPS or age stops setup with instructions. No command updates these in the background: `office upgrade-tools` bumps the office's pins, and the next `office setup` (or, in host mode, `office up`) installs them.
 
@@ -609,30 +609,12 @@ System and package-manager executables are never overwritten, global mise select
 
 You can instead install standalone releases with their published integrity checks, or use your package manager: the CLI uses them until the pinned versions are installed. Tested releases are mise **2026.11.8** (2026-11-13), SOPS **3.13.3** (2026-07-23), age **1.3.2** (2026-08-29), gh **2.104.0** (2026-11-12) and pre-commit **4.7.0**. Automated host installation supports Linux and macOS on x64 and arm64; on Windows, use WSL. SOPS runs on the host in container mode too: the container gets the office package's tools like any package's, but no age identity.
 
-Optional sources in `office.yaml` (existing offices without these stay unchanged):
+The Executor owner's source in `office.yaml`, relative to the office root and written by `office setup`:
 
 ```yaml
 secrets:
   executor_owner: secrets/executor-owner.enc.json
-claude:
-  credential: secrets/claude.enc.json
-  settings: claude/settings.json
 ```
-
-Sources are relative to the office root, independent of the current desk or nested repository. The encrypted Claude JSON contains `{"token":"<gateway credential>"}`. Create/edit it with `sops secrets/claude.enc.json`; keep plaintext out of shell history. The separate, non-secret `claude/settings.json` is an office adapter configuration, **not an automatically loaded Claude settings file**:
-
-```json
-{
-  "baseUrl": "https://gateway.example.com",
-  "models": {
-    "sonnet": "claude-sonnet-4-6",
-    "opus": "claude-opus-4-6",
-    "haiku": "claude-haiku-4-5"
-  }
-}
-```
-
-`models` is optional. Only `baseUrl` and these model aliases are supported; arbitrary Claude settings, environment, hooks and permissions are deliberately outside this adapter. The launcher delivers model aliases through Claude's supported `ANTHROPIC_DEFAULT_*_MODEL` environment variables, even when OpenCode disables settings discovery. Caller arguments (including model and policy flags) pass through unchanged.
 
 The host identity normally lives at `~/.config/sops/age/keys.txt` (`$XDG_CONFIG_HOME` is honored). Standard SOPS identity selection, including `SOPS_AGE_KEY_FILE`, also works. `office setup --generate-age-key` creates a missing identity only with explicit consent, shows **only its public recipient**, and preserves any existing `.sops.yaml`. Multiple recipients are supported by normal SOPS rules:
 
@@ -644,15 +626,11 @@ creation_rules:
       age1<second-public-recipient>
 ```
 
-On a new computer, a newly generated identity **cannot** decrypt an existing office. Send its public recipient to an already-authorized host. There, add it to `.sops.yaml`, run `sops updatekeys secrets/claude.enc.json` and `sops updatekeys secrets/executor-owner.enc.json` for the sources in use, review/commit those encrypted files, and sync them to the new host. Use ordinary `sops <file>` for later edits; `updatekeys` changes enrollment, not the secret values. Keep authorized recovery identities backed up.
+On a new computer, a newly generated identity **cannot** decrypt an existing office. Send its public recipient to an already-authorized host. There, add it to `.sops.yaml`, run `sops updatekeys` on each encrypted file in `secrets/`, review/commit those encrypted files, and sync them to the new host. Use ordinary `sops <file>` for later edits; `updatekeys` changes enrollment, not the secret values. Keep authorized recovery identities backed up.
 
-`office up` decrypts and validates all configured sources **before changing services**, never falling back to old runtime plaintext on failure. It atomically replaces `state/runtime/claude/gateway.json`. The host-only `runtime/` parent is mode 0700; its selected `claude/` child is 0755 and the runtime file 0444 so container uid 1000 can read it even when the host has another uid. Host users cannot traverse the private parent. Only that selected child directory is mounted read-only at `/run/office-claude`; mounting the directory rather than a single file makes atomic rotation visible. Keep state outside the repository and do not weaken the parent permissions.
+`office up` decrypts and validates the configured sources **before changing services**. No age key or SOPS executable enters the image or mounts, and Executor owner plaintext stays in host memory.
 
-No age key or SOPS executable enters the image or mounts. Executor owner plaintext stays in host memory and is never mounted. The Claude launcher sets the token/base URL only for its Claude child, then execs the real binary, preserving signals and exit status. Both direct `claude` and OpenCode's non-secret `OPENCODE_CLAUDE_PATH` use it; no token is put in global OpenCode environment, image layers or build arguments. Missing/malformed mounted credentials fail before Claude starts. Without `claude:` the launcher passes through to ordinary Claude login behavior.
-
-After rotating with SOPS, run `office up`. Fresh Claude processes read the new credential; replace already-running Claude processes to rotate those too. The container remains the trust boundary: unrestricted agents able to read the selected mount can read its token. OpenCode provider plugins keep their own independent login configuration; this adapter does not wire or share their credentials.
-
-Managed gateway delivery currently requires container mode. In host mode office refuses a configured gateway before changing services, rather than altering a shared host server. A host gateway needs a dedicated OpenCode process configured by its operator with `OPENCODE_CLAUDE_PATH` pointing at a host launcher; this release does not generate or validate that host adapter. Ordinary host-mode offices remain supported.
+An earlier `office` had a Claude gateway (a `claude:` block feeding Claude Code a gateway token and base URL). It is gone: an `office.yaml` that still has the block fails with a message to delete it, and the encrypted credential it named can be deleted too.
 
 ## Not yet
 
