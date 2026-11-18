@@ -225,7 +225,7 @@ upgrades:
 2. `office setup` once, which asks whether the office may manage this machine (see "Machine"); `--manage-machine` says yes unattended. Or, for an office set up before host mode, `office setup --manage-machine` then `office sync`.
 3. `office up`. It starts `executor` and the office's own services, removes an `opencode` container left from container mode, writes the MCP files above, installs Socket Firewall (see "Socket Firewall"), runs `mise trust` and `mise install` (through sfw) for the root's and each desk's `mise.toml`, then `mise install` from `/` for the office's machine-wide tools (`machine.toml` and `.office/mise/`, through their links; it says what to run when there are none), and installs the cron timers.
 4. `office apps deploy`, so the apps reach the host's server, then `office check`.
-5. Add the line `office setup` printed to your `~/.zshrc`, after `mise activate`, so your terminal has the office's environment (see "Socket Firewall").
+5. Accept the shell startup update during host setup, or follow the printed instructions. Open a new terminal to load the changes (see "Socket Firewall").
 
 Containers reach a server on the host's loopback through `host.docker.internal`; with Docker Desktop on WSL that reaches a server listening on `127.0.0.1` in WSL, so nothing listens on another address. Sessions start at the office's own path, so the host server also loads its global configuration and every `AGENTS.md` from the office up to your home folder; the container's machine note exists only in container mode.
 
@@ -294,7 +294,7 @@ socket_firewall: true     # false turns it off in both modes
 
 Each is a file in the machine record, with the usual rules: `office check` has a line per file (sfw's names the installed version against the applied and pinned ones), turning the firewall off removes `sfw/`, and leaving host mode or `office sync --release-machine` removes everything. These names carry no office name: the folder is the tool's own, a machine has one host-mode office, and your startup file names one stable path. Until `office up` has installed sfw, the wrappers refuse to run downloads rather than run them unchecked. `office up` installs sfw before the office's tools, whose `mise install` it runs through the mise wrapper.
 
-Nothing edits your shell's startup files. `office setup` shows the line to add among its closing steps, after `mise activate` so the wrappers stay ahead of mise's tool folders:
+Host `office setup` offers to update the detected shell's interactive startup file (`~/.bashrc`, or `.zshrc` in `$ZDOTDIR` or home). It checks for existing mise activation and office environment lines, including literal sourced files. With your confirmation it adds missing activation before the office environment, so the wrappers stay ahead of mise's tool folders. For manual setup, put this after `mise activate`:
 
 ```sh
 [ -r "$HOME/.local/share/office/env.sh" ] && . "$HOME/.local/share/office/env.sh"

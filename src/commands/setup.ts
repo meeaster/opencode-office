@@ -14,6 +14,7 @@ import { claim, consentCommand, consentQuestion, grantConsent, ownedElsewhere } 
 import { executorEnvFile, type Office, OfficeError, readEnvFile, updateConfig } from "../office.ts";
 import { last, type NextStep, type Reporter, say, terminalAsk } from "../report/index.ts";
 import { decrypt, encrypt, initializeIdentity, prepareSecrets, requireTool } from "../secrets.ts";
+import { configureStartup, interactiveShell } from "../shell-startup.ts";
 import { offerRestart, systemStep, verifySystems } from "../system-setup.ts";
 import { deploy } from "./apps.ts";
 import { check } from "./check.ts";
@@ -124,6 +125,9 @@ export async function setup(initial: Office, options: SetupOptions, reporter: Re
   if (office.opencode.mode === "host") {
     stage = reporter.stage("This machine", { key: "machine" });
     shell = await machineConsent(office, options.manageMachine === true, ask);
+    const detected = interactiveShell();
+
+    if (shell && detected) shell = await configureStartup(detected, hostTool("mise"), ask);
     stage.done(claim(office).kind === "ours" ? `managed by office ${office.name}` : "not managed by this office");
   }
 
@@ -242,7 +246,7 @@ function nextSteps(office: Office, shell: boolean): NextStep[] {
     steps.push({
       title: "Your shell",
       items: [
-        { label: `office sync writes ${envFilePath()}, the environment agents and your terminal share (Socket Firewall's wrappers first on PATH, package release ages). Add this line to your ~/.zshrc (or ~/.bashrc), after mise activate; office check says whether your startup files source it:` },
+        { label: `For bash or zsh, enable mise in the interactive startup file (eval "$(mise activate bash)" or eval "$(mise activate zsh)"). Source ${envFilePath()} after activation so the office wrappers come first. Keep existing lines if already configured:` },
         { label: "", value: sourceLine() },
       ],
     });

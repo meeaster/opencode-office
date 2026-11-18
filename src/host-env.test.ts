@@ -12,6 +12,7 @@ import { globalConfD, grantConsent, installSfw, machineRecordVariable, machineRe
 import { loadOffice } from "./office.ts";
 import { check, packageManifestSchema } from "./schema.ts";
 import { wrappedCommands } from "./sfw.ts";
+import { configureStartup } from "./shell-startup.ts";
 import { defaultPins, hostPlatform } from "./versions.ts";
 
 let dir: string;
@@ -56,6 +57,29 @@ function makeOffice({ firewall = true, host = "" } = {}): void {
 const data = () => join(dir, "data");
 
 const sfwPath = () => join(dir, "data/sfw/sfw");
+
+test("setup adds bash activation before an existing office source and doesn't prompt twice", async () => {
+  const file = join(dir, "home/.bashrc");
+  const original = `# eval "$(mise activate bash)"\nsource '${envFilePath()}'\n`;
+  write(file, original);
+  expect(await configureStartup("bash", "mise", async () => "no")).toBe(true);
+  expect(readFileSync(file, "utf8")).toBe(original);
+  expect(await configureStartup("bash", "mise", async () => "yes")).toBe(false);
+  expect(readFileSync(file, "utf8")).toBe(original.replace("\nsource", '\neval "$(mise activate bash)"\nsource'));
+  expect(await configureStartup("bash", "mise")).toBe(false);
+});
+
+test("setup follows zsh's sourced activation and updates the linked rc in ZDOTDIR", async () => {
+  const folder = join(dir, "zsh");
+  const linked = join(folder, "dotfile");
+  process.env.ZDOTDIR = folder;
+  write(join(dir, "home/tools"), 'eval "$(mise activate zsh)"\n');
+  write(linked, 'source "$HOME/tools"');
+  symlinkSync(linked, join(folder, ".zshrc"));
+  expect(await configureStartup("zsh", "mise", async () => "yes")).toBe(false);
+  expect(readFileSync(linked, "utf8")).toBe(`source "$HOME/tools"\n${sourceLine()}\n`);
+  expect(await configureStartup("zsh", "mise")).toBe(false);
+});
 
 test.skipIf(hostPlatform() === undefined)("with the firewall on, sync writes the wrappers and the environment file, records each, and says sfw comes with office up", async () => {
   makeOffice();

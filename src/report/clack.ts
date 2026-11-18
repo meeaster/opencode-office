@@ -145,6 +145,7 @@ class ClackStage implements Stage {
   private readonly running: string[] = [];
   private total = 0;
   private finishedParts = 0;
+  private readonly completedLines: string[] = [];
   /** Output of parts that failed, shown on their own when the stage fails. */
   private readonly failedParts: string[] = [];
   /** Whether the stage's header line has been written above its part lines. */
@@ -223,6 +224,8 @@ class ClackStage implements Stage {
   }
 
   private flush(): void {
+    if (this.completedLines.length > 0) process.stdout.write(`${this.completedLines.splice(0).join("\n")}\n`);
+
     for (const { kind, text } of this.pending.splice(0)) {
       if (kind === "note") clack.log.info(wrap(text));
       else if (kind === "warn") clack.log.warn(wrap(text));
@@ -310,7 +313,7 @@ class ClackStage implements Stage {
         end();
         const rest = [summary ?? "done", elapsed(performance.now() - start)].filter(Boolean).join(" · ");
 
-        this.above(`${styleText("gray", clack.S_BAR)}  ${styleText("green", "✓")} ${name}  ${dim(rest)}`);
+        this.completedLines.push(`${styleText("gray", clack.S_BAR)}  ${styleText("green", "✓")} ${name}  ${dim(rest)}`);
       },
       fail: (why) => {
         const { reason, evidence } = partFailure(why, own);
