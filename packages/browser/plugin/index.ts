@@ -5,9 +5,12 @@
 // - agent-browser drives a headless Chromium of its own. The package declares it as a mise tool,
 //   so `office sync` writes it into the office's .mise/conf.d/browser.toml and it is on the PATH of
 //   the office's container (mise's shims) and of a host whose mise installs it.
-// - Browse drives the user's own Chrome through its relay and extension. Its installer puts the
-//   binary in ~/.local/bin (or $XDG_BIN_HOME, or $OPENCODE_BROWSER_HOME/bin), and that is the only
-//   place this looks: xdg-utils ships an unrelated `browse` on the PATH.
+// - Browse drives the user's own Chrome through its relay and extension. It is host-mode only, as the
+//   office declares (`.office.json`, which `office sync` writes from office.yaml's `opencode`): in a
+//   container-mode office it is never registered, even for a host session opened in the office.
+//   The package's install script puts the binary in ~/.local/bin, as Browse's installer does (or
+//   $XDG_BIN_HOME, or $OPENCODE_BROWSER_HOME/bin), and those are the only places this looks:
+//   xdg-utils ships an unrelated `browse` on the PATH.
 //
 // A missing command registers nothing, and nothing here fails a session. It imports only Node's
 // built-ins, so it runs with nothing installed.
@@ -32,6 +35,9 @@ type Context = {
 };
 
 type Settings = { agentBrowserTools: string; browse: boolean };
+
+/** Where the office runs OpenCode, as it declares; undefined before `office sync` writes it. */
+type Mode = "host" | "container" | undefined;
 
 // OpenCode loads the plugin through the link `.opencode/plugins/browser`; the real folder is the
 // package's, beside its skills/ and .settings.json.
@@ -88,10 +94,21 @@ function findBrowse(): string | undefined {
   return dirs.map((dir) => join(dir, "browse")).find(executable);
 }
 
+/** The office's mode from `.office.json`, which `office sync` writes beside `.settings.json`. */
+function readMode(): Mode {
+  try {
+    const read: { opencode?: string } = JSON.parse(readFileSync(join(packageDir, ".office.json"), "utf8"));
+
+    return read.opencode === "host" || read.opencode === "container" ? read.opencode : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Each server this session gets, by name, with its command; and why each other one is absent. */
 type Servers = { present: Map<string, string[]>; absent: string[] };
 
-function servers(settings: Settings): Servers {
+function servers(settings: Settings, mode: Mode): Servers {
   const present = new Map<string, string[]>();
   const absent: string[] = [];
   const agentBrowser = findAgentBrowser();
@@ -101,9 +118,15 @@ function servers(settings: Settings): Servers {
   else if (agentBrowser === undefined) absent.push("`agent-browser`: the command isn't on this server's PATH (the office's `.mise/conf.d/browser.toml` declares it; `mise install` in the office installs it)");
   else present.set("agent-browser", [agentBrowser, "mcp", "--tools", settings.agentBrowserTools]);
 
-  if (!settings.browse) absent.push("`browse`: turned off (the package's `browse` setting is false)");
-  else if (browse === undefined) absent.push("`browse`: Browse isn't installed for this server's user (no `~/.local/bin/browse`)");
-  else present.set("browse", [browse, "mcp"]);
+  if (mode === "container") {
+    absent.push(
+      "`browse`: not in this office. Browse, the user's own Chrome, is host-mode only, and this office runs OpenCode in its container (`opencode: container`), even when a host session opens it. Use `agent-browser`, or OpenCode's in-app browser (`tools.browser.*`) when the desktop app is attached",
+    );
+  } else if (mode === undefined) absent.push("`browse`: the office's mode is unknown until `office sync` writes the package's `.office.json`");
+  else if (!settings.browse) absent.push("`browse`: turned off (the package's `browse` setting is false)");
+  else if (browse === undefined) {
+    absent.push("`browse`: not installed yet. `mise install` in the office installs it once (or `mise run browser:install`); it updates itself after that, and the user pairs Chrome once with `~/.local/bin/browse pair`");
+  } else present.set("browse", [browse, "mcp"]);
 
   return { present, absent };
 }
@@ -119,7 +142,7 @@ function browserSkill(settings: Settings): Skill {
 
   if (line === undefined) throw new Error(`${skillFile} has no description`);
 
-  const { present, absent } = servers(settings);
+  const { present, absent } = servers(settings, readMode());
 
   const available = [...[...present].map(([name, command]) => `- \`${name}\`: registered, running \`${command.join(" ")}\``), ...absent.map((reason) => `- ${reason}`)];
 
@@ -146,15 +169,15 @@ export default {
     // Looked up on each load of the MCP servers, so a tool installed since is found on the next.
     await ctx.mcp.transform((editor) => {
       try {
-        for (const [name, command] of servers(readSettings()).present) editor.set(name, { type: "local", command });
+        for (const [name, command] of servers(readSettings(), readMode()).present) editor.set(name, { type: "local", command });
       } catch (error) {
         console.error("browser plugin: no browser MCP servers registered:", error);
       }
     });
 
-    // Watch the directory so sync replacing the settings file doesn't detach the watcher.
+    // Watch the directory so sync replacing the settings or mode file doesn't detach the watcher.
     const watcher = watch(packageDir, (_event, file) => {
-      if (file === ".settings.json") {
+      if (file === ".settings.json" || file === ".office.json") {
         void ctx.skill.reload().catch(console.error);
         void ctx.mcp.reload().catch(console.error);
       }

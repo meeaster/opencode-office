@@ -5,12 +5,14 @@ description: Choose and use a browser tool. Use before verifying a UI change, au
 
 # Browser automation
 
-The office has up to three browsers. Pick by whose browser the task needs:
+The office's mode (`opencode:` in `office.yaml`) decides which browsers exist. In **host mode** OpenCode runs on the machine itself and has what it has, the user's own Chrome through Browse included. In **container mode** OpenCode runs in a container with no desktop: browser work goes through `agent-browser`, and the in-app browser when the desktop app is attached. Browse is never available in a container-mode office, even to a host session opened in it.
+
+Pick by whose browser the task needs:
 
 | Tool | Drives | Use for |
 |---|---|---|
-| `agent-browser` | A headless Chromium of its own, on the machine OpenCode runs on | Verifying UI work, repeatable checks, scraping public pages, anything unattended or in the office's container |
-| `browse` | The user's real Chrome, with their logins, cookies and extensions, through the Browse extension | Sites the user is signed in to, tasks in their session, handing control to the user (a login, a CAPTCHA, a confirmation) |
+| `agent-browser` | A headless Chromium of its own, on the machine OpenCode runs on; both modes | Verifying UI work, repeatable checks, scraping public pages, anything unattended |
+| `browse` | Host mode only: the user's real Chrome, with their logins, cookies and extensions, through the Browse extension | Sites the user is signed in to, tasks in their session, handing control to the user (a login, a CAPTCHA, a confirmation) |
 | `tools.browser.*` | OpenCode's in-app browser, beside the session in the desktop app | Showing the user a page while you work on it, when those tools are present: only when the desktop app is attached to this session. OpenCode's own `browser` skill covers them |
 
 Default to `agent-browser`. Reach for `browse` only when the task needs the user's own browser state, and say so before acting there: the user's tabs, cookies and logins are shared, so its actions are real and visible to them.

@@ -82,8 +82,8 @@ plugins: []
 packages:
   # Lists the articles in knowledge/ in every session.
   - name: knowledge
-  # Browser automation: agent-browser (headless Chromium, a mise tool) and, where it is installed,
-  # Browse (the user's own Chrome), each an MCP server in every session.
+  # Browser automation: agent-browser (headless Chromium, a mise tool) in either mode, and in host
+  # mode Browse (the user's own Chrome, installed once, self-updating), each an MCP server.
   - name: browser
 #  - name: artifact-share
 #    settings:
