@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { installedPackages, type InstalledPackages } from "../layout.ts";
 import { type Office, OfficeError } from "../office.ts";
 import type { PackageManifest, Parsed } from "../schema.ts";
+import { officeCommand } from "../tool.ts";
 import { type ScheduleFields, scheduleFields } from "./schedule.ts";
 
 export type CronJob = { id: string; fields: ScheduleFields; script: string };
@@ -79,6 +80,7 @@ export async function executeJob(office: Office, job: CronJob): Promise<number> 
     const child = spawn("/bin/sh", [job.script], {
       cwd: office.dir,
       stdio: "inherit",
+      env: { ...process.env, OFFICE_CRON_COMMAND: officeCommand() },
     });
 
     child.on("error", fail);

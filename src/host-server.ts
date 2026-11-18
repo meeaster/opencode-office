@@ -1,7 +1,7 @@
 // The opt-in local OpenCode background service. OpenCode still owns service.json and its password.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
@@ -12,9 +12,10 @@ import { hasSystemd, unitDirVariable } from "./cron/host.ts";
 import { envFilePath, miseShims, opencodeBin } from "./host-env.ts";
 import { officeTool, requireOfficeTool } from "./host-tools.ts";
 import { type Office, OfficeError, readEnvFile } from "./office.ts";
-import { check, type Parsed } from "./schema.ts";
+import { check, type Parsed, version as releaseVersion } from "./schema.ts";
 import { requireHostIdentity, source, validateServerSecrets } from "./secrets.ts";
 import { shellQuote } from "./sfw.ts";
+import { compareVersions } from "./versions.ts";
 
 export { unitDirVariable } from "./cron/host.ts";
 
@@ -27,6 +28,14 @@ export function serverUnit(office: Office): string {
 
 export function serverUnitPath(office: Office): string {
   return resolve(process.env[unitDirVariable] ?? join(xdg("CONFIG", ".config"), "systemd/user"), serverUnit(office));
+}
+
+function serverWantedFile(office: Office): string {
+  return join(office.state, "managed-opencode.wanted");
+}
+
+export function markServerStopped(office: Office): void {
+  rmSync(serverWantedFile(office), { force: true });
 }
 
 function xdg(kind: "CONFIG" | "DATA" | "STATE" | "CACHE", fallback: string): string {
@@ -176,7 +185,6 @@ export function planServer(office: Office): ServerPlan {
     `XDG_STATE_HOME=${xdg("STATE", ".local/state")}`,
     `XDG_CACHE_HOME=${xdg("CACHE", ".cache")}`,
     `PATH=${[miseShims(), join(homedir(), ".local/bin"), opencodeBin(), "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"].join(":")}`,
-    "OPENCODE_DISABLE_AUTOUPDATE=1",
   ];
 
   if (identity !== undefined) variables.push(`SOPS_AGE_KEY_FILE=${identity}`);
@@ -202,6 +210,8 @@ export function planServer(office: Office): ServerPlan {
     "",
     "[Service]",
     "Type=exec",
+    // `down` also prevents an already-queued takeover or an enabled unit at login from starting.
+    `ExecCondition=:/usr/bin/test -f ${systemdQuote(serverWantedFile(office))}`,
     ...variables.map((value) => `Environment=${systemdQuote(value)}`),
     // The colon prefix switches off systemd's $ expansion; only the inner shell expands variables.
     `ExecStart=:/bin/sh -c ${systemdQuote(script)}`,
@@ -233,10 +243,12 @@ export function planServer(office: Office): ServerPlan {
 }
 
 const pidSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(2));
-const infoSchema = v.object({ pid: pidSchema, version: v.string() });
+const infoSchema = v.object({ pid: pidSchema, version: releaseVersion });
 const registrationSchema = v.object({ pid: pidSchema, url: v.string() });
 
-async function serverPid(office: Office): Promise<number | undefined> {
+type ServerInfo = v.InferOutput<typeof infoSchema>;
+
+async function serverInfo(office: Office): Promise<ServerInfo | undefined> {
   const { OPENCODE_PASSWORD: password } = readEnvFile(join(office.state, "secrets.env"));
 
   if (password === undefined) return;
@@ -251,10 +263,14 @@ async function serverPid(office: Office): Promise<number | undefined> {
 
     const info = check(v.safeParse(infoSchema, await response.json()));
 
-    return info.ok ? info.value.pid : undefined;
+    return info.ok ? info.value : undefined;
   } catch {
     return;
   }
+}
+
+async function serverPid(office: Office): Promise<number | undefined> {
+  return (await serverInfo(office))?.pid;
 }
 
 function mainPid(unit: string): number {
@@ -351,8 +367,8 @@ function processIdentity(pid: number): string {
   return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
 }
 
-function queueRestart(plan: ServerPlan, { stray, legacy }: Incumbent): void {
-  const lines = ["set -eu"];
+function queueRestart(office: Office, plan: ServerPlan, { stray, legacy }: Incumbent): void {
+  const lines = ["set -eu", `test -f ${shellQuote(serverWantedFile(office))} || exit 0`];
 
   if (legacy) lines.push(`systemctl --user stop ${legacyUnit}`);
 
@@ -396,13 +412,20 @@ export async function startServer(office: Office, plan: ServerPlan, upgrade: boo
 
   if (property(unit, "UnitFileState") !== "enabled") userSystemd(["enable", path]);
 
+  mkdirSync(office.state, { recursive: true });
+  const marker = serverWantedFile(office);
+  const existing = lstatSync(marker, { throwIfNoEntry: false });
+
+  if (existing === undefined) writeFileSync(marker, "", { flag: "wx", mode: 0o600 });
+  else if (!existing.isFile()) throw new OfficeError(`${marker} is not an office state file`);
+
   console.log(`office: ${unit} runs ${program}`);
 
   if (upgrade && (active || incumbent.legacy || incumbent.stray !== undefined)) {
     if (incumbent.legacy) console.log(`office: taking over ${legacyUnit}; disable it and any restart timer for it yourself`);
 
     console.log(`office: queueing OpenCode restart independently of this terminal; verify with office check or journalctl --user -u ${unit.replace(/\.service$/, "-restart.service")} -u ${unit}`);
-    queueRestart(plan, incumbent);
+    queueRestart(office, plan, incumbent);
 
     return;
   }
@@ -424,6 +447,177 @@ export async function startServer(office: Office, plan: ServerPlan, upgrade: boo
   }
 
   throw new OfficeError(`${unit} did not become the healthy OpenCode server at ${office.opencode.url}; see journalctl --user -u ${unit} and check the service password`);
+}
+
+/** Don't run a synchronous restart from a terminal that would die with the server. */
+export function inManagedServer(office: Office): boolean {
+  return process.platform === "linux" && readFileSync("/proc/self/cgroup", "utf8").split(/[\/\n]/).includes(serverUnit(office));
+}
+
+const updateUnitProperties = "FragmentPath,DropInPaths,NeedDaemonReload,UnitFileState,ActiveState,SubState,MainPID,ExecMainPID,ExecMainCode,ExecMainStatus";
+
+function updateUnit(office: Office) {
+  const unit = serverUnit(office);
+  const result = userSystemd(["show", `--property=${updateUnitProperties}`, unit]).split("\n");
+  const read = (key: string) => result.find((line) => line.startsWith(`${key}=`))?.slice(key.length + 1);
+
+  if (read("FragmentPath") !== serverUnitPath(office) || read("DropInPaths") !== "" || read("NeedDaemonReload") !== "no") {
+    throw new OfficeError(`${unit} has a different loaded file, a drop-in, or a pending reload; run office up before updating`);
+  }
+
+  const active = read("ActiveState") === "active";
+  const recovering = read("ActiveState") === "activating" && read("SubState") === "auto-restart";
+  // `serve --service` exits cleanly when an incumbent wins. A stopped/never-run unit does not
+  // have a successful main process exit (OpenCode exits 143 when systemd stops it).
+  const displaced = read("ActiveState") === "inactive" && read("ExecMainCode") === "1" && read("ExecMainStatus") === "0" && Number(read("ExecMainPID")) >= 2;
+
+  const enabled = read("UnitFileState") === "enabled";
+
+  return { eligible: enabled && (active || recovering || displaced), stopped: !enabled || (read("ActiveState") === "inactive" && read("ExecMainStatus") === "143"), active, displaced, main: Number(read("MainPID")) || 0 };
+}
+
+export type UpdatePeer = ServerInfo & { owned: boolean };
+
+/** Accept only a healthy, authenticated service registered to this profile and origin. */
+export async function updatePeer(office: Office): Promise<UpdatePeer | undefined> {
+  if (!existsSync(serverWantedFile(office))) return;
+
+  const state = updateUnit(office);
+
+  if (!state.eligible) return;
+
+  const info = await serverInfo(office);
+
+  if (!info || !registeredHere(office, info.pid)) {
+    if (!state.active && !await occupied(office)) return;
+
+    throw new OfficeError("cannot verify the registered OpenCode listener; leaving it alone");
+  }
+
+  const owned = info.pid === state.main;
+
+  if (!owned && activeUnit(legacyUnit)) throw new OfficeError("the legacy OpenCode unit is active; take over the listener explicitly first");
+
+  return { ...info, owned };
+}
+
+async function takeOverAgentPeer(office: Office, program: string, peer: UpdatePeer): Promise<boolean> {
+  const identity = processIdentity(peer.pid);
+  const confirmed = await updatePeer(office);
+
+  if (confirmed === undefined) return false;
+
+  if (confirmed.owned || confirmed.pid !== peer.pid || !/^\d+$/.test(identity)) {
+    throw new OfficeError("the registered OpenCode process changed during takeover; retry from a separate terminal");
+  }
+
+  // A different .service owns a supervised listener. Only a client-spawned native OpenCode
+  // of this profile can be taken over here; other supervisors need explicit intervention.
+  const group = readFileSync(`/proc/${peer.pid}/cgroup`, "utf8").trim();
+  const binary = readlinkSync(`/proc/${peer.pid}/exe`).replace(/ \(deleted\)$/, "");
+
+  if (group.split("\n").some((line) => line.endsWith(".service")) || binary !== realpathSync(program)) {
+    throw new OfficeError("the registered server is not an unsupervised copy of this OpenCode install; leaving it alone");
+  }
+
+  if (!existsSync(serverWantedFile(office)) || !updateUnit(office).eligible) return false;
+
+  if (!processIdentityIs(peer.pid, identity)) throw new OfficeError("the registered OpenCode PID changed before takeover");
+
+  process.kill(peer.pid, "SIGTERM");
+
+  const deadline = Date.now() + 10_000;
+
+  // A connected TUI also tries to fill this gap. Wait for the exact process, not a long delay.
+  while (Date.now() < deadline && processIdentityIs(peer.pid, identity)) await Bun.sleep(20);
+
+  if (processIdentityIs(peer.pid, identity)) throw new OfficeError("the previous OpenCode listener did not exit; leaving the managed unit alone");
+
+  if (!existsSync(serverWantedFile(office)) || !updateUnit(office).eligible) return false;
+
+  const unit = serverUnit(office);
+
+  if (await occupied(office) && (await serverPid(office)) !== mainPid(unit)) throw new OfficeError("another process took the OpenCode address; leaving it alone");
+
+  userSystemd(["start", unit]);
+
+  return true;
+}
+
+/** Reconcile the already-installed, recorded unit. Never writes its files or restarts other services. */
+export async function applyAgentServerVersion(office: Office, program: string, version: string, peer: UpdatePeer): Promise<void> {
+  const unit = serverUnit(office);
+  let takenOver = !peer.owned;
+
+  if (peer.owned) {
+    const state = updateUnit(office);
+
+    if (!existsSync(serverWantedFile(office)) || state.stopped) return;
+
+    if (!state.active || state.main !== peer.pid) throw new OfficeError("the managed OpenCode PID changed before restart; leaving it alone");
+
+    // Unlike restart, try-restart does not bring back an explicitly stopped unit.
+    userSystemd(["try-restart", unit]);
+  } else if (!await takeOverAgentPeer(office, program, peer)) {
+    return;
+  }
+
+  let strayPid = 0;
+  let currentPid = 0;
+
+  for (let attempt = 0; attempt < 30; attempt++) {
+    if (!existsSync(serverWantedFile(office))) return;
+
+    const state = updateUnit(office);
+
+    if (state.stopped) return;
+
+    const info = await serverInfo(office);
+    const previousPid = currentPid;
+
+    currentPid = 0;
+
+    if (info !== undefined && info.pid !== peer.pid && registeredHere(office, info.pid)) {
+      if (state.active && info.pid === state.main && info.version === version) {
+        currentPid = info.pid;
+
+        if (currentPid === previousPid) {
+          console.log(`office: managed OpenCode ${version} verified at systemd PID ${info.pid}`);
+
+          return;
+        }
+      }
+
+      if (state.eligible && info.pid !== state.main && (state.displaced || strayPid === info.pid)) {
+        if (takenOver) throw new OfficeError("another OpenCode client took the address again; leaving it alone");
+
+        if (compareVersions(version, info.version) < 0) throw new OfficeError("the new listener is newer than the installed OpenCode; leaving it alone");
+
+        console.log("office: a client registered during restart; taking over the verified same-profile server once");
+
+        if (!await takeOverAgentPeer(office, program, { ...info, owned: false })) return;
+
+        takenOver = true;
+      }
+
+      strayPid = info.pid;
+    }
+
+    await Bun.sleep(500);
+  }
+
+  throw new OfficeError(`${unit} did not register a healthy OpenCode ${version} at its systemd PID; check the unit journal`);
+}
+
+function processIdentityIs(pid: number, identity: string): boolean {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+
+    return fields[0] !== "Z" && fields[0] !== "X" && fields[19] === identity;
+  } catch {
+    return false;
+  }
 }
 
 export async function serverReport(office: Office, plan: ServerPlan, matches: boolean): Promise<{ ok: boolean | "warn"; detail: string }> {

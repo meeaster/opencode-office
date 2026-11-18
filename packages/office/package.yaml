@@ -1,5 +1,10 @@
 name: office
 description: What every office needs from OpenCode, given by its plugin; the guidance for a session's folder, the office skill and the office-executor MCP server; and the tools the office CLI itself runs.
+cron:
+  update-agent-clis:
+    schedule: '30 7 * * *'
+    script: scripts/update-agent-clis.sh
+    when: managed-host
 # The tools the office CLI itself runs, which every office gets in .office/mise/office.toml like any
 # package's: SOPS and age for the office's encrypted secrets, gh for GitHub logins and sources, and
 # pre-commit for the gitleaks hook in .pre-commit-config.yaml. The CLI runs the versions that file

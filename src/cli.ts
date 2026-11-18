@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import * as v from "valibot";
 
 import { officeInstructions } from "../packages/office/plugin/instructions.ts";
+import { agentUpdateJob, updateAgentClis } from "./commands/agent-cli-update.ts";
 import { deploy } from "./commands/apps.ts";
 import { check } from "./commands/check.ts";
 import { down, up } from "./commands/compose.ts";
@@ -211,6 +212,12 @@ async function main(): Promise<void> {
     down(currentOffice(flags));
   } else if (command === "upgrade-tools") {
     if (!(await upgradeTools(currentOffice(flags)))) process.exitCode = 1;
+  } else if (command === "host-agent-cli-update" && rest.length === 0) {
+    const office = currentOffice(flags);
+
+    if (!requireJobs(office).some((job) => job.id === agentUpdateJob)) throw new OfficeError(`cron ${agentUpdateJob}: not enabled for this office`);
+
+    process.exitCode = await updateAgentClis(office);
   } else if (command === "cron") {
     const office = currentOffice(flags);
     const jobs = requireJobs(office);

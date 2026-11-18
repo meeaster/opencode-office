@@ -74,7 +74,7 @@ const fileSchema = v.variant("kind", [
   // A symbolic link to a file in the office.
   v.strictObject({ kind: v.literal("link"), ...owned, target: absolute }),
   // A real file the office wrote, starting with its marker line.
-  v.strictObject({ kind: v.literal("file"), ...owned, sha256: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/)), service: v.optional(v.literal("opencode")) }),
+  v.strictObject({ kind: v.literal("file"), ...owned, sha256: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/)), service: v.optional(v.literal("opencode")), program: v.optional(absolute) }),
 ]);
 
 const recordSchema = v.strictObject({
@@ -492,13 +492,35 @@ export function matchesServerUnit(office: Office, plan: ServerPlan): boolean {
   return file?.kind === "file" && file.sha256 === sha256(plan.text) && fileState(file) === "present";
 }
 
+/** The recorded launch paths, unchanged on disk. The updater does not plan or rewrite the unit. */
+export function recordedAgentUpdate(office: Office) {
+  const { files } = requireServerConsent(office);
+  const server = files.find((file) => managedFile(file) && file.path === serverUnitPath(office));
+  const env = files.find((file) => file.path === envFilePath() && file.kind === "file");
+  const sfw = files.find((file) => file.path === hostLayout("").sfw && file.kind === "file");
+
+  if (server?.kind !== "file" || server.program === undefined || fileState(server) !== "present") throw new OfficeError("the managed OpenCode unit needs to match the machine record; run office up first");
+
+  if (env === undefined || fileState(env) !== "present") throw new OfficeError("the host environment needs to match the machine record; run office sync first");
+
+  let screened: string | undefined;
+
+  try {
+    if (office.socketFirewall && sfw !== undefined && fileState(sfw) === "present") screened = sfw.path;
+  } catch {
+    // Clause applies to OpenCode only; an unreadable firewall must not prevent Claude's update.
+  }
+
+  return { program: server.program, env: env.path, sfw: screened };
+}
+
 export function writeServerUnit(office: Office, plan: ServerPlan): boolean {
   const record = requireServerConsent(office);
   const env = record.files.find((file) => file.path === envFilePath());
 
   if (env === undefined || fileState(env) !== "present") throw new OfficeError(`managed OpenCode needs the recorded environment file at ${envFilePath()}; run office sync`);
 
-  const file: RealFile = { kind: "file", path: plan.path, package: null, service: "opencode", sha256: sha256(plan.text) };
+  const file: RealFile = { kind: "file", path: plan.path, package: null, service: "opencode", program: plan.program, sha256: sha256(plan.text) };
   const previous = record.files.find((entry) => entry.path === file.path);
 
   if (previous === undefined) {
@@ -510,7 +532,7 @@ export function writeServerUnit(office: Office, plan: ServerPlan): boolean {
 
     if (state === "changed") throw new OfficeError(`${file.path} changed since office wrote it; office leaves it alone`);
 
-    if (state === "present" && same(previous, file)) return false;
+    if (state === "present" && same(previous, file) && previous.program === file.program) return false;
   }
 
   atomicWrite(file.path, plan.text, 0o644);

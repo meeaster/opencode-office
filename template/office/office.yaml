@@ -8,7 +8,8 @@ name: __OFFICE__
 
 # Where OpenCode runs: `container` (the default), the office's opencode container, or `host`, an
 # OpenCode server on this machine. The office attaches unless `managed: true` opts in to its
-# systemd user service (Linux, with consent from office setup). Host tools update independently.
+# systemd user service (Linux, with consent from office setup). The required office package
+# schedules native Claude Code and OpenCode updates only in managed host mode.
 # Executor and the office's other services always run in containers.
 opencode: container
 # opencode:

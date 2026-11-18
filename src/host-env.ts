@@ -21,6 +21,7 @@ import { hostToolsRoot } from "./host-tools.ts";
 import type { Office } from "./office.ts";
 import { hostApplies } from "./package-tools.ts";
 import type { InstalledPackage } from "./packages.ts";
+import { managedAgentEnvironment } from "./schema.ts";
 import { type Environment, releaseAgeVariables, type SfwLayout, sfwLayout, shellQuote } from "./sfw.ts";
 
 export const machineDirVariable = "OFFICE_MACHINE_DIR";
@@ -139,6 +140,8 @@ export function hostEnvironment(office: Office, installed: InstalledPackage[]): 
   const problems = [...setters].flatMap(([name, names]) => (names.length > 1 ? [`packages ${names.join(" and ")} both set ${name} in their host block, so ${envFilePath()} sets neither; remove it from one`] : []));
   const variables: [string, string][] = Object.entries(releaseAgeVariables);
   const path = [...(office.socketFirewall ? [hostWrappers()] : []), miseShims(), opencodeBin()];
+
+  if (office.opencode.managed !== undefined) variables.push(...Object.entries(managedAgentEnvironment));
 
   for (const item of declared) {
     for (const entry of item.path) if (!path.includes(entry)) path.push(entry);

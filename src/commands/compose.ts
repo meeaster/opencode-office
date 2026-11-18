@@ -22,7 +22,7 @@ import { hostTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
 import { hostLayout, hostWrappers } from "../host-env.ts";
-import { planServer, serverIncumbent, startServer } from "../host-server.ts";
+import { markServerStopped, planServer, serverIncumbent, startServer } from "../host-server.ts";
 import { claim, globalConfD, installSfw, removeUnwantedServer, requireServerConsent, stopRecordedServer, writeServerUnit } from "../machine.ts";
 import { machineFiles } from "../package-tools.ts";
 import { packageComposeFile, preparePackageServices, serviceFiles, serviceSettings, type UpgradedServices } from "../package-services.ts";
@@ -543,8 +543,9 @@ export async function startExecutor(office: Office): Promise<void> {
 
 /** Stops the office's containers, whichever mode started them, and its timers. */
 export function down(office: Office): void {
+  markServerStopped(office);
   removeTimers(office);
+  stopRecordedServer(office);
   compose(office, ["down"], { profiles: "container" });
   removeExecutorFiles(office);
-  stopRecordedServer(office);
 }
