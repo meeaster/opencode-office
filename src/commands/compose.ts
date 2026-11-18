@@ -19,7 +19,8 @@ import { ghConfigDir, ghHosts } from "../github.ts";
 import { hostTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
-import { claim, globalConfD } from "../machine.ts";
+import { hostLayout, hostWrappers } from "../host-env.ts";
+import { claim, globalConfD, installSfw } from "../machine.ts";
 import { machineFiles } from "../package-tools.ts";
 import { packageComposeFile, preparePackageServices, serviceFiles, serviceSettings, type UpgradedServices } from "../package-services.ts";
 import type { Lock } from "../schema.ts";
@@ -180,12 +181,22 @@ function removeExecutorFiles(office: Office): void {
   for (const file of Object.values(executorFiles)) rmSync(join(office.dir, file), { force: true });
 }
 
-/** Runs `mise install` with the host's mise in `dir`; as in the container, a failure must not keep the office from starting. */
-function miseInstall(dir: string, trust: string[] = []): void {
+/**
+ * The mise that installs the office's tools: the wrapper that runs installs through Socket Firewall
+ * when the office wrote it and sfw is installed, else the host's mise.
+ */
+function installingMise(office: Office): string {
+  const wrapper = join(hostWrappers(), "mise");
+
+  return office.socketFirewall && claim(office).kind === "ours" && existsSync(wrapper) && existsSync(hostLayout("").sfw) ? wrapper : hostTool("mise");
+}
+
+/** Runs `mise install` in `dir`, through sfw where it applies; as in the container, a failure must not keep the office from starting. */
+function miseInstall(office: Office, dir: string, trust: string[] = []): void {
   try {
     for (const config of trust) execFileSync(hostTool("mise"), ["trust", "--quiet", config], { stdio: "inherit" });
 
-    execFileSync(hostTool("mise"), ["install", "--quiet"], { cwd: dir, stdio: "inherit" });
+    execFileSync(installingMise(office), ["install", "--quiet"], { cwd: dir, stdio: "inherit" });
   } catch {
     console.error(`office: mise install failed in ${dir}`);
   }
@@ -202,7 +213,7 @@ function installTools(office: Office): void {
   for (const dir of [office.dir, ...office.desks.map((desk) => join(office.dir, desk.name))]) {
     const config = join(dir, "mise.toml");
 
-    if (existsSync(config)) miseInstall(dir, [config]);
+    if (existsSync(config)) miseInstall(office, dir, [config]);
   }
 
   if (machineFiles(office).length === 0) return;
@@ -213,7 +224,7 @@ function installTools(office: Office): void {
     return;
   }
 
-  miseInstall("/");
+  miseInstall(office, "/");
 }
 
 function docker(args: string[]): void {
@@ -450,6 +461,10 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
     compose(office, ["rm", "--stop", "--force", "opencode"], { profiles: "container", pins });
     compose(office, ["up", "-d", "--build", "--remove-orphans"], { pins });
     writeExecutorFiles(office);
+
+    // Before the tools, so their installs go through it.
+    for (const line of await installSfw(office, pins.sfw)) console.log(line);
+
     installTools(office);
     installTimers(office, cronTimers(office));
 

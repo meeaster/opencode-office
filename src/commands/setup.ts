@@ -8,6 +8,7 @@ import * as v from "valibot";
 import { git } from "../git.ts";
 import { githubStep, planGithub, unreachableSources } from "../github.ts";
 import { hostTool, onboardHostTools } from "../host-tools.ts";
+import { envFilePath, sourceLine } from "../host-env.ts";
 import { claim, consentCommand, consentQuestion, grantConsent, ownedElsewhere } from "../machine.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile, updateConfig } from "../office.ts";
 import { decrypt, encrypt, initializeIdentity, parsed, prepareSecrets, requireTool } from "../secrets.ts";
@@ -158,14 +159,22 @@ async function machineConsent(office: Office, granted: boolean, ask: ((text: str
 
   if (current.kind === "ours" || granted) {
     console.log(grantConsent(office));
+    console.log(shellNote());
 
     return;
   }
 
   const answer = ask === undefined ? "unattended" : await ask(consentQuestion(office));
 
-  if (answer === "yes") console.log(grantConsent(office));
-  else console.log(`Machine: office ${office.name} writes nothing outside its folder, so its tools apply only inside it; to allow it later, run ${consentCommand}`);
+  if (answer === "yes") {
+    console.log(grantConsent(office));
+    console.log(shellNote());
+  } else console.log(`Machine: office ${office.name} writes nothing outside its folder, so its tools apply only inside it; to allow it later, run ${consentCommand}`);
+}
+
+/** The one line the user adds to their shell's startup file; office never edits it. */
+function shellNote(): string {
+  return `Shell: office sync writes ${envFilePath()}, the environment agents and your terminal share (Socket Firewall's wrappers first on PATH, package release ages). Add this line to your ~/.zshrc (or ~/.bashrc), after mise activate; office check says whether your startup files source it:\n  ${sourceLine()}`;
 }
 
 function globalGit(key: string): string | undefined {

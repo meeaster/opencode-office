@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { sync } from "./commands/sync.ts";
+import { machineDirVariable } from "./host-env.ts";
 import { claim, grantConsent, machineRecordVariable, machineReport, miseConfigVariable, readMachine, releaseMachine, syncMachine } from "./machine.ts";
 import { oldMiseFiles } from "./migrate.ts";
 import { loadOffice, OfficeError, readConfig } from "./office.ts";
@@ -14,7 +15,7 @@ let office: string;
 
 let confD: string;
 
-const saved = { record: process.env[machineRecordVariable], mise: process.env[miseConfigVariable] };
+const saved = { record: process.env[machineRecordVariable], mise: process.env[miseConfigVariable], data: process.env[machineDirVariable] };
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "office-machine-"));
@@ -22,12 +23,13 @@ beforeEach(() => {
   confD = join(dir, "mise-config/conf.d");
   process.env[machineRecordVariable] = join(dir, "record/machine.json");
   process.env[miseConfigVariable] = join(dir, "mise-config");
+  process.env[machineDirVariable] = join(dir, "data");
 });
 
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 
-  for (const [key, value] of [[machineRecordVariable, saved.record], [miseConfigVariable, saved.mise]] as const) {
+  for (const [key, value] of [[machineRecordVariable, saved.record], [miseConfigVariable, saved.mise], [machineDirVariable, saved.data]] as const) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
@@ -40,9 +42,13 @@ function write(path: string, content: string): void {
 
 const host = "opencode:\n  mode: host\n  url: http://127.0.0.1:49999\n";
 
-/** An office `name` at `at` in `mode`, with a local package `demo` that declares jq, and the office's own machine.toml. */
-function makeOffice(at: string, { name = "t", opencode = host, packages = "packages:\n  - name: demo\n" } = {}): void {
-  write(join(at, "office.yaml"), `name: ${name}\n${opencode}${packages}`);
+/**
+ * An office `name` at `at` in `mode`, with a local package `demo` that declares jq, and the office's
+ * own machine.toml. Socket Firewall is off unless `firewall`, so tests of the links see only them
+ * and the environment file.
+ */
+function makeOffice(at: string, { name = "t", opencode = host, packages = "packages:\n  - name: demo\n", firewall = false } = {}): void {
+  write(join(at, "office.yaml"), `name: ${name}\n${opencode}${firewall ? "" : "socket_firewall: false\n"}${packages}`);
   write(join(at, "packages/demo/package.yaml"), 'name: demo\ndescription: A demo package.\ntools:\n  jq: "1.7.1"\n');
   write(join(at, "machine.toml"), '# The office\'s own.\n[tools]\njq = "1.8.0"\n');
 }
@@ -54,10 +60,11 @@ test("without consent, sync writes nothing outside the office and says what to r
 
   const changes = await sync(loadOffice(office));
 
-  expect(changes).toContain(`not linking machine.toml and .office/mise/ into ${confD} yet, so the office's tools apply nowhere: office writes outside its folder only once you agree; run office setup (unattended: office setup --manage-machine)`);
+  expect(changes).toContain(`not linking machine.toml and .office/mise/ into ${confD} or writing ${join(dir, "data/env.sh")} yet, so the office's tools apply nowhere: office writes outside its folder only once you agree; run office setup (unattended: office setup --manage-machine)`);
+  expect(existsSync(join(dir, "data"))).toBe(false);
   expect(existsSync(confD)).toBe(false);
   expect(readMachine()).toBeUndefined();
-  expect(machineReport(loadOffice(office))).toEqual([{ ok: false, name: "machine", detail: expect.stringContaining("no consent for this office to manage this machine, so machine.toml and the packages' tools in .office/mise/ apply nowhere; run office setup") }]);
+  expect(machineReport(loadOffice(office))).toEqual([{ ok: false, name: "machine", detail: expect.stringContaining(`no consent for this office to manage this machine, so machine.toml and the packages' tools in .office/mise/ apply nowhere and ${join(dir, "data/env.sh")} isn't written; run office setup`) }]);
 });
 
 test("with consent, sync links each fragment, machine.toml last, records them, and a second sync changes nothing", async () => {
@@ -77,10 +84,11 @@ test("with consent, sync links each fragment, machine.toml last, records them, a
     files: [
       { kind: "link", path: join(confD, "office-t-1-demo.toml"), package: "demo", target: join(office, ".office/mise/demo.toml") },
       { kind: "link", path: join(confD, "office-t-2-machine.toml"), package: null, target: join(office, "machine.toml") },
+      { kind: "file", path: join(dir, "data/env.sh"), package: null, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) },
     ],
   });
   expect(await sync(loadOffice(office))).toEqual([]);
-  expect(machineReport(loadOffice(office)).map((line) => line.ok)).toEqual([true, true, true]);
+  expect(machineReport(loadOffice(office)).map((line) => line.ok)).toEqual([true, true, true, true]);
 });
 
 test("removing a package removes its link; leaving host mode removes them all and the record", async () => {
@@ -91,13 +99,14 @@ test("removing a package removes its link; leaving host mode removes them all an
 
   expect(await sync(loadOffice(office))).toContain(`removed ${confD}/office-t-1-demo.toml, as package demo no longer has a fragment`);
   expect(links()).toEqual(["office-t-2-machine.toml"]);
-  expect(readMachine()?.files.map((file) => file.package)).toEqual([null]);
+  expect(readMachine()?.files.map((file) => file.package)).toEqual([null, null]);
 
   makeOffice(office, { opencode: "opencode: container\n" });
 
   const changes = await sync(loadOffice(office));
 
   expect(changes).toContain(`removed ${confD}/office-t-2-machine.toml, as the office now runs OpenCode in its container`);
+  expect(changes).toContain(`removed ${join(dir, "data/env.sh")}, as the office now runs OpenCode in its container`);
   expect(changes).toEqual(expect.arrayContaining([expect.stringMatching(/^office t no longer manages this machine/)]));
   expect(links()).toEqual([]);
   expect(readMachine()).toBeUndefined();
@@ -115,7 +124,7 @@ test("office sync --release-machine removes everything and the consent, keeping 
 
   expect(first).toContain(`FAILED to remove ${confD}/office-t-1-demo.toml: it changed since office wrote it, so it stays; delete it yourself`);
   expect(links()).toEqual(["office-t-1-demo.toml"]);
-  expect(readMachine()?.files.length).toBe(1);
+  expect(readMachine()?.files.map((file) => file.path)).toEqual([join(confD, "office-t-1-demo.toml")]);
 
   rmSync(join(confD, "office-t-1-demo.toml"));
 
@@ -160,6 +169,7 @@ test("an office that moved takes its record along and relinks its tools", async 
     [false, `the record names ${office}, where this office was`],
     [false, `dangling: ${join(office, ".office/mise/demo.toml")} is gone, so mise skips it silently`],
     [false, `dangling: ${join(office, "machine.toml")} is gone, so mise skips it silently`],
+    [true, "written: the office's environment file"],
   ]);
 
   const changes = await sync(loadOffice(moved));

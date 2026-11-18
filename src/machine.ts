@@ -1,11 +1,14 @@
-// What a host-mode office writes on its machine, outside its folder and its state: for now, a link
-// in mise's global conf.d to each of the office's machine-wide mise files, its `machine.toml` and
-// the packages' fragments in `.office/mise/`, which mise loads nowhere else, so the office's tools
-// apply in every folder. The rules, for every such file:
+// What a host-mode office writes on its machine, outside its folder and its state: a link in mise's
+// global conf.d to each of the office's machine-wide mise files, its `machine.toml` and the packages'
+// fragments in `.office/mise/`, which mise loads nowhere else, so the office's tools apply in every
+// folder; and, in the office tool's data folder (src/host-env.ts), the environment file agents and
+// the user's terminal share, Socket Firewall's wrappers and sfw itself. The rules, for every such
+// file:
 //
-// - Whole files only, each named `office-<office name>-…` (a real file also starts with a marker
-//   line). The office never edits a file it didn't write, and never replaces a path the machine
-//   record doesn't list: it reports it instead.
+// - Whole files only, each named `office-<office name>-…` in a folder others share (a real file also
+//   starts with a marker line; sfw, a program, can't, and its record holds its release's SHA-256).
+//   The office never edits a file it didn't write, and never replaces a path the machine record
+//   doesn't list: it reports it instead.
 // - The machine record, `$XDG_DATA_HOME/office/machine.json`, lists each file with its kind, the
 //   package it belongs to and what it points at or its hash, and names the one office that manages
 //   the machine. A second host-mode office, in another folder, is refused; the same office (by
@@ -13,23 +16,33 @@
 // - The record exists only once the user said yes: `office setup` asks (or takes
 //   `--manage-machine`) and writes it. Until then `office sync` writes nothing here and says what to
 //   run.
-// - `office sync` removes a file when its fragment goes, and everything (with the record) when the
-//   office leaves host mode or `office sync --release-machine` asks; `office down` leaves them.
+// - `office sync` removes a file when its fragment goes or socket_firewall turns off, and everything
+//   (with the record) when the office leaves host mode or `office sync --release-machine` asks;
+//   `office down` leaves them. `office sync` writes the generated files; `office up` installs sfw at
+//   the version it applies, as it applies the office's other pins.
 //
 // OFFICE_MACHINE_RECORD replaces the record's path, and OFFICE_MISE_CONFIG_DIR the mise config
-// folder whose conf.d gets the links, so tests and scratch offices never touch the real ones. A
-// scratch office that runs mise sets MISE_CONFIG_DIR to the same folder, so mise reads the links.
+// folder whose conf.d gets the links, and OFFICE_MACHINE_DIR the office tool's data folder, so
+// tests and scratch offices never touch the real ones. A scratch office that runs mise sets
+// MISE_CONFIG_DIR to the same folder, so mise reads the links.
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 
 import * as v from "valibot";
 
+import { fetchBytes } from "./download.ts";
+import { envFilePath, hostEnvironment, hostLayout, hostWrappers, realMise } from "./host-env.ts";
+import { installedPackages } from "./layout.ts";
 import { oldFragments, oldMiseFiles } from "./migrate.ts";
 import { type Office, OfficeError, readConfig } from "./office.ts";
 import { fragmentOwner, machineFile, machineFiles } from "./package-tools.ts";
-import { check } from "./schema.ts";
+import { platformAsset } from "./releases.ts";
+import { check, type Lock } from "./schema.ts";
+import { envScript, wrapperFiles } from "./sfw.ts";
+import { defaultPins, hostPlatform, readApplied, wantedPins } from "./versions.ts";
 
 /** Replace the machine record's path and the global mise config folder, for tests and scratch offices. */
 export const machineRecordVariable = "OFFICE_MACHINE_RECORD";
@@ -141,7 +154,9 @@ export const consentCommand = "office setup (unattended: office setup --manage-m
 
 /** What the office will do on the machine once allowed, for the consent question. */
 export function consentQuestion(office: Office): string {
-  return `Office ${office.name} runs OpenCode on this machine (host mode), so it manages the machine: it links its machine.toml and each package's tools in .office/mise/ into ${globalConfD()} as office-${office.name}-…toml, so its tools apply in every folder (without the links they apply nowhere), and lists each file it writes in ${machineRecordPath()}. It changes no file it didn't write; office sync --release-machine removes them all. Allow it? [yes/no]`;
+  const firewall = office.socketFirewall ? `, Socket Firewall (sfw) and its wrappers for npm, pnpm, pip, uv, cargo and mise in ${hostLayout("").root}` : "";
+
+  return `Office ${office.name} runs OpenCode on this machine (host mode), so it manages the machine: it links its machine.toml and each package's tools in .office/mise/ into ${globalConfD()} as office-${office.name}-…toml, so its tools apply in every folder (without the links they apply nowhere), and writes ${envFilePath()}, the environment your shell and agents share${firewall}. It lists each file it writes in ${machineRecordPath()}, changes no file it didn't write, and never edits your shell's startup files; office sync --release-machine removes them all. Allow it? [yes/no]`;
 }
 
 /**
@@ -165,9 +180,83 @@ export function linkName(office: Office, file: string): string {
   return file === join(office.dir, machineFile) ? `office-${office.name}-2-machine.toml` : `office-${office.name}-1-${basename(file, ".toml")}.toml`;
 }
 
-/** The links the office wants: one per machine-wide file, machine.toml and each package's fragment. */
-function wantedLinks(office: Office): Extract<MachineFile, { kind: "link" }>[] {
-  return machineFiles(office).map((target) => ({ kind: "link", path: join(globalConfD(), linkName(office, target)), package: fragmentOwner(target) ?? null, target }));
+type LinkFile = Extract<MachineFile, { kind: "link" }>;
+
+type RealFile = Extract<MachineFile, { kind: "file" }>;
+
+/**
+ * A file the office wants on the machine, with what to call it in messages and what to add when it
+ * is made: a link, a file sync writes (`text`), or sfw, which `office up` installs (no text).
+ */
+type Wanted = { file: LinkFile; what: string; made: string } | { file: RealFile; what: string; made: string; text: string | undefined };
+
+function sha256(content: string | Uint8Array): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+/** The links the office wants in the global conf.d: one per machine-wide file, machine.toml and each package's fragment. */
+function wantedLinks(office: Office): Wanted[] {
+  return machineFiles(office).map((target) => {
+    const file: LinkFile = { kind: "link", path: join(globalConfD(), linkName(office, target)), package: fragmentOwner(target) ?? null, target };
+
+    return { file, what: `${relative(office.dir, target)} (${owner(file)})`, made: ", so its tools apply in every folder on this machine" };
+  });
+}
+
+/** The sfw pin `office up` runs: the one it last applied, else office.yaml's, else the tool's default. */
+function appliedSfw(office: Office): Lock["sfw"] {
+  const applied = readApplied(office)?.pins.sfw;
+
+  if (applied !== undefined) return applied;
+
+  try {
+    return wantedPins(office).sfw;
+  } catch {
+    return defaultPins.sfw;
+  }
+}
+
+/** The SHA-256 of a pin's release file for this machine, in hex, or undefined where office installs no sfw. */
+function sfwDigest(pin: Lock["sfw"]): string | undefined {
+  const platform = hostPlatform();
+
+  return platform === undefined ? undefined : pin.platforms?.[platform]?.replace(/^sha256:/, "");
+}
+
+/**
+ * Everything the office wants on the machine in host mode: the links, the environment file, and
+ * while socket_firewall is on, the wrappers (the mise wrapper only where a real mise is found)
+ * and sfw. Problems in what packages declare come back as lines.
+ */
+/** What the office wants on the machine, and the problems that kept something out. */
+type WantedFiles = { wanted: Wanted[]; problems: string[] };
+
+function wantedFiles(office: Office): WantedFiles {
+  const { environment, problems } = hostEnvironment(office, installedPackages(office).installed);
+  const envText = envScript(`the environment of office ${office.name}, which agents and your terminal share`, envFilePath(), environment);
+  const wanted: Wanted[] = [...wantedLinks(office), { file: { kind: "file", path: envFilePath(), package: null, sha256: sha256(envText) }, what: "the office's environment file", made: "; source it from your shell's startup file (office setup prints the line)", text: envText }];
+
+  if (!office.socketFirewall) return { wanted, problems };
+
+  const mise = realMise();
+  const files = wrapperFiles(hostLayout(mise ?? ""));
+  const digest = sfwDigest(appliedSfw(office));
+
+  wanted.push({ file: { kind: "file", path: files.script.path, package: null, sha256: sha256(files.script.text) }, what: "the Socket Firewall wrapper script", made: "", text: files.script.text });
+
+  for (const link of files.links) wanted.push({ file: { kind: "link", path: link.path, package: null, target: link.target }, what: `the Socket Firewall wrapper for ${basename(link.path)}`, made: "" });
+
+  if (mise !== undefined) wanted.push({ file: { kind: "file", path: files.mise.path, package: null, sha256: sha256(files.mise.text) }, what: `the mise wrapper, which runs ${mise}'s installs through Socket Firewall`, made: "", text: files.mise.text });
+  else problems.push(`no mise program found on PATH or in office's host-tools, so ${files.mise.path} isn't written and mise installs don't go through Socket Firewall; install mise (office setup --install-deps) and run office sync`);
+
+  if (digest !== undefined) wanted.push({ file: { kind: "file", path: hostLayout("").sfw, package: null, sha256: digest }, what: "Socket Firewall", made: "", text: undefined });
+
+  return { wanted, problems };
+}
+
+/** Whether a wanted file is sfw, which `office up` installs rather than sync. */
+function isSfw(file: MachineFile): boolean {
+  return file.path === hostLayout("").sfw;
 }
 
 /** A recorded file against what is on disk. */
@@ -227,12 +316,21 @@ function owner(file: MachineFile): string {
 function removalReason(office: Office, file: MachineFile): string {
   if (file.package !== null) return `as ${owner(file)} no longer has a fragment`;
 
+  if (file.path.startsWith(`${hostLayout("").root}/`)) return office.socketFirewall ? "as office no longer writes it" : "as office.yaml sets socket_firewall: false";
+
   // Earlier releases linked every file in .mise/conf.d/, the office's own fragments too, which are its project config now.
   if (file.kind === "link" && file.target !== join(office.dir, machineFile) && file.target.startsWith(join(office.dir, oldFragments))) {
     return `as ${relative(office.dir, file.target)} is the office's project config now: only machine.toml and the packages' fragments in .office/mise/ are linked`;
   }
 
   return `as ${machineFile} is gone`;
+}
+
+/** Removes the sfw folders when removing their files left them empty. */
+function removeEmptyFolders(): void {
+  for (const folder of [hostWrappers(), hostLayout("").root]) {
+    if (existsSync(folder) && readdirSync(folder).length === 0) rmdirSync(folder);
+  }
 }
 
 /** Removes every file the record lists and the record itself, ending this office's management of the machine. */
@@ -247,6 +345,8 @@ function release(record: MachineRecord, why: string): string[] {
 
     if (!result.removed) kept.push(file);
   }
+
+  removeEmptyFolders();
 
   if (kept.length > 0) {
     writeMachine({ ...record, files: kept });
@@ -273,29 +373,62 @@ export function releaseMachine(office: Office): string[] {
 /** What to say about a wanted link, and what the record lists at its path afterwards. */
 type Placement = { line: string | undefined; file: MachineFile | undefined };
 
-/** Makes one wanted link: created, relinked from what the record says it was, or refused. */
-function placeLink(office: Office, wanted: Extract<MachineFile, { kind: "link" }>, recorded: MachineFile | undefined): Placement {
-  const what = `${relative(office.dir, wanted.target)} (${owner(wanted)})`;
+/** Writes or links one wanted file in place, its folder made first. */
+function make(wanted: Wanted): void {
+  mkdirSync(dirname(wanted.file.path), { recursive: true });
+
+  if (wanted.file.kind === "link") {
+    symlinkSync(wanted.file.target, wanted.file.path);
+
+    return;
+  }
+
+  const text = "text" in wanted ? wanted.text : undefined;
+
+  if (text === undefined) return;
+
+  writeFileSync(wanted.file.path, text);
+  chmodSync(wanted.file.path, text.startsWith("#!") ? 0o755 : 0o644);
+}
+
+/** Whether a recorded file is the wanted one, as it is on disk. */
+function same(recorded: MachineFile, wanted: MachineFile): boolean {
+  if (recorded.kind === "link") return wanted.kind === "link" && recorded.target === wanted.target;
+
+  return wanted.kind === "file" && recorded.sha256 === wanted.sha256;
+}
+
+/**
+ * Makes one wanted file: created, rewritten or relinked from what the record says it was, or
+ * refused. sfw is only kept as recorded: `office up` installs it.
+ */
+function place(wanted: Wanted, recorded: MachineFile | undefined): Placement {
+  const { file, what } = wanted;
+  const verb = file.kind === "link" ? "link" : "write";
+
+  if ("text" in wanted && wanted.text === undefined) return { line: undefined, file: recorded };
 
   if (recorded === undefined) {
-    if (occupied(wanted.path)) return { line: `FAILED to link ${what}: ${wanted.path} exists and ${machineRecordPath()} doesn't list it, so office leaves it; move it away and run office sync`, file: undefined };
+    if (occupied(file.path)) return { line: `FAILED to ${verb} ${what}: ${file.path} exists and ${machineRecordPath()} doesn't list it, so office leaves it; move it away and run office sync`, file: undefined };
 
-    symlinkSync(wanted.target, wanted.path);
+    make(wanted);
 
-    return { line: `linked ${wanted.path} to ${what}, so its tools apply in every folder on this machine`, file: wanted };
+    return { line: file.kind === "link" ? `linked ${file.path} to ${what}${wanted.made}` : `wrote ${file.path}, ${what}${wanted.made}`, file };
   }
 
   const state = fileState(recorded);
 
-  if (state === "changed") return { line: `FAILED to link ${what}: ${wanted.path} changed since office wrote it, so office leaves it; delete it and run office sync`, file: recorded };
+  if (state === "changed") return { line: `FAILED to ${verb} ${what}: ${file.path} changed since office wrote it, so office leaves it; delete it and run office sync`, file: recorded };
 
-  if (state === "present" && recorded.kind === "link" && recorded.target === wanted.target) return { line: undefined, file: wanted };
+  if (state === "present" && same(recorded, file)) return { line: undefined, file };
 
-  if (state !== "missing") unlinkSync(wanted.path);
+  if (state !== "missing") unlinkSync(file.path);
 
-  symlinkSync(wanted.target, wanted.path);
+  make(wanted);
 
-  return { line: `${state === "missing" ? "restored" : "relinked"} ${wanted.path} to ${what}`, file: wanted };
+  const again = state === "missing" ? "restored" : file.kind === "link" ? "relinked" : "rewrote";
+
+  return { line: file.kind === "link" ? `${again} ${file.path} to ${what}` : `${again} ${file.path}, ${what}`, file };
 }
 
 /**
@@ -311,16 +444,19 @@ export function syncMachine(office: Office): string[] {
 
   if (current.kind === "other") return [`FAILED to link this office's tools on the machine: ${ownedElsewhere(current.record)}`];
 
-  const wanted = wantedLinks(office);
+  if (current.kind === "free") {
+    const firewall = office.socketFirewall ? ", and package downloads don't go through Socket Firewall" : "";
 
-  if (current.kind === "free") return wanted.length === 0 ? [] : [`not linking machine.toml and .office/mise/ into ${globalConfD()} yet, so the office's tools apply nowhere: office writes outside its folder only once you agree; run ${consentCommand}`];
+    return [`not linking machine.toml and .office/mise/ into ${globalConfD()} or writing ${envFilePath()} yet, so the office's tools apply nowhere${firewall}: office writes outside its folder only once you agree; run ${consentCommand}`];
+  }
 
+  const { wanted, problems } = wantedFiles(office);
   const { record, movedFrom } = current;
-  const lines = movedFrom === undefined ? [] : [`office ${office.name} moved from ${movedFrom}; ${machineRecordPath()} now names ${office.dir}`];
+  const lines = [...(movedFrom === undefined ? [] : [`office ${office.name} moved from ${movedFrom}; ${machineRecordPath()} now names ${office.dir}`]), ...problems.map((problem) => `FAILED ${problem}`)];
   const files: MachineFile[] = [];
 
   for (const file of record.files) {
-    if (wanted.some((link) => link.path === file.path)) continue;
+    if (wanted.some((entry) => entry.file.path === file.path)) continue;
 
     const result = removeFile(file, removalReason(office, file));
 
@@ -329,14 +465,19 @@ export function syncMachine(office: Office): string[] {
     if (!result.removed) files.push(file);
   }
 
+  removeEmptyFolders();
   mkdirSync(globalConfD(), { recursive: true });
 
-  for (const link of wanted) {
-    const result = placeLink(office, link, record.files.find((file) => file.path === link.path));
+  for (const entry of wanted) {
+    const result = place(entry, record.files.find((file) => file.path === entry.file.path));
 
     if (result.line !== undefined) lines.push(result.line);
 
     if (result.file !== undefined) files.push(result.file);
+  }
+
+  if (office.socketFirewall && lines.some((line) => line.startsWith(`wrote ${hostLayout("").script}`)) && !files.some(isSfw)) {
+    lines.push(`Socket Firewall itself isn't installed yet, so the wrappers refuse to run downloads: office up installs sfw ${appliedSfw(office).version}`);
   }
 
   const next: MachineRecord = { ...record, office: { name: office.name, dir: office.dir }, files };
@@ -366,47 +507,140 @@ export function machineReport(office: Office): MachineLine[] {
 
   if (current.kind === "other") return [...lines, { ok: false, name: "machine", detail: ownedElsewhere(current.record) }];
 
-  const wanted = wantedLinks(office);
   // Until sync moves an earlier release's files out of .mise/conf.d/, their links look unwanted; sync relinks most of them.
   const unwanted = oldMiseFiles(office).length > 0 ? "relinks or removes it once it has moved the files out of .mise/conf.d/" : "removes it";
 
   if (current.kind === "free") {
-    if (wanted.length === 0) return [...lines, { ok: "warn", name: "machine", detail: "no consent for this office to manage this machine, and nothing to write outside the office yet" }];
-
     // mise loads machine.toml and .office/mise/ only through the links, so without them a host-mode office has none of its tools.
-    return [...lines, { ok: false, name: "machine", detail: `no consent for this office to manage this machine, so machine.toml and the packages' tools in .office/mise/ apply nowhere; run ${consentCommand}, then office sync` }];
+    return [...lines, { ok: false, name: "machine", detail: `no consent for this office to manage this machine, so machine.toml and the packages' tools in .office/mise/ apply nowhere and ${envFilePath()} isn't written; run ${consentCommand}, then office sync` }];
   }
 
+  const { wanted, problems } = wantedFiles(office);
   const { record, movedFrom } = current;
 
   lines.push(
     movedFrom === undefined
       ? { ok: true, name: "machine", detail: `managed by this office since ${record.consented}, recorded in ${machineRecordPath()}` }
       : { ok: false, name: "machine", detail: `the record names ${movedFrom}, where this office was; office sync moves it here and relinks its tools` },
+    ...problems.map((problem) => ({ ok: false, name: "machine", detail: problem })),
   );
 
   for (const file of record.files) {
-    const state = fileState(file);
-    const target = file.kind === "link" ? ` to ${file.target}` : "";
-    const want = wanted.find((link) => link.path === file.path);
-    const retarget = want !== undefined && file.kind === "link" && want.target !== file.target;
-    const repair = want === undefined ? unwanted : retarget ? `relinks it to ${want.target}` : "restores it";
+    const want = wanted.find((entry) => entry.file.path === file.path);
 
-    const details: Record<FileState, string> = {
-      present: want === undefined || retarget ? `links${target}, which the office no longer wants; office sync ${repair}` : `${file.kind === "link" ? "links" : "written"}${target} (${owner(file)})`,
-      changed: `changed since office wrote it${target}; office leaves it: delete it, then office sync`,
-      missing: `missing; office sync ${want === undefined ? "drops it from the record" : repair}`,
-      dangling: `dangling: ${file.kind === "link" ? file.target : file.path} is gone, so mise skips it silently; office sync ${repair}`,
-    };
-
-    lines.push({ ok: state === "present" && want !== undefined && !retarget, name: `machine ${file.path}`, detail: details[state] });
+    lines.push(isSfw(file) && want !== undefined ? sfwLine(office, file) : fileLine(file, want, unwanted));
   }
 
-  for (const link of wanted) {
-    if (record.files.some((file) => file.path === link.path)) continue;
+  for (const entry of wanted) {
+    if (record.files.some((file) => file.path === entry.file.path)) continue;
 
-    lines.push({ ok: false, name: `machine ${link.path}`, detail: occupied(link.path) ? `exists but isn't in the record, so office sync won't link ${relative(office.dir, link.target)} there; move it away` : `not linked yet; office sync links ${relative(office.dir, link.target)}` });
+    const { file } = entry;
+    const missing = isSfw(file) ? `not installed; office up installs sfw ${appliedSfw(office).version}, and until then the wrappers refuse to run downloads` : file.kind === "link" ? `not linked yet; office sync links ${entry.what}` : `not written yet; office sync writes ${entry.what}`;
+
+    lines.push({ ok: false, name: `machine ${file.path}`, detail: occupied(file.path) ? `exists but isn't in the record, so office won't put ${entry.what} there; move it away` : missing });
   }
 
   return lines;
+}
+
+/** One recorded file's line: present and as wanted, changed, missing, dangling, or no longer wanted. */
+function fileLine(file: MachineFile, want: Wanted | undefined, unwanted: string): MachineLine {
+  const state = fileState(file);
+  const target = file.kind === "link" ? ` to ${file.target}` : "";
+  const stale = want !== undefined && !same(file, want.file);
+  const repair = want === undefined ? unwanted : stale ? (file.kind === "link" && want.file.kind === "link" ? `relinks it to ${want.file.target}` : "rewrites it") : "restores it";
+  const done = file.kind === "link" ? `links${target}` : "written";
+
+  const details: Record<FileState, string> = {
+    present: want === undefined ? `${done}, which the office no longer wants; office sync ${repair}` : stale ? `${done}, but differs from ${want.what} as office sync writes it now; office sync ${repair}` : `${done}: ${want.what}`,
+    changed: `changed since office wrote it${target}; office leaves it: delete it, then office sync`,
+    missing: `missing; office sync ${want === undefined ? "drops it from the record" : repair}`,
+    dangling: `dangling: ${file.kind === "link" ? file.target : file.path} is gone, so mise skips it silently; office sync ${repair}`,
+  };
+
+  return { ok: state === "present" && want !== undefined && !stale, name: `machine ${file.path}`, detail: details[state] };
+}
+
+/** sfw's line: the version installed against the one office up applied and the one office.yaml pins. */
+function sfwLine(office: Office, file: MachineFile): MachineLine {
+  const state = fileState(file);
+  const name = `machine ${file.path}`;
+  const applied = appliedSfw(office);
+  const installed = file.kind === "file" && file.sha256 === sfwDigest(applied) ? applied.version : undefined;
+
+  if (state === "changed") return { ok: false, name, detail: "changed since office installed it; office leaves it: delete it, then office up" };
+
+  if (state !== "present") return { ok: false, name, detail: `missing, so the wrappers refuse to run downloads; office up installs sfw ${applied.version}` };
+
+  if (installed === undefined) return { ok: false, name, detail: `Socket Firewall, but not the sfw ${applied.version} office applies; office up installs it` };
+
+  let pending = "";
+
+  try {
+    const wanted = wantedPins(office).sfw.version;
+
+    if (wanted !== applied.version) pending = `; office.yaml pins ${wanted}, which office up --upgrade installs`;
+  } catch (error) {
+    pending = `; ${error instanceof Error ? error.message : String(error)}`;
+  }
+
+  return { ok: pending === "" ? true : "warn", name, detail: `Socket Firewall ${installed}, matching office.lock's SHA-256 for this machine${pending}` };
+}
+
+/**
+ * `office up`'s part on the machine in host mode: installs sfw at `pin`, checked against office.lock's
+ * SHA-256 for this machine and its own `--version`, and records it. Nothing without consent, or with
+ * socket_firewall off; an installed copy at the same digest stays. Returns one line per change.
+ */
+export async function installSfw(office: Office, pin: Lock["sfw"], download: (url: string, what: string) => Promise<Uint8Array> = fetchBytes): Promise<string[]> {
+  if (!office.socketFirewall || office.opencode.mode !== "host") return [];
+
+  const current = claim(office);
+
+  if (current.kind !== "ours") return [`office: Socket Firewall isn't installed: office writes outside its folder only once you agree; run ${consentCommand}, then office sync and office up`];
+
+  const platform = hostPlatform();
+  const digest = sfwDigest(pin);
+
+  if (platform === undefined || digest === undefined) throw new OfficeError(`office installs Socket Firewall on Linux and macOS, x64 and arm64, not ${process.platform}-${process.arch}; set socket_firewall: false in office.yaml`);
+
+  const path = hostLayout("").sfw;
+  const record = current.record;
+  const recorded = record.files.find((file) => file.path === path);
+
+  if (recorded !== undefined && fileState(recorded) === "present" && recorded.kind === "file" && recorded.sha256 === digest) return [];
+
+  if (recorded === undefined ? occupied(path) : fileState(recorded) === "changed") throw new OfficeError(`${path} ${recorded === undefined ? `exists and ${machineRecordPath()} doesn't list it` : "changed since office installed it"}, so office leaves it; move it away and run office up`);
+
+  const bytes = await download(platformAsset("sfw", pin.version, platform), `sfw ${pin.version}`);
+
+  if (sha256(bytes) !== digest) throw new OfficeError(`sfw ${pin.version} for ${platform} doesn't match office.lock's SHA-256; nothing was installed`);
+
+  // Written beside the final file and renamed, so the wrappers never run half a download.
+  const staging = `${path}.new`;
+
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(staging, bytes, { mode: 0o755 });
+
+  let reported = "";
+
+  try {
+    reported = execFileSync(staging, ["--version"], { encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
+  } catch {
+    reported = "";
+  }
+
+  if (!reported.includes(`version ${pin.version}`)) {
+    rmSync(staging, { force: true });
+
+    throw new OfficeError(`the downloaded sfw doesn't report version ${pin.version}; nothing was installed`);
+  }
+
+  renameSync(staging, path);
+
+  const file: MachineFile = { kind: "file", path, package: null, sha256: digest };
+
+  writeMachine({ ...record, files: [...record.files.filter((entry) => entry.path !== path), file] });
+
+  return [`office: installed Socket Firewall ${pin.version} in ${path}, checked against office.lock`];
 }

@@ -67,6 +67,13 @@ const dropFromPath = (variable: string, entry: string) => [
   `${variable}=\${${variable}#:}`,
 ];
 
+/** Refuses to run a download without sfw, rather than run it unchecked: a host-mode office's sfw comes with `office up`. */
+function missingSfw(layout: SfwLayout, indent: string): string[] {
+  const message = `office: Socket Firewall is not installed at ${layout.sfw}, so this download doesn't run; run office up in the office (or set socket_firewall: false in its office.yaml and run office sync)`;
+
+  return [`if [ ! -x ${shellQuote(layout.sfw)} ]; then`, `${indent}echo ${shellQuote(message)} >&2`, `${indent}exit 127`, "fi"];
+}
+
 /**
  * The script every package manager's wrapper links to, run under the wrapper's name: it drops the
  * wrappers' folder from PATH, so sfw finds the real command and a nested call (an npm script that
@@ -84,6 +91,7 @@ export function packageManagerScript(layout: SfwLayout): string {
     "export PATH",
     'name=${0##*/}',
     `if [ "\${${behindSfwVariable}-}" = 1 ]; then exec "$name" "$@"; fi`,
+    ...missingSfw(layout, "    "),
     `${behindSfwVariable}=1`,
     `export ${behindSfwVariable}`,
     `exec ${shellQuote(layout.sfw)} "$name" "$@"`,
@@ -114,6 +122,7 @@ export function miseWrapperScript(layout: SfwLayout): string {
     "  install | i | use | u | upgrade | up)",
     "    drop",
     `    [ "\${${behindSfwVariable}-}" = 1 ] && exec "$real" "$@"`,
+    ...missingSfw(layout, "    "),
     `    export ${behindSfwVariable}=1`,
     `    exec ${shellQuote(layout.sfw)} "$real" "$@"`,
     "    ;;",

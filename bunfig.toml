@@ -1,4 +1,4 @@
 [test]
-# Every test run gets its own machine record and global mise config folder, so nothing a test
-# syncs reaches the real ones.
+# Every test run gets its own machine record, global mise config folder and office data folder (the
+# environment file, Socket Firewall's wrappers), so nothing a test syncs reaches the real ones.
 preload = ["./src/test-preload.ts"]

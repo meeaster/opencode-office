@@ -244,10 +244,47 @@ const hostInstall = v.strictObject(
 );
 
 /**
- * What a package gives only an office in host mode, where OpenCode runs on the machine itself,
- * and, with `setting`, only while that boolean setting is true: more mise tools and a host install.
+ * A folder a package puts on PATH in the office's environment file: `~/…` in the home folder, an
+ * absolute path, or a path in the package's own folder. Letters, digits and `. _ @ + -` only, so
+ * it holds no PATH separator and nothing a shell would expand.
  */
-const hostBlock = v.strictObject({ setting: v.optional(v.string()), tools: miseTools, install: v.optional(hostInstall) }, mapping);
+const hostPathEntry = v.pipe(
+  v.string("must be a folder"),
+  v.regex(/^(?:~\/|\/)?[A-Za-z0-9._@+-]+(?:\/[A-Za-z0-9._@+-]+)*\/?$/, "must be a folder such as ~/.local/bin, /opt/tool/bin or bin (in the package), with letters, digits and . _ @ + - only"),
+  v.check((entry) => !entry.split("/").includes(".."), "must not climb out with .."),
+);
+
+/** Variables office's environment file sets itself, or that would change how a shell runs. */
+export const reservedVariables = ["PATH", "HOME", "SHELL", "ENV", "BASH_ENV", "ZDOTDIR", "IFS", "NPM_CONFIG_MIN_RELEASE_AGE", "pnpm_config_minimum_release_age", "UV_EXCLUDE_NEWER", "PIP_UPLOADED_PRIOR_TO"];
+
+const hostVariable = v.pipe(
+  v.string(),
+  v.regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be an environment variable name"),
+  v.check((name) => !reservedVariables.includes(name) && !name.startsWith("OFFICE_"), "is set by office itself, or changes how a shell runs"),
+);
+
+/** A variable's value: one line of plain text, written single-quoted, so nothing in it is expanded. */
+const hostValue = v.pipe(
+  v.union([v.string(), v.number(), v.boolean()], "must be text, a number or true/false"),
+  v.transform(String),
+  v.regex(/^[^\u0000-\u001f\u007f]*$/, "must be one line of plain text"),
+);
+
+/**
+ * What a package gives only an office in host mode, where OpenCode runs on the machine itself,
+ * and, with `setting`, only while that boolean setting is true: more mise tools, a host install,
+ * and folders and variables for the office's environment file (src/host-env.ts). No shell code.
+ */
+const hostBlock = v.strictObject(
+  {
+    setting: v.optional(v.string()),
+    tools: miseTools,
+    install: v.optional(hostInstall),
+    path: v.nullish(v.array(hostPathEntry, "must be a list of folders"), []),
+    env: v.nullish(v.record(hostVariable, hostValue, "must map variable names to values"), {}),
+  },
+  mapping,
+);
 
 /** A package's package.yaml: what can't be discovered from its folders. */
 export const packageManifestSchema = v.pipe(

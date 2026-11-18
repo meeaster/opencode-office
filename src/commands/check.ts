@@ -15,7 +15,9 @@ import { clones, installedPackages, library, oldKnowledgePlugin, pluginLinks, sk
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, oldMiseFiles, pulledLocalFolders, versionsLackSfw } from "../migrate.ts";
 import { executorEnvFile, type Office, readEnvFile } from "../office.ts";
 import { packageComposeFile, serviceStatus, sharedNamespaces } from "../package-services.ts";
-import { machineReport } from "../machine.ts";
+import { envFilePath, hostWrappers, sourceLine, sourcedBy } from "../host-env.ts";
+import { claim, machineReport } from "../machine.ts";
+import { wrappedCommands } from "../sfw.ts";
 import { fragmentNotes, orphanFragments, strayFragments } from "../package-tools.ts";
 import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
 import { pinnedTools } from "../schema.ts";
@@ -566,6 +568,43 @@ async function executorKey(office: Office, report: Report): Promise<void> {
   }
 }
 
+/** Whether Socket Firewall is on, and where it applies in the office's mode. */
+function firewallChecks(office: Office, report: Report): void {
+  if (!office.socketFirewall) {
+    report("warn", "Socket Firewall", "off (socket_firewall: false in office.yaml): package downloads aren't checked; package managers still take only releases at least three days old");
+
+    return;
+  }
+
+  if (office.opencode.mode === "host" && claim(office).kind !== "ours") {
+    report("warn", "Socket Firewall", "on in office.yaml, but nothing is installed on this machine until the office may manage it (see the machine line), so package downloads here aren't checked");
+
+    return;
+  }
+
+  report(
+    true,
+    "Socket Firewall",
+    office.opencode.mode === "host"
+      ? `on: ${wrappedCommands.join(", ")} and mise installs go through sfw, from ${hostWrappers()} first on PATH in ${envFilePath()} (each file is on its machine line below)`
+      : `on: the image's sfw, with ${wrappedCommands.join(", ")} and mise wrapped, first on PATH in the container (office env --container shows the file); office up rebuilds the image when the pin moves`,
+  );
+}
+
+/**
+ * Whether the user's shell startup sources the environment file: a note, never a failure, since
+ * office never edits those files and can't see every way a shell could source it.
+ */
+function shellCheck(report: Report): void {
+  const where = sourcedBy();
+
+  report(
+    where === undefined ? "warn" : true,
+    "shell environment",
+    where === undefined ? `no shell startup file sources ${envFilePath()} that office can see, so your terminal's package managers bypass Socket Firewall; add after mise activate in ~/.zshrc: ${sourceLine()}` : `sourced from ${where}`,
+  );
+}
+
 /** The versions office.yaml pins, whether office.lock matches, the tested range, and what is pending. */
 function versionChecks(office: Office, report: Report): void {
   const tools = toolsFor(office);
@@ -737,7 +776,11 @@ export async function check(office: Office): Promise<boolean> {
 
   await packageChecks(office, report);
 
+  firewallChecks(office, report);
+
   for (const line of machineReport(office)) report(line.ok, line.name, line.detail);
+
+  if (office.opencode.mode === "host") shellCheck(report);
 
   panelChecks(office, report);
 

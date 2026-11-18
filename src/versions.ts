@@ -41,12 +41,13 @@ export const tested: Record<PinnedTool, { from: string; to: string }> = {
 };
 
 /**
- * The tools that run in the office's own containers in each OpenCode mode, which `office up`
- * applies. A host-mode office's sfw isn't among them: `office sync` installs it on the machine at
- * the version office.yaml pins (src/sfw.ts).
+ * The tools `office up` applies in each OpenCode mode: everything in the container; in host mode
+ * Executor, and sfw while socket_firewall is on, which `office up` installs on the machine.
  */
 export function toolsFor(office: Office): PinnedTool[] {
-  return office.opencode.mode === "host" ? ["executor"] : [...pinnedTools];
+  if (office.opencode.mode !== "host") return [...pinnedTools];
+
+  return office.socketFirewall ? ["executor", "sfw"] : ["executor"];
 }
 
 /** Compares two versions by semver precedence: numbers numerically, a pre-release before its release. */
