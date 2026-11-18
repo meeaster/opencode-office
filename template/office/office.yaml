@@ -12,6 +12,9 @@ name: __OFFICE__
 # schedules native Claude Code and OpenCode updates only in managed host mode.
 # Executor and the office's other services always run in containers.
 opencode: container
+# Install official Executor catalog apps on setup or `office apps deploy`.
+# executor:
+#   catalog_apps: [github]
 # opencode:
 #   mode: host
 #   url: http://127.0.0.1:49374

@@ -7,7 +7,7 @@ import * as v from "valibot";
 
 import { officeInstructions } from "../packages/office/plugin/instructions.ts";
 import { agentUpdateJob, updateAgentClis } from "./commands/agent-cli-update.ts";
-import { deploy } from "./commands/apps.ts";
+import { adopt, deploy } from "./commands/apps.ts";
 import { check } from "./commands/check.ts";
 import { down, up } from "./commands/compose.ts";
 import { containerEnvText } from "./commands/env.ts";
@@ -63,7 +63,8 @@ const usage = `usage: office <command> [--office <dir>]
   exec -- <command...>         run one command there the same way, with its stdin and exit status
   pin                          write office.lock for the versions office.yaml pins
   pair [--origin <url>]        print a one-time link that connects the OpenCode app or a browser
-  apps deploy                  deploy every Executor app in the office from its files
+  apps deploy                  install declared catalog apps and deploy local Executor app sources
+  apps adopt <catalog-id>      copy an installed catalog app's source into executor/apps/<catalog-id>
   gui dev <package>            install a local package's panel on the desktop app's machine each
                                time its build writes the bundle
   upgrade-tools                bump exact pins in mise.toml files, machine.toml, .office/mise/
@@ -244,7 +245,9 @@ async function main(): Promise<void> {
     for (const path of writeContainerWrappers()) console.log(`office: wrote ${path}`);
   } else if (command === "migrate-home") {
     for (const line of migrateHome(homedir())) console.log(`office: ${line}`);
-  } else if (command === "apps" && rest[0] === "deploy") {
+  } else if (command === "apps" && rest[0] === "adopt" && rest.length === 2) {
+    await adopt(currentOffice(flags), rest[1]);
+  } else if (command === "apps" && rest[0] === "deploy" && rest.length === 1) {
     await deploy(currentOffice(flags));
   } else if (command === "gui" && rest[0] === "dev") {
     if (rest[1] === undefined) throw new OfficeError("usage: office gui dev <package>");

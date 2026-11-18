@@ -3,25 +3,27 @@
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
 import { ports } from "./compose.ts";
+import { adoptionMarker, adoptCatalog, catalogPlan, installedApps, installMissing } from "./catalog-apps.ts";
 
 /** An app as Executor's API lists it, with only the fields the office reads. */
 export type ExecutorApp = {
   id: string;
   slug: string;
-  activeVersion?: number;
+  copiedFrom?: { name?: string | null } | null;
+  activeVersion?: string;
   requirements?: { accounts?: { opencode?: { scope?: string } } };
 };
 
 type AccountLink = { requirement: string; account: { id: string; label: string } };
 
 /** An app folder's package.json, with only the fields the office reads. */
-type AppManifest = { dependencies?: { apps?: string }; executor?: { title?: string } };
+type AppManifest = { dependencies?: Record<string, string>; executor?: { title?: string } };
 
-export type AppFolder = { slug: string; dir: string };
+export type AppFolder = { slug: string; dir: string; adopted: boolean };
 
 /** The app folders: the root's executor/apps/* and each desk's. */
 export function appFolders(office: Office): AppFolder[] {
@@ -32,7 +34,17 @@ export function appFolders(office: Office): AppFolder[] {
 
     return readdirSync(dir, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && existsSync(join(dir, entry.name, "package.json")))
-      .map((entry) => ({ slug: entry.name, dir: join(dir, entry.name) }));
+      .map((entry) => {
+        const path = join(dir, entry.name);
+        const marker = join(path, adoptionMarker);
+        const adopted = existsSync(marker);
+
+        if (adopted && (level !== "" || !office.catalogApps.includes(entry.name) || readFileSync(marker, "utf8").trim() !== entry.name)) {
+          throw new OfficeError(`${marker}: an adopted app must be in executor/apps/<catalog-id> and declared in executor.catalog_apps`);
+        }
+
+        return { slug: entry.name, dir: path, adopted };
+      });
   });
 }
 
@@ -61,13 +73,16 @@ export const officeDirectory = ${JSON.stringify(office.opencode.directory)};
 `;
 }
 
-function sourceFiles(office: Office, dir: string): { path: string; content: string }[] {
-  return readdirSync(dir, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile() && !relative(dir, entry.parentPath).split("/").includes("node_modules"))
-    .map((entry) => {
-      const path = relative(dir, join(entry.parentPath, entry.name));
+function sourceFiles(office: Office, folder: AppFolder) {
+  return readdirSync(folder.dir, { recursive: true, withFileTypes: true })
+    .flatMap((entry): { path: string; content: string; encoding?: "base64" }[] => {
+      const path = relative(folder.dir, join(entry.parentPath, entry.name));
 
-      return { path, content: path === "office.ts" ? officeModule(office) : readFileSync(join(dir, path), "utf8") };
+      if (!entry.isFile() || path.split("/").some(part => part === "node_modules" || part === ".git") || path === adoptionMarker) return [];
+
+      if (path.startsWith("ui/public/")) return [{ path, content: readFileSync(join(folder.dir, path), "base64"), encoding: "base64" }];
+
+      return [{ path, content: !folder.adopted && path === "office.ts" ? officeModule(office) : readFileSync(join(folder.dir, path), "utf8") }];
     });
 }
 
@@ -198,10 +213,28 @@ function typecheck(office: Office, folders: AppFolder[], version: string): void 
 
     try {
       cpSync(folder.dir, copy, { recursive: true, filter: (source) => !relative(folder.dir, source).split("/").includes("node_modules") });
-      symlinkSync(join(cache, "node_modules"), join(copy, "node_modules"));
+
+      if (folder.adopted) {
+        const modules = join(copy, "node_modules");
+
+        mkdirSync(modules);
+        symlinkSync(join(cache, "node_modules/apps"), join(modules, "apps"));
+
+        for (const dep of Object.keys(readManifest(folder.dir).dependencies ?? {})) {
+          if (dep === "apps" || !/^(?:@[\w.-]+\/)?[\w-][\w.-]*$/.test(dep)) continue;
+          const path = join(folder.dir, "node_modules", dep);
+
+          if (!existsSync(path)) continue;
+          mkdirSync(dirname(join(modules, dep)), { recursive: true });
+          symlinkSync(path, join(modules, dep));
+        }
+      } else {
+        symlinkSync(join(cache, "node_modules"), join(copy, "node_modules"));
+      }
+
       bun([tsc, "--ignoreConfig", "--noEmit", "--strict", "--skipLibCheck", "--module", "nodenext", "--moduleResolution", "nodenext", "--target", "es2022", "index.ts"], copy);
     } catch {
-      throw new OfficeError(`${relative(office.dir, folder.dir)} doesn't type-check against apps@${version}; nothing was deployed`);
+      throw new OfficeError(`${relative(office.dir, folder.dir)} doesn't type-check against apps@${version}; nothing was deployed${folder.adopted ? "; install any extra dependencies in the app folder before deploying" : ""}`);
     } finally {
       rmSync(copy, { recursive: true, force: true });
     }
@@ -222,23 +255,30 @@ function matchFramework(office: Office, folders: AppFolder[], version: string): 
 }
 
 /** The `apps` version each deployed app's source names, by slug, for `office check`. */
-export async function deployedFrameworks(office: Office): Promise<{ version: string; apps: { slug: string; apps: string | undefined }[] }> {
+export async function deployedFrameworks(office: Office) {
   const call = client(connection(office));
   const { organization } = await call<{ organization: string }>("GET", "/api/context");
   const { version } = await call<{ version: string }>("GET", `/api/organizations/${organization}/framework/release`);
-  const apps = await call<ExecutorApp[]>("GET", `/api/organizations/${organization}/apps`);
-  const slugs = new Set(appFolders(office).map((folder) => folder.slug));
-  const deployed = [];
+  const base = `/api/organizations/${organization}`;
+  const apps = await installedApps(call, base);
+  const folders = appFolders(office);
+  const catalog = await catalogPlan(call, base, office.catalogApps, apps, folders);
+  const slugs = new Set(folders.filter(folder => !folder.adopted).map((folder) => folder.slug));
+  const deployed: { slug: string; apps: string | undefined }[] = [];
 
   for (const app of apps.filter((entry) => slugs.has(entry.slug))) {
-    const source = await call<{ files: { path: string; content?: string }[] }>("GET", `/api/organizations/${organization}/apps/${app.id}/workspace`);
+    const source = await call<{ files: { path: string; content?: string }[] }>("GET", `/api/organizations/${organization}/apps/${app.id}/source`);
     const manifest = source.files.find((file) => file.path === "package.json")?.content;
     const parsed: AppManifest = manifest === undefined ? {} : JSON.parse(manifest);
 
     deployed.push({ slug: app.slug, apps: parsed.dependencies?.apps });
   }
 
-  return { version, apps: deployed };
+  return { version, apps: deployed, catalog };
+}
+
+export async function adopt(office: Office, id: string) {
+  await adoptCatalog(office, id, client(connection(office)), appFolders(office));
 }
 
 /**
@@ -252,15 +292,25 @@ export async function deploy(office: Office): Promise<void> {
   const { version } = await call<{ version: string }>("GET", `/api/organizations/${organization}/framework/release`);
   const folders = appFolders(office);
 
-  typecheck(office, folders, version);
-  matchFramework(office, folders, version);
+  const base = `/api/organizations/${organization}`;
+  const existing = await installedApps(call, base);
+  const plan = await catalogPlan(call, base, office.catalogApps, existing, folders);
+  const authored = folders.filter(folder => !folder.adopted);
 
-  const existing = await call<ExecutorApp[]>("GET", `/api/organizations/${organization}/apps`);
+  for (const folder of authored) {
+    if (existing.find(app => app.slug === folder.slug)?.copiedFrom?.name?.startsWith("@executor.sh/")) {
+      throw new OfficeError(`${folder.slug}: local app would overwrite an installed catalog app; adopt it or rename the local folder`);
+    }
+  }
+
+  if (folders.length) typecheck(office, folders, version);
+  matchFramework(office, authored, version);
+  await installMissing(call, base, plan, existing);
   const deployed: ExecutorApp[] = [];
 
   for (const folder of folders) {
     const manifest = readManifest(folder.dir);
-    const files = sourceFiles(office, folder.dir);
+    const files = sourceFiles(office, folder);
     let app = existing.find((entry) => entry.slug === folder.slug);
 
     if (app === undefined) {
@@ -271,7 +321,8 @@ export async function deploy(office: Office): Promise<void> {
     const result = await call<{ app: ExecutorApp }>("POST", `/api/organizations/${organization}/apps/${app.id}/deploy`, { files });
 
     console.log(`deployed ${relative(office.dir, folder.dir)} → ${app.slug} (${app.id}) version ${result.app.activeVersion}`);
-    deployed.push(result.app);
+
+    if (!folder.adopted) deployed.push(result.app);
   }
 
   for (const line of await linkOpencode(office, call, organization, deployed)) console.log(line);

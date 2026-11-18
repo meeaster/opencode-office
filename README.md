@@ -86,7 +86,8 @@ pre-commit install
 | `office pin` | Writes `office.lock` for the versions `office.yaml` pins, looking up any it doesn't already hold on GitHub or Executor's registry |
 | `office pair [--origin <url>]` | Prints a one-time link that connects the OpenCode desktop app or a browser to the office's OpenCode server. It works once, within five minutes; the app stays signed in until the password changes. `--origin` replaces the address in the link |
 | `office gui dev <package>` | While a local package's panel is being built, installs the bundle on the desktop app's machine each time the build writes it; see "Panels" |
-| `office apps deploy` | Deploys every app in `executor/apps/*` and `<desk>/executor/apps/*` from its files, creating apps that don't exist, and links the OpenCode account to each app that declares one. It first type-checks every app against the `apps` framework Executor serves (with this executable acting as Bun) and sets each app's `apps` dependency to that version, deploying nothing if one fails. Each app's `office.ts` is replaced by one for the office's mode |
+| `office apps deploy` | Installs missing `executor.catalog_apps` and deploys app folders in `executor/apps/*` and `<desk>/executor/apps/*`. It first type-checks local sources against the framework Executor serves. For office-authored apps it updates the `apps` dependency, supplies the mode-specific `office.ts` and links the OpenCode account when required |
+| `office apps adopt <catalog-id>` | Copies an installed catalog app's currently deployed source into `executor/apps/<catalog-id>/` for customization. Future deployments target that app in place |
 | `office upgrade-tools` | Bumps each exact pin in the office's own `mise.toml` files (root and desks), its `machine.toml` and the packages' fragments in `.office/mise/` (see "Tools"), and the versions in `office.yaml`, to the newest release at least the office's minimum release age old, and commits the changed files alone as the office's git identity, else `office cron`. See "Cron" |
 | `office update [--check] [--minimum-release-age <age> \| --version <release>]` | Replaces this `office` executable with a release from GitHub: the newest at least a day (or `<age>`) old and newer than this one, or exactly `<release>`. `--check` only reports. It changes no office; see "Updating" |
 | `office cron list` / `office cron run <job-id>` | Lists enabled, applicable YAML jobs or runs one by its qualified ID; see "Cron" |
@@ -651,6 +652,19 @@ Review and commit `.sops.yaml`, `office.yaml` and encrypted credentials yourself
 `office setup` deploys apps and runs checks. It makes no model request and does not verify a provider's billing or model access. `office pair` prints the next-step link for the desktop app or a browser.
 
 OpenCode's API picks a session's folder from the `x-opencode-directory` header or the `location[directory]` query parameter; it ignores `?directory=` and falls back to its start folder.
+
+## Executor catalog apps
+
+Select official catalog IDs in `office.yaml`:
+
+```yaml
+executor:
+  catalog_apps: [github]
+```
+
+Run `office apps deploy` (also part of `office setup`). It installs missing entries and recognizes existing apps by slug **and catalog package**. It does not refresh an existing app from the catalog. Removing a stock entry stops checking it; the app and its accounts remain in Executor. `office check` reports missing apps and name conflicts. Connect the app's accounts in Executor.
+
+To customize an installed app, run `office apps adopt github`. Commit `executor/apps/github/`, including `.office-catalog`, and keep `github` declared. Edit its tools, schedules or workflows there and run `office apps deploy`. Deployment uses the existing app ID, retaining compatible account links. On a fresh instance it installs the template first, then deploys your committed version. The marker is office metadata and is not uploaded. The adopted manifest and `office.ts` remain yours; if your tools import extra dependencies directly, install them in the app folder for local type-checking. Adoption refuses to overwrite an existing folder or silently omit assets whose bytes Executor's source API does not return.
 
 ## The office's Executor key
 

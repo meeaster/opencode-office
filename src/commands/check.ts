@@ -756,8 +756,13 @@ async function opencodeVersion(office: Office, report: Report, auth: Record<stri
 /** Every app in the office, in its folder and as deployed, must name the apps framework Executor serves. */
 async function appFrameworks(office: Office, report: Report): Promise<void> {
   try {
-    const { version: served, apps } = await deployedFrameworks(office);
-    const folders = appFolders(office);
+    const { version: served, apps, catalog } = await deployedFrameworks(office);
+
+    for (const item of catalog) {
+      report(!!item.existing, `catalog app ${item.id}`, item.existing ? `installed from ${item.pkg} (${item.existing.id})` : "missing; run office apps deploy");
+    }
+
+    const folders = appFolders(office).filter(folder => !folder.adopted);
     const local = folders.filter((folder) => JSON.parse(readFileSync(join(folder.dir, "package.json"), "utf8")).dependencies?.apps !== served);
     const deployed = apps.filter((app) => app.apps !== served);
     const missing = folders.filter((folder) => !apps.some((app) => app.slug === folder.slug));
@@ -768,7 +773,7 @@ async function appFrameworks(office: Office, report: Report): Promise<void> {
       ...missing.map((folder) => `${folder.slug} isn't deployed`),
     ];
 
-    report(problems.length === 0, "app frameworks", problems.length === 0 ? `every app is deployed for apps@${served}` : `Executor serves apps@${served}: ${problems.join("; ")}; run office apps deploy`);
+    report(problems.length === 0, "app frameworks", problems.length === 0 ? `office-authored apps are deployed for apps@${served}` : `Executor serves apps@${served}: ${problems.join("; ")}; run office apps deploy`);
   } catch (error) {
     report(false, "app frameworks", error instanceof Error ? error.message : String(error));
   }

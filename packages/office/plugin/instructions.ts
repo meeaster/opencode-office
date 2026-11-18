@@ -13,7 +13,7 @@ import { check, type OfficeConfig, officeSchema, type Parsed } from "../../../sr
 // What the text uses from office.yaml, read through the schema the CLI uses.
 type DeskInfo = { name: string } & OfficeConfig["desks"][string];
 
-type OfficeInfo = { name: string; desks: DeskInfo[]; references: OfficeConfig["references"]; socketFirewall: boolean };
+type OfficeInfo = { name: string; desks: DeskInfo[]; references: OfficeConfig["references"]; catalogApps: string[]; socketFirewall: boolean };
 
 function readOffice(office: string): Parsed<OfficeInfo> {
   // The plugin and the compiled `office` both run on Bun, which parses YAML itself.
@@ -29,6 +29,7 @@ function readOffice(office: string): Parsed<OfficeInfo> {
       name: config.name,
       desks: Object.entries(config.desks).map(([name, desk]) => ({ name, ...desk })),
       references: config.references,
+      catalogApps: config.executor?.catalog_apps ?? [],
       socketFirewall: config.socket_firewall,
     },
   };
@@ -83,7 +84,8 @@ function sharedSections(office: OfficeInfo, apps: string[]): string[] {
     "",
     "## Shared Executor apps",
     "",
-    ...(apps.length === 0 ? ["None."] : apps),
+    ...(office.catalogApps.length ? [`Catalog apps declared in \`office.yaml\`: ${office.catalogApps.join(", ")}. Use them through \`office-executor\`.`] : []),
+    ...(apps.length === 0 && !office.catalogApps.length ? ["None."] : apps),
   ];
 }
 

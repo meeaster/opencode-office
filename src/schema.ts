@@ -244,6 +244,9 @@ export const officeSchema = v.pipe(v.strictObject(
     name,
     state: v.optional(text),
     opencode,
+    executor: v.optional(v.strictObject({
+      catalog_apps: v.optional(v.pipe(v.array(name, "must be a list of Executor catalog IDs"), v.check((ids) => new Set(ids).size === ids.length, "lists a catalog ID twice")), []),
+    }, mapping)),
     git,
     secrets: v.optional(v.strictObject({ executor_owner: v.optional(text), server: v.optional(text) })),
     // The Claude gateway (a credential and settings for Claude Code in the container) was removed;
@@ -261,7 +264,7 @@ export const officeSchema = v.pipe(v.strictObject(
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
     packages: v.pipe(v.nullish(v.array(packageEntry, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
   },
-  "must be a mapping of name, state, opencode, git, secrets, versions, upgrades, cron, socket_firewall, references, desks, skills, plugins and packages",
+  "must be a mapping of name, state, opencode, executor, git, secrets, versions, upgrades, cron, socket_firewall, references, desks, skills, plugins and packages",
 ), v.forward(v.check(({ secrets, opencode }) => secrets?.server === undefined || (opencode !== "container" && opencode.mode === "host" && opencode.managed), "requires opencode.managed: true in host mode"), ["secrets", "server"]));
 
 export type OfficeConfig = v.InferOutput<typeof officeSchema>;

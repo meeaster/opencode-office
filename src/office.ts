@@ -36,6 +36,7 @@ export type Office = {
   name: string;
   state: string;
   opencode: OpencodeMode;
+  catalogApps: string[];
   /** The commit identity and HTTPS credentials office.yaml sets; undefined leaves git's own config. */
   git: OfficeConfig["git"];
   secrets?: OfficeConfig["secrets"];
@@ -118,6 +119,7 @@ export function loadOffice(dir: string): Office {
     name: config.name,
     state: config.state === undefined ? join(homedir(), ".local/share/office", config.name) : resolve(dir, expandHome(config.state)),
     opencode: opencodeMode(config.opencode, dir),
+    catalogApps: config.executor?.catalog_apps ?? [],
     git: config.git,
     secrets: config.secrets,
     versions: config.versions,
