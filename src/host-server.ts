@@ -110,7 +110,12 @@ function serverAddress(office: Office): URL {
   return url;
 }
 
-function checkAddress(url: URL): void {
+// Service discovery uses loopback, but OpenCode can save or register its actual bind address.
+function matchesServiceHost(url: URL, host: string, listenHost?: "0.0.0.0"): boolean {
+  return hostKey(host) === hostKey(url.hostname) || host === listenHost;
+}
+
+function checkAddress(url: URL, listenHost?: "0.0.0.0"): void {
   const path = join(xdg("CONFIG", ".config"), "opencode/service.json");
   const result = readServiceFile(path, serviceConfig);
 
@@ -120,7 +125,7 @@ function checkAddress(url: URL): void {
 
   const port = Number(url.port || 80);
 
-  if (result.value.port !== port || hostKey(result.value.hostname) !== hostKey(url.hostname)) {
+  if (result.value.port !== port || !matchesServiceHost(url, result.value.hostname, listenHost)) {
     throw new OfficeError(`OpenCode's service address in ${path} does not match ${url.origin}; correct the address before starting the office (changing service settings can stop the server)`);
   }
 
@@ -145,7 +150,9 @@ export function planServer(office: Office): ServerPlan {
   const encrypted = file === undefined ? undefined : source(office, file);
   const env = envFilePath();
 
-  checkAddress(url);
+  const listenHost = office.opencode.managed.listenHost;
+
+  checkAddress(url, listenHost);
 
   if (file !== undefined && sops !== undefined && identity !== undefined) {
     if (!existsSync(identity)) throw new OfficeError("managed OpenCode server secrets require an authorized age identity file (SOPS_AGE_KEY_FILE or the standard SOPS age keys.txt)");
@@ -155,7 +162,7 @@ export function planServer(office: Office): ServerPlan {
 
   const commands = Object.entries(office.opencode.managed.envCommands);
   const gh = commands.length === 0 ? undefined : officeTool(office, "gh")?.path;
-  const launch = `exec ${shellQuote(program)} serve --service --hostname ${shellQuote(hostKey(url.hostname))} --port ${url.port || "80"}`;
+  const launch = `exec ${shellQuote(program)} serve --service --hostname ${shellQuote(listenHost ?? hostKey(url.hostname))} --port ${url.port || "80"}`;
 
   const script = [
     "set -e",
@@ -287,7 +294,7 @@ function registeredHere(office: Office, pid: number): boolean {
     const expected = serverAddress(office);
     const registered = new URL(result.value.url);
 
-    return expected.protocol === registered.protocol && expected.port === registered.port && hostKey(expected.hostname) === hostKey(registered.hostname);
+    return expected.protocol === registered.protocol && expected.port === registered.port && matchesServiceHost(expected, registered.hostname, office.opencode.managed?.listenHost);
   } catch {
     return false;
   }

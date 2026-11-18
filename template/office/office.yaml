@@ -19,6 +19,7 @@ opencode: container
 #   mode: host
 #   url: http://127.0.0.1:49374
 #   managed: true
+#   listen_host: 0.0.0.0  # optional LAN access; keep url on IPv4 loopback for local clients
 #   env_commands:
 #     GITHUB_MCP_TOKEN: gh auth token
 # secrets:

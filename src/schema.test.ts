@@ -18,6 +18,17 @@ test("a claude block says the gateway was removed", () => {
   ]);
 });
 
+test("the wildcard listen host is opt-in for managed hosts with an IPv4 loopback client URL", () => {
+  const host = "opencode:\n  mode: host\n  url: http://127.0.0.1:49374\n  listen_host: 0.0.0.0\n";
+  const managed = host + "  managed: true\n";
+
+  expect(errors(managed)).toEqual([]);
+  expect(errors(host).join("\n")).toContain("requires opencode.managed");
+  expect(errors(managed.replace("127.0.0.1", "[::1]")).join("\n")).toContain("IPv4 loopback");
+  expect(errors(managed.replace("127.0.0.1", "0.0.0.0")).join("\n")).toContain("loopback HTTP origin");
+  expect(errors("opencode:\n  mode: container\n  listen_host: 0.0.0.0\n")).not.toEqual([]);
+});
+
 test("server commands and encrypted secrets need managed host mode", () => {
   const host = "opencode:\n  mode: host\n  url: http://127.0.0.1:49374\n";
   const commands = "  env_commands:\n    GITHUB_MCP_TOKEN: gh auth token\n";

@@ -100,9 +100,12 @@ const hostOpencode = v.pipe(
     mode: v.literal("host"),
     url: v.pipe(text, v.url("must be a URL such as http://127.0.0.1:49374")),
     managed: v.optional(v.boolean("must be true or false"), false),
+    listen_host: v.optional(v.literal("0.0.0.0")),
     env_commands: v.optional(v.record(serverVariable, text, "must map variable names to shell commands")),
   }),
   v.forward(v.check((host) => host.managed || host.env_commands === undefined, "requires opencode.managed: true"), ["env_commands"]),
+  v.forward(v.check((host) => host.listen_host === undefined || host.managed, "requires opencode.managed: true"), ["listen_host"]),
+  v.forward(v.check((host) => host.listen_host === undefined || new URL(host.url).hostname !== "[::1]", "an IPv4 listener needs an IPv4 loopback URL"), ["url"]),
   v.forward(v.check((host) => {
     if (!host.managed) return true;
 

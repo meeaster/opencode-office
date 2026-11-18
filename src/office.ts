@@ -29,7 +29,7 @@ export type PackageEntry = OfficeConfig["packages"][number];
  * reaches it, `containerUrl` as Executor and the office's other containers do, and `directory` the
  * office's path as the server sees it, where sessions start.
  */
-export type OpencodeMode = { mode: "container" | "host"; url: string | undefined; containerUrl: string; directory: string; managed?: { envCommands: Record<string, string> } };
+export type OpencodeMode = { mode: "container" | "host"; url: string | undefined; containerUrl: string; directory: string; managed?: { envCommands: Record<string, string>; listenHost?: "0.0.0.0" } };
 
 export type Office = {
   dir: string;
@@ -81,7 +81,7 @@ function opencodeMode(config: OfficeConfig["opencode"], dir: string): OpencodeMo
 
   const mode: OpencodeMode = { mode: "host", url: url.origin, containerUrl: containerUrl.origin, directory: dir };
 
-  if (config.managed) mode.managed = { envCommands: config.env_commands ?? {} };
+  if (config.managed) mode.managed = { envCommands: config.env_commands ?? {}, listenHost: config.listen_host };
 
   return mode;
 }
