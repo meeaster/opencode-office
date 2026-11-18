@@ -59,13 +59,38 @@ const plugin = v.strictObject(
   mapping,
 );
 
+export const serverVariable = v.pipe(
+  v.string(),
+  v.regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be an environment variable name"),
+  v.check((key) => !reservedServerVariables.has(key) && !/^(OFFICE_|XDG_|SOPS_|LD_)/.test(key), "is reserved for server startup"),
+);
+
+const reservedServerVariables = new Set(["PATH", "HOME", "SHELL", "ENV", "BASH_ENV", "ZDOTDIR", "IFS", "TMPDIR", "OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "OPENCODE_PTY_HANDOFF", "OPENCODE_DISABLE_AUTOUPDATE"]);
+
+const hostOpencode = v.pipe(
+  v.strictObject({
+    mode: v.literal("host"),
+    url: v.pipe(text, v.url("must be a URL such as http://127.0.0.1:49374")),
+    managed: v.optional(v.boolean("must be true or false"), false),
+    env_commands: v.optional(v.record(serverVariable, text, "must map variable names to shell commands")),
+  }),
+  v.forward(v.check((host) => host.managed || host.env_commands === undefined, "requires opencode.managed: true"), ["env_commands"]),
+  v.forward(v.check((host) => {
+    if (!host.managed) return true;
+
+    const url = new URL(host.url);
+
+    return url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) && url.href === `${url.origin}/`;
+  }, "a managed server needs a loopback HTTP origin, such as http://127.0.0.1:49374"), ["url"]),
+);
+
 const opencode = v.nullish(
   v.union(
     [
       v.literal("container"),
       v.variant("mode", [
         v.strictObject({ mode: v.literal("container") }),
-        v.strictObject({ mode: v.literal("host"), url: v.pipe(text, v.url("must be a URL such as http://127.0.0.1:49374")) }),
+        hostOpencode,
       ]),
     ],
     "must be container, or { mode: host, url: <the server's URL> }",
@@ -162,13 +187,13 @@ const git = v.optional(
   ),
 );
 
-export const officeSchema = v.strictObject(
+export const officeSchema = v.pipe(v.strictObject(
   {
     name,
     state: v.optional(text),
     opencode,
     git,
-    secrets: v.optional(v.strictObject({ executor_owner: v.optional(text) })),
+    secrets: v.optional(v.strictObject({ executor_owner: v.optional(text), server: v.optional(text) })),
     // The Claude gateway (a credential and settings for Claude Code in the container) was removed;
     // an office.yaml that still has the block is told so instead of hearing of an unknown key.
     claude: v.optional(v.never("was the Claude gateway, which office no longer has: delete the claude block from office.yaml")),
@@ -184,7 +209,7 @@ export const officeSchema = v.strictObject(
     packages: v.pipe(v.nullish(v.array(packageEntry, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
   },
   "must be a mapping of name, state, opencode, git, secrets, versions, upgrades, socket_firewall, references, desks, skills, plugins and packages",
-);
+), v.forward(v.check(({ secrets, opencode }) => secrets?.server === undefined || (opencode !== "container" && opencode.mode === "host" && opencode.managed), "requires opencode.managed: true in host mode"), ["secrets", "server"]));
 
 export type OfficeConfig = v.InferOutput<typeof officeSchema>;
 

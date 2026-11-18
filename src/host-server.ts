@@ -1,0 +1,449 @@
+// The opt-in local OpenCode background service. OpenCode still owns service.json and its password.
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { createConnection } from "node:net";
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
+
+import * as v from "valibot";
+
+import { hasSystemd } from "./cron/host.ts";
+import { envFilePath, miseShims, opencodeBin } from "./host-env.ts";
+import { officeTool, requireOfficeTool } from "./host-tools.ts";
+import { type Office, OfficeError, readEnvFile } from "./office.ts";
+import { check, type Parsed } from "./schema.ts";
+import { requireHostIdentity, source, validateServerSecrets } from "./secrets.ts";
+import { shellQuote } from "./sfw.ts";
+
+export const unitDirVariable = "OFFICE_SYSTEMD_USER_DIR";
+
+const legacyUnit = "opencode-serve.service";
+const revisionVariable = "OFFICE_SERVER_REVISION";
+
+export function serverUnit(office: Office): string {
+  return `office-${office.name}-opencode.service`;
+}
+
+export function serverUnitPath(office: Office): string {
+  return resolve(process.env[unitDirVariable] ?? join(xdg("CONFIG", ".config"), "systemd/user"), serverUnit(office));
+}
+
+function xdg(kind: "CONFIG" | "DATA" | "STATE" | "CACHE", fallback: string): string {
+  return resolve(process.env[`XDG_${kind}_HOME`] || join(homedir(), fallback));
+}
+
+export function userSystemd(args: string[]): string {
+  const result = spawnSync("systemctl", ["--user", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+
+  if (result.status !== 0) throw new OfficeError(`systemctl --user ${args.join(" ")} failed: ${result.stderr?.trim() || result.error?.message || "see systemd's user journal"}`);
+
+  return result.stdout.trim();
+}
+
+function activeUnit(name: string): boolean {
+  return spawnSync("systemctl", ["--user", "is-active", "--quiet", name], { stdio: "ignore" }).status === 0;
+}
+
+function property(unit: string, name: string): string {
+  return userSystemd(["show", `--property=${name}`, "--value", unit]);
+}
+
+function systemdQuote(text: string): string {
+  return `"${text.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\n", "\\n").replaceAll("\r", "\\r").replaceAll("%", "%%")}"`;
+}
+
+function absoluteProgram(path: string): string {
+  const found = isAbsolute(path) ? path : Bun.which(path);
+
+  if (found === null) throw new OfficeError(`could not resolve ${path} to an executable on PATH`);
+
+  return resolve(found);
+}
+
+function opencodePath(): string {
+  const path = Bun.which("opencode", { PATH: opencodeBin() }) ?? Bun.which("opencode");
+
+  if (path === null) throw new OfficeError("install OpenCode on this host first; office does not install it in host mode");
+
+  // Keep an installer-managed symlink, rather than resolving it to a versioned target.
+  return absoluteProgram(path);
+}
+
+const serviceConfig = v.looseObject({
+  disabled: v.optional(v.boolean(), false),
+  port: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65535)), 49374),
+  hostname: v.optional(v.string(), "127.0.0.1"),
+  env: v.optional(v.record(v.string(), v.string()), {}),
+});
+
+function readServiceFile<Schema extends v.GenericSchema>(path: string, schema: Schema): Parsed<v.InferOutput<Schema>> {
+  try {
+    return check(v.safeParse(schema, existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {}));
+  } catch {
+    return { ok: false, errors: ["invalid OpenCode service JSON (contents withheld)"] };
+  }
+}
+
+function hostKey(host: string): string {
+  if (host === "localhost") return "127.0.0.1";
+
+  return host.replace(/^\[(::1)\]$/, "$1");
+}
+
+function serverAddress(office: Office): URL {
+  if (office.opencode.url === undefined) throw new OfficeError("managed OpenCode requires a host URL");
+
+  const url = new URL(office.opencode.url);
+
+  if (url.hostname === "localhost") url.hostname = "127.0.0.1";
+
+  return url;
+}
+
+function checkAddress(url: URL): void {
+  const path = join(xdg("CONFIG", ".config"), "opencode/service.json");
+  const result = readServiceFile(path, serviceConfig);
+
+  if (!result.ok) throw new OfficeError(`${path}: invalid OpenCode service configuration (contents withheld)`);
+
+  if (result.value.disabled) throw new OfficeError(`${path}: OpenCode's background service is disabled; enable it before using managed mode`);
+
+  const port = Number(url.port || 80);
+
+  if (result.value.port !== port || hostKey(result.value.hostname) !== hostKey(url.hostname)) {
+    throw new OfficeError(`OpenCode's service address in ${path} does not match ${url.origin}; correct the address before starting the office (changing service settings can stop the server)`);
+  }
+
+  if (Object.keys(result.value.env).length > 0) {
+    throw new OfficeError(`${path}: OpenCode's saved service environment takes precedence over the unit; remove it before using managed mode`);
+  }
+}
+
+export type ServerPlan = { unit: string; path: string; program: string; text: string; revision: string; hasSecrets: boolean };
+
+/** Validate startup inputs without printing command output, decrypted data or runtime credentials. */
+export function planServer(office: Office): ServerPlan {
+  if (process.platform !== "linux" || !hasSystemd()) throw new OfficeError("opencode.managed requires Linux with a running systemd user manager");
+
+  if (office.opencode.managed === undefined) throw new OfficeError("office.yaml does not select a managed OpenCode server");
+
+  const url = serverAddress(office);
+  const program = opencodePath();
+  const file = office.secrets?.server;
+  const sops = file === undefined ? undefined : absoluteProgram(requireOfficeTool(office, "sops"));
+  const identity = file === undefined ? undefined : requireHostIdentity(office);
+  const encrypted = file === undefined ? undefined : source(office, file);
+  const env = envFilePath();
+
+  checkAddress(url);
+
+  if (file !== undefined && sops !== undefined && identity !== undefined) {
+    if (!existsSync(identity)) throw new OfficeError("managed OpenCode server secrets require an authorized age identity file (SOPS_AGE_KEY_FILE or the standard SOPS age keys.txt)");
+
+    validateServerSecrets(office, file, sops, identity);
+  }
+
+  const commands = Object.entries(office.opencode.managed.envCommands);
+  const gh = commands.length === 0 ? undefined : officeTool(office, "gh")?.path;
+  const launch = `exec ${shellQuote(program)} serve --service --hostname ${shellQuote(hostKey(url.hostname))} --port ${url.port || "80"}`;
+
+  const script = [
+    "set -e",
+    `cd ${shellQuote(office.dir)}`,
+    `. ${shellQuote(env)}`,
+    ...(gh === undefined ? [] : [`gh() { ${shellQuote(absoluteProgram(gh))} "$@"; }`]),
+    ...commands.map(([key, command]) => [
+      `if OFFICE_COMMAND_OUTPUT=$( ( eval ${shellQuote(command)} ) 2>/dev/null ); then`,
+      '  OFFICE_COMMAND_OUTPUT=${OFFICE_COMMAND_OUTPUT#"${OFFICE_COMMAND_OUTPUT%%[![:space:]]*}"}',
+      '  OFFICE_COMMAND_OUTPUT=${OFFICE_COMMAND_OUTPUT%"${OFFICE_COMMAND_OUTPUT##*[![:space:]]}"}',
+      `  export ${key}="$OFFICE_COMMAND_OUTPUT"`,
+      "else",
+      `  unset ${key}`,
+      `  printf '%s\\n' 'office: could not set ${key} from its command (output withheld)' >&2`,
+      "fi",
+      "unset OFFICE_COMMAND_OUTPUT",
+    ].join("\n")),
+    sops === undefined || encrypted === undefined
+      ? launch
+      : `exec ${shellQuote(sops)} exec-env --same-process ${shellQuote(encrypted)} ${shellQuote(launch)}`,
+  ].join("\n");
+
+  const variables = [
+    `HOME=${homedir()}`,
+    `XDG_CONFIG_HOME=${xdg("CONFIG", ".config")}`,
+    `XDG_DATA_HOME=${xdg("DATA", ".local/share")}`,
+    `XDG_STATE_HOME=${xdg("STATE", ".local/state")}`,
+    `XDG_CACHE_HOME=${xdg("CACHE", ".cache")}`,
+    `PATH=${[miseShims(), join(homedir(), ".local/bin"), opencodeBin(), "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"].join(":")}`,
+    "OPENCODE_DISABLE_AUTOUPDATE=1",
+  ];
+
+  if (identity !== undefined) variables.push(`SOPS_AGE_KEY_FILE=${identity}`);
+
+  if (process.env.TMPDIR) variables.push(`TMPDIR=${resolve(process.env.TMPDIR)}`);
+
+  if (process.env.GH_CONFIG_DIR) variables.push(`GH_CONFIG_DIR=${resolve(process.env.GH_CONFIG_DIR)}`);
+
+  for (const key of ["MISE_CONFIG_DIR", "MISE_DATA_DIR", "MISE_STATE_DIR", "MISE_CACHE_DIR"]) {
+    const value = process.env[key];
+
+    if (value) variables.push(`${key}=${resolve(value)}`);
+  }
+
+  const unit = serverUnit(office);
+
+  const text = [
+    `# Generated by office for ${office.name}: managed OpenCode. Do not edit.`,
+    "[Unit]",
+    `Description=office ${office.name}: OpenCode background service`,
+    "StartLimitIntervalSec=60",
+    "StartLimitBurst=5",
+    "",
+    "[Service]",
+    "Type=exec",
+    ...variables.map((value) => `Environment=${systemdQuote(value)}`),
+    // The colon prefix switches off systemd's $ expansion; only the inner shell expands variables.
+    `ExecStart=:/bin/sh -c ${systemdQuote(script)}`,
+    "UMask=0077",
+    "KillMode=mixed",
+    "TimeoutStopSec=10s",
+    "Restart=always",
+    "RestartSec=2s",
+    "SuccessExitStatus=143",
+    "RestartPreventExitStatus=0",
+    "",
+    "[Install]",
+    "WantedBy=default.target",
+    "",
+  ].join("\n");
+
+  const hash = createHash("sha256").update(text);
+
+  for (const input of [env, encrypted]) {
+    if (input !== undefined && existsSync(input)) hash.update("\0").update(readFileSync(input));
+  }
+
+  const revision = hash.digest("hex");
+
+  return {
+    unit, path: serverUnitPath(office), program, revision, hasSecrets: file !== undefined,
+    text: text.replace("\nExecStart=", `\nEnvironment=${revisionVariable}=${revision}\nExecStart=`),
+  };
+}
+
+const pidSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(2));
+const infoSchema = v.object({ pid: pidSchema, version: v.string() });
+const registrationSchema = v.object({ pid: pidSchema, url: v.string() });
+
+async function serverPid(office: Office): Promise<number | undefined> {
+  const { OPENCODE_PASSWORD: password } = readEnvFile(join(office.state, "secrets.env"));
+
+  if (password === undefined) return;
+
+  try {
+    const response = await fetch(new URL("/api/info", serverAddress(office)), {
+      headers: { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}` },
+      signal: AbortSignal.timeout(1500), redirect: "error",
+    });
+
+    if (!response.ok) return;
+
+    const info = check(v.safeParse(infoSchema, await response.json()));
+
+    return info.ok ? info.value.pid : undefined;
+  } catch {
+    return;
+  }
+}
+
+function mainPid(unit: string): number {
+  return Number(property(unit, "MainPID")) || 0;
+}
+
+function registeredHere(office: Office, pid: number): boolean {
+  try {
+    const file = join(xdg("STATE", ".local/state"), "opencode/service.json");
+    const result = readServiceFile(file, registrationSchema);
+
+    if (!result.ok || result.value.pid !== pid) return false;
+
+    const expected = serverAddress(office);
+    const registered = new URL(result.value.url);
+
+    return expected.protocol === registered.protocol && expected.port === registered.port && hostKey(expected.hostname) === hostKey(registered.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function runningRevision(pid: number): string | undefined {
+  try {
+    const prefix = `${revisionVariable}=`;
+
+    return readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").find((entry) => entry.startsWith(prefix))?.slice(prefix.length);
+  } catch {
+    return;
+  }
+}
+
+function occupied(office: Office): Promise<boolean> {
+  const url = serverAddress(office);
+
+  return new Promise((done) => {
+    const socket = createConnection({ host: hostKey(url.hostname), port: Number(url.port || 80), timeout: 1500 });
+
+    socket.on("connect", () => { socket.destroy(); done(true); });
+    socket.on("timeout", () => { socket.destroy(); done(true); });
+    socket.on("error", (error: NodeJS.ErrnoException) => done(error.code !== "ECONNREFUSED"));
+  });
+}
+
+/** The old Mindframe-Z unit uses the manager's HOME/XDG roots. Do not consider it in a scratch profile. */
+function legacyActive(): boolean {
+  const values = readManagerEnvironment();
+  const home = values.HOME ?? homedir();
+
+  return homedir() === home &&
+    xdg("STATE", ".local/state") === (values.XDG_STATE_HOME || join(home, ".local/state")) &&
+    xdg("CONFIG", ".config") === (values.XDG_CONFIG_HOME || join(home, ".config")) &&
+    activeUnit(legacyUnit);
+}
+
+function readManagerEnvironment() {
+  const entries = userSystemd(["show-environment"]).split("\n");
+  const value = (key: string) => entries.find((line) => line.startsWith(`${key}=`))?.slice(key.length + 1);
+
+  return { HOME: value("HOME"), XDG_STATE_HOME: value("XDG_STATE_HOME"), XDG_CONFIG_HOME: value("XDG_CONFIG_HOME") };
+}
+
+type Incumbent = { stray: number | undefined; legacy: boolean };
+
+/** Refuse a plain up before it mutates services. Only replace the authenticated local registration. */
+export async function serverIncumbent(office: Office, upgrade: boolean): Promise<Incumbent> {
+  const unit = serverUnit(office);
+  const fragment = property(unit, "FragmentPath");
+
+  if ((fragment !== "" && fragment !== serverUnitPath(office)) || property(unit, "DropInPaths") !== "") {
+    throw new OfficeError(`${unit} has a different unit file or a drop-in; remove the override before running office up`);
+  }
+
+  const own = mainPid(unit);
+  const pid = await serverPid(office);
+  const legacy = legacyActive();
+  const stray = pid === own ? undefined : pid;
+
+  if ((stray !== undefined || legacy) && !upgrade) {
+    throw new OfficeError(`${legacy ? `${legacyUnit} is active` : `OpenCode PID ${stray} is running outside the office's unit`}; office up --upgrade explicitly takes over. ${legacy ? `Disable ${legacyUnit} and any restart timer for it yourself; office never disables them.` : "Stop any other supervisor first."}`);
+  }
+
+  if (stray !== undefined && !registeredHere(office, stray)) throw new OfficeError("the OpenCode listener is not this profile's registered service; stop it yourself before office can start");
+
+  if (pid === undefined && own === 0 && await occupied(office)) throw new OfficeError(`cannot identify the listener at ${office.opencode.url}; check OPENCODE_PASSWORD in state/secrets.env or stop the listener yourself`);
+
+  return { stray, legacy };
+}
+
+function processIdentity(pid: number): string {
+  // /proc/PID/stat field 22 (start time); the parenthesized comm field can itself contain spaces.
+  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+
+  return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+}
+
+function queueRestart(plan: ServerPlan, { stray, legacy }: Incumbent): void {
+  const lines = ["set -eu"];
+
+  if (legacy) lines.push(`systemctl --user stop ${legacyUnit}`);
+
+  if (stray !== undefined) {
+    let identity;
+
+    try {
+      identity = processIdentity(stray);
+    } catch {
+      throw new OfficeError("the registered OpenCode process changed during takeover; run office up --upgrade again");
+    }
+
+    if (!/^\d+$/.test(identity)) throw new OfficeError("could not identify the registered OpenCode process");
+
+    lines.push(
+      `same_process() { [ "$(sed -n 's/^.*) \\([^ZX]\\)/\\1/p' /proc/${stray}/stat 2>/dev/null | cut -d ' ' -f20)" = ${identity} ]; }`,
+      `if same_process; then kill -TERM ${stray}; fi`,
+      "for wait in 1 2 3 4 5 6 7 8 9 10; do if ! same_process; then break; fi; sleep 1; done",
+      `if same_process; then printf '%s\\n' 'office: previous OpenCode process did not exit; stop it and retry' >&2; exit 1; fi`,
+    );
+  }
+
+  lines.push(`exec systemctl --user restart ${plan.unit}`);
+
+  const job = plan.unit.replace(/\.service$/, "-restart.service");
+  const result = spawnSync("systemd-run", ["--user", "--collect", "--no-block", "--quiet", "--unit", job, "/bin/sh", "-c", lines.join("\n")], { stdio: "ignore" });
+
+  if (result.status !== 0) throw new OfficeError(`could not queue the OpenCode restart; check the systemd user manager (${job})`);
+}
+
+export async function startServer(office: Office, plan: ServerPlan, upgrade: boolean, changed: boolean): Promise<void> {
+  const incumbent = await serverIncumbent(office, upgrade);
+  const { unit, path, program } = plan;
+  const active = activeUnit(unit);
+
+  if (changed || property(unit, "NeedDaemonReload") === "yes") userSystemd(["daemon-reload"]);
+
+  if (property(unit, "FragmentPath") !== path || property(unit, "DropInPaths") !== "") {
+    throw new OfficeError(`${unit} has a different unit file or a drop-in; remove the override before running office up`);
+  }
+
+  if (property(unit, "UnitFileState") !== "enabled") userSystemd(["enable", path]);
+
+  console.log(`office: ${unit} runs ${program}`);
+
+  if (upgrade && (active || incumbent.legacy || incumbent.stray !== undefined)) {
+    if (incumbent.legacy) console.log(`office: taking over ${legacyUnit}; disable it and any restart timer for it yourself`);
+
+    console.log(`office: queueing OpenCode restart independently of this terminal; verify with office check or journalctl --user -u ${unit.replace(/\.service$/, "-restart.service")} -u ${unit}`);
+    queueRestart(plan, incumbent);
+
+    return;
+  }
+
+  if (!active) userSystemd(["start", unit]);
+
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const pid = await serverPid(office);
+
+    if (pid !== undefined && pid === mainPid(unit)) {
+      if (runningRevision(pid) !== plan.revision) console.log("office: OpenCode restart pending; run office up --upgrade to apply changes");
+
+      return;
+    }
+
+    if (pid !== undefined) break;
+
+    await Bun.sleep(500);
+  }
+
+  throw new OfficeError(`${unit} did not become the healthy OpenCode server at ${office.opencode.url}; see journalctl --user -u ${unit} and check the service password`);
+}
+
+export async function serverReport(office: Office, plan: ServerPlan, matches: boolean): Promise<{ ok: boolean | "warn"; detail: string }> {
+  const { unit, program } = plan;
+  const loaded = property(unit, "FragmentPath") === plan.path && property(unit, "DropInPaths") === "";
+  const matching = matches && loaded;
+  const enabled = property(unit, "UnitFileState") === "enabled";
+  const active = activeUnit(unit);
+  const own = mainPid(unit);
+  const pid = await serverPid(office);
+  const outside = pid !== undefined && pid !== own;
+  const pending = own !== 0 && runningRevision(own) !== plan.revision;
+
+  const detail = [
+    unit, matching ? "unit matches" : "unit missing or different", enabled ? "enabled" : "not enabled",
+    active ? "active" : "not active", program,
+    outside ? "the server is running outside the office's unit; run office up --upgrade" : pid === undefined ? "server not responding (check the unit journal and service password)" : `server and unit PID ${pid}`,
+    ...(pending ? ["restart pending: office up --upgrade"] : []),
+    plan.hasSecrets ? "secrets file decrypts" : "no server secrets configured",
+  ].join("; ");
+
+  return { ok: matching && enabled && active && pid !== undefined && !outside ? pending ? "warn" : true : false, detail };
+}

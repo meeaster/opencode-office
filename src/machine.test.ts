@@ -5,7 +5,8 @@ import { dirname, join } from "node:path";
 
 import { sync } from "./commands/sync.ts";
 import { machineDirVariable } from "./host-env.ts";
-import { claim, grantConsent, machineRecordVariable, machineReport, miseConfigVariable, readMachine, releaseMachine, syncMachine } from "./machine.ts";
+import { serverUnit, serverUnitPath } from "./host-server.ts";
+import { claim, grantConsent, machineRecordVariable, machineReport, matchesServerUnit, miseConfigVariable, readMachine, releaseMachine, syncMachine, writeServerUnit } from "./machine.ts";
 import { oldMiseFiles } from "./migrate.ts";
 import { loadOffice, OfficeError, readConfig } from "./office.ts";
 
@@ -54,6 +55,38 @@ function makeOffice(at: string, { name = "t", opencode = host, packages = "packa
 }
 
 const links = () => (existsSync(confD) ? readdirSync(confD).sort() : []);
+
+test("the managed server unit needs consent and a recorded env.sh, and is not overwritten when edited", () => {
+  makeOffice(office, { name: "test-server-record", opencode: `${host}  managed: true\n` });
+
+  const config = loadOffice(office);
+
+  const plan = {
+    unit: serverUnit(config), path: serverUnitPath(config),
+    program: "/path/to/opencode", revision: "test", text: "# managed unit fixture\n", hasSecrets: false,
+  };
+
+  expect(() => writeServerUnit(config, plan)).toThrow("requires consent");
+  grantConsent(config);
+  expect(() => writeServerUnit(config, plan)).toThrow("recorded environment file");
+  syncMachine(config);
+  write(plan.path, "# somebody else's unit\n");
+  expect(() => writeServerUnit(config, plan)).toThrow("not in the machine record");
+  unlinkSync(plan.path);
+
+  expect(writeServerUnit(config, plan)).toBe(true);
+  expect(writeServerUnit(config, plan)).toBe(false);
+  expect(matchesServerUnit(config, plan)).toBe(true);
+  expect(syncMachine(config)).toEqual([]);
+  expect(matchesServerUnit(config, plan)).toBe(true);
+
+  write(plan.path, "# edited\n");
+  expect(matchesServerUnit(config, plan)).toBe(false);
+  expect(() => writeServerUnit(config, plan)).toThrow("changed since office wrote it");
+  expect(releaseMachine(config).join("\n")).toContain(`FAILED to remove ${plan.path}`);
+  expect(readFileSync(plan.path, "utf8")).toBe("# edited\n");
+  unlinkSync(plan.path);
+});
 
 test("without consent, sync writes nothing outside the office and says what to run; check fails, as the office's tools apply nowhere", async () => {
   makeOffice(office);

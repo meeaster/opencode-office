@@ -17,3 +17,16 @@ test("a claude block says the gateway was removed", () => {
     "claude: was the Claude gateway, which office no longer has: delete the claude block from office.yaml",
   ]);
 });
+
+test("server commands and encrypted secrets need managed host mode", () => {
+  const host = "opencode:\n  mode: host\n  url: http://127.0.0.1:49374\n";
+  const commands = "  env_commands:\n    GITHUB_MCP_TOKEN: gh auth token\n";
+  const secrets = "secrets:\n  server: secrets/server.enc.yaml\n";
+
+  expect(errors(host + "  managed: true\n" + commands + secrets)).toEqual([]);
+  expect(errors(host + commands).join("\n")).toContain("requires opencode.managed: true");
+  expect(errors(host + secrets).join("\n")).toContain("secrets.server: requires opencode.managed: true");
+  expect(errors("opencode: container\n" + secrets).join("\n")).toContain("secrets.server: requires opencode.managed: true");
+  expect(errors(host + "  managed: true\n" + commands.replace("GITHUB_MCP_TOKEN", "PATH"))).not.toEqual([]);
+  expect(errors(host.replace("127.0.0.1", "example.org") + "  managed: true\n").join("\n")).toContain("loopback HTTP origin");
+});

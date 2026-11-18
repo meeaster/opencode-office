@@ -20,7 +20,8 @@ import { hostTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
 import { hostLayout, hostWrappers } from "../host-env.ts";
-import { claim, globalConfD, installSfw } from "../machine.ts";
+import { planServer, serverIncumbent, startServer } from "../host-server.ts";
+import { claim, globalConfD, installSfw, removeUnwantedServer, requireServerConsent, stopRecordedServer, writeServerUnit } from "../machine.ts";
 import { machineFiles } from "../package-tools.ts";
 import { packageComposeFile, preparePackageServices, serviceFiles, serviceSettings, type UpgradedServices } from "../package-services.ts";
 import type { Lock } from "../schema.ts";
@@ -426,8 +427,19 @@ function choosePins(office: Office, upgrade: boolean) {
 }
 
 export async function up(office: Office, { upgrade = false, refresh = false } = {}): Promise<void> {
+  const managed = office.opencode.managed !== undefined;
+
+  if (managed) requireServerConsent(office);
+
   prepareSecrets(office);
   prepareState(office);
+
+  if (managed) {
+    planServer(office);
+    await serverIncumbent(office, upgrade);
+  }
+
+  removeUnwantedServer(office);
 
   const { pins, moved } = choosePins(office, upgrade);
   const applied = readApplied(office);
@@ -487,15 +499,25 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
   if (moved.some((move) => move.tool === "executor")) {
     if (!(await waitForExecutor())) throw new OfficeError("Executor didn't become ready; run office apps deploy once it is");
 
+    let ready = false;
+
     try {
       connection(office);
+      ready = true;
     } catch {
       console.log("office: Executor was upgraded; run office apps deploy once it has a token, so the apps match its framework");
-
-      return;
     }
 
-    await deploy(office);
+    if (ready) await deploy(office);
+  }
+
+  if (managed) {
+    // Tools installed above can change the resolved path of the office's gh or SOPS.
+    const plan = planServer(office);
+
+    const changed = writeServerUnit(office, plan);
+
+    await startServer(office, plan, upgrade, changed);
   }
 }
 
@@ -517,4 +539,5 @@ export function down(office: Office): void {
   compose(office, ["down"], { profiles: "container" });
   removeTimers(office);
   removeExecutorFiles(office);
+  stopRecordedServer(office);
 }

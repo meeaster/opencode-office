@@ -9,7 +9,7 @@ import * as v from "valibot";
 
 import { requireOfficeTool } from "./host-tools.ts";
 import { type Office, OfficeError } from "./office.ts";
-import { check } from "./schema.ts";
+import { check, serverVariable } from "./schema.ts";
 
 function identityFile(): string {
   return process.env.SOPS_AGE_KEY_FILE ?? join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "sops/age/keys.txt");
@@ -21,8 +21,8 @@ function requireExternal(office: Office, path: string, label: string): void {
   if (!location.startsWith("..") && !isAbsolute(location)) throw new OfficeError(`${label} must be outside the office repository, which is mounted into OpenCode`);
 }
 
-function requireHostIdentity(office: Office): string {
-  const key = identityFile();
+export function requireHostIdentity(office: Office): string {
+  const key = resolve(identityFile());
   const withinState = relative(office.state, resolve(key));
 
   requireExternal(office, key, "the age private identity");
@@ -33,6 +33,8 @@ function requireHostIdentity(office: Office): string {
 }
 
 const nonempty = v.pipe(v.string(), v.trim(), v.nonEmpty());
+
+const serverSchema = v.record(serverVariable, v.pipe(v.string(), v.regex(/^[^\0]*$/)));
 
 export const ownerSchema = v.strictObject({
   email: v.pipe(nonempty, v.email()),
@@ -90,16 +92,23 @@ export function requireTool(tool: string, args = ["--version"]): void {
   }
 }
 
-export function decrypt(office: Office, file: string): string {
-  requireHostIdentity(office);
-  const sops = requireOfficeTool(office, "sops");
-
+export function decrypt(office: Office, file: string, sops = requireOfficeTool(office, "sops"), identity = requireHostIdentity(office)): string {
   try {
     return execFileSync(sops, ["decrypt", "--output-type", "json", source(office, file)], {
       cwd: office.dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, SOPS_AGE_KEY_FILE: identity },
     });
   } catch {
     throw new OfficeError(`cannot decrypt ${file}. Supply an authorized age identity (SOPS_AGE_KEY_FILE or the standard SOPS age keys.txt). For a new host, send its PUBLIC recipient to an authorized host, add it to .sops.yaml, then run sops updatekeys ${file} there and sync the encrypted file. A new key alone cannot decrypt existing secrets`);
+  }
+}
+
+/** Validate without returning any secret values to the caller. */
+export function validateServerSecrets(office: Office, file: string, sops: string, identity: string): void {
+  const values = parsed(serverSchema, decrypt(office, file, sops, identity), file);
+
+  if (Object.keys(values).some((key) => Object.hasOwn(office.opencode.managed?.envCommands ?? {}, key))) {
+    throw new OfficeError(`${file}: a variable is also defined by opencode.env_commands (contents withheld)`);
   }
 }
 
@@ -165,7 +174,7 @@ export function initializeIdentity(office: Office): void {
   const config = join(office.dir, ".sops.yaml");
 
   if (!existsSync(config)) {
-    atomicWrite(config, `creation_rules:\n  - path_regex: secrets/.*\\.enc\\.json$\n    age: ${recipient}\n`, 0o644);
+    atomicWrite(config, `creation_rules:\n  - path_regex: secrets/.*\\.enc\\.(json|yaml)$\n    age: ${recipient}\n`, 0o644);
   } else {
     console.log("Existing .sops.yaml preserved. An authorized host must enroll this public recipient and run sops updatekeys on every selected encrypted file.");
   }

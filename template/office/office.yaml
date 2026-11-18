@@ -7,12 +7,18 @@ name: __OFFICE__
 # state: ~/.local/share/office/__OFFICE__
 
 # Where OpenCode runs: `container` (the default), the office's opencode container, or `host`, an
-# OpenCode server already running on this machine, which the office never starts or stops.
+# OpenCode server on this machine. The office attaches unless `managed: true` opts in to its
+# systemd user service (Linux, with consent from office setup). Host tools update independently.
 # Executor and the office's other services always run in containers.
 opencode: container
 # opencode:
 #   mode: host
-#   url: http://127.0.0.1:4096
+#   url: http://127.0.0.1:49374
+#   managed: true
+#   env_commands:
+#     GITHUB_MCP_TOKEN: gh auth token
+# secrets:
+#   server: secrets/server.enc.yaml  # optional flat SOPS-encrypted mapping for managed OpenCode
 
 # Optional: who the office commits as, the git default in the container and for its cron jobs (a
 # repository's own config overrides it), and `credentials: gh` to authenticate HTTPS remotes with

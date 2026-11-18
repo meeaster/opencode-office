@@ -11,13 +11,14 @@ import { cronTimers, hasSystemd, refreshTimer, timerStates } from "../cron/host.
 import { configFile, installedPanelNames, locate, panelDir, panelId, panelState, readPanelRecord, removalNote } from "../desktop.ts";
 import { ghConfigDir, ghLogin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
 import { hookNote, hookState } from "../hook.ts";
+import { planServer, serverReport } from "../host-server.ts";
 import { officeCommands, officePins, officeTool, officeToolNamed, required } from "../host-tools.ts";
 import { clones, installedPackages, library, oldKnowledgePlugin, pluginLinks, skillSelections } from "../layout.ts";
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, oldMiseFiles, pulledLocalFolders, versionsLackSfw } from "../migrate.ts";
 import { executorEnvFile, type Office, readEnvFile } from "../office.ts";
 import { packageComposeFile, serviceStatus, sharedNamespaces } from "../package-services.ts";
 import { envFilePath, hostWrappers, sourceLine, sourcedBy } from "../host-env.ts";
-import { claim, machineReport } from "../machine.ts";
+import { claim, machineReport, matchesServerUnit, requireServerConsent } from "../machine.ts";
 import { wrappedCommands } from "../sfw.ts";
 import { toolPins } from "../mise-toml.ts";
 import { fragmentNotes, machineFile, orphanFragments, strayFragments } from "../package-tools.ts";
@@ -711,7 +712,7 @@ async function opencodeVersion(office: Office, report: Report, auth: Record<stri
   }
 
   if (office.opencode.mode === "host") {
-    report(isTested("opencode", info.version) ? true : "warn", "OpenCode version", `the host's server runs ${info.version}${isTested("opencode", info.version) ? "" : `, outside ${tested.opencode.from}–${tested.opencode.to}, the range this office tool was tested with`}`);
+    report(true, "OpenCode version", `the host's server runs ${info.version} (not pinned by office)${isTested("opencode", info.version) ? "" : `; tested with ${tested.opencode.from}–${tested.opencode.to}`}`);
 
     return;
   }
@@ -829,6 +830,19 @@ export async function check(office: Office): Promise<boolean> {
   firewallChecks(office, report);
 
   for (const line of machineReport(office)) report(line.ok, line.name, line.detail);
+
+  if (office.opencode.managed !== undefined) {
+    try {
+      requireServerConsent(office);
+
+      const plan = planServer(office);
+      const status = await serverReport(office, plan, matchesServerUnit(office, plan));
+
+      report(status.ok, "managed OpenCode", status.detail);
+    } catch (error) {
+      report(false, "managed OpenCode", error instanceof Error ? error.message : String(error));
+    }
+  }
 
   if (office.opencode.mode === "host") shellCheck(report);
 

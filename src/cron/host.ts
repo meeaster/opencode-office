@@ -104,6 +104,8 @@ export function cronTimers(office: Office): Timer[] {
 
   const used = new Set<string>();
 
+  if (office.opencode.managed !== undefined) used.add(`office-${office.name}-opencode`);
+
   return jobs(readFileSync(crontab, "utf8")).flatMap((job) => {
     const calendar = onCalendar(job.expression);
 

@@ -35,12 +35,14 @@ import * as v from "valibot";
 
 import { fetchBytes } from "./download.ts";
 import { envFilePath, hostEnvironment, hostLayout, hostWrappers, realMise } from "./host-env.ts";
+import { type ServerPlan, serverUnit, serverUnitPath, userSystemd } from "./host-server.ts";
 import { installedPackages } from "./layout.ts";
 import { oldFragments, oldMiseFiles } from "./migrate.ts";
 import { type Office, OfficeError, readConfig } from "./office.ts";
 import { cliToolsPackage, fragmentOwner, machineFile, machineFiles } from "./package-tools.ts";
 import { platformAsset } from "./releases.ts";
 import { check, type Lock } from "./schema.ts";
+import { atomicWrite } from "./secrets.ts";
 import { envScript, wrapperFiles } from "./sfw.ts";
 import { defaultPins, hostPlatform, readApplied, wantedPins } from "./versions.ts";
 
@@ -72,7 +74,7 @@ const fileSchema = v.variant("kind", [
   // A symbolic link to a file in the office.
   v.strictObject({ kind: v.literal("link"), ...owned, target: absolute }),
   // A real file the office wrote, starting with its marker line.
-  v.strictObject({ kind: v.literal("file"), ...owned, sha256: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/)) }),
+  v.strictObject({ kind: v.literal("file"), ...owned, sha256: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/)), service: v.optional(v.literal("opencode")) }),
 ]);
 
 const recordSchema = v.strictObject({
@@ -155,8 +157,9 @@ export const consentCommand = "office setup (unattended: office setup --manage-m
 /** What the office will do on the machine once allowed, for the consent question. */
 export function consentQuestion(office: Office): string {
   const firewall = office.socketFirewall ? `, Socket Firewall (sfw) and its wrappers for npm, pnpm, pip, uv, cargo and mise in ${hostLayout("").root}` : "";
+  const server = office.opencode.managed === undefined ? "" : ` It also enables ${serverUnit(office)} for OpenCode.`;
 
-  return `Office ${office.name} runs OpenCode on this machine (host mode), so it manages the machine: it links its machine.toml and each package's tools in .office/mise/ into ${globalConfD()} as office-${office.name}-…toml, so its tools apply in every folder (without the links they apply nowhere), and writes ${envFilePath()}, the environment your shell and agents share${firewall}. It lists each file it writes in ${machineRecordPath()}, changes no file it didn't write, and never edits your shell's startup files; office sync --release-machine removes them all. Allow it? [yes/no]`;
+  return `Office ${office.name} runs OpenCode on this machine (host mode), so it manages the machine: it links its machine.toml and each package's tools in .office/mise/ into ${globalConfD()} as office-${office.name}-…toml, so its tools apply in every folder (without the links they apply nowhere), and writes ${envFilePath()}, the environment your shell and agents share${firewall}.${server} It lists each file it writes in ${machineRecordPath()}, changes no file it didn't write, and never edits your shell's startup files; office sync --release-machine removes them all. Allow it? [yes/no]`;
 }
 
 /**
@@ -307,9 +310,22 @@ type Removal = { removed: boolean; line: string | undefined };
 function removeFile(file: MachineFile, why: string): Removal {
   const state = fileState(file);
 
-  if (state === "missing") return { removed: true, line: undefined };
-
   if (state === "changed") return { removed: false, line: `FAILED to remove ${file.path}: it changed since office wrote it, so it stays; delete it yourself` };
+
+  if (file.kind === "file" && file.service === "opencode") {
+    try {
+      stopServerFile(file, true);
+
+      if (state !== "missing") unlinkSync(file.path);
+      userSystemd(["daemon-reload"]);
+
+      return { removed: true, line: `removed ${file.path}, ${why}` };
+    } catch (error) {
+      return { removed: false, line: `FAILED to remove ${file.path}: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  }
+
+  if (state === "missing") return { removed: true, line: undefined };
 
   unlinkSync(file.path);
 
@@ -323,6 +339,8 @@ function owner(file: MachineFile): string {
 
 /** Why sync removes a recorded file the office no longer wants, for messages. */
 function removalReason(office: Office, file: MachineFile): string {
+  if (file.kind === "file" && file.service === "opencode") return "as office no longer manages this OpenCode unit";
+
   if (file.package !== null) return `as ${owner(file)} no longer has a fragment`;
 
   if (file.path.startsWith(`${hostLayout("").root}/`)) return office.socketFirewall ? "as office no longer writes it" : "as office.yaml sets socket_firewall: false";
@@ -440,6 +458,100 @@ function place(wanted: Wanted, recorded: MachineFile | undefined): Placement {
   return { line: file.kind === "link" ? `${again} ${file.path} to ${what}` : `${again} ${file.path}, ${what}`, file };
 }
 
+function managedFile(file: MachineFile): file is RealFile & { service: "opencode" } {
+  return file.kind === "file" && file.service === "opencode";
+}
+
+function stopServerFile(file: RealFile, remove: boolean): void {
+  const unit = basename(file.path);
+  const fragment = userSystemd(["show", "--property=FragmentPath", "--value", unit]);
+
+  if (fileState(file) === "changed") throw new OfficeError(`${file.path} changed since office wrote it; office leaves it alone`);
+
+  if (fragment !== "" && fragment !== file.path) throw new OfficeError(`${unit} is loaded from ${fragment}, not the office's file`);
+
+  if (fragment === file.path) userSystemd(["stop", unit]);
+
+  if (remove && (fragment === file.path || existsSync(file.path))) userSystemd(["disable", unit]);
+}
+
+export function requireServerConsent(office: Office): MachineRecord {
+  const current = claim(office);
+
+  if (current.kind === "other") throw new OfficeError(ownedElsewhere(current.record));
+
+  if (current.kind === "free") throw new OfficeError(`managed OpenCode requires consent to manage the machine; run ${consentCommand}`);
+
+  return current.record;
+}
+
+export function matchesServerUnit(office: Office, plan: ServerPlan): boolean {
+  const current = claim(office);
+  const file = current.kind === "ours" ? current.record.files.find((entry) => managedFile(entry) && entry.path === plan.path) : undefined;
+
+  return file?.kind === "file" && file.sha256 === sha256(plan.text) && fileState(file) === "present";
+}
+
+export function writeServerUnit(office: Office, plan: ServerPlan): boolean {
+  const record = requireServerConsent(office);
+  const env = record.files.find((file) => file.path === envFilePath());
+
+  if (env === undefined || fileState(env) !== "present") throw new OfficeError(`managed OpenCode needs the recorded environment file at ${envFilePath()}; run office sync`);
+
+  const file: RealFile = { kind: "file", path: plan.path, package: null, service: "opencode", sha256: sha256(plan.text) };
+  const previous = record.files.find((entry) => entry.path === file.path);
+
+  if (previous === undefined) {
+    if (occupied(file.path)) throw new OfficeError(`${file.path} exists but is not in the machine record; office leaves it alone`);
+  } else {
+    if (!managedFile(previous)) throw new OfficeError(`${file.path} isn't recorded as the managed OpenCode service`);
+
+    const state = fileState(previous);
+
+    if (state === "changed") throw new OfficeError(`${file.path} changed since office wrote it; office leaves it alone`);
+
+    if (state === "present" && same(previous, file)) return false;
+  }
+
+  atomicWrite(file.path, plan.text, 0o644);
+  writeMachine({ ...record, files: [...record.files.filter((entry) => entry !== previous), file] });
+  console.log(`office: ${previous === undefined ? "wrote" : "updated"} ${file.path}`);
+
+  return true;
+}
+
+export function stopRecordedServer(office: Office): void {
+  const current = claim(office);
+
+  if (current.kind !== "ours") return;
+
+  for (const file of current.record.files) {
+    if (managedFile(file)) stopServerFile(file, false);
+  }
+}
+
+/** `up` reconciles an installed server even when the option has just been removed. */
+export function removeUnwantedServer(office: Office): void {
+  const current = claim(office);
+
+  if (current.kind !== "ours") return;
+
+  let files = current.record.files;
+
+  for (const file of current.record.files) {
+    if (!managedFile(file) || (office.opencode.managed !== undefined && file.path === serverUnitPath(office))) continue;
+
+    const result = removeFile(file, removalReason(office, file));
+
+    if (!result.removed) throw new OfficeError(result.line);
+
+    files = files.filter((entry) => entry !== file);
+    writeMachine({ ...current.record, files });
+
+    if (result.line !== undefined) console.log(result.line);
+  }
+}
+
 /**
  * `office sync`'s part on the machine. In host mode, with consent, it makes the global conf.d hold
  * a link to each of the office's machine-wide files, removes links whose file is gone, and repairs links
@@ -465,6 +577,12 @@ export function syncMachine(office: Office): string[] {
   const files: MachineFile[] = [];
 
   for (const file of record.files) {
+    if (managedFile(file) && office.opencode.managed !== undefined && file.path === serverUnitPath(office)) {
+      files.push(file);
+
+      continue;
+    }
+
     if (wanted.some((entry) => entry.file.path === file.path)) continue;
 
     const result = removeFile(file, removalReason(office, file));
@@ -535,6 +653,8 @@ export function machineReport(office: Office): MachineLine[] {
   );
 
   for (const file of record.files) {
+    if (managedFile(file) && office.opencode.managed !== undefined && file.path === serverUnitPath(office)) continue;
+
     const want = wanted.find((entry) => entry.file.path === file.path);
 
     lines.push(isSfw(file) && want !== undefined ? sfwLine(office, file) : fileLine(file, want, unwanted));

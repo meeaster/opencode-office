@@ -25,11 +25,11 @@ export type PackageEntry = OfficeConfig["packages"][number];
 
 /**
  * Where OpenCode runs. Container mode: the office's `opencode` container. Host mode: an OpenCode
- * server on this machine, which the office never starts or stops. `url` is the server as the host
+ * server on this machine, optionally managed by office. `url` is the server as the host
  * reaches it, `containerUrl` as Executor and the office's other containers do, and `directory` the
  * office's path as the server sees it, where sessions start.
  */
-export type OpencodeMode = { mode: "container" | "host"; url: string | undefined; containerUrl: string; directory: string };
+export type OpencodeMode = { mode: "container" | "host"; url: string | undefined; containerUrl: string; directory: string; managed?: { envCommands: Record<string, string> } };
 
 export type Office = {
   dir: string;
@@ -77,7 +77,11 @@ function opencodeMode(config: OfficeConfig["opencode"], dir: string): OpencodeMo
 
   if (loopback.has(url.hostname)) containerUrl.hostname = "host.docker.internal";
 
-  return { mode: "host", url: url.origin, containerUrl: containerUrl.origin, directory: dir };
+  const mode: OpencodeMode = { mode: "host", url: url.origin, containerUrl: containerUrl.origin, directory: dir };
+
+  if (config.managed) mode.managed = { envCommands: config.env_commands ?? {} };
+
+  return mode;
 }
 
 function expandHome(path: string): string {

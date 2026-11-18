@@ -47,14 +47,16 @@ const usage = `usage: office <command> [--office <dir>]
                                office's tools into mise's global conf.d, install panels on the
                                desktop app's machine, migrate old layouts. --release-machine only
                                removes every file the office wrote on this machine, and its consent
-  check                        report drift from office.yaml and the tool, and the running
-                               containers' state
+  check                        report drift from office.yaml and the tool, the running
+                               containers and opted-in managed OpenCode
   instructions [folder]        print the office guidance a session started in <folder> gets
   up [--upgrade] [--refresh] | down
                                start or stop this office's containers. up runs the versions it
                                last applied; --upgrade applies office.yaml's newer ones;
                                --refresh rebuilds the opencode image with current Debian
-                               packages, which a weekly timer runs in container mode
+                               packages, which a weekly timer runs in container mode.
+                               With managed host OpenCode, up starts it, --upgrade queues a
+                               restart or takeover, and down stops it
   shell                        open a shell in the running opencode container, in the folder
                                matching this one
   exec -- <command...>         run one command there the same way, with its stdin and exit status
