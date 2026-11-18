@@ -92,7 +92,7 @@ test("an install ignores the source office's records, an update by full commit S
 
   if (!installed.ok) throw new Error(installed.errors.join("\n"));
 
-  expect(installPackage(loaded, installed.value)).toEqual(["wrote .office/packages/demo/.settings.json", "created out/AGENTS.md from package demo"]);
+  expect(installPackage(loaded, installed.value)).toEqual(["wrote .office/packages/demo/.settings.json", "wrote .office/packages/demo/.office.json (opencode: container)", "created out/AGENTS.md from package demo"]);
   write(join(office, "out/AGENTS.md"), "the office's own\n");
   write(script, "echo edited\n");
 
@@ -165,7 +165,7 @@ test("a template file is copied once: one the office deletes stays deleted, one 
   write(join(office, "packages/demo/template/notes/AGENTS.md"), "from the package\n");
   write(join(office, "notes/AGENTS.md"), "the office's own\n");
 
-  expect(install()).toEqual(["wrote packages/demo/.settings.json", "kept notes/AGENTS.md, which was already there, instead of package demo's copy", "created notes/README.md from package demo"]);
+  expect(install()).toEqual(["wrote packages/demo/.settings.json", "wrote packages/demo/.office.json (opencode: container)", "kept notes/AGENTS.md, which was already there, instead of package demo's copy", "created notes/README.md from package demo"]);
 
   rmSync(join(office, "notes"), { recursive: true });
   write(join(office, "packages/demo/template/notes/later.md"), "added by a later version\n");

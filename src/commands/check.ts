@@ -15,8 +15,8 @@ import { clones, installedPackages, library, oldKnowledgePlugin, pluginLinks, sk
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, pulledLocalFolders } from "../migrate.ts";
 import { executorEnvFile, type Office, readEnvFile } from "../office.ts";
 import { packageComposeFile, serviceStatus, sharedNamespaces } from "../package-services.ts";
-import { orphanFragments, toolNotes } from "../package-tools.ts";
-import { describeRecord, fileHashes, localEdits, localFolders, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
+import { fragmentNotes, orphanFragments } from "../package-tools.ts";
+import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
 import { pinnedTools } from "../schema.ts";
 import { builtinFiles, builtinPackages, version } from "../tool.ts";
 import { changes, defaultPins, describeMove, executorImage, isTested, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
@@ -215,6 +215,13 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
 
     if (!written) ok = false;
 
+    const officePath = join(item.dir, officeFile);
+
+    if (!existsSync(officePath) || readFileSync(officePath, "utf8") !== officeText(office)) {
+      ok = false;
+      notes.push(`${relative(office.dir, officePath)} doesn't say opencode: ${office.opencode.mode}; office sync writes it`);
+    }
+
     // Skills reach OpenCode only through the package's plugin; earlier releases linked them.
     if (item.skills.length > 0 && !item.plugin) {
       ok = false;
@@ -244,7 +251,7 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
     if (services.pending) notes.push(`its ${packageComposeFile} changed since office up applied it; office up --upgrade applies it`);
 
     // A version the office changed is its own pin, not drift: only a missing or extra tool is.
-    const tools = toolNotes(office, item);
+    const tools = fragmentNotes(office, item);
 
     notes.push(...tools.notes);
 

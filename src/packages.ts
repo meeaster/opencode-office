@@ -41,8 +41,15 @@ export const settingsFile = ".settings.json";
  */
 export const templateFile = ".template.json";
 
+/**
+ * What the office declares that any package's plugin and scripts may read, beside its settings and
+ * kept apart from them, so no setting name can collide: `{ "opencode": "host" | "container" }`,
+ * office.yaml's mode. `office sync` writes it, and it is committed like `.settings.json`.
+ */
+export const officeFile = ".office.json";
+
 /** The office's own records in a package folder, left out of its file hashes. */
-const records = [sourceFile, settingsFile, templateFile];
+const records = [sourceFile, settingsFile, templateFile, officeFile];
 
 /** The built-in packages every office has, without an entry in office.yaml. */
 export const requiredPackages = ["office"];
@@ -244,7 +251,7 @@ function replaceFolder<Result>(dir: string, fill: (staging: string) => Result): 
   try {
     const result = fill(staging);
 
-    for (const kept of [settingsFile, templateFile]) {
+    for (const kept of [settingsFile, templateFile, officeFile]) {
       if (existsSync(join(dir, kept))) copyFileSync(join(dir, kept), join(staging, kept));
     }
 
@@ -440,13 +447,18 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
   return { ok: true, value: { ...resolved, manifest, settings, skills, plugin: existsSync(join(dir, "plugin")), panel: existsSync(panel) ? panel : undefined } };
 }
 
+/** `.office.json`'s content: what the office declares to its packages. */
+export function officeText(office: Office): string {
+  return `${JSON.stringify({ opencode: office.opencode.mode }, null, 2)}\n`;
+}
+
 /** `.settings.json`'s content for a package's resolved settings. */
 export function settingsText(installed: InstalledPackage): string {
   return `${JSON.stringify(installed.settings, null, 2)}\n`;
 }
 
 /**
- * Writes a package's settings file, and copies each file of its `template/` it has never handled
+ * Writes a package's settings file and .office.json, and copies each file of its `template/` it has never handled
  * to the same path in the office, unless a file is already there: from then on the office owns
  * it. Both kinds count as handled in `.template.json`. Returns one line per change.
  */
@@ -458,6 +470,14 @@ export function installPackage(office: Office, installed: InstalledPackage): str
   if (!existsSync(settingsPath) || readFileSync(settingsPath, "utf8") !== settings) {
     writeFileSync(settingsPath, settings);
     changes.push(`wrote ${relative(office.dir, settingsPath)}`);
+  }
+
+  const officePath = join(installed.dir, officeFile);
+  const declared = officeText(office);
+
+  if (!existsSync(officePath) || readFileSync(officePath, "utf8") !== declared) {
+    writeFileSync(officePath, declared);
+    changes.push(`wrote ${relative(office.dir, officePath)} (opencode: ${office.opencode.mode})`);
   }
 
   const template = join(installed.dir, "template");

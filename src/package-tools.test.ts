@@ -1,24 +1,33 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { sync } from "./commands/sync.ts";
 import { installedPackages } from "./layout.ts";
+import { toolPins } from "./mise-toml.ts";
 import { loadOffice } from "./office.ts";
-import { fragmentFiles, orphanFragments, toolNotes, updateFragment } from "./package-tools.ts";
+import { localEdits, pulledDir, readRecord } from "./packages.ts";
+import { fragmentFiles, fragmentNotes, orphanFragments, updateFragment } from "./package-tools.ts";
 
 let dir: string;
 
 let office: string;
 
+const miseState = process.env.MISE_STATE_DIR;
+
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "office-package-tools-"));
   office = join(dir, "office");
+  // Sync trusts a fragment with a hook through this machine's mise: keep that out of its real state.
+  process.env.MISE_STATE_DIR = join(dir, "mise-state");
 });
 
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
+
+  if (miseState === undefined) delete process.env.MISE_STATE_DIR;
+  else process.env.MISE_STATE_DIR = miseState;
 });
 
 function write(path: string, content: string): void {
@@ -41,7 +50,7 @@ function notes() {
 
   if (item === undefined) throw new Error("demo isn't installed");
 
-  return toolNotes(loaded, item);
+  return fragmentNotes(loaded, item);
 }
 
 test("sync writes a package's tools to its fragment at the package's versions, naming the package", async () => {
@@ -82,13 +91,13 @@ test("sync removes a tool the package no longer declares and adds a new one, kee
 
   expect(notes()).toEqual({
     ok: false,
-    notes: ["tools jq in .mise/conf.d/demo.toml", ".mise/conf.d/demo.toml lacks npm:oxlint; office sync adds it", ".mise/conf.d/demo.toml holds npm:agent-browser, which the package no longer declares; office sync removes it"],
+    notes: ["tools jq in .mise/conf.d/demo.toml", ".mise/conf.d/demo.toml lacks npm:oxlint; office sync adds it", ".mise/conf.d/demo.toml holds npm:agent-browser, which the package no longer declares here; office sync removes it"],
   });
 
   const changes = await sync(loadOffice(office));
 
   expect(changes).toContain("added npm:oxlint 1.93.0 to .mise/conf.d/demo.toml, which package demo declares");
-  expect(changes).toContain("removed npm:agent-browser from .mise/conf.d/demo.toml, as package demo no longer declares it");
+  expect(changes).toContain("removed npm:agent-browser from .mise/conf.d/demo.toml, as package demo no longer declares it here");
   expect(readFileSync(fragment(), "utf8")).toEndWith('[tools]\n"jq" = "1.8.0"\n"npm:oxlint" = "1.93.0"\n');
   expect(notes().ok).toBe(true);
 });
@@ -146,4 +155,126 @@ test("package.yaml's tools take exact versions only", async () => {
     expect.arrayContaining(["FAILED package demo: packages/demo/package.yaml: tools.jq: must be an exact version such as 0.43.0", "FAILED package demo: packages/demo/package.yaml: tools.node: must be an exact version such as 0.43.0"]),
   );
   expect(existsSync(fragment())).toBe(false);
+});
+
+const hostManifest = `settings:
+  extra:
+    description: Whether host offices get the demo install
+    default: true
+tools:
+  jq: "1.7.1"
+host:
+  setting: extra
+  tools:
+    bun: "1.4.4"
+  install:
+    description: Demo
+    creates: ~/.local/bin/demo
+    script: scripts/install.ts
+`;
+
+/** office.yaml for an office in `mode`, listing demo with `settings`. */
+function mode(which: "host" | "container", settings = ""): void {
+  const opencode = which === "host" ? "opencode:\n  mode: host\n  url: http://127.0.0.1:49999\n" : "opencode: container\n";
+
+  write(join(office, "office.yaml"), `name: t\n${opencode}packages:\n  - name: demo\n${settings}`);
+}
+
+const section = `[hooks]
+# Demo, in ~/.local/bin/demo: installed by mise install in this host-mode office when it is missing; it updates itself.
+postinstall = "test -x \\"$HOME/.local/bin/demo\\" || bun \\"packages/demo/scripts/install.ts\\""
+
+[tasks."demo:install"]
+description = "Install or repair Demo in ~/.local/bin/demo"
+run = "bun \\"packages/demo/scripts/install.ts\\""
+`;
+
+test("a host-mode office with the switch on gets the host tools, the install hook and its task, and check looks for what it creates", async () => {
+  demo(hostManifest);
+  mode("host");
+
+  const home = process.env.HOME;
+
+  process.env.HOME = join(dir, "home");
+
+  try {
+    const changes = await sync(loadOffice(office));
+
+    expect(changes).toContain("wrote packages/demo/.office.json (opencode: host)");
+    expect(changes).toContain("wrote package demo's install of Demo to .mise/conf.d/demo.toml: mise install in the office installs it once (or mise run demo:install)");
+    expect(changes).toContain("trusted .mise/conf.d/demo.toml with this machine's mise, which runs and loads a fragment's hook only once it is trusted");
+    expect(readdirSync(join(dir, "mise-state/trusted-configs")).length).toBeGreaterThan(0);
+    expect(JSON.parse(readFileSync(join(office, "packages/demo/.office.json"), "utf8"))).toEqual({ opencode: "host" });
+    expect(readFileSync(fragment(), "utf8")).toEndWith(`[tools]\n"jq" = "1.7.1"\n"bun" = "1.4.4"\n\n${section}`);
+    expect(toolPins(readFileSync(fragment(), "utf8")).map((pin) => pin.tool)).toEqual(["jq", "bun"]);
+    expect(notes()).toEqual({ ok: false, notes: ["tools jq, bun in .mise/conf.d/demo.toml", "Demo is missing from ~/.local/bin/demo; mise install in the office installs it (or mise run demo:install)"] });
+
+    write(join(dir, "home/.local/bin/demo"), "");
+
+    expect(notes()).toEqual({ ok: true, notes: ["tools jq, bun in .mise/conf.d/demo.toml", "Demo installed in ~/.local/bin/demo; it updates itself"] });
+    expect(await sync(loadOffice(office))).toEqual([]);
+  } finally {
+    process.env.HOME = home;
+  }
+});
+
+test("switching to container mode or turning the setting off removes the host part and keeps the office's versions", async () => {
+  demo(hostManifest);
+  mode("host");
+  await sync(loadOffice(office));
+  writeFileSync(fragment(), readFileSync(fragment(), "utf8").replace('"jq" = "1.7.1"', '"jq" = "1.8.0"'));
+
+  expect(await sync(loadOffice(office))).toEqual([]);
+
+  mode("container");
+
+  const changes = await sync(loadOffice(office));
+
+  expect(changes).toContain("removed bun from .mise/conf.d/demo.toml, as package demo no longer declares it here");
+  expect(changes).toContain("removed package demo's install of Demo from .mise/conf.d/demo.toml: the office runs OpenCode in its container (opencode: container)");
+  expect(readFileSync(fragment(), "utf8")).toEndWith('[tools]\n"jq" = "1.8.0"\n');
+  expect(notes()).toEqual({ ok: true, notes: ["tools jq in .mise/conf.d/demo.toml", "Demo is host-mode only, so this container-mode office doesn't have it"] });
+
+  mode("host");
+  await sync(loadOffice(office));
+
+  expect(readFileSync(fragment(), "utf8")).toEndWith(`[tools]\n"jq" = "1.8.0"\n"bun" = "1.4.4"\n\n${section}`);
+
+  mode("host", "    settings:\n      extra: false\n");
+
+  expect(await sync(loadOffice(office))).toContain("removed package demo's install of Demo from .mise/conf.d/demo.toml: its extra setting is off");
+  expect(readFileSync(fragment(), "utf8")).toEndWith('[tools]\n"jq" = "1.8.0"\n');
+  expect(notes()).toEqual({ ok: true, notes: ["tools jq in .mise/conf.d/demo.toml"] });
+});
+
+test("check reports a host part sync would rewrite, and removing the package deletes the fragment with it", async () => {
+  demo(hostManifest);
+  mode("host");
+  await sync(loadOffice(office));
+  writeFileSync(fragment(), readFileSync(fragment(), "utf8").replace("|| bun", "|| echo"));
+
+  expect(notes().notes).toContain(".mise/conf.d/demo.toml lacks or differs from the package's host install; office sync rewrites it");
+
+  write(join(office, "office.yaml"), "name: t\nopencode:\n  mode: host\n  url: http://127.0.0.1:49999\n");
+
+  expect(await sync(loadOffice(office))).toContain("deleted .mise/conf.d/demo.toml, the tools of package demo, which office.yaml no longer lists");
+  expect(existsSync(join(office, ".mise"))).toBe(false);
+});
+
+test("host: setting must name a true/false setting", async () => {
+  demo(hostManifest.replace("setting: extra", "setting: missing"));
+  mode("host");
+
+  expect(await sync(loadOffice(office))).toContain("FAILED package demo: packages/demo/package.yaml: host.setting: must name one of the package's settings whose default is true or false");
+});
+
+test(".office.json is the office's record, so a pulled-in package with it isn't edited", async () => {
+  write(join(office, "office.yaml"), "name: t\n");
+  await sync(loadOffice(office));
+
+  const dir = pulledDir(loadOffice(office), "office");
+  const record = readRecord(dir);
+
+  expect(JSON.parse(readFileSync(join(dir, ".office.json"), "utf8"))).toEqual({ opencode: "container" });
+  expect(record !== undefined && localEdits(dir, record)).toEqual([]);
 });

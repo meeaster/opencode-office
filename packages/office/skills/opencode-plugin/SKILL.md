@@ -22,7 +22,7 @@ When the docs run out, read the OpenCode source ([anomalyco/opencode](https://gi
 
 - **Loading.** `office sync` links `plugin/` as `.opencode/plugins/<name>`, which OpenCode loads for the root and every desk. The entry is `server.ts`, else `index.ts` or `index.js`, or what a `package.json` there exports. An edit to a file the entry imports inside `plugin/` reloads it.
 - **Imports.** Nothing is installed beside the plugin. Import only Node's and Bun's built-ins, `@opencode/plugin` and `effect`, which OpenCode provides; `import type` anything, since types go when it loads.
-- **Files beside `plugin/`.** OpenCode resolves relative imports from the link, so `../anything` fails. Find the package folder with `dirname(realpathSync(dirname(fileURLToPath(import.meta.url))))`, the office by walking up to `office.yaml`, and read the package's `.settings.json` inside a hook or transform, so a new sync's values arrive.
+- **Files beside `plugin/`.** OpenCode resolves relative imports from the link, so `../anything` fails. Find the package folder with `dirname(realpathSync(dirname(fileURLToPath(import.meta.url))))`, the office by walking up to `office.yaml`, and read the package's `.settings.json` (and `.office.json`, the office's declared mode, when behaviour depends on it) inside a hook or transform, so a new sync's values arrive.
 - **What it registers**, each from `setup(ctx)`:
   - skills: `ctx.skill.transform((editor) => editor.add({ id, name, description, path, content }))`, with `path` the absolute `SKILL.md` so its references resolve;
   - MCP servers: `ctx.mcp.transform((editor) => editor.set(name, config))`;

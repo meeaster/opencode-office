@@ -273,19 +273,19 @@ For each package, `office sync`:
 
 1. Installs a built-in package from the executable, or copies a remote one at `ref`, with the repository's licence when the folder has none, into `.office/packages/<name>/`, and writes its `.source.json`. It replaces a built-in copy that differs from the executable's, a remote copy whose record differs from the entry's repository, path or ref, and any pulled-in copy whose files were edited, saying which.
 2. Copies each file under `template/` to the same path in the office once, and says what it created; a file already there is kept and counted as handled. The package's `.template.json` records the handled paths, kept across updates, so a file the office deletes stays deleted and an update creates only files a newer version adds. It never overwrites: from then on the file is the office's.
-3. Writes the settings, with defaults applied, to the package's `.settings.json`. A setting the package doesn't declare, or a required one left out, is an error naming the field. Settings are not secrets: the file is committed, so the plugin, scripts and a workflow all read it.
-4. Writes the mise tools it declares into `.mise/conf.d/<name>.toml` (see "Tools").
+3. Writes the settings, with defaults applied, to the package's `.settings.json`. A setting the package doesn't declare, or a required one left out, is an error naming the field. Settings are not secrets: the file is committed, so the plugin, scripts and a workflow all read it. Beside it, `.office.json` holds what the office declares to every package, apart from its settings so no setting name can collide: `{ "opencode": "host" }` or `"container"`, `office.yaml`'s mode (see "Modes").
+4. Writes the mise tools it declares, and in a host-mode office its host install, into `.mise/conf.d/<name>.toml` (see "Tools").
 5. Links its `plugin/` as `.opencode/plugins/<name>` (a relative link, committed), which OpenCode loads for the root and every desk without an entry in `opencode.jsonc`. A package whose name is a `plugins:` entry, or a plugin folder of the office's own in `.opencode/plugins/`, is an error, and its plugin isn't linked (package names are unique in `office.yaml`, so two packages can't meet there). When the entry leaves `office.yaml`, sync removes the link and the plugin stops loading.
 
 A package's plugin is the one way it reaches OpenCode: OpenCode loads each package's plugin itself, nothing else of a package is linked into `.opencode/`, and `package.yaml` declares nothing OpenCode loads. The plugin registers the package's skills with `ctx.skill.transform`, as `artifact-share` does for `skills/share-artifact/`, and its MCP servers with `ctx.mcp.transform`, as `office` does for `office-executor`; tools, hooks and instructions come from the plugin too. `office check` fails a package that has `skills/` but no plugin, since nothing loads them.
 
 A plugin runs with nothing installed: there is no `node_modules` beside it. It imports only what the runtime provides (Node's and Bun's built-ins, and the `@opencode/plugin` and `effect` modules OpenCode gives every plugin), or ships its own bundle, as the `office` package does: its `plugin/` in an office holds one `index.js` built with what it imports. OpenCode loads `plugin/server.ts`, else `plugin/index.ts` (or `.js`), or the entry exported by a `package.json` there that has `name` and `exports`, and reloads a plugin when a file it imports inside `plugin/` changes.
 
-OpenCode loads the plugin through the link and resolves its relative imports from there, so a plugin can't import a file outside `plugin/` (`../.settings.json` fails to load), and its own path may be the link's or the package folder's. It finds its package folder with `realpathSync` on its own folder, and the office by walking up to `office.yaml`, never by a fixed number of folders. A plugin that uses its settings reads `.settings.json` from its package folder itself, when it needs them (in a hook or transform), so it sees the values the next `office sync` writes.
+OpenCode loads the plugin through the link and resolves its relative imports from there, so a plugin can't import a file outside `plugin/` (`../.settings.json` fails to load), and its own path may be the link's or the package folder's. It finds its package folder with `realpathSync` on its own folder, and the office by walking up to `office.yaml`, never by a fixed number of folders. A plugin that uses its settings reads `.settings.json` from its package folder itself, when it needs them (in a hook or transform), so it sees the values the next `office sync` writes; one that depends on the office's mode reads `.office.json` the same way, never the environment it runs in.
 
 To uninstall a built-in or remote package, delete its entry from `office.yaml` and run `office sync`. It unlinks the plugin, deletes each file `.template.json` lists that is still byte-identical to the package's `template/` copy (and the folders that leaves empty), keeps and names each one the office changed, and removes `.office/packages/<name>/`. Files the office created itself, such as `artifacts/<name>/` beside a template's `artifacts/README.md`, are never touched. Commit what it changed; `git restore` brings it back. A local package stays until you delete its folder.
 
-`.source.json`, `.settings.json` and `.template.json` are the office's records, so they are left out of the file hashes. `office check` reports a folder in `packages/` that `office.yaml` doesn't list (sync never removes one) and one that has a built-in's name, and a folder in `.office/packages/` that no entry wants, which sync removes.
+`.source.json`, `.settings.json`, `.office.json` and `.template.json` are the office's records, so they are left out of the file hashes. `office check` reports a folder in `packages/` that `office.yaml` doesn't list (sync never removes one) and one that has a built-in's name, and a folder in `.office/packages/` that no entry wants, which sync removes.
 
 There is no registry, no dependency between packages and no version range. The built-in packages:
 
@@ -295,7 +295,7 @@ There is no registry, no dependency between packages and no version range. The b
 | [`knowledge`](packages/knowledge/README.md) | Lists the office's `knowledge/` articles, with their descriptions, in every session, refreshed on each prompt. `office init` adds it |
 | [`artifact-share`](packages/artifact-share/README.md) | The user asks an agent to share something; it goes in the office's `artifacts/`, which a workflow publishes as a GitHub Pages site with an index page. The site may be public, even for a private repository |
 | [`design`](packages/design/README.md) | The office runs its own [Doop](https://github.com/kgoedecke/doop) design canvas as package services, and every session reaches it as the `doop` MCP server, with an agent key a person creates once |
-| [`browser`](packages/browser/README.md) | Browser automation: agent-browser (a mise tool the package declares) drives a headless Chromium, and Browse drives the user's own Chrome where it is installed, each an MCP server where its command is found, with a skill saying which to use when. `office init` adds it |
+| [`browser`](packages/browser/README.md) | Browser automation: agent-browser (a mise tool the package declares) drives a headless Chromium in either mode, and in a host-mode office Browse drives the user's own Chrome, installed once and self-updating; each an MCP server where it applies, with a skill saying which to use when. `office init` adds it |
 
 ### Tools
 
@@ -305,7 +305,26 @@ A package that needs a CLI declares it as a mise tool in `package.yaml`'s `tools
 - It never changes a version already in the fragment: from then on the pin is the office's. `office upgrade-tools` bumps the fragments' pins as it does `mise.toml`'s, with the same minimum release ages, and the container installs them at start (in host mode, `office up` does).
 - It deletes the fragment of a package that declares no tools, or that leaves `office.yaml`.
 
+A package can also give a host-mode office something more, in `package.yaml`'s `host` block, optionally behind one of its true/false settings:
+
+```yaml
+host:
+  setting: browse                      # only while this setting is true
+  tools:                               # more mise tools, as in tools
+    bun: "1.4.4"
+  install:                             # a file outside the office, installed once
+    description: Browse
+    creates: ~/.local/bin/browse
+    script: scripts/install-browse.ts  # a Bun script in the package
+```
+
+When the office is in host mode and the setting is on, sync adds `host.tools` to the fragment and, after its `[tools]` table, a `[hooks]` `postinstall` that runs the script when `creates` is missing, and a `<package>:install` task that runs it unconditionally. Both are inline commands run from the office root with the office's tools on PATH (a task hook would run untrusted); mise runs `postinstall` after every `mise install`, so the file is installed the first time and left alone after. Everything after `[tools]` is sync's: when the mode or the setting changes, sync removes the host tools, hook and task, never the other versions. A fragment with a hook needs trust, which host mode's `office up` gives it (`mise trust` per fragment) before `mise install`; a container-mode office never gets one. `office check` says on the package's line when the setting is on in a container-mode office (not a failure), and in host mode fails when `creates` is missing, naming `mise install` and the task.
+
 mise loads `.mise/conf.d/*.toml` in a project folder before the folder's own `mise.toml`, so the office's `mise.toml` (and a desk's) wins over a fragment for the same tool, and the fragment's tools resolve in every folder of the office. `office check` reports, on the package's line, a declared tool missing from the fragment and a tool the package no longer declares; a version the office changed is not a problem.
+
+### Modes
+
+`opencode:` in `office.yaml` says where OpenCode runs, and so what agents have. In host mode OpenCode runs on the machine itself (a workstation, WSL, a VPS) and has what that machine has, the user's desktop Chrome through Browse among it. In container mode it runs in the office's container, with no desktop: browser work goes through agent-browser, and OpenCode's in-app browser when the desktop app is attached. Services (Executor, package services) are containers in both. A package learns the mode from its `.office.json`, as declared, not from the environment: a host session opened in a container-mode office is still a container-mode office.
 
 ### Panels
 

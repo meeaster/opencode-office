@@ -205,6 +205,34 @@ const miseTool = v.pipe(v.string(), v.regex(/^[A-Za-z0-9_.:@/-]+$/, "must be a m
 /** An exact version to start a mise tool at, such as 0.43.0: never a range, a prefix or `latest`. */
 const miseVersion = v.pipe(v.string("must be an exact version such as 0.43.0"), v.regex(/^v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?$/, "must be an exact version such as 0.43.0"));
 
+function isTrueOrFalse(value: string | number | boolean | undefined): value is boolean {
+  return value === true || value === false;
+}
+
+const miseTools = v.nullish(v.record(miseTool, miseVersion, "must map mise tool names to exact versions"), {});
+
+/**
+ * Something a package installs once on the machine of a host-mode office, outside the office:
+ * `script` (a Bun script in the package) creates `creates` (a path in the home folder) when it is
+ * missing. It runs as the postinstall hook of the package's mise fragment, so `mise install` in
+ * the office runs it, and as the task `<package>:install`. After that the file is its own: office
+ * neither pins nor updates it.
+ */
+const hostInstall = v.strictObject(
+  {
+    description: text,
+    creates: v.pipe(v.string(), v.regex(/^~\/[A-Za-z0-9._/-]+$/, "must be a path in the home folder such as ~/.local/bin/tool")),
+    script: v.pipe(v.string(), v.regex(/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*\.ts$/, "must be a .ts script in the package, such as scripts/install.ts")),
+  },
+  mapping,
+);
+
+/**
+ * What a package gives only an office in host mode, where OpenCode runs on the machine itself,
+ * and, with `setting`, only while that boolean setting is true: more mise tools and a host install.
+ */
+const hostBlock = v.strictObject({ setting: v.optional(v.string()), tools: miseTools, install: v.optional(hostInstall) }, mapping);
+
 /** A package's package.yaml: what can't be discovered from its folders. */
 export const packageManifestSchema = v.pipe(
   v.strictObject(
@@ -217,11 +245,16 @@ export const packageManifestSchema = v.pipe(
       secrets: v.nullish(v.record(v.pipe(v.string(), v.regex(/^[A-Z][A-Z0-9_]*$/, "must be an environment variable name in capitals")), packageSecret, "must map variable names to how each is generated"), {}),
       // mise tools the package needs, each at the version an office starts at; `office sync` writes
       // them to the office's .mise/conf.d/<name>.toml, whose versions are the office's from then on.
-      tools: v.nullish(v.record(miseTool, miseVersion, "must map mise tool names to exact versions"), {}),
+      tools: miseTools,
+      host: v.optional(hostBlock),
     },
-    "must be a mapping of name, namespace, description, settings, secrets and tools",
+    "must be a mapping of name, namespace, description, settings, secrets, tools and host",
   ),
   v.transform((manifest) => ({ ...manifest, namespace: manifest.namespace ?? manifest.name })),
+  v.forward(
+    v.check((manifest) => manifest.host?.setting === undefined || isTrueOrFalse(manifest.settings[manifest.host.setting]?.default), "must name one of the package's settings whose default is true or false"),
+    ["host", "setting"],
+  ),
   // Every compose file of the office is interpolated with the same process environment, which wins
   // over a package's own values, so a package's secrets carry its namespace.
   v.forward(
