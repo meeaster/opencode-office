@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -218,11 +218,54 @@ test("a host-mode office with the switch on gets the host tools, the install hoo
 
     write(join(dir, "home/.local/bin/demo"), "");
 
+    // The hook's test -x would run the script again, so check doesn't call it installed either.
+    expect(notes()).toEqual({ ok: false, notes: ["tools jq, bun in .office/mise/demo.toml", "Demo is not an executable file in ~/.local/bin/demo; office up installs it (or mise install, or mise run demo:install, once the office's tools are linked)"] });
+
+    chmodSync(join(dir, "home/.local/bin/demo"), 0o755);
+
     expect(notes()).toEqual({ ok: true, notes: ["tools jq, bun in .office/mise/demo.toml", "Demo installed in ~/.local/bin/demo; it updates itself"] });
     expect(await sync(loadOffice(office))).toEqual([expect.stringMatching(/^not linking machine.toml and .office\/mise\//)]);
   } finally {
     process.env.HOME = home;
   }
+});
+
+test("an install with executable: false creates a regular file: the hook tests -f, and check accepts a file that isn't executable", async () => {
+  demo(hostManifest.replace("    script: scripts/install.ts\n", "    script: scripts/install.ts\n    executable: false\n").replace("~/.local/bin/demo", "~/.local/share/demo/init.zsh"));
+  mode("host");
+
+  const home = process.env.HOME;
+
+  process.env.HOME = join(dir, "home");
+
+  try {
+    await sync(loadOffice(office));
+
+    const text = readFileSync(fragment(), "utf8");
+
+    expect(text).toContain("# Demo, in ~/.local/share/demo/init.zsh: installed by mise install on this host-mode office's machine when it is missing; mise run demo:install repairs or updates it.\n");
+    expect(text).toContain('postinstall = "test -f \\"$HOME/.local/share/demo/init.zsh\\" || bun ');
+    expect(notes()).toEqual({ ok: false, notes: ["tools jq, bun in .office/mise/demo.toml", "Demo is missing from ~/.local/share/demo/init.zsh; office up installs it (or mise install, or mise run demo:install, once the office's tools are linked)"] });
+
+    // A folder in its place is no regular file, as test -f says too.
+    mkdirSync(join(dir, "home/.local/share/demo/init.zsh"), { recursive: true });
+
+    expect(notes().ok).toBe(false);
+
+    rmSync(join(dir, "home/.local/share/demo/init.zsh"), { recursive: true });
+    write(join(dir, "home/.local/share/demo/init.zsh"), "");
+
+    expect(notes()).toEqual({ ok: true, notes: ["tools jq, bun in .office/mise/demo.toml", "Demo installed in ~/.local/share/demo/init.zsh; mise run demo:install repairs or updates it"] });
+  } finally {
+    process.env.HOME = home;
+  }
+});
+
+test("host.install.executable must be true or false", async () => {
+  demo(hostManifest.replace("    script: scripts/install.ts\n", "    script: scripts/install.ts\n    executable: maybe\n"));
+  mode("host");
+
+  expect(await sync(loadOffice(office))).toContain("FAILED package demo: packages/demo/package.yaml: host.install.executable: must be true or false");
 });
 
 test("switching to container mode or turning the setting off removes the host part and keeps the office's versions", async () => {

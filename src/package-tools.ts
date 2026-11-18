@@ -14,7 +14,7 @@
 // office's own pins. Everything after that table is sync's alone: the [hooks] postinstall and the
 // `<package>:install` task of a host install, written only in a host-mode office (with the
 // package's switch on), and rewritten or removed as that changes.
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -86,6 +86,27 @@ function wantedTools(office: Office, item: InstalledPackage): Record<string, str
 const officeRoot = "{{ config_source | canonicalize | dirname }}/../..";
 
 /**
+ * Who keeps a host install current once it exists: an executable updates itself (Browse); a
+ * regular file stays as installed until its task runs again.
+ */
+function afterInstall(item: InstalledPackage): string {
+  return item.manifest.host?.install?.executable === false ? `mise run ${item.entry.name}:install repairs or updates it` : "it updates itself";
+}
+
+/** Whether `path` is what a host install creates: a regular file, executable unless the install says otherwise. */
+function installed(path: string, executable: boolean): boolean {
+  try {
+    if (!statSync(path).isFile()) return false;
+
+    if (executable) accessSync(path, constants.X_OK);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * What follows the [tools] table when the package's host install applies: a postinstall hook that
  * runs its script when the file it creates is missing, and the `<package>:install` task that runs
  * it unconditionally. Both are inline commands that find the script from the fragment's own path,
@@ -98,11 +119,12 @@ export function hostSection(office: Office, item: InstalledPackage): string | un
 
   const script = relative(office.dir, join(item.dir, install.script));
   const creates = install.creates.replace(/^~\//, "$HOME/");
+  const test = install.executable ? "test -x" : "test -f";
 
   return [
     "[hooks]",
-    `# ${install.description}, in ${install.creates}: installed by mise install on this host-mode office's machine when it is missing; it updates itself.`,
-    `postinstall = ${JSON.stringify(`test -x "${creates}" || bun "${officeRoot}/${script}"`)}`,
+    `# ${install.description}, in ${install.creates}: installed by mise install on this host-mode office's machine when it is missing; ${afterInstall(item)}.`,
+    `postinstall = ${JSON.stringify(`${test} "${creates}" || bun "${officeRoot}/${script}"`)}`,
     "",
     `[tasks.${JSON.stringify(`${item.entry.name}:install`)}]`,
     `description = ${JSON.stringify(`Install or repair ${install.description} in ${install.creates}`)}`,
@@ -324,9 +346,12 @@ function hostNotes(office: Office, item: InstalledPackage): FragmentReport {
   // $HOME first, as the hook's test reads it.
   const path = install.creates.replace(/^~\//, `${process.env.HOME ?? homedir()}/`);
 
-  return existsSync(path)
-    ? { ok: true, notes: [`${what} installed in ${install.creates}; it updates itself`] }
-    : { ok: false, notes: [`${what} is missing from ${install.creates}; office up installs it (or mise install, or mise run ${item.entry.name}:install, once the office's tools are linked)`] };
+  if (installed(path, install.executable)) return { ok: true, notes: [`${what} installed in ${install.creates}; ${afterInstall(item)}`] };
+
+  const wrong = install.executable ? "not an executable file" : "not a regular file";
+  const state = existsSync(path) ? `is ${wrong} in ${install.creates}` : `is missing from ${install.creates}`;
+
+  return { ok: false, notes: [`${what} ${state}; office up installs it (or mise install, or mise run ${item.entry.name}:install, once the office's tools are linked)`] };
 }
 
 /** What `office check` says of a package's fragment and its host install. */

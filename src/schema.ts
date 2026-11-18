@@ -315,13 +315,15 @@ const miseTools = v.nullish(v.record(miseTool, miseVersion, "must map mise tool 
  * `script` (a Bun script in the package) creates `creates` (a path in the home folder) when it is
  * missing. It runs as the postinstall hook of the package's mise fragment, so `mise install` in
  * the office runs it, and as the task `<package>:install`. After that the file is its own: office
- * neither pins nor updates it.
+ * neither pins nor updates it. `creates` is an executable unless `executable: false` makes it a
+ * regular file, such as a script a shell sources; the hook's test and `office check` follow it.
  */
 const hostInstall = v.strictObject(
   {
     description: text,
     creates: v.pipe(v.string(), v.regex(/^~\/[A-Za-z0-9._/-]+$/, "must be a path in the home folder such as ~/.local/bin/tool")),
     script: v.pipe(v.string(), v.regex(/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*\.ts$/, "must be a .ts script in the package, such as scripts/install.ts")),
+    executable: v.optional(v.boolean("must be true or false"), true),
   },
   mapping,
 );
