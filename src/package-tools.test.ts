@@ -145,7 +145,20 @@ test("sync refuses to write a package's tools over a fragment it didn't write", 
 });
 
 test("a fragment whose [tools] table was removed gets one back", () => {
-  expect(updateFragment("# The mise tools of package demo. x\n", "demo", { jq: "1.7.1" }).text).toBe('# The mise tools of package demo. x\n[tools]\n"jq" = "1.7.1"\n');
+  expect(updateFragment("# The mise tools of package demo. x\n", "demo", { jq: "1.7.1" }).text).toEndWith('office sync\'s, rewritten on every sync.\n[tools]\n"jq" = "1.7.1"\n');
+});
+
+test("sync rewrites an earlier release's header, keeping the office's versions and comments below it", async () => {
+  demo('tools:\n  jq: "1.7.1"\n');
+  write(fragment(), '# The mise tools of package demo. office sync adds a tool the package declares, at the version\n# it starts at.\n\n[tools]\n# ours\n"jq" = "1.8.0"\n');
+
+  expect(await sync(loadOffice(office))).toContain("rewrote the header comment of .mise/conf.d/demo.toml, which says who changes what in it");
+
+  const text = readFileSync(fragment(), "utf8");
+
+  expect(text).toStartWith("# The mise tools of package demo. office sync owns which tools are here");
+  expect(text).toEndWith('\n\n[tools]\n# ours\n"jq" = "1.8.0"\n');
+  expect(await sync(loadOffice(office))).not.toContain(expect.stringContaining(".mise"));
 });
 
 test("package.yaml's tools take exact versions only", async () => {
@@ -182,11 +195,12 @@ function mode(which: "host" | "container", settings = ""): void {
 
 const section = `[hooks]
 # Demo, in ~/.local/bin/demo: installed by mise install in this host-mode office when it is missing; it updates itself.
-postinstall = "test -x \\"$HOME/.local/bin/demo\\" || bun \\"packages/demo/scripts/install.ts\\""
+postinstall = "test -x \\"$HOME/.local/bin/demo\\" || bun \\"{{ config_source | canonicalize | dirname }}/../../packages/demo/scripts/install.ts\\""
 
 [tasks."demo:install"]
 description = "Install or repair Demo in ~/.local/bin/demo"
-run = "bun \\"packages/demo/scripts/install.ts\\""
+env = { OFFICE_ROOT = "{{ config_source | canonicalize | dirname }}/../.." }
+run = "bun \\"$OFFICE_ROOT/packages/demo/scripts/install.ts\\""
 `;
 
 test("a host-mode office with the switch on gets the host tools, the install hook and its task, and check looks for what it creates", async () => {

@@ -2,7 +2,10 @@
 // office), and a package's host install (`host.install`). `office sync` writes each package's into
 // its own fragment, `.mise/conf.d/<package>.toml` in the office root, which mise loads in the
 // office and every folder below it, on the host and in the container. The office's own mise.toml
-// in the same folder wins over a fragment, and so does a desk's.
+// in the same folder wins over a fragment, and so does a desk's. In a host-mode office every file
+// in that folder is also linked into mise's global conf.d (src/machine.ts), so it applies in every
+// folder on the machine; `machine.toml` there is the office's own machine-wide file, never a
+// package's.
 //
 // The fragment is the office's file, committed with it. Its [tools] table is the office's: sync
 // adds a tool the package declares, at the version the package starts it at, and removes one it no
@@ -22,6 +25,9 @@ import type { InstalledPackage } from "./packages.ts";
 /** Where mise loads fragments from in a project folder, beside its mise.toml. */
 export const fragmentsFolder = ".mise/conf.d";
 
+/** The office's own machine-wide fragment, `.mise/conf.d/machine.toml`: so `machine` can't be a package's name. */
+export const machineFragment = "machine";
+
 /** The fragment that holds a package's tools. */
 export function fragmentPath(office: Office, name: string): string {
   return join(office.dir, fragmentsFolder, `${name}.toml`);
@@ -31,19 +37,26 @@ export function fragmentPath(office: Office, name: string): string {
 // package's fragment from one the office wrote itself.
 const marker = /^# The mise tools of package ([a-z0-9][a-z0-9-]*)\./;
 
-function header(name: string): string {
+function header(name: string): string[] {
   return [
-    `# The mise tools of package ${name}. office sync adds a tool the package declares, at the version`,
-    "# it starts at, and removes one it no longer declares, but never changes a version: from then on",
-    "# each is the office's, which office upgrade-tools bumps. The same tool in mise.toml wins over it.",
-    "# Anything after the [tools] table is office sync's, rewritten on every sync.",
-    "",
-  ].join("\n");
+    `# The mise tools of package ${name}. office sync owns which tools are here: it adds a tool the`,
+    "# package declares, at the version it starts at, and removes one it no longer declares (office",
+    "# check reports a tool added or removed by hand). The versions are the office's: sync never changes",
+    "# one, and office upgrade-tools bumps them. In a host-mode office this file is linked into mise's",
+    "# global conf.d, so it applies on the whole machine; machine.toml beside it is the office's own",
+    "# and wins over it there, and the same tool in a mise.toml wins in that mise.toml's folder. These",
+    "# comment lines and anything after the [tools] table are office sync's, rewritten on every sync.",
+  ];
 }
 
 /** The package a fragment's first line names, or undefined for a file sync didn't write. */
 function fragmentPackage(text: string): string | undefined {
   return marker.exec(text)?.[1];
+}
+
+/** The package whose tools the fragment at `path` holds, or undefined for the office's own file. */
+export function fragmentOwner(path: string): string | undefined {
+  return fragmentPackage(readFileSync(path, "utf8"));
 }
 
 /** Whether the package's own switch for its host block, if it names one, is on. */
@@ -63,28 +76,35 @@ function wantedTools(office: Office, item: InstalledPackage): Record<string, str
   return hostApplies(office, item) ? { ...item.manifest.tools, ...item.manifest.host?.tools } : item.manifest.tools;
 }
 
+// The office root as a fragment's hook and task find it: the fragment's real folder, two levels
+// down, whether mise reads the fragment in place or through its link in the global conf.d. mise runs
+// a linked file's hooks and tasks from the home folder, so a path relative to the office breaks
+// there. A task's `run` and `dir` don't get `config_source`, so the task takes it through `env`.
+const officeRoot = "{{ config_source | canonicalize | dirname }}/../..";
+
 /**
  * What follows the [tools] table when the package's host install applies: a postinstall hook that
  * runs its script when the file it creates is missing, and the `<package>:install` task that runs
- * it unconditionally. Both are inline commands run from the office root, where mise runs install
- * hooks and a fragment's tasks; mise puts the office's tools on their PATH, `bun` among them.
+ * it unconditionally. Both are inline commands that find the script from the fragment's own path,
+ * so they work from any folder; mise puts the fragment's tools on their PATH, `bun` among them.
  */
 export function hostSection(office: Office, item: InstalledPackage): string | undefined {
   const install = item.manifest.host?.install;
 
   if (install === undefined || !hostApplies(office, item)) return undefined;
 
-  const script = `bun "${relative(office.dir, join(item.dir, install.script))}"`;
+  const script = relative(office.dir, join(item.dir, install.script));
   const creates = install.creates.replace(/^~\//, "$HOME/");
 
   return [
     "[hooks]",
     `# ${install.description}, in ${install.creates}: installed by mise install in this host-mode office when it is missing; it updates itself.`,
-    `postinstall = ${JSON.stringify(`test -x "${creates}" || ${script}`)}`,
+    `postinstall = ${JSON.stringify(`test -x "${creates}" || bun "${officeRoot}/${script}"`)}`,
     "",
     `[tasks.${JSON.stringify(`${item.entry.name}:install`)}]`,
     `description = ${JSON.stringify(`Install or repair ${install.description} in ${install.creates}`)}`,
-    `run = ${JSON.stringify(script)}`,
+    `env = { OFFICE_ROOT = ${JSON.stringify(officeRoot)} }`,
+    `run = ${JSON.stringify(`bun "$OFFICE_ROOT/${script}"`)}`,
     "",
   ].join("\n");
 }
@@ -106,6 +126,13 @@ function splitFragment(text: string): FragmentParts {
   while (tools.length > 0 && tools[tools.length - 1].trim() === "" && cut < lines.length) tools.pop();
 
   return { tools, rest: lines.slice(cut) };
+}
+
+/** The fragment with its leading comment lines, sync's header, as this release writes it. */
+function withHeader(parts: FragmentParts, name: string): FragmentParts {
+  const comments = parts.tools.findIndex((line) => !line.startsWith("#"));
+
+  return { ...parts, tools: [...header(name), ...parts.tools.slice(comments === -1 ? parts.tools.length : comments)] };
 }
 
 /** Where the [tools] table starts, and the line of each tool in it, by name. */
@@ -151,10 +178,10 @@ export function updateFragment(text: string | undefined, name: string, tools: Re
   const tail = section === undefined ? [] : ["", ...section.replace(/\n$/, "").split("\n")];
 
   if (text === undefined) {
-    return { text: `${[header(name).replace(/\n$/, ""), "[tools]", ...wanted.map((tool) => toolLine(tool, tools[tool])), ...tail].join("\n")}\n`, added: wanted, removed: [], section: section !== undefined };
+    return { text: `${[...header(name), "", "[tools]", ...wanted.map((tool) => toolLine(tool, tools[tool])), ...tail].join("\n")}\n`, added: wanted, removed: [], section: section !== undefined };
   }
 
-  const parts = splitFragment(text);
+  const parts = withHeader(splitFragment(text), name);
   const { table, entries } = toolLines(parts.tools);
   const added = wanted.filter((tool) => !entries.has(tool));
   const removed = [...entries.keys()].filter((tool) => !wanted.includes(tool));
@@ -271,6 +298,8 @@ export function syncTools(office: Office, installed: InstalledPackage[], declare
     for (const tool of current === undefined ? [] : next.added) changes.push(`added ${tool} ${tools[tool]} to ${where}, which package ${name} declares`);
 
     for (const tool of next.removed) changes.push(`removed ${tool} from ${where}, as package ${name} no longer declares it here`);
+
+    if (current !== undefined && next.added.length === 0 && next.removed.length === 0 && !next.section) changes.push(`rewrote the header comment of ${where}, which says who changes what in it`);
 
     if (next.section) {
       const description = item.manifest.host?.install?.description ?? "its host install";

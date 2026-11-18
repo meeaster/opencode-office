@@ -44,13 +44,14 @@ In a host-mode office with `browse` on, sync adds to the fragment `bun` (which r
 
 ```toml
 [hooks]
-postinstall = "test -x \"$HOME/.local/bin/browse\" || bun \".office/packages/browser/scripts/install-browse.ts\""
+postinstall = "test -x \"$HOME/.local/bin/browse\" || bun \"{{ config_source | canonicalize | dirname }}/../../.office/packages/browser/scripts/install-browse.ts\""
 
 [tasks."browser:install"]
-run = "bun \".office/packages/browser/scripts/install-browse.ts\""
+env = { OFFICE_ROOT = "{{ config_source | canonicalize | dirname }}/../.." }
+run = "bun \"$OFFICE_ROOT/.office/packages/browser/scripts/install-browse.ts\""
 ```
 
-So the first `mise install` in the office (`office up` runs it in host mode) installs Browse, and later ones leave it alone. `mise run browser:install` reinstalls it, to repair a broken binary. `scripts/install-browse.ts` does what Browse's own installer does without its setup step: it reads the stable channel's manifest from Anomaly's release service, picks this machine's build (Linux or macOS, x64 or arm64, the baseline build without AVX2, musl), checks the download's size and SHA-256 against the manifest, and renames `package/bin/browse` over `~/.local/bin/browse`. It runs no `browse install`, edits no agent configs and pairs nothing. Then pair Chrome once:
+Both find the script from the fragment's own path, so they work in the office and, once sync has linked the fragment into mise's global conf.d, from any folder. So the first `mise install` (`office up` runs it in host mode) installs Browse, and later ones leave it alone. `mise run browser:install` reinstalls it, from any folder, to repair a broken binary. `scripts/install-browse.ts` does what Browse's own installer does without its setup step: it reads the stable channel's manifest from Anomaly's release service, picks this machine's build (Linux or macOS, x64 or arm64, the baseline build without AVX2, musl), checks the download's size and SHA-256 against the manifest, and renames `package/bin/browse` over `~/.local/bin/browse`. It runs no `browse install`, edits no agent configs and pairs nothing. Then pair Chrome once:
 
 ```sh
 ~/.local/bin/browse pair
