@@ -101,7 +101,6 @@ test("refuses malformed declarations and unknown overrides, even when the job wo
     "cron: { constructor: { schedule: '@daily', script: run.sh } }",
     "packages: [{ name: office }, { name: office }]",
     "packages: [{ name: office, repo: repo, path: path, ref: ref }]",
-    "packages: [{ name: office, settings: { change: true } }]",
     "packages: [{ name: office, cron: { update: { when: host } } }]",
     "packages: [{ name: office, cron: { update: { script: run.sh } } }]",
     "packages: [{ name: office, cron: { update: { enabled: 'false' } } }]",

@@ -216,7 +216,7 @@ const packageEntry = v.pipe(
     mapping,
   ),
   v.check((entry) => (entry.repo === undefined ? entry.path === undefined && entry.ref === undefined : entry.path !== undefined && entry.ref !== undefined), "needs repo, path and ref together, or none of them for a built-in package or one in packages/<name>/"),
-  v.check((entry) => entry.name !== "office" || (entry.repo === undefined && Object.keys(entry.settings ?? {}).length === 0), "the required office package entry can only configure cron"),
+  v.check((entry) => entry.name !== "office" || entry.repo === undefined, "the required office package is built in: its entry can only configure settings and cron"),
   // The check above makes the three all present or all absent; `source` carries that as a type.
   v.transform(({ name: packageName, settings, cron, repo, path, ref }) => ({
     name: packageName,

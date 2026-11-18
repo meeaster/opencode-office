@@ -371,7 +371,7 @@ There are three kinds, by where a package comes from:
 | Local | Written in the office | `- name: mine` | `packages/<name>/` | Yes |
 
 - An entry without `repo` is built-in when this tool ships a package of that name, and the office's own otherwise; a local package can't use a built-in's name. The built-in packages are this repository's `packages/`: `office`, `knowledge`, `artifact-share`, `design` and `browser`.
-- `office` is required: every office has it without an entry, and an optional entry may only configure cron. It holds what every office needs from OpenCode, given by its plugin: the guidance for a session's folder (which `office instructions` prints), the `office` skill and the `office-executor` MCP server (see "Runtime"). `knowledge`, `artifact-share`, `design` and `browser` are optional.
+- `office` is required: every office has it without an entry, and an optional entry may only configure its one setting (below) and cron. It holds what every office needs from OpenCode, given by its plugin: the guidance for a session's folder (which `office instructions` prints), the `office` skill and the `office-executor` MCP server (see "Runtime"). `knowledge`, `artifact-share`, `design` and `browser` are optional.
 - A built-in package follows the `office` executable: `office sync` replaces the office's copy whenever it differs from the executable's. An entry naming a built-in with a `repo` other than this tool's repository is an error: a built-in can't be pinned or forked under its own name.
 - A remote package moves when its `ref` changes: a tag, a branch or a full 40-character commit SHA (git can't fetch an abbreviated one).
 - Every kind is committed with the office, so a clone and CI work with nothing fetched. A built-in package's `test/` stays in this repository, which runs it with `pnpm test`.
@@ -443,11 +443,26 @@ There is no registry, no dependency between packages and no version range. The b
 
 | Package | Does |
 |---|---|
-| `office` | Every office has it: folder guidance, the `office-executor` MCP server, and the `office`, `skill-creator`, `opencode-sessions` and `opencode-plugin` skills |
+| `office` | Every office has it: folder guidance, the `office-executor` MCP server, and the `office`, `openai-skill-creator`, `opencode-sessions` and `opencode-plugin` skills |
 | [`knowledge`](packages/knowledge/README.md) | Lists the office's `knowledge/` articles, with their descriptions, in every session, refreshed on each prompt. `office init` adds it |
 | [`artifact-share`](packages/artifact-share/README.md) | The user asks an agent to share something; it goes in the office's `artifacts/`, which a workflow publishes as a GitHub Pages site with an index page. The site may be public, even for a private repository |
 | [`design`](packages/design/README.md) | The office runs its own [Doop](https://github.com/kgoedecke/doop) design canvas as package services, and every session reaches it as the `doop` MCP server, with an agent key a person creates once |
 | [`browser`](packages/browser/README.md) | Browser automation: agent-browser (a mise tool the package declares) drives a headless Chromium in either mode, and in a host-mode office Browse drives the user's own Chrome, installed once and self-updating; each an MCP server where it applies, with a skill saying which to use when. `office init` adds it |
+
+The `office` package has two settings for skills outside the office that its sessions shouldn't get: `ignore_claude_synced_skills`, on by default, and `ignore_skill_folders`, a list of more folders. OpenCode loads every skill under `~/.config/opencode/skills`, `~/.claude/skills` and `~/.agents/skills` into every session, and its permission rules can only deny a skill by ID, so a folder another program fills, such as the one the Claude desktop app syncs account skills into, has no switch of its own. These are one. `ignore_claude_synced_skills` covers that folder, `~/.claude/skills/synced`, and is on in every office without setting anything; `false` lets those skills load. `ignore_skill_folders` adds folders of your own and never replaces it:
+
+```yaml
+packages:
+  - name: office
+    settings:
+      ignore_skill_folders:
+        - ~/.agents/skills/unwanted
+      # ignore_claude_synced_skills: false   # to load the Claude app's synced skills
+```
+
+Each folder is an absolute path, one starting with `~` (the home of the server the sessions run on: the container's in container mode), or one relative to the office root; a folder that doesn't exist hides nothing. After `office sync`, the package's plugin removes every loaded skill whose file is inside one of them, at any depth, from the root's and every desk's sessions, while skills beside the folder still load. Nothing lists skill IDs: OpenCode reloads its skills when a folder changes and the plugin removes them again on each load, so a skill added to the folder later never appears, and removing a folder from the settings brings its skills back on the next sync, without a restart either way. A removed skill is gone from the server's skill list for the office's folders, so it is neither offered to the model nor loadable by ID there; sessions outside the office are unaffected.
+
+One case is left alone: a skill in an ignored folder with the ID of a skill one of the office's packages provides. OpenCode had already replaced the package's skill with the outside one, so removing it would leave neither; it stays, loaded from the ignored folder, until one of the two is renamed. A library skill of the office (`skills/<id>/`) needs no such care: it loads after the outside one and wins.
 
 ### Tools
 

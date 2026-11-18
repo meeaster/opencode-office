@@ -335,3 +335,45 @@ test("sync installs the built-in packages from the tool and restores an edited c
   expect(readFileSync(join(office, ".office/packages/knowledge/.template.json"), "utf8")).toBe(template);
   expect(await sync(loadOffice(office))).toEqual([]);
 });
+
+test("the required office package ignores the Claude app's synced skills unless turned off, and takes more folders as a list", async () => {
+  const office = join(dir, "office");
+  const settings = join(office, ".office/packages/office/.settings.json");
+
+  write(join(office, "office.yaml"), "name: t\n");
+  await sync(loadOffice(office));
+
+  expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ ignore_claude_synced_skills: true, ignore_skill_folders: [] });
+
+  write(join(office, "office.yaml"), "name: t\npackages:\n  - name: office\n    settings:\n      ignore_claude_synced_skills: false\n      ignore_skill_folders:\n        - ~/other/skills\n");
+
+  expect(await sync(loadOffice(office))).toEqual(["wrote .office/packages/office/.settings.json"]);
+  expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ ignore_claude_synced_skills: false, ignore_skill_folders: ["~/other/skills"] });
+
+  write(join(office, "office.yaml"), "name: t\npackages:\n  - name: office\n    settings:\n      ignore_skill_folders: ~/.claude/skills/synced\n");
+  expect(read(office, "office").result).toEqual({ ok: false, errors: ["office.settings/ignore_skill_folders: must be array"] });
+
+  write(join(office, "office.yaml"), "name: t\npackages:\n  - name: office\n    settings:\n      ignored: []\n");
+  expect(read(office, "office").result).toEqual({ ok: false, errors: ["office.settings: must NOT have additional properties: ignored"] });
+
+  write(join(office, "office.yaml"), "name: t\npackages:\n  - name: office\n    repo: https://example.com/fork.git\n    path: packages/office\n    ref: main\n");
+  expect(() => loadOffice(office)).toThrow("the required office package is built in: its entry can only configure settings and cron");
+});
+
+test("a skill a built-in package renamed leaves the office's copy on the next sync", async () => {
+  const office = join(dir, "office");
+  const skills = join(office, ".office/packages/office/skills");
+
+  write(join(office, "office.yaml"), "name: t\n");
+  await sync(loadOffice(office));
+
+  // What an earlier executable's copy held.
+  write(join(skills, "skill-creator/SKILL.md"), readFileSync(join(skills, "openai-skill-creator/SKILL.md"), "utf8"));
+
+  await sync(loadOffice(office));
+
+  expect(existsSync(join(skills, "skill-creator"))).toBe(false);
+  expect(readFileSync(join(skills, "openai-skill-creator/SKILL.md"), "utf8")).toContain("\nname: openai-skill-creator\n");
+  expect(existsSync(join(skills, "openai-skill-creator/NOTICE"))).toBe(true);
+  expect(existsSync(join(skills, "openai-skill-creator/license.txt"))).toBe(true);
+});

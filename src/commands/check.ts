@@ -27,6 +27,7 @@ import { wrappedCommands } from "../sfw.ts";
 import { toolPins } from "../mise-toml.ts";
 import { fragmentNotes, machineFile, orphanFragments, strayFragments } from "../package-tools.ts";
 import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
+import { describeIgnoredSkills, ignoredSkills, readIgnoredFolders } from "../../packages/office/plugin/ignored-skills.ts";
 import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces, shadowing, withLoaded } from "../outside.ts";
 import { pinnedTools } from "../schema.ts";
 import { builtinFiles, builtinPackages, version } from "../tool.ts";
@@ -911,6 +912,14 @@ function outsideSection(office: Office, report: Report, root: RootAnswer | undef
   };
 
   for (const warning of shadowing(items, provided, places.home, loaded)) report("warn", "outside the office", warning);
+
+  // What the office package's skill-folder settings hide from sessions, and what it can't.
+  const officePackage = installed.installed.find((item) => item.entry.name === "office");
+  const ignored = officePackage === undefined ? [] : readIgnoredFolders(officePackage.dir);
+
+  if (ignored.length === 0) return;
+
+  for (const line of describeIgnoredSkills(ignoredSkills(office.dir, ignored, places.home), places.home)) report(line.ok ? true : "warn", "ignored skill folders", line.text);
 }
 
 /** Prints each check; returns whether all passed. */
