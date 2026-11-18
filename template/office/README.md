@@ -27,10 +27,10 @@ Portable owner credentials are SOPS-encrypted in `secrets/executor-owner.enc.jso
 | `knowledge/` | Articles every session sees listed, through the `knowledge` package |
 | `mise.toml` | Tools every desk gets; a desk's own `mise.toml` adds more |
 | `machine.toml` | Machine-wide tools and mise settings, the office's own. mise loads it only through a link in its global conf.d, after the packages' tools in `.office/mise/` (whose list `office sync` owns): in host mode sync makes the links once you agree in `office setup`, and the container makes them inside itself. Inside a folder with a `mise.toml`, that file wins |
-| `executor/apps/` | Executor apps the whole office shares, such as `opencode` (start a session and wait for it) |
+| `executor-apps/` | Source for shared Executor apps, such as `opencode` (start a session and wait for it). The office plugin lists each Executor app with its `package.json` description |
 | `cron/` | The scripts named under `cron:` in `office.yaml`. They run in the container, or as systemd user timers in host mode. `office cron list` lists the applicable jobs. `upgrade-tools.sh` commits daily bumps of the pins in the `mise.toml` files, `machine.toml` and `.office/mise/` as the office's git identity, else `office cron`; revert such a commit to undo it |
 | `references/` | Read-only clones, gitignored |
-| `<desk>/` | A desk: `AGENTS.md`, `.opencode/`, `mise.toml`, its Executor app in `executor/apps/<desk>/` (none with `app: false` in `office.yaml`), and gitignored `repos/` and `scratch/` |
+| `<desk>/` | A desk: `AGENTS.md`, `.opencode/`, `mise.toml`, its Executor app in `executor-apps/<desk>/` (none with `app: false` in `office.yaml`), and gitignored `repos/` and `scratch/` |
 | `Dockerfile`, `compose.yaml` | Optional: system packages on top of the base image, and extra services `office up` starts. A service reaches Executor with the office's key: `env_file: [{ path: "${OFFICE_STATE}/office-executor.env", required: false }]` gives it `EXECUTOR_TOKEN` and `EXECUTOR_ORGANIZATION`, and Executor is at `http://executor:4400` |
 | `.pre-commit-config.yaml` | The gitleaks hook, which blocks commits that contain secrets |
 

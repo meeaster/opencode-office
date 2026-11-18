@@ -8,6 +8,7 @@ import { join, relative } from "node:path";
 import * as v from "valibot";
 
 import { editConfig, type Office, updateConfig, withoutItem, withoutKeys } from "./office.ts";
+import { moveExecutorAppDirs } from "./executor-app-layout.ts";
 import { fragmentOwner, fragmentsFolder, machineFile } from "./package-tools.ts";
 import { isToolRepository, localDir, localFolders, pulledDir, readRecord, sourceFile } from "./packages.ts";
 import { check } from "./schema.ts";
@@ -411,7 +412,7 @@ function pinSfw(office: Office): Migrated {
 
 /** Runs every step, returning the office as office.yaml now describes it and one line per change. */
 export function migrate(office: Office): Migrated {
-  const changes: string[] = [];
+  const changes = moveExecutorAppDirs(office);
   let current = office;
 
   for (const step of [builtinEntries, removeOfficeSkill, pinSfw]) {

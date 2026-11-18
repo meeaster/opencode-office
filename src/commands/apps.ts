@@ -7,6 +7,7 @@ import { dirname, join, relative } from "node:path";
 
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
 import { ports } from "./compose.ts";
+import { oldExecutorAppDirs } from "../executor-app-layout.ts";
 import { adoptionMarker, adoptCatalog, catalogPlan, installedApps, installMissing } from "./catalog-apps.ts";
 
 /** An app as Executor's API lists it, with only the fields the office reads. */
@@ -25,10 +26,14 @@ type AppManifest = { dependencies?: Record<string, string>; executor?: { title?:
 
 export type AppFolder = { slug: string; dir: string; adopted: boolean };
 
-/** The app folders: the root's executor/apps/* and each desk's. */
+/** The Executor app sources shared by the office and local to each desk. */
 export function appFolders(office: Office): AppFolder[] {
+  const [old] = oldExecutorAppDirs(office);
+
+  if (old) throw new OfficeError(`${old} still uses the previous Executor app layout; run office sync`);
+
   return ["", ...office.desks.map((desk) => desk.name)].flatMap((level) => {
-    const dir = join(office.dir, level, "executor/apps");
+    const dir = join(office.dir, level, "executor-apps");
 
     if (!existsSync(dir)) return [];
 
@@ -40,7 +45,7 @@ export function appFolders(office: Office): AppFolder[] {
         const adopted = existsSync(marker);
 
         if (adopted && (level !== "" || !office.catalogApps.includes(entry.name) || readFileSync(marker, "utf8").trim() !== entry.name)) {
-          throw new OfficeError(`${marker}: an adopted app must be in executor/apps/<catalog-id> and declared in executor.catalog_apps`);
+          throw new OfficeError(`${marker}: an adopted Executor app must be in executor-apps/<catalog-id> and declared in executor.catalog_apps`);
         }
 
         return { slug: entry.name, dir: path, adopted };

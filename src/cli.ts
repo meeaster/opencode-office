@@ -64,7 +64,7 @@ const usage = `usage: office <command> [--office <dir>]
   pin                          write office.lock for the versions office.yaml pins
   pair [--origin <url>]        print a one-time link that connects the OpenCode app or a browser
   apps deploy                  install declared catalog apps and deploy local Executor app sources
-  apps adopt <catalog-id>      copy an installed catalog app's source into executor/apps/<catalog-id>
+  apps adopt <catalog-id>      copy an installed Executor app's source into executor-apps/<catalog-id>
   gui dev <package>            install a local package's panel on the desktop app's machine each
                                time its build writes the bundle
   upgrade-tools                bump exact pins in mise.toml files, machine.toml, .office/mise/

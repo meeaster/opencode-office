@@ -66,7 +66,7 @@ export function copyTemplate(from: string, to: string, values: Record<string, st
  */
 function scaffoldDesk(office: Office, desk: Desk): string[] {
   const dir = join(office.dir, desk.name);
-  const appPath = join("executor/apps", desk.name);
+  const appPath = join("executor-apps", desk.name);
   const deskExists = existsSync(dir);
   const appExists = !desk.app || existsSync(join(dir, appPath));
 
@@ -84,7 +84,7 @@ function scaffoldDesk(office: Office, desk: Desk): string[] {
     for (const file of ["opencode.ts", "office.ts"]) {
       const copy = join(dir, appPath, file);
 
-      cpSync(join(office.dir, "executor/apps/opencode", file), copy);
+      cpSync(join(office.dir, "executor-apps/opencode", file), copy);
       written.push(copy);
     }
   }

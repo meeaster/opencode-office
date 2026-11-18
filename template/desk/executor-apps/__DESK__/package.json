@@ -1,5 +1,6 @@
 {
   "name": "__DESK__",
+  "description": "Save __DESK__ reports, send desktop notifications, and run OpenCode sessions for the desk.",
   "private": true,
   "type": "module",
   "executor": {

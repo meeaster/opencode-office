@@ -64,7 +64,7 @@ test("adoption refuses paths outside the app and never leaves a deployable parti
     writeFileSync(join(dir, "office.yaml"), "name: proof\nexecutor: { catalog_apps: [github] }\n");
     const call = client({ url: server.url.origin, token: "fixture" });
     await expect(adoptCatalog(loadOffice(dir), "github", call, [])).rejects.toThrow("invalid app source path");
-    expect(existsSync(join(dir, "executor/apps/github"))).toBe(false);
+    expect(existsSync(join(dir, "executor-apps/github"))).toBe(false);
   } finally {
     await server.stop(true);
     rmSync(dir, { recursive: true, force: true });

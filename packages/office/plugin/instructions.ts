@@ -59,20 +59,39 @@ function entry(path: string, description: string | undefined): string {
   return description === undefined ? `- \`${path}\`` : `- \`${path}\`: ${description}`;
 }
 
-// The office's shared Executor apps, each with the title from its package.json.
-function sharedApps(office: string): string[] {
-  const dir = join(office, "executor/apps");
+const appManifest = v.object({ description: v.optional(v.string()), executor: v.optional(v.object({ title: v.optional(v.string()) })) });
 
-  if (!existsSync(dir)) return [];
+function appDescription(path: string): string | undefined {
+  // An unfinished manifest should not prevent the session from receiving its instructions.
+  try {
+    const manifest = check(v.safeParse(appManifest, JSON.parse(readFileSync(path, "utf8"))));
 
-  return readdirSync(dir, { withFileTypes: true })
-    .filter((item) => item.isDirectory() && existsSync(join(dir, item.name, "package.json")))
-    .map((item) => {
-      const manifest: { executor?: { title?: string } } = JSON.parse(readFileSync(join(dir, item.name, "package.json"), "utf8"));
-      const title = manifest.executor?.title;
+    return manifest.ok ? manifest.value.description?.trim() || manifest.value.executor?.title : undefined;
+  } catch (error) {
+    if (error instanceof SyntaxError) return undefined;
 
-      return entry(`executor/apps/${item.name}/`, title === undefined ? undefined : `the \`${item.name}\` app (${title}) in the \`office-executor\` MCP server`);
-    });
+    throw error;
+  }
+}
+
+/** Local source supplies the description; a catalog-only Executor app has just its slug. */
+function executorAppLines(root: string, scope: string, catalog: string[] = []): string[] {
+  const folder = join(scope, "executor-apps");
+  const dir = join(root, folder);
+  const lines = new Map(catalog.map(slug => [slug, `- \`${slug}\` (catalog)`]));
+
+  if (existsSync(dir)) {
+    for (const item of readdirSync(dir, { withFileTypes: true })) {
+      const source = join(folder, item.name);
+      const path = join(root, source, "package.json");
+
+      if (!item.isDirectory() || !existsSync(path)) continue;
+
+      lines.set(item.name, entry(`${source}/`, appDescription(path)));
+    }
+  }
+
+  return [...lines.values()];
 }
 
 // What every scope shares from the root, listed in full so a desk session can use it directly.
@@ -84,8 +103,9 @@ function sharedSections(office: OfficeInfo, apps: string[]): string[] {
     "",
     "## Shared Executor apps",
     "",
-    ...(office.catalogApps.length ? [`Catalog apps declared in \`office.yaml\`: ${office.catalogApps.join(", ")}. Use them through \`office-executor\`.`] : []),
-    ...(apps.length === 0 && !office.catalogApps.length ? ["None."] : apps),
+    "Use Executor apps through `office-executor` by name (the last folder in each path). To change an Executor app, edit its source there and run `office apps deploy`.",
+    "",
+    ...(apps.length === 0 ? ["None."] : apps),
   ];
 }
 
@@ -106,7 +126,7 @@ function repoLines(desk: DeskInfo, indent = ""): string[] {
   return desk.repos.map((repo) => `${indent}${entry(`${desk.name}/repos/${repo.name}/`, repo.description)}`);
 }
 
-function rootText(office: OfficeInfo, apps: string[]): string {
+function rootText(root: string, office: OfficeInfo, apps: string[]): string {
   return [
     `# The ${office.name} office`,
     "",
@@ -114,21 +134,22 @@ function rootText(office: OfficeInfo, apps: string[]): string {
     "",
     "- Each desk is a top-level folder. A session started in a desk loads the root's instructions, config and skills plus the desk's own; desks never load each other's. Do a desk's work in a session started there.",
     "- `office.yaml` declares the desks, their repositories, the references, which skills from `skills/` are enabled where, cloned plugins and packages: the office's own in `packages/<name>/`, and built-in and remote ones in `.office/packages/`, which are read-only. After changing it, run `office sync`. A package with a desktop app panel (`gui/`) gets it installed on the app's machine only when `office sync` runs on the host, not in the container.",
-    "- Reach services through the `office-executor` MCP server. Each desk has an Executor app at `<desk>/executor/apps/<desk>/` with `reports.*`, `notifications.*` and `agent.ask`, unless `office.yaml` sets `app: false` for it; after changing an app, run `office apps deploy`. For onboarding use `office setup`. Owner credentials are human-only: let the human run `office executor credentials` in their terminal, never capture its output in an agent transcript. Keep private age identities and decrypted runtime state outside the office repository.",
+    "- For onboarding use `office setup`. Owner credentials are human-only: let the human run `office executor credentials` in their terminal, never capture its output in an agent transcript. Keep private age identities and decrypted runtime state outside the office repository.",
     "- `cron:` in `office.yaml` declares file-system jobs; `office cron list` shows which jobs apply in this mode.",
     "- `git` in `office.yaml` sets the commit identity of the container and the office's jobs; with `credentials: gh`, HTTPS remotes use the user's GitHub login, which the user manages on the host. Never run `gh auth login`, `logout` or `switch` for them.",
     ...firewallLines(office),
     "",
     "## Desks",
     "",
-    ...(office.desks.length === 0 ? ["No desks yet."] : office.desks.flatMap((desk) => [entry(`${desk.name}/`, desk.description), ...repoLines(desk, "  ")])),
+    ...(office.desks.length === 0 ? ["No desks yet."] : office.desks.flatMap((desk) => [entry(`${desk.name}/`, desk.description), ...repoLines(desk, "  "), ...executorAppLines(root, desk.name).map(line => `  ${line}`)])),
     "",
     ...sharedSections(office, apps),
   ].join("\n");
 }
 
-function deskText(office: OfficeInfo, desk: DeskInfo, apps: string[]): string {
+function deskText(root: string, office: OfficeInfo, desk: DeskInfo, apps: string[]): string {
   const repos = repoLines(desk);
+  const deskApps = executorAppLines(root, desk.name);
   const others = office.desks.flatMap((other) => (other.name === desk.name ? [] : [other.name]));
 
   return [
@@ -137,14 +158,16 @@ function deskText(office: OfficeInfo, desk: DeskInfo, apps: string[]): string {
     `This session is at the ${desk.name} desk (\`${desk.name}/\`)${desk.description === undefined ? "." : `: ${desk.description}`} Paths below are relative to the office root.`,
     "",
     `- Keep this desk's work inside \`${desk.name}/\`: repositories under \`${desk.name}/repos/\` (declare new ones under \`desks.${desk.name}.repos\` in \`office.yaml\`, then run \`office sync\`), throwaway work in \`${desk.name}/scratch/\`.`,
-    desk.app
-      ? `- The desk's Executor app is \`${desk.name}/executor/apps/${desk.name}/\`, the \`${desk.name}\` app in the \`office-executor\` MCP server: save results with \`reports.save\`, reach the user with \`notifications.send\`. After changing it, run \`office apps deploy\`.`
-      : `- This desk has no Executor app of its own (\`app: false\` in \`office.yaml\`).`,
     ...firewallLines(office),
     "",
     "## Repositories",
     "",
     ...(repos.length === 0 ? ["None yet."] : repos),
+    "",
+    "## Desk Executor apps",
+    "",
+    ...(deskApps.length ? deskApps : ["None."]),
+    ...(desk.app ? ["", `Use \`${desk.name}\` tools \`reports.save\` to save results and \`notifications.send\` to reach the user.`] : []),
     "",
     "Shared from the office root, for this desk to use directly:",
     "",
@@ -164,9 +187,9 @@ export function officeInstructions(folder: string): string {
   if (!read.ok) return invalidText(read.errors);
 
   const office = read.value;
-  const apps = sharedApps(dir);
+  const apps = executorAppLines(dir, "", office.catalogApps);
   const [first] = relative(dir, folder).split(sep);
   const desk = office.desks.find((candidate) => candidate.name === first);
 
-  return desk === undefined ? rootText(office, apps) : deskText(office, desk, apps);
+  return desk === undefined ? rootText(dir, office, apps) : deskText(dir, office, desk, apps);
 }

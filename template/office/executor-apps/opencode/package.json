@@ -1,5 +1,6 @@
 {
   "name": "opencode",
+  "description": "Start OpenCode sessions, check their status, and wait for replies.",
   "private": true,
   "type": "module",
   "executor": {

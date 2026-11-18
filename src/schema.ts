@@ -65,7 +65,7 @@ const desk = v.nullish(
       description: v.optional(text),
       repos: repositories,
       skills: names,
-      // Whether the desk has its own Executor app at <desk>/executor/apps/<desk>/.
+      // Whether the desk has its own Executor app at <desk>/executor-apps/<desk>/.
       app: v.optional(v.boolean("must be true or false"), true),
     },
     mapping,
@@ -259,7 +259,7 @@ export const officeSchema = v.pipe(v.strictObject(
     // Firewall, in the container and, in host mode, on the machine. On unless set to false.
     socket_firewall: v.optional(v.boolean("must be true or false"), true),
     references: repositories,
-    desks: v.nullish(v.record(name, desk, "must map desk names to desks"), {}),
+    desks: v.nullish(v.record(v.pipe(name, v.check(key => key !== "executor-apps", "executor-apps is reserved for shared Executor app sources")), desk, "must map desk names to desks"), {}),
     skills,
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
     packages: v.pipe(v.nullish(v.array(packageEntry, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),

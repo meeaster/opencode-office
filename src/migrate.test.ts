@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { sync } from "./commands/sync.ts";
+import { appFolders } from "./commands/apps.ts";
+import { officeInstructions } from "../packages/office/plugin/instructions.ts";
 import { git } from "./git.ts";
 import { editedOfficeSkill, withoutExecutorEntry } from "./migrate.ts";
 import { loadOffice, withoutItem } from "./office.ts";
@@ -41,6 +43,37 @@ const browserEntry = `      // Browser automation.
 `;
 
 const config = (servers: string) => `{\n  "$schema": "https://opencode.ai/config.json",\n  "mcp": {\n    "servers": {\n${servers}    },\n  },\n}\n`;
+
+test("sync moves shared and desk Executor apps before scaffolding; instructions show each app once in scope", async () => {
+  write(join(dir, "office.yaml"), "name: demo\ndesks: { work: {}, other: { app: false } }\nexecutor: { catalog_apps: [github, calendar] }\n");
+  write(join(dir, "executor/apps/github/.office-catalog"), "github\n");
+  write(join(dir, "executor/apps/github/package.json"), '{"description":"Browse issues."}');
+  write(join(dir, "executor/notes"), "keep");
+  write(join(dir, "work/executor/apps/work/package.json"), '{"description":"Save reports."}');
+  write(join(dir, "work/executor/apps/work/index.ts"), "// customized");
+  write(join(dir, "other/executor/apps/custom/package.json"), '{"executor":{"title":"Other desk tools"}}');
+  const office = loadOffice(dir);
+
+  expect(() => appFolders(office)).toThrow("run office sync");
+  mkdirSync(join(dir, "other/executor-apps"));
+  await expect(sync(office)).rejects.toThrow("both other/executor/apps and other/executor-apps exist");
+  expect(existsSync(join(dir, "executor/apps/github/.office-catalog"))).toBe(true);
+  rmSync(join(dir, "other/executor-apps"), { recursive: true });
+  await sync(office);
+  expect(await sync(office)).toEqual([]);
+  expect(appFolders(office).map(app => [app.slug, app.adopted])).toEqual([["github", true], ["work", false], ["custom", false]]);
+  expect(readFileSync(join(dir, "work/executor-apps/work/index.ts"), "utf8")).toBe("// customized");
+  expect(readFileSync(join(dir, "executor/notes"), "utf8")).toBe("keep");
+  expect(existsSync(join(dir, "work/executor"))).toBe(false);
+  const desk = officeInstructions(join(dir, "work"));
+
+  expect(desk.match(/github/g)).toHaveLength(1);
+  expect(desk).toContain("`executor-apps/github/`: Browse issues.");
+  expect(desk).toContain("`calendar` (catalog)");
+  expect(desk).toContain("`work/executor-apps/work/`: Save reports.");
+  expect(desk).not.toContain("Other desk tools");
+  expect(officeInstructions(dir)).toContain("`other/executor-apps/custom/`: Other desk tools");
+});
 
 test("the office-executor entry goes with its template comment and comma, leaving every other character of opencode.jsonc", () => {
   expect(withoutExecutorEntry(config(`${executorEntry}${browserEntry}`))).toBe(config(browserEntry));

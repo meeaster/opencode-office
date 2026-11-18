@@ -71,7 +71,7 @@ export async function adoptCatalog(office: Office, id: string, call: Call, folde
 
   if (!app) throw new OfficeError(`catalog app ${id} isn't installed; run office apps deploy first`);
 
-  const parent = join(office.dir, "executor/apps");
+  const parent = join(office.dir, "executor-apps");
   const dir = join(parent, id);
 
   if (existsSync(dir)) throw new OfficeError(`${dir} already exists; adoption will not overwrite it`);
@@ -82,7 +82,7 @@ export async function adoptCatalog(office: Office, id: string, call: Call, folde
 
   mkdirSync(parent, { recursive: true });
 
-  if (realpathSync(parent) !== join(realpathSync(office.dir), "executor/apps")) throw new OfficeError(`${parent} must not be a symlink`);
+  if (realpathSync(parent) !== join(realpathSync(office.dir), "executor-apps")) throw new OfficeError(`${parent} must not be a symlink`);
   mkdirSync(dir);
 
   try {
@@ -99,5 +99,5 @@ export async function adoptCatalog(office: Office, id: string, call: Call, folde
     throw error;
   }
 
-  console.log(`adopted ${id} (${app.id}) into executor/apps/${id}; commit its source and use office apps deploy after editing`);
+  console.log(`adopted ${id} (${app.id}) into executor-apps/${id}; commit its source and use office apps deploy after editing`);
 }

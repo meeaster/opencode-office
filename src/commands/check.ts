@@ -17,6 +17,7 @@ import { planServer, serverReport } from "../host-server.ts";
 import { officeCommands, officePins, officeTool, officeToolNamed, required } from "../host-tools.ts";
 import { clones, installedPackages, library, oldKnowledgePlugin, pluginLinks, skillSelections } from "../layout.ts";
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, oldMiseFiles, pulledLocalFolders, versionsLackSfw } from "../migrate.ts";
+import { oldExecutorAppDirs } from "../executor-app-layout.ts";
 import { executorEnvFile, type Office, readEnvFile } from "../office.ts";
 import { packageComposeFile, serviceStatus, sharedNamespaces } from "../package-services.ts";
 import { envFilePath, hostWrappers, sourceLine, sourcedBy } from "../host-env.ts";
@@ -40,8 +41,10 @@ async function drift(office: Office): Promise<string[]> {
   const libraryIds = library(office);
   const declared = new Set(office.desks.map((desk) => desk.name));
 
+  for (const old of oldExecutorAppDirs(office)) problems.push(`${old}/ uses the previous Executor app layout; run office sync`);
+
   for (const desk of office.desks) {
-    const app = `executor/apps/${desk.name}`;
+    const app = `executor-apps/${desk.name}`;
 
     for (const path of ["AGENTS.md", ".opencode/opencode.jsonc", ...(desk.app ? [`${app}/index.ts`] : [])]) {
       if (!existsSync(join(office.dir, desk.name, path))) problems.push(`desk ${desk.name}: ${desk.name}/${path} is missing`);
