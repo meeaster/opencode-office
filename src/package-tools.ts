@@ -302,7 +302,7 @@ function sectionChanges(office: Office, item: InstalledPackage, before: string, 
   if (system === undefined || state === undefined) return lines;
 
   if (wanted === undefined && before.includes(systemMarker(item))) lines.push(`removed package ${name}'s system setup, ${system.description}, from ${where}: ${state.applies ? "it no longer applies" : state.reason}; what it installed stays on the machine`);
-  else if (wanted !== undefined && !before.includes(wanted.trim())) lines.push(`wrote package ${name}'s system setup, ${system.description}, to ${where}: run ${systemApplyCommand} once on this machine (it may ask for sudo); office never runs it`);
+  else if (wanted !== undefined && !before.includes(wanted.trim())) lines.push(`wrote package ${name}'s system setup, ${system.description}, to ${where}: ${systemApplyCommand} offers to apply it on this machine (mise asks for sudo); nothing else does`);
 
   return lines;
 }

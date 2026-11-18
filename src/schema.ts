@@ -390,9 +390,11 @@ const systemPlatform = v.pipe(v.string(), v.regex(/^[a-z0-9]+-[0-9.]+-[a-z0-9]+(
  * manager, only while `setting` (which defaults to false) is on and the machine is one of
  * `platforms`: mise `[bootstrap]` tables (`bootstrap`, a TOML file in the package) and a `prepare`
  * script that runs as their `pre-packages` hook, both written to the package's mise fragment; and
- * variables for the office's environment file. Office never applies it: the user runs
- * `mise bootstrap --only packages,files` once, which may ask for sudo. `ready` lists the absolute
- * paths whose presence shows it was applied, for `office check`.
+ * variables for the office's environment file. `office setup` offers to apply it from the user's
+ * terminal (src/system-setup.ts); nothing else does. `prepare --check` must only say whether a run
+ * would change anything (exit 0 for nothing, 100 with a line per change). `ready` lists the
+ * absolute paths whose presence shows it was applied, for `office check`, and `verify`, a bash
+ * script setup runs once the tools are installed, proves it works from the environment file.
  */
 const systemBlock = v.strictObject(
   {
@@ -400,6 +402,7 @@ const systemBlock = v.strictObject(
     description: text,
     platforms: v.pipe(v.array(systemPlatform, "must be a list of platforms"), v.minLength(1, "must name at least one platform")),
     prepare: v.optional(packageFile("sh", "scripts/prepare.sh")),
+    verify: v.optional(packageFile("sh", "scripts/verify.sh")),
     bootstrap: packageFile("toml", "system/bootstrap.toml"),
     ready: v.pipe(v.array(v.pipe(v.string(), v.regex(/^\/[A-Za-z0-9._@+/-]+$/, "must be an absolute path")), "must be a list of absolute paths"), v.minLength(1, "must name at least one path")),
     env: v.nullish(v.record(hostVariable, hostValue, "must map variable names to values"), {}),

@@ -8,7 +8,7 @@ settings:
     description: Whether a host-mode office gets Browse, the user's own Chrome, installed and as the browse MCP server; container-mode offices never do
     default: true
   system_chrome:
-    description: Whether a host-mode office on Ubuntu 24.04 or 26.04 amd64 under WSL has agent-browser launch Google Chrome Stable from Google's apt repository, /usr/bin/google-chrome-stable (the Chrome WSLg runs, with a temporary profile of its own each launch), which `mise bootstrap --only packages,files` installs once with sudo and unattended-upgrades keeps patched. Independent of browse; never in a container-mode office
+    description: Whether a host-mode office on Ubuntu 24.04 or 26.04 amd64 under WSL has agent-browser launch Google Chrome Stable from Google's apt repository, /usr/bin/google-chrome-stable (the Chrome WSLg runs, with a temporary profile of its own each launch), which `office setup` offers to install once (mise asks for sudo) and unattended-upgrades keeps patched. Independent of browse; never in a container-mode office
     default: false
 tools:
   "npm:agent-browser": "0.43.0"
@@ -30,6 +30,7 @@ system:
   description: Google Chrome Stable from Google's apt repository, for agent-browser
   platforms: [ubuntu-24.04-amd64-wsl, ubuntu-26.04-amd64-wsl]
   prepare: scripts/google-chrome-apt-source.sh
+  verify: scripts/verify-system-chrome.sh
   bootstrap: system/google-chrome.toml
   ready:
     - /usr/bin/google-chrome-stable

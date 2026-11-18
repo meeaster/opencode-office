@@ -40,7 +40,9 @@ const usage = `usage: office <command> [--office <dir>]
                                updates, using exact stable releases at least 3d old. office.yaml's
                                git block declares the commit identity and GitHub (credentials: gh).
                                --manage-machine lets a host-mode office link machine.toml and its
-                               packages' tools into mise's global conf.d, as interactive setup asks
+                               packages' tools into mise's global conf.d, as interactive setup asks;
+                               it never covers the system packages the office declares, which setup
+                               installs through mise only on a yes in a terminal
   executor credentials [--password-only]
                                deliberately reveal the stored encrypted owner login, even offline
   sync [--references | --release-machine]

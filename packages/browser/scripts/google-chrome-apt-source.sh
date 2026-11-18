@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Adds Google's apt repository for Google Chrome Stable before `mise bootstrap` installs it: the
-# browser package's system setup (its system_chrome setting), run as the setup's pre-packages hook.
+# Adds Google's apt repository for Google Chrome Stable before mise installs it: the browser
+# package's system setup (its system_chrome setting), run as the setup's pre-packages hook when
+# office setup applies it.
 #
 # It writes the source exactly where and as Chrome's own package does, so Chrome takes it over
 # instead of adding a second one: /etc/apt/sources.list.d/google-chrome.sources, signed by
@@ -12,6 +13,7 @@
 # keyring when no source names that any more. Anything else in apt's sources is left alone.
 #
 # Run as the user; it uses sudo only for a change, and changes nothing when the source is in place.
+# With --check it only says what a run would change (office setup asks it first).
 set -euo pipefail
 
 fingerprint=EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796
@@ -91,6 +93,34 @@ fetch_key() {
 named_keyring() {
   sed -n 's/^Signed-By:[[:space:]]*\(\/[^[:space:]]*\)[[:space:]]*$/\1/p' "$sources" | head -n 1
 }
+
+# What a run would change, read from files alone: no sudo, no network, no change.
+pending() {
+  if [ ! -f "$sources" ]; then
+    echo "add Google's repository as $sources"
+    [ -s "$keyring" ] || echo "fetch and check Google's signing key into $keyring"
+  else
+    local named
+    named=$(named_keyring)
+
+    if [ -n "$named" ] && [ ! -s "$named" ]; then echo "fetch and check Google's signing key into $named"; fi
+  fi
+
+  if [ -f "$legacy" ] && grep -qE "^[[:space:]]*$legacy_line" "$legacy"; then echo "retire Google's older repository line in $legacy"; fi
+
+  if [ -f "$legacy_keyring" ] && ! grep -rqsF "$legacy_keyring" /etc/apt/sources.list "$sources_dir"; then echo "remove $legacy_keyring, which no source names"; fi
+}
+
+# --check: office setup's question, whether a run would change anything. Exit 0 for nothing, 100
+# with one line per change.
+if [ "${1-}" = --check ]; then
+  work=$(pending)
+
+  if [ -z "$work" ]; then exit 0; fi
+
+  printf '%s\n' "$work"
+  exit 100
+fi
 
 if [ ! -f "$sources" ]; then
   [ -s "$keyring" ] || fetch_key

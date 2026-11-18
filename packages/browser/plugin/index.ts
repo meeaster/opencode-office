@@ -119,7 +119,7 @@ function launchNotes(settings: Settings, mode: Mode): string[] {
   if (path !== undefined && path !== "") return [`\`agent-browser\` launches \`${path}\` (AGENT_BROWSER_EXECUTABLE_PATH)${executable(path) ? "" : ", which isn't an executable file on this machine, so launches fail"}, with a temporary profile of its own`];
 
   if (settings.systemChrome && mode === "host") {
-    return ["`agent-browser` launches its own Chrome for Testing: the package's `system_chrome` is on, but this OpenCode server's environment has no AGENT_BROWSER_EXECUTABLE_PATH. The office's environment file sets it where the setup applies (`office check` says), and the server gets it when it restarts"];
+    return ["`agent-browser` launches its own Chrome for Testing: the package's `system_chrome` is on, but this OpenCode server's environment has no AGENT_BROWSER_EXECUTABLE_PATH. The office's environment file sets it where the setup applies (`office check` says), and the server gets it when it restarts, which office setup offers"];
   }
 
   return [];

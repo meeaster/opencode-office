@@ -98,7 +98,7 @@ function notes() {
   return fragmentNotes(loaded, item);
 }
 
-const systemPart = `# The system setup of package demo: Demo Browser from the distribution. mise bootstrap --only packages,files applies it on this machine once (it may ask for sudo); office never runs it, and what it installs stays when it is turned off.
+const systemPart = `# The system setup of package demo: Demo Browser from the distribution. office setup offers to apply it on this machine, from your terminal (mise asks for sudo); nothing else does, and what it installs stays when it is turned off.
 [vars]
 office_package_demo = "{{ config_source | canonicalize | dirname }}/../../packages/demo"
 
@@ -121,7 +121,7 @@ test("an office that opts in on a supported host gets the setup in the fragment 
 
   const changes = await sync(loadOffice(office));
 
-  expect(changes).toContain("wrote package demo's system setup, Demo Browser from the distribution, to .office/mise/demo.toml: run mise bootstrap --only packages,files once on this machine (it may ask for sudo); office never runs it");
+  expect(changes).toContain("wrote package demo's system setup, Demo Browser from the distribution, to .office/mise/demo.toml: office setup offers to apply it on this machine (mise asks for sudo); nothing else does");
   expect(fragment()).toEndWith(`\n\n${systemPart}`);
   expect(fragment()).toContain('[tasks."demo:install"]');
   expect(readFileSync(envFilePath(), "utf8")).toContain("export DEMO_BROWSER='/usr/bin/demo-browser'\n");
@@ -130,7 +130,7 @@ test("an office that opts in on a supported host gets the setup in the fragment 
     notes: [
       "tools jq in .office/mise/demo.toml",
       "Demo is missing from ~/.local/bin/demo; office up installs it (or mise install, or mise run demo:install, once the office's tools are linked)",
-      `Demo Browser from the distribution isn't set up on this machine yet (missing ${ready()}): run mise bootstrap --only packages,files once, which may ask for sudo`,
+      `Demo Browser from the distribution isn't set up on this machine yet (missing ${ready()}): run office setup in a terminal, which offers to apply it (mise asks for sudo)`,
     ],
   });
 

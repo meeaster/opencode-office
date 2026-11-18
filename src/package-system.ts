@@ -3,12 +3,12 @@
 // It applies only while the package's own setting for it is on (it defaults to off: the office opts
 // in), the office runs OpenCode on the host, and the machine is one of the platforms the block names.
 //
-// Office never applies it and never runs sudo. Sync writes it to the package's mise fragment as mise
-// `[bootstrap]` tables, with the package's `prepare` script as their `pre-packages` hook, and its
-// variables to the office's environment file (src/host-env.ts). The user applies it once with
-// `mise bootstrap --only packages,files`, which reads the fragment through its link in mise's global
-// conf.d and asks for sudo itself; `office up`, `office sync` and the cron jobs never do. `office
-// check` looks for the paths the block lists as `ready`. Turning it off removes it from the fragment
+// Sync writes it to the package's mise fragment as mise `[bootstrap]` tables, with the package's
+// `prepare` script as their `pre-packages` hook, and its variables to the office's environment file
+// (src/host-env.ts). Only `office setup` applies it, when the user says yes in their terminal
+// (src/system-setup.ts), through mise, which asks for sudo itself; `office up`, `office sync` and
+// the cron jobs never do, and office never runs sudo. `office check` looks for the paths the block
+// lists as `ready`. Turning it off removes it from the fragment
 // and the environment file; what it installed stays on the machine, as mise removes no packages.
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -20,8 +20,8 @@ import type { Parsed } from "./schema.ts";
 /** Overrides the machine's platform, for tests and scratch offices; empty for a machine no block supports. */
 export const systemPlatformVariable = "OFFICE_SYSTEM_PLATFORM";
 
-/** The command that applies every system block on the machine, and the office's machine.toml's packages. */
-export const systemApplyCommand = "mise bootstrap --only packages,files";
+/** What applies a system setup, as messages name it. */
+export const systemApplyCommand = "office setup";
 
 /** The office root as a fragment's hook finds it from the fragment's real folder, `.office/mise/`. */
 export const fragmentOfficeRoot = "{{ config_source | canonicalize | dirname }}/../..";
@@ -164,7 +164,7 @@ export function systemSection(office: Office, item: InstalledPackage): Parsed<st
   return {
     ok: true,
     value: [
-      `${systemMarker(item)}: ${system.description}. ${systemApplyCommand} applies it on this machine once (it may ask for sudo); office never runs it, and what it installs stays when it is turned off.`,
+      `${systemMarker(item)}: ${system.description}. ${systemApplyCommand} offers to apply it on this machine, from your terminal (mise asks for sudo); nothing else does, and what it installs stays when it is turned off.`,
       ...hook,
       tables.value,
       "",
@@ -194,5 +194,5 @@ export function systemNotes(office: Office, item: InstalledPackage): SystemRepor
 
   if (missing.length === 0) return { ok: true, notes: [`${system.description} is set up on this machine`] };
 
-  return { ok: false, notes: [`${system.description} isn't set up on this machine yet (missing ${missing.join(", ")}): run ${systemApplyCommand} once, which may ask for sudo`] };
+  return { ok: false, notes: [`${system.description} isn't set up on this machine yet (missing ${missing.join(", ")}): run ${systemApplyCommand} in a terminal, which offers to apply it (mise asks for sudo)`] };
 }

@@ -7,11 +7,14 @@ import { requireJobs } from "../cron/jobs.ts";
 import { git } from "../git.ts";
 import { githubStep, planGithub, unreachableSources } from "../github.ts";
 import { installHook } from "../hook.ts";
-import { onboardHostTools, requireOfficeTool } from "../host-tools.ts";
 import { envFilePath, sourceLine } from "../host-env.ts";
+import { planServer, queueStaleRestart, restartStaleServer, staleServer } from "../host-server.ts";
+import { hostTool, onboardHostTools, requireOfficeTool } from "../host-tools.ts";
+import { installedPackages } from "../layout.ts";
 import { claim, consentCommand, consentQuestion, grantConsent, ownedElsewhere } from "../machine.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile, updateConfig } from "../office.ts";
 import { decrypt, encrypt, initializeIdentity, prepareSecrets, requireTool } from "../secrets.ts";
+import { offerRestart, systemStep, verifySystems } from "../system-setup.ts";
 import { deploy } from "./apps.ts";
 import { check } from "./check.ts";
 import { installingMise, ports, startExecutor, up } from "./compose.ts";
@@ -113,6 +116,9 @@ export async function setup(initial: Office, options: SetupOptions): Promise<voi
 
   if (hook !== undefined) console.log(hook);
 
+  // Before office up installs tools, some of which build against these system packages.
+  await systemStep(office, installedPackages(office).installed, { mise: office.opencode.mode === "host" ? hostTool("mise") : "mise", ask });
+
   let email = options.ownerEmail;
 
   if (!hasToken && ownerFile !== undefined && !existsSync(join(office.dir, ownerFile)) && email === undefined) {
@@ -127,8 +133,33 @@ export async function setup(initial: Office, options: SetupOptions): Promise<voi
 
   await deploy(office);
 
-  if (!(await check(office))) throw new OfficeError("setup checks need attention; fix the reported issues and rerun office setup");
+  const verified = verifySystems(office, installedPackages(office).installed);
 
+  for (const line of verified.lines) console.log(`System check: ${line}`);
+
+  const managed = office.opencode.mode === "host" && office.opencode.managed !== undefined;
+  const plan = managed ? planServer(office) : undefined;
+  const restart = plan === undefined ? undefined : await offerRestart(ask, { stale: () => staleServer(office, plan), restart: (stale) => restartStaleServer(office, plan, stale) });
+
+  const checked = await check(office);
+
+  try {
+    if (!verified.ok) throw new OfficeError("a package's system check failed (above); fix it and rerun office setup");
+
+    if (!checked) throw new OfficeError("setup checks need attention; fix the reported issues and rerun office setup");
+
+    finalNotes(office);
+  } finally {
+    // Last: from a terminal inside the server, the restart closes this terminal.
+    if (restart === "queue" && plan !== undefined) {
+      console.log("OpenCode: restarting now in a job of its own; this terminal closes with the server. Reconnect, then run office check");
+      queueStaleRestart(office, plan);
+    }
+  }
+}
+
+/** What setup says when everything checked out. */
+function finalNotes(office: Office): void {
   console.log(`Services and apps are ready. Next: office pair (Executor dashboard: http://localhost:${ports().executor}).`);
 
   console.log(`Provider authentication remains human-controlled: use /connect in OpenCode and /models. For Claude Agent in container mode: docker exec -it office-${office.name}-opencode-1 claude auth login, then connect Claude Agent in OpenCode. Other provider logins are independent.`);

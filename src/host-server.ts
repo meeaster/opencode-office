@@ -443,7 +443,7 @@ export async function startServer(office: Office, plan: ServerPlan, upgrade: boo
     const pid = await serverPid(office);
 
     if (pid !== undefined && pid === mainPid(unit)) {
-      if (runningRevision(pid) !== plan.revision) console.log("office: OpenCode restart pending; run office up --upgrade to apply changes");
+      if (runningRevision(pid) !== plan.revision) console.log("office: OpenCode restart pending, to apply changed settings: office setup offers it (office up --upgrade also restarts it)");
 
       return;
     }
@@ -454,6 +454,59 @@ export async function startServer(office: Office, plan: ServerPlan, upgrade: boo
   }
 
   throw new OfficeError(`${unit} did not become the healthy OpenCode server at ${office.opencode.url}; see journalctl --user -u ${unit} and check the service password`);
+}
+
+/** The office's own managed server, serving under an older plan (environment file, unit or secrets) than the current one. */
+export type StaleServer = { unit: string; pid: number; inside: boolean };
+
+/**
+ * The office's managed server when its unit's own main process answers as the office's server
+ * but started under another revision; undefined when it is current, stopped, not answering, not
+ * the unit's process, or the unit file isn't the office's.
+ */
+export async function staleServer(office: Office, plan: ServerPlan): Promise<StaleServer | undefined> {
+  const { unit } = plan;
+
+  if (!activeUnit(unit) || property(unit, "FragmentPath") !== plan.path || property(unit, "DropInPaths") !== "") return;
+
+  const own = mainPid(unit);
+
+  if (own === 0 || (await serverPid(office)) !== own || runningRevision(own) === plan.revision) return;
+
+  return { unit, pid: own, inside: inManagedServer(office) };
+}
+
+/**
+ * Restarts the office's unit alone, from a terminal outside it, and waits until a new main
+ * process answers with the current revision. Takes over nothing and changes no pin.
+ */
+export async function restartStaleServer(office: Office, plan: ServerPlan, stale: StaleServer): Promise<number> {
+  if (stale.inside) throw new OfficeError("this terminal runs inside the managed OpenCode server; queue the restart instead");
+
+  const identity = processIdentity(stale.pid);
+
+  if (mainPid(plan.unit) !== stale.pid || !processIdentityIs(stale.pid, identity)) throw new OfficeError("the managed OpenCode PID changed before restart; leaving it alone");
+
+  userSystemd(["restart", plan.unit]);
+
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const pid = await serverPid(office);
+
+    if (pid !== undefined && pid !== stale.pid && pid === mainPid(plan.unit)) {
+      if (runningRevision(pid) === plan.revision) return pid;
+
+      throw new OfficeError(`${plan.unit} restarted as PID ${pid}, but not with the current settings; see journalctl --user -u ${plan.unit}`);
+    }
+
+    await Bun.sleep(500);
+  }
+
+  throw new OfficeError(`${plan.unit} did not answer as the office's OpenCode after the restart; see journalctl --user -u ${plan.unit}`);
+}
+
+/** Queues the office unit's restart in a job of its own, for a terminal the restart would close. */
+export function queueStaleRestart(office: Office, plan: ServerPlan): void {
+  queueRestart(office, plan, { stray: undefined, legacy: false });
 }
 
 /** Don't run a synchronous restart from a terminal that would die with the server. */
@@ -642,7 +695,7 @@ export async function serverReport(office: Office, plan: ServerPlan, matches: bo
     unit, matching ? "unit matches" : "unit missing or different", enabled ? "enabled" : "not enabled",
     active ? "active" : "not active", program,
     outside ? "the server is running outside the office's unit; run office up --upgrade" : pid === undefined ? "server not responding (check the unit journal and service password)" : `server and unit PID ${pid}`,
-    ...(pending ? ["restart pending: office up --upgrade"] : []),
+    ...(pending ? ["restart pending: office setup offers it (or office up --upgrade)"] : []),
     plan.hasSecrets ? "secrets file decrypts" : "no server secrets configured",
   ].join("; ");
 
