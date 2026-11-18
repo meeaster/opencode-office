@@ -13,7 +13,7 @@ import { check, type OfficeConfig, officeSchema, type Parsed } from "../../../sr
 // What the text uses from office.yaml, read through the schema the CLI uses.
 type DeskInfo = { name: string } & OfficeConfig["desks"][string];
 
-type OfficeInfo = { name: string; desks: DeskInfo[]; references: OfficeConfig["references"] };
+type OfficeInfo = { name: string; desks: DeskInfo[]; references: OfficeConfig["references"]; socketFirewall: boolean };
 
 function readOffice(office: string): Parsed<OfficeInfo> {
   // The plugin and the compiled `office` both run on Bun, which parses YAML itself.
@@ -29,6 +29,7 @@ function readOffice(office: string): Parsed<OfficeInfo> {
       name: config.name,
       desks: Object.entries(config.desks).map(([name, desk]) => ({ name, ...desk })),
       references: config.references,
+      socketFirewall: config.socket_firewall,
     },
   };
 }
@@ -86,6 +87,19 @@ function sharedSections(office: OfficeInfo, apps: string[]): string[] {
   ];
 }
 
+/**
+ * What every session is told about package downloads while the office's Socket Firewall is on. It
+ * holds wherever the office's environment is loaded: the container, and on the host a shell that
+ * sources the environment file (`office setup` prints the line).
+ */
+function firewallLines(office: OfficeInfo): string[] {
+  if (!office.socketFirewall) return [];
+
+  return [
+    "- Package downloads go through Socket Firewall (`sfw`) wherever the office's environment is loaded (the container; on the host, a shell that sources `~/.local/share/office/env.sh`): `npm`, `npx`, `pnpm`, `pip`, `pip3`, `uv`, `uvx` and `cargo` are wrappers that run `sfw <command>`, and `mise install`, `use` and `upgrade` run behind it. A refused package fails the command with `=== Socket Firewall ===` and `blocked <ecosystem> package: name: …; reason: malware`: tell the user, and never route around the wrappers (a real binary by its path, another registry). Package managers take only releases at least three days old. A script that runs a mise-managed tool many times runs faster under `mise exec -- <script>`, which keeps the wrappers first.",
+  ];
+}
+
 function repoLines(desk: DeskInfo, indent = ""): string[] {
   return desk.repos.map((repo) => `${indent}${entry(`${desk.name}/repos/${repo.name}/`, repo.description)}`);
 }
@@ -101,6 +115,7 @@ function rootText(office: OfficeInfo, apps: string[]): string {
     "- Reach services through the `office-executor` MCP server. Each desk has an Executor app at `<desk>/executor/apps/<desk>/` with `reports.*`, `notifications.*` and `agent.ask`, unless `office.yaml` sets `app: false` for it; after changing an app, run `office apps deploy`. For onboarding use `office setup`. Owner credentials are human-only: let the human run `office executor credentials` in their terminal, never capture its output in an agent transcript. Keep private age identities and decrypted runtime state outside the office repository.",
     "- `cron/crontab` runs file-system jobs in the container.",
     "- `git` in `office.yaml` sets the commit identity of the container and the office's jobs; with `credentials: gh`, HTTPS remotes use the user's GitHub login, which the user manages on the host. Never run `gh auth login`, `logout` or `switch` for them.",
+    ...firewallLines(office),
     "",
     "## Desks",
     "",
@@ -123,6 +138,7 @@ function deskText(office: OfficeInfo, desk: DeskInfo, apps: string[]): string {
     desk.app
       ? `- The desk's Executor app is \`${desk.name}/executor/apps/${desk.name}/\`, the \`${desk.name}\` app in the \`office-executor\` MCP server: save results with \`reports.save\`, reach the user with \`notifications.send\`. After changing it, run \`office apps deploy\`.`
       : `- This desk has no Executor app of its own (\`app: false\` in \`office.yaml\`).`,
+    ...firewallLines(office),
     "",
     "## Repositories",
     "",

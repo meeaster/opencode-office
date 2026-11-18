@@ -26,7 +26,7 @@ opencode: container
 # The versions this office runs in its containers. office.lock (written by `office pin`; don't
 # edit it) holds their checksums: run `office pin` after changing a version by hand. The daily
 # upgrade-tools job bumps them; `office up --upgrade` applies a bump, `office up` never does. In
-# host mode only Executor's applies, and sfw's, which office sync installs on the machine.
+# host mode only Executor's applies, and sfw's, which office up installs on the machine.
 versions:
   opencode: __OPENCODE_VERSION__
   claude: __CLAUDE_VERSION__

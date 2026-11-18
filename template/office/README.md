@@ -16,7 +16,7 @@ Portable owner credentials are SOPS-encrypted in `secrets/executor-owner.enc.jso
 
 | Path | Holds |
 |---|---|
-| `office.yaml` | The versions the containers run, how old a release must be before the daily job bumps them, the desks, references, desk repositories, enabled skills, copied skills and cloned plugins |
+| `office.yaml` | The versions the containers run (and Socket Firewall's), how old a release must be before the daily job bumps them, whether package downloads go through Socket Firewall (`socket_firewall`), the desks, references, desk repositories, enabled skills, copied skills and cloned plugins |
 | `office.lock` | The checksum of each version in `office.yaml`, written by `office pin`; don't edit it |
 | `AGENTS.md`, `.opencode/opencode.jsonc` | Your instructions and config for every session. No tool writes to `AGENTS.md` |
 | `skills/<id>/` | The skill library. Only skills `office.yaml` enables are linked into a `.opencode/skills/` |
