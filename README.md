@@ -123,6 +123,21 @@ pre-commit install
 | `office update [--check] [--minimum-release-age <age> \| --version <release>]` | Replaces this `office` executable with a release from GitHub: the newest at least a day (or `<age>`) old and newer than this one, or exactly `<release>`. `--check` only reports. It changes no office; see "Updating" |
 | `office cron list` / `office cron run <job-id>` | Lists enabled, applicable YAML jobs or runs one by its qualified ID; see "Cron" |
 
+### Native Claude Code in the office
+
+In a [mise-activated shell](https://mise.jdx.dev/cli/activate.html), run `claude` from the office root, a desk, or a nested repository. The office launcher runs the installed Claude Code in the same folder and adds `CLAUDE.md` and `AGENTS.md` discovery via Claude's built-in instruction plugin. The extra settings file applies only to that invocation; your normal user and project settings, plugins, and sign-in still apply. The office doesn't install Claude on the host, edit your Claude profile, or change `claude` outside the office. If you pass `--settings <file-or-json>` or `--settings=<file-or-json>` before `--`, your explicit settings take precedence: the launcher passes them through without adding the office file.
+
+The launcher also loads the required `office` package's Claude plugin. Its session-start hook gives Claude the same repository-scoping guidance the package supplies to OpenCode: investigate at the root or desk, then move the current session to the target repository before editing.
+
+`office sync` maintains `.office/claude/bin/claude` and `.office/claude/settings.json`. New offices already expose the launcher in the root `mise.toml`. For an existing office, run `office sync` and add the following to the **office root's** `mise.toml`:
+
+```toml
+[env]
+_.path = ["{{ config_root }}/.office/claude/bin"]
+```
+
+If `[env]` already exists, add only the `_.path` line there; if it already sets `_.path`, add the launcher directory to the existing list. Keep all other entries. Review and trust the changed file with `mise trust mise.toml` if mise asks. Remove the path entry to opt out.
+
 ### What setup, sync and up print
 
 `office setup`, `office sync` and `office up` show what runs now, in stages. Setup's are, in order: Tools, Secrets, Git and GitHub, This machine (host mode only), Repositories and packages, System packages, Services, Apps and Checks; `office sync` is the Repositories and packages stage alone and `office up` the Services stage alone. Each stage ends in one line with a short summary and its time.

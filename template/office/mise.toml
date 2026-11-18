@@ -6,3 +6,7 @@
 # from the office package, in .office/mise/office.toml: pinning one here too only overrides it.
 [tools]
 node = "26.13.1"
+
+# In a mise-activated shell, add AGENTS.md to native Claude Code's instruction files.
+[env]
+_.path = ["{{ config_root }}/.office/claude/bin"]

@@ -8,6 +8,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import { claudeFiles } from "../claude.ts";
 import { cronRevision } from "../cron/container.ts";
 import { cronTimers, hasSystemd, refreshTimer, staleTimerUnits, timerStates } from "../cron/host.ts";
 import { collectJobs } from "../cron/jobs.ts";
@@ -43,6 +44,8 @@ async function drift(office: Office): Promise<string[]> {
   const problems: string[] = [];
   const libraryIds = library(office);
   const declared = new Set(office.desks.map((desk) => desk.name));
+
+  problems.push(...claudeFiles(office.dir));
 
   for (const old of oldExecutorAppDirs(office)) problems.push(`${old}/ uses the previous Executor app layout; run office sync`);
 

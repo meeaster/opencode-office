@@ -11,6 +11,7 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import { claudeFiles } from "../claude.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { collectJobs } from "../cron/jobs.ts";
 import { syncMachine } from "../machine.ts";
@@ -366,6 +367,7 @@ export async function sync(loaded: Office, { referencesOnly = false, stage = sil
 
   stage.detail("writing the packages' tools and linking skills and plugins");
   changes.push(...syncTools(office, installed.installed, packages.map((item) => item.entry.name)));
+  changes.push(...claudeFiles(office.dir, true));
   changes.push(...syncMachine(office));
 
   changes.push(...linkSkills(office));

@@ -9,6 +9,7 @@ import { dirname, join, relative, sep } from "node:path";
 import * as v from "valibot";
 
 import { check, type OfficeConfig, officeSchema, type Parsed } from "../../../src/schema.ts";
+import sessionScope from "../claude/session-scope.txt" with { type: "text" };
 
 // What the text uses from office.yaml, read through the schema the CLI uses.
 type DeskInfo = { name: string } & OfficeConfig["desks"][string];
@@ -132,7 +133,8 @@ function rootText(root: string, office: OfficeInfo, apps: string[]): string {
     "",
     "This session is at the root of an office: a source-controlled folder of desks. Paths below are relative to the office root.",
     "",
-    "- Each desk is a top-level folder. A session started in a desk loads the root's instructions, config and skills plus the desk's own; desks never load each other's. Do a desk's work in a session started there.",
+    "- Each desk is a top-level folder. A session in a desk loads the root's instructions, config and skills plus the desk's own; desks never load each other's.",
+    sessionScope.trimEnd(),
     "- `office.yaml` declares the desks, their repositories, the references, which skills from `skills/` are enabled where, cloned plugins and packages: the office's own in `packages/<name>/`, and built-in and remote ones in `.office/packages/`, which are read-only. After changing it, run `office sync`. A package with a desktop app panel (`gui/`) gets it installed on the app's machine only when `office sync` runs on the host, not in the container.",
     "- For onboarding use `office setup`. Owner credentials are human-only: let the human run `office executor credentials` in their terminal, never capture its output in an agent transcript. Keep private age identities and decrypted runtime state outside the office repository.",
     "- `cron:` in `office.yaml` declares file-system jobs; `office cron list` shows which jobs apply in this mode.",
@@ -158,6 +160,7 @@ function deskText(root: string, office: OfficeInfo, desk: DeskInfo, apps: string
     `This session is at the ${desk.name} desk (\`${desk.name}/\`)${desk.description === undefined ? "." : `: ${desk.description}`} Paths below are relative to the office root.`,
     "",
     `- Keep this desk's work inside \`${desk.name}/\`: repositories under \`${desk.name}/repos/\` (declare new ones under \`desks.${desk.name}.repos\` in \`office.yaml\`, then run \`office sync\`), throwaway work in \`${desk.name}/scratch/\`.`,
+    sessionScope.trimEnd(),
     ...firewallLines(office),
     "",
     "## Repositories",
@@ -172,7 +175,7 @@ function deskText(root: string, office: OfficeInfo, desk: DeskInfo, apps: string
     "Shared from the office root, for this desk to use directly:",
     "",
     ...sharedSections(office, apps),
-    ...(others.length === 0 ? [] : ["", `Other desks (${others.join(", ")}) have their own folders; their work belongs to sessions started there.`]),
+    ...(others.length === 0 ? [] : ["", `Other desks (${others.join(", ")}) have their own folders; move the session there for their work.`]),
   ].join("\n");
 }
 

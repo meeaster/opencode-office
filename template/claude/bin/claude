@@ -1,0 +1,60 @@
+#!/bin/bash
+# Managed by office sync. Keep Claude's normal settings sources; add only the
+# office's instruction-file preference, unless the caller supplied --settings.
+run_claude() {
+  local native=$1 arg office_root cwd
+  shift
+  office_root=$(CDPATH='' cd -P -- "${0%/*}/../../.." && pwd) || exit 1
+  cwd=$(pwd -P) || exit 1
+  # A child shell can inherit the office's PATH and leave without a mise hook.
+  if [[ $cwd/ != "$office_root/"* ]]; then
+    exec "$native" "$@"
+  fi
+
+  # Keep the owner's plugin directories; this one ships in the required package.
+  local guidance="$office_root/.office/packages/office/claude"
+  case ":${CLAUDE_CODE_PLUGIN_DIRS-}:" in
+    *":$guidance:"*) ;;
+    *) export CLAUDE_CODE_PLUGIN_DIRS="${CLAUDE_CODE_PLUGIN_DIRS:+$CLAUDE_CODE_PLUGIN_DIRS:}$guidance" ;;
+  esac
+
+  for arg in "$@"; do
+    case "$arg" in
+      --settings|--settings=*) exec "$native" "$@" ;;
+      --) break ;;
+    esac
+  done
+
+  exec "$native" --settings "$office_root/.office/claude/settings.json" "$@"
+}
+
+# Search PATH in order without calling ourselves through aliases or stale mise
+# shims. Ask mise for its selected executable only when reaching a shim; a
+# shim with no selected Claude should not hide an existing native install.
+user_shims=${MISE_SHIMS_DIR:-${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/shims}
+system_shims=${MISE_SYSTEM_SHIMS_DIR:-${MISE_SYSTEM_DATA_DIR:-/usr/local/share/mise}/shims}
+remaining=${PATH-}:
+while [[ -n $remaining ]]; do
+  dir=${remaining%%:*}
+  remaining=${remaining#*:}
+  dir=${dir:-.}
+  candidate=$dir/claude
+  if [[ ! -f $candidate || ! -x $candidate || $candidate -ef $0 || /$dir == */.office/claude/bin ]]; then
+    continue
+  fi
+
+  link=
+  if [[ -L $candidate ]]; then link=$(readlink "$candidate"); fi
+  if [[ $dir -ef $user_shims || $dir -ef $system_shims || ${link##*/} == mise ]]; then
+    resolved=$(mise which claude 2>/dev/null) || continue
+    if [[ $resolved != /* || ! -f $resolved || ! -x $resolved || $resolved -ef $0 || $resolved -ef $candidate ]]; then
+      continue
+    fi
+    candidate=$resolved
+  fi
+
+  run_claude "$candidate" "$@"
+done
+
+printf 'office: no Claude Code executable found on PATH; install Claude Code and try again.\n' >&2
+exit 127

@@ -1,0 +1,4 @@
+Investigate from the office root or desk. Once a change belongs to one repository, move the current conversation directly to that repository's root before editing. For changes spanning several repositories in one desk, work from their shared desk.
+
+- **OpenCode:** Call `tools.opencode.session_move({ directory: "<absolute target path>" })`. Omit `sessionID` to move this conversation; do destination-specific work in the next tool call.
+- **Claude Code:** Give the user the exact `/cd <absolute target path>` command to enter at the Claude prompt. Wait for the session to move before editing; changing a shell command's working directory does not move the conversation.
