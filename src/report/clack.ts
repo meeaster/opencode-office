@@ -1,7 +1,4 @@
-// The renderer on a terminal, with Clack. A stage shows a spinner with elapsed time, which becomes a
-// taskLog of the last few subprocess lines at the first one, and ends as one line; prompts and
-// inherited sections pause whatever is live. Clack must never write when output isn't a terminal:
-// its taskLog writes erase codes even into a pipe, so src/report/index.ts picks the plain renderer.
+// The terminal renderer: Clack owns prompts and permanent output; stages own their live rows.
 import { styleText } from "node:util";
 
 import * as clack from "@clack/prompts";
@@ -15,6 +12,7 @@ const logLimit = 3;
 const quiet = 150;
 
 const dim = (text: string) => styleText("dim", text);
+const graphemes = new Intl.Segmenter();
 
 function columns(): number {
   return process.stdout.columns ?? 80;
@@ -22,9 +20,23 @@ function columns(): number {
 
 /** One line cut to fit the terminal: wrapped lines in a taskLog or spinner break their erasing. */
 function fit(line: string, reserve = 4): string {
-  const width = Math.max(20, columns() - reserve);
+  const width = Math.max(1, columns() - reserve);
 
-  return line.length > width ? `${line.slice(0, width - 1)}…` : line;
+  const text = line.replaceAll("\t", "    ");
+
+  if (Bun.stringWidth(text) <= width) return text;
+
+  let used = 0;
+  let end = 0;
+
+  for (const { segment, index } of graphemes.segment(text)) {
+    used += Bun.stringWidth(segment);
+
+    if (used >= width) break;
+    end = index + segment.length;
+  }
+
+  return `${text.slice(0, end)}…`;
 }
 
 /** Clack's log lines don't wrap to the terminal, so a long one breaks the guide; wrap it first. */
@@ -54,7 +66,7 @@ export class ClackReporter implements Reporter {
   active: ClackStage | undefined;
 
   /** `rerun` says how to continue, such as "Run office setup again to continue". */
-  constructor(private readonly command: string, private readonly rerun: string, private readonly onSpinnerCancel: () => void) {}
+  constructor(private readonly command: string, private readonly rerun: string) {}
 
   begin(context: string): void {
     // Clack's intro doesn't wrap: the context is cut to the line.
@@ -62,7 +74,7 @@ export class ClackReporter implements Reporter {
   }
 
   stage(name: string, _options: { key: string }): Stage {
-    const stage = new ClackStage(name, this.onSpinnerCancel, () => {
+    const stage = new ClackStage(name, () => {
       if (this.active === stage) this.active = undefined;
     });
 
@@ -129,13 +141,91 @@ export class ClackReporter implements Reporter {
   }
 }
 
+/** Animation frames overwrite only the leading glyph, never erase and repaint a stationary label. */
+class StatusLine {
+  private drawn = "";
+  private readonly started = performance.now();
+  private frame = 0;
+  private seconds = 0;
+  private readonly timer: ReturnType<typeof setInterval>;
+
+  constructor(private text: string) {
+    process.stdout.write("\x1b[?25l");
+    this.draw();
+    this.timer = setInterval(() => {
+      this.frame++;
+      const seconds = Math.floor((performance.now() - this.started) / 1000);
+
+      const previous = this.seconds;
+      this.seconds = seconds;
+
+      if (this.drawn !== this.text) this.draw();
+      else process.stdout.write(`\r${this.glyph()}${seconds === previous ? "" : this.clock(seconds)}`);
+    }, 100);
+  }
+
+  private glyph(): string {
+    return styleText("magenta", ["◒", "◐", "◓", "◑"][this.frame % 4]);
+  }
+
+  private clock(seconds: number): string {
+    return ` ${`${seconds}s`.padStart(6)} `;
+  }
+
+  private draw(): void {
+    this.drawn = this.text;
+    process.stdout.write(`\r${this.glyph()}${this.clock(this.seconds)} ${this.text}\x1b[K`);
+  }
+
+  message(text: string): void {
+    this.text = text;
+  }
+
+  above(line: string): void {
+    process.stdout.write(`\r${line.replaceAll("\n", "\x1b[K\n")}\x1b[K\n`);
+    this.draw();
+  }
+
+  clear(): void {
+    clearInterval(this.timer);
+    process.stdout.write("\r\x1b[K\x1b[?25h");
+  }
+}
+
+/** Cursor rests just below the visible rows. The heading above them is never part of a repaint. */
+class LiveLog {
+  private readonly lines: string[] = [];
+  private rows = 0;
+  private timer?: ReturnType<typeof setTimeout>;
+
+  constructor(heading: string) {
+    clack.log.step(fit(heading));
+  }
+
+  message(line: string): void {
+    this.lines.push(line);
+
+    if (this.lines.length > logLimit) this.lines.shift();
+    this.timer ??= setTimeout(() => {
+      this.timer = undefined;
+      const up = this.rows ? `\x1b[${this.rows}A` : "";
+      process.stdout.write(up + this.lines.map((entry) => `\r  ${fit(entry)}\x1b[K\n`).join(""));
+      this.rows = this.lines.length;
+    }, 100);
+  }
+
+  clear(): void {
+    clearTimeout(this.timer);
+
+    if (this.rows) process.stdout.write(`\x1b[${this.rows}A\r\x1b[J`);
+  }
+}
+
 class ClackStage implements Stage {
   private readonly start = performance.now();
   private paused = 0;
-  private spin: ReturnType<typeof clack.spinner> | undefined;
-  private log: ReturnType<typeof clack.taskLog> | undefined;
-  /** The taskLog's group for the current detail: its header names the step, its lines are the step's output. */
-  private group: ReturnType<ReturnType<typeof clack.taskLog>["group"]> | undefined;
+  private spin: StatusLine | undefined;
+  private log: LiveLog | undefined;
   private detailText: string | undefined;
   private lazy: ReturnType<typeof setTimeout> | undefined;
   private message: string;
@@ -152,7 +242,7 @@ class ClackStage implements Stage {
   private headed = false;
   private finished = false;
 
-  constructor(private readonly name: string, private readonly onCancel: () => void, private readonly onEnd: () => void) {
+  constructor(private readonly name: string, private readonly onEnd: () => void) {
     this.message = name;
     this.lazy = setTimeout(() => this.show(), quiet);
   }
@@ -163,9 +253,7 @@ class ClackStage implements Stage {
 
     if (this.finished || this.spin !== undefined || this.log !== undefined) return;
 
-    // withGuide off: Clack would print a guide line above the spinner that clear() leaves behind.
-    this.spin = clack.spinner({ indicator: "timer", withGuide: false, onCancel: this.onCancel, cancelMessage: `${this.name} interrupted` });
-    this.spin.start(this.spinnerText());
+    this.spin = new StatusLine(this.spinnerText());
   }
 
   /**
@@ -187,28 +275,25 @@ class ClackStage implements Stage {
     this.spin?.message(this.spinnerText());
   }
 
-  /**
-   * Swaps the spinner for a taskLog at the first subprocess line: taskLog has no timer, so the
-   * spinner covers the quiet part of a stage. Its title is the stage; each detail is a group whose
-   * header names the step, so a later step doesn't run under an earlier one's name, and a finished
-   * step collapses to one line until the stage ends. Nothing styled goes into a taskLog: it
-   * measures lines with their escape codes when erasing, and would erase lines above itself.
-   */
+  /** Switch from quiet progress to the current step's subprocess output. */
   private logView(): { message(line: string): void } {
     if (this.log === undefined) {
       if (this.lazy !== undefined) clearTimeout(this.lazy), (this.lazy = undefined);
       this.spin?.clear();
       this.spin = undefined;
-      this.log = clack.taskLog({ title: this.name, limit: logLimit });
-      this.group = this.detailText === undefined ? undefined : this.log.group(fit(this.detailText));
+      this.log = new LiveLog(this.message);
     }
 
-    return this.group ?? this.log;
+    return this.log;
   }
 
   /** Writes a persistent line above the live spinner, which redraws itself below it on its next frame. */
   private above(line: string): void {
-    process.stdout.write(`${this.spin === undefined ? "" : "\r\u001b[J"}${line}\n`);
+    this.log?.clear();
+    this.log = undefined;
+
+    if (this.spin) this.spin.above(line);
+    else process.stdout.write(`${line}\n`);
   }
 
   /** The stage's name above its part lines, once. */
@@ -240,9 +325,8 @@ class ClackStage implements Stage {
     if (this.lazy !== undefined) clearTimeout(this.lazy), (this.lazy = undefined);
     this.spin?.clear();
     this.spin = undefined;
-    // A taskLog can't pause: its last lines stay on screen as they are, and a later line starts a new one.
+    this.log?.clear();
     this.log = undefined;
-    this.group = undefined;
     this.flush();
 
     return () => {
@@ -257,19 +341,21 @@ class ClackStage implements Stage {
     this.finished = true;
 
     if (this.lazy !== undefined) clearTimeout(this.lazy);
-    this.spin?.cancel(`${this.name} interrupted`);
-    this.log?.error(`${this.name} interrupted`, { showLog: false });
+    this.spin?.clear();
+    this.log?.clear();
     this.spin = undefined;
     this.log = undefined;
     this.onEnd();
   }
 
   detail(text: string): void {
+    if (text === this.detailText) return;
     this.message = `${this.name}: ${text}`;
 
     if (this.log !== undefined) {
-      if (this.detailText !== undefined) this.group?.success(fit(this.detailText));
-      this.group = this.log.group(fit(text));
+      this.log.clear();
+      this.log = undefined;
+      this.lazy = setTimeout(() => this.show(), quiet);
     } else this.refresh();
 
     this.detailText = text;
@@ -280,7 +366,7 @@ class ClackStage implements Stage {
 
     if (this.tail.length > 20) this.tail.shift();
 
-    if (!this.finished) this.logView().message(fit(line));
+    if (!this.finished) this.logView().message(line);
   }
 
   expect(parts: number): void {
@@ -361,14 +447,11 @@ class ClackStage implements Stage {
 
     const rest = [summary, this.took()].filter(Boolean).join(" · ");
 
-    // Plain text into a taskLog (see logView); dim elsewhere.
-    if (this.log !== undefined) this.log.success(wrap(`${this.name}  ${rest}`));
-    else {
-      this.spin?.clear();
-      const [first = "", ...more] = wrap(`${this.name}  ${rest}`).split("\n");
+    this.log?.clear();
+    this.spin?.clear();
+    const [first = "", ...more] = wrap(`${this.name}  ${rest}`).split("\n");
 
-      clack.log.success([first.startsWith(`${this.name}  `) ? `${this.name}  ${dim(first.slice(this.name.length + 2))}` : first, ...more.map(dim)].join("\n"));
-    }
+    clack.log.success([first.startsWith(`${this.name}  `) ? `${this.name}  ${dim(first.slice(this.name.length + 2))}` : first, ...more.map(dim)].join("\n"));
 
     this.spin = undefined;
     this.log = undefined;
@@ -382,14 +465,11 @@ class ClackStage implements Stage {
     const why = reason ?? (this.detailText === undefined ? undefined : `while ${this.detailText}`);
     const line = `${this.name} failed${this.took() ? ` after ${this.took()}` : ""}${why ? `: ${why}` : ""}`;
     // Only the output that explains the failure stays: a failed part's, else the stage's last lines.
-    // (taskLog.error's own showLog would replay everything.)
     const evidence = this.failedParts.length > 0 ? this.failedParts : this.tail.slice(-12);
 
-    if (this.log !== undefined) this.log.error(wrap(line), { showLog: false });
-    else {
-      this.spin?.clear();
-      clack.log.error(wrap(line));
-    }
+    this.log?.clear();
+    this.spin?.clear();
+    clack.log.error(wrap(line));
 
     this.spin = undefined;
     this.log = undefined;

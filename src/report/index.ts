@@ -210,7 +210,7 @@ export async function reported(command: "setup" | "sync" | "up", context: string
   const rerun = `Run ${name} again to continue`;
   let over = false;
 
-  // Ctrl+C where stdin isn't raw (no spinner, no prompt), or a spinner's own cancel.
+  // Ctrl+C during a stage; interactive prompts handle their own cancellation.
   const interrupt = () => {
     if (over) return;
     over = true;
@@ -219,10 +219,9 @@ export async function reported(command: "setup" | "sync" | "up", context: string
     process.exit(130);
   };
 
-  const created: Reporter = onTerminal() ? new ClackReporter(name, rerun, interrupt) : new PlainReporter(name, verbose);
+  const created: Reporter = onTerminal() ? new ClackReporter(name, rerun) : new PlainReporter(name, verbose);
 
-  // While a spinner runs, Clack holds stdin in raw mode and answers Ctrl+C with process.exit(0)
-  // itself: no SIGINT and no onCancel. The only place left to say how to continue is on exit.
+  // Restore the terminal and report an interruption on an unexpected exit during a stage.
   const onExit = () => {
     if (over) return;
     over = true;
