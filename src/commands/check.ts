@@ -464,17 +464,20 @@ function officeToolChecks(office: Office, report: Report): void {
   const install = `office setup --install-deps${office.opencode.mode === "host" ? " or office up" : ""} installs it`;
   const found: string[] = [];
 
+  const pins = officePins(office);
+
   for (const command of officeCommands) {
     const tool = officeTool(office, command);
 
-    if (tool !== undefined && tool.version === tool.pinned) {
+    if (tool?.managed === true) {
       found.push(`${command} ${tool.version}`);
 
       continue;
     }
 
-    const pin = tool?.pinned === undefined ? "the office package's" : `${command} ${tool.pinned}, the office's pin,`;
-    const detail = tool === undefined ? `${pin} isn't installed on this host, nor any other copy; ${install}` : `${pin} isn't installed on this host, so office runs ${command} ${tool.version} from ${tool.path}; ${install}`;
+    const version = pins[command === "age-keygen" ? "age" : command];
+    const pin = version === undefined ? `the office package's ${command} isn't in .office/mise/office.toml (office sync writes it)` : `mise hasn't installed ${command} ${version}, the office's pin, on this host`;
+    const detail = tool === undefined ? `${pin}, and there is no other copy; ${install}` : `${pin}, so office runs ${command} ${tool.version} from ${tool.path}; ${install}`;
 
     report(tool === undefined && required.includes(command) ? false : "warn", `office tool ${command}`, detail);
   }

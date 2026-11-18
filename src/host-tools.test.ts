@@ -150,7 +150,7 @@ test("the CLI runs the version the office pins, as mise installed it, over newer
   executable(join(dir, "path/sops"), "sops 3.14.0");
   executable(join(hostToolsRoot(), "bin/sops"), "sops 3.15.0");
 
-  expect(officeTool(office(pins), "sops")).toEqual({ path: pinned, version: "3.13.3", pinned: "3.13.3" });
+  expect(officeTool(office(pins), "sops")).toEqual({ path: pinned, version: "3.13.3", pinned: "3.13.3", managed: true });
   expect(requests().at(-1)).toEqual({ args: ["which", "sops", "--tool=sops@3.13.3"], cwd: "/", noConfig: "1" });
 
   // No shims, PATH entry or session-local selection: a new process from another folder finds it too.
@@ -164,7 +164,7 @@ test("until the pinned version is installed, the newest copy anywhere serves; wi
 
   const older = installed("age", "1.2.0", "age-keygen");
 
-  expect(officeTool(office(pins), "age-keygen")).toEqual({ path: older, version: "1.2.0", pinned: "1.3.2" });
+  expect(officeTool(office(pins), "age-keygen")).toEqual({ path: older, version: "1.2.0", pinned: "1.3.2", managed: false });
 
   executable(join(dir, "path/age-keygen"), "v1.2.1");
 

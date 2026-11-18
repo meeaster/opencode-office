@@ -176,8 +176,8 @@ function wantedVersions(office: Office) {
   return { ...startingVersions(), ...officePins(office) };
 }
 
-/** Where the CLI found an office command, and whether it is the version the office pins. */
-export type OfficeTool = InstalledTool & { pinned: string | undefined };
+/** Where the CLI found an office command, the version the office pins, and whether this is mise's install of that version. */
+export type OfficeTool = InstalledTool & { pinned: string | undefined; managed: boolean };
 
 /**
  * A command of the office package's tools: the version `.office/mise/office.toml` pins, as mise
@@ -188,14 +188,14 @@ export function officeTool(office: Office, command: OfficeCommand): OfficeTool |
   const mise = installedTool("mise")?.path;
   const exact = mise === undefined || pinned === undefined ? undefined : miseCopy(mise, command, pinned);
 
-  if (exact !== undefined) return { ...exact, pinned };
+  if (exact !== undefined) return { ...exact, pinned, managed: true };
 
   const found = [mise === undefined ? undefined : newestMiseInstall(mise, command), installedTool(command)]
     .filter((candidate) => candidate !== undefined)
     .sort((left, right) => compareVersions(left.version, right.version))
     .at(-1);
 
-  return found === undefined ? undefined : { ...found, pinned };
+  return found === undefined ? undefined : { ...found, pinned, managed: false };
 }
 
 /** The path of an office command, or an error saying how to install it. */
