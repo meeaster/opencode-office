@@ -180,8 +180,9 @@ upgrades:
    mkdir -p <state> && (umask 077; echo "OPENCODE_PASSWORD=$(opencode service get password)" >> <state>/secrets.env)
    ```
 
-2. `office up`. It starts `executor` and the office's own services, removes an `opencode` container left from container mode, writes the MCP files above, runs `mise trust` and `mise install` for the root's and each desk's `mise.toml` and the root's `.mise/conf.d/` fragments, and installs the cron timers.
-3. `office apps deploy`, so the apps reach the host's server, then `office check`.
+2. `office setup` once, which asks whether the office may manage this machine (see "Machine"); `--manage-machine` says yes unattended. Or, for an office set up before host mode, `office setup --manage-machine` then `office sync`.
+3. `office up`. It starts `executor` and the office's own services, removes an `opencode` container left from container mode, writes the MCP files above, runs `mise trust` and `mise install` for the root's and each desk's `mise.toml` and the root's `.mise/conf.d/` fragments, and installs the cron timers.
+4. `office apps deploy`, so the apps reach the host's server, then `office check`.
 
 Containers reach a server on the host's loopback through `host.docker.internal`; with Docker Desktop on WSL that reaches a server listening on `127.0.0.1` in WSL, so nothing listens on another address. Sessions start at the office's own path, so the host server also loads its global configuration and every `AGENTS.md` from the office up to your home folder; the container's machine note exists only in container mode.
 
@@ -197,7 +198,7 @@ The template ships two jobs:
 
 - `cron/update-references.sh` (06:00): `office sync --references`.
 - `cron/upgrade-tools.sh` (06:30): `office upgrade-tools`.
-  - For each exact pin in the root's and each desk's `mise.toml` and the root's `.mise/conf.d/*.toml` fragments (never a clone's), it asks `mise latest <tool> --minimum-release-age <age>` for the newest version at least that old and installs it; only after the install succeeds does it rewrite the pin, and a failed install keeps the old one.
+  - For each exact pin in the root's and each desk's `mise.toml` and the root's `.mise/conf.d/*.toml` fragments, `machine.toml` among them (never a clone's), it asks `mise latest <tool> --minimum-release-age <age>` for the newest version at least that old and installs it; only after the install succeeds does it rewrite the pin, and a failed install keeps the old one.
   - For the four versions in `office.yaml`, it reads each project's newest hundred GitHub releases without a login, keeps the line the office runs (`v<semver>` tags for OpenCode, Claude Code and mise; Executor's `executor@2.…` pre-releases, not its v1 line), drops releases younger than the age, and takes the highest version, never a lower one than the pin. It confirms the release file, or Executor's image on ghcr.io, exists, then rewrites only those version lines in `office.yaml` and `office.lock`. A failed lookup (GitHub's rate limit, no network) skips that tool and is reported. It never rebuilds or restarts anything.
   - Ages come from `upgrades` in `office.yaml`: a tool's own, else `minimum_release_age`, else a day.
   - It skips a file with uncommitted changes (for the versions, `office.yaml` or `office.lock`). Changed files (and a `mise.lock` beside them, if the office uses one) go into one commit, such as `chore: bump opencode 2.3.0 → 2.4.0, node 26.13.1 → 26.14.0`, made as the office's git identity from `office.yaml`, else `office cron <office-cron@localhost>`, through `git -c`, so no git config changes. It never pushes, even when the office has GitHub credentials. It notifies the app of the first desk that has one (`notifications.send`) of what moved or failed, stays silent when nothing changed, and exits non-zero on a failure, so the job counts as missed and runs again at the next start.
@@ -299,11 +300,24 @@ There is no registry, no dependency between packages and no version range. The b
 
 ### Tools
 
+Everything in the office's `.mise/conf.d/` is machine-wide; every `mise.toml` is folder-scoped:
+
+| File | Applies | Who changes it |
+|---|---|---|
+| `.mise/conf.d/machine.toml` | The whole machine | The office, freely: tools, versions and mise settings. `machine` is a reserved package name |
+| `.mise/conf.d/<package>.toml` | The whole machine | Sync adds and removes tools as the package declares them; the office only changes versions (`office upgrade-tools` bumps them) |
+| `mise.toml` at the office root | The office folder | The office: what the office repository itself needs |
+| `<desk>/mise.toml` | That desk | The desk |
+| A repository's `mise.toml` | That repository | The project |
+
+Each file's header comment says which kind it is. `office init` writes a starter `machine.toml`; sync never rewrites it. "The whole machine" is through links: in a host-mode office `office sync` links each file into mise's global conf.d (see "Machine"), and the container links them inside itself at start. Without the links (before consent), the files apply in the office's folders only.
+
 A package that needs a CLI declares it as a mise tool in `package.yaml`'s `tools`, by the name a `mise.toml` gives it, at the exact version an office starts at (never a range or `latest`). For each package that declares tools, `office sync` writes them into a mise config fragment of the office's own, `.mise/conf.d/<name>.toml` in the office root, which the office commits:
 
 - It adds a tool the fragment lacks, at the package's version, and removes one the package no longer declares. The file's first line names the package; sync never touches a file in that folder whose first line doesn't name one of its packages, and refuses to write a package's tools over such a file.
 - It never changes a version already in the fragment: from then on the pin is the office's. `office upgrade-tools` bumps the fragments' pins as it does `mise.toml`'s, with the same minimum release ages, and the container installs them at start (in host mode, `office up` does).
 - It deletes the fragment of a package that declares no tools, or that leaves `office.yaml`.
+- It rewrites the fragment's header comment, which is sync's, as the current release words it.
 
 A package can also give a host-mode office something more, in `package.yaml`'s `host` block, optionally behind one of its true/false settings:
 
@@ -318,9 +332,25 @@ host:
     script: scripts/install-browse.ts  # a Bun script in the package
 ```
 
-When the office is in host mode and the setting is on, sync adds `host.tools` to the fragment and, after its `[tools]` table, a `[hooks]` `postinstall` that runs the script when `creates` is missing, and a `<package>:install` task that runs it unconditionally. Both are inline commands run from the office root with the office's tools on PATH (a task hook would run untrusted); mise runs `postinstall` after every `mise install`, so the file is installed the first time and left alone after. Everything after `[tools]` is sync's: when the mode or the setting changes, sync removes the host tools, hook and task, never the other versions. A fragment with a hook needs trust, which host mode's `office up` gives it (`mise trust` per fragment) before `mise install`; a container-mode office never gets one. `office check` says on the package's line when the setting is on in a container-mode office (not a failure), and in host mode fails when `creates` is missing, naming `mise install` and the task.
+When the office is in host mode and the setting is on, sync adds `host.tools` to the fragment and, after its `[tools]` table, a `[hooks]` `postinstall` that runs the script when `creates` is missing, and a `<package>:install` task that runs it unconditionally. Both are inline commands with the fragment's tools on PATH (a task hook would run untrusted). mise runs a linked fragment's hooks and tasks from the home folder, so neither uses a path relative to the office: each finds the office root from the fragment's own real path, `{{ config_source | canonicalize | dirname }}/../..`, which the hook uses directly and the task through a task-level `env = { OFFICE_ROOT = … }` (mise gives `config_source` to neither a task's `run` nor its `dir`). So both work from any folder, read in place or through the link. mise runs `postinstall` after every `mise install`, anywhere once the fragment is linked, so the file is installed the first time and left alone after. Everything after `[tools]` is sync's: when the mode or the setting changes, sync removes the host tools, hook and task, never the other versions. A fragment with a hook needs trust, which host mode's `office up` gives it (`mise trust` per fragment) before `mise install`; a container-mode office never gets one. `office check` says on the package's line when the setting is on in a container-mode office (not a failure), and in host mode fails when `creates` is missing, naming `mise install` and the task.
 
-mise loads `.mise/conf.d/*.toml` in a project folder before the folder's own `mise.toml`, so the office's `mise.toml` (and a desk's) wins over a fragment for the same tool, and the fragment's tools resolve in every folder of the office. `office check` reports, on the package's line, a declared tool missing from the fragment and a tool the package no longer declares; a version the office changed is not a problem.
+mise loads `.mise/conf.d/*.toml` in a project folder before the folder's own `mise.toml`, so the office's `mise.toml` (and a desk's) wins over a fragment for the same tool, and the fragment's tools resolve in every folder of the office. Inside the office, mise reads the fragments in place, in name order with the last winning, so there a package whose name sorts after `machine` wins over `machine.toml` for the same tool; outside it, the links' names put `machine.toml` last. Put a tool the office needs at one version everywhere in `machine.toml`, and pin it in `mise.toml` too if a package fragment sorting after it pins the same tool. `office check` reports, on the package's line, a declared tool missing from the fragment and a tool the package no longer declares; a version the office changed is not a problem.
+
+### Machine
+
+A host-mode office manages the machine it runs on, so there is one per machine. What it writes outside its folder and its state follows these rules:
+
+1. **Whole files only.** The office writes files it owns and never edits yours (the one exception is the `plugins` list for desktop panels, see "Panels"). It never replaces a path it didn't write: sync reports it instead.
+2. **Named.** Each file is named `office-<name>-…`; a real file starts with a marker line.
+3. **Recorded.** The machine record, `$XDG_DATA_HOME/office/machine.json` (`~/.local/share/office/machine.json`), lists each file: its path, its kind (a link, or a file with its SHA-256), the package it belongs to (or the office itself) and what it points at. It names the office that manages the machine, by name and folder. A host-mode office in another folder is refused, naming the owner; an office with the same name whose recorded folder no longer holds it is the same office moved, and sync moves the record and relinks.
+4. **Consented.** The record exists only after you say yes: `office setup` asks in a host-mode office, and `--manage-machine` says yes unattended. Until then sync writes nothing outside the office and says what to run, and `office check` warns.
+5. **Undone.** Sync removes a file when its fragment goes (a package removed, or a file deleted from `.mise/conf.d/`), and every file with the record when the office leaves host mode. `office sync --release-machine` does the same on demand, so setup asks again before the next write. `office down` stops what runs and leaves installed files. A file changed since the office wrote it stays, reported.
+6. **Checked.** `office check` has a line per file: present and correct, changed, missing, or a dangling link (mise skips one silently, and every shim then fails with "No version is set"); a failure when another office manages the machine.
+7. **No root, no apt.**
+
+The first such files are the tool links: sync links each file in `.mise/conf.d/` into mise's global conf.d (`$MISE_CONFIG_DIR/conf.d`, else `$XDG_CONFIG_HOME/mise/conf.d` or `~/.config/mise/conf.d`) as `office-<name>-1-<package>.toml` and `office-<name>-2-machine.toml`. mise loads that folder by name and the last wins, so these come after ordinary fragments such as `10-….toml` and `machine.toml` after the packages'; a global `config.toml` still wins over every fragment, and a project's config over everything global. Links, not copies: a copy would run a fragment's hooks twice inside the office. Linked files load from any folder with no trust step, which means mise trusts the office's files wherever it reads them. A `mise.lock` in the office doesn't apply through the links: global tools use mise's one global lock, and the office pins exact versions. Never set `MISE_GLOBAL_CONFIG_FILE` where agents or the office's tools run: it switches global fragments off, and `office check` warns when it is set.
+
+`OFFICE_MACHINE_RECORD` (the record's path) and `OFFICE_MISE_CONFIG_DIR` (the mise config folder whose conf.d gets the links) replace both locations for tests and scratch offices; a scratch office that runs mise also sets `MISE_CONFIG_DIR` to that folder.
 
 ### Modes
 
@@ -450,7 +480,7 @@ cd ~/my-office
 office setup
 ```
 
-Setup offers host dependency installation before age identity or encryption work, then the office's commit identity and GitHub before cloning (see "Git and GitHub"). It asks before creating an age identity and asks for your Executor owner email; it never invents an email. For unattended setup, supply `--owner-email <email>`, `--install-deps` to authorize dependency changes and `--generate-age-key` if a new identity is needed; declare the identity and GitHub in `office.yaml`'s `git` block. Without `--install-deps`, unattended setup keeps working installed tools, reports available updates, and stops if a required tool is missing. Missing required input stops with guidance instead of waiting on stdin. Docker with a working daemon, Compose and Buildx, and Git remain separately installed prerequisites.
+Setup offers host dependency installation before age identity or encryption work, then the office's commit identity and GitHub before cloning (see "Git and GitHub"), and in a host-mode office asks whether it may manage the machine (see "Machine"). It asks before creating an age identity and asks for your Executor owner email; it never invents an email. For unattended setup, supply `--owner-email <email>`, `--install-deps` to authorize dependency changes, `--generate-age-key` if a new identity is needed and, in a host-mode office, `--manage-machine` to let it write outside its folder (see "Machine"); declare the identity and GitHub in `office.yaml`'s `git` block. Without `--install-deps`, unattended setup keeps working installed tools, reports available updates, and stops if a required tool is missing. Missing required input stops with guidance instead of waiting on stdin. Docker with a working daemon, Compose and Buildx, and Git remain separately installed prerequisites.
 
 Cron activation follows the existing `up` behavior without another approval prompt: starting a template office runs its missed jobs, including jobs never run, which can update references and commit tool pin changes. `init` still creates files only; `up` still starts services only.
 
