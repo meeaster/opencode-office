@@ -13,13 +13,16 @@
 // longer declares, but never changes a version, which `office upgrade-tools` bumps like the
 // office's own pins. Everything after that table is sync's alone: the [hooks] postinstall and the
 // `<package>:install` task of a host install, written only in a host-mode office (with the
-// package's switch on), and rewritten or removed as that changes.
+// package's switch on), then a package's system setup where it applies (src/package-system.ts),
+// each rewritten or removed as that changes.
 import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 
 import type { Office } from "./office.ts";
+import { fragmentOfficeRoot, systemApplyCommand, systemMarker, systemNotes, systemSection, systemState } from "./package-system.ts";
 import type { InstalledPackage } from "./packages.ts";
+import type { Parsed } from "./schema.ts";
 
 /** Where sync writes packages' fragments: in the tool's `.office/`, where mise loads nothing by itself. */
 export const fragmentsFolder = ".office/mise";
@@ -83,7 +86,7 @@ function wantedTools(office: Office, item: InstalledPackage): Record<string, str
 // folder, `.office/mise/`, read through its link in the global conf.d. mise runs a linked file's
 // hooks and tasks from whatever folder it runs in, so a path relative to the office breaks. A
 // task's `run` and `dir` don't get `config_source`, so the task takes it through `env`.
-const officeRoot = "{{ config_source | canonicalize | dirname }}/../..";
+const officeRoot = fragmentOfficeRoot;
 
 /**
  * Who keeps a host install current once it exists: an executable updates itself (Browse); a
@@ -134,6 +137,22 @@ export function hostSection(office: Office, item: InstalledPackage): string | un
   ].join("\n");
 }
 
+/** Everything after the [tools] table: the host install, then the system setup, each where it applies. */
+function fragmentSection(office: Office, item: InstalledPackage): Parsed<string | undefined> {
+  const system = systemSection(office, item);
+
+  if (!system.ok) return system;
+
+  const parts = [hostSection(office, item), system.value].filter((part) => part !== undefined);
+
+  return { ok: true, value: parts.length === 0 ? undefined : parts.join("\n") };
+}
+
+/** The line of the host install's task in a fragment, which tells sync's messages it is there. */
+function hostMarker(item: InstalledPackage): string {
+  return `[tasks.${JSON.stringify(`${item.entry.name}:install`)}]`;
+}
+
 // A key in a [tools] table: `name = ...`, the name optionally quoted.
 const keyPattern = /^\s*("[^"]+"|[A-Za-z0-9_.:@/-]+)\s*=/;
 
@@ -144,7 +163,11 @@ function splitFragment(text: string): FragmentParts {
   const lines = text.replace(/\n$/, "").split("\n");
   const table = lines.findIndex((line) => /^\s*\[tools\]\s*(#.*)?$/.test(line));
   const after = lines.findIndex((line, index) => index > table && /^\s*\[/.test(line));
-  const cut = table === -1 ? lines.length : after === -1 ? lines.length : after;
+  let cut = table === -1 ? lines.length : after === -1 ? lines.length : after;
+
+  // The comment lines right above sync's first table, such as a system setup's heading, are sync's
+  // too; sync writes a blank line between the tools and its part.
+  while (cut < lines.length && cut - 1 > table && lines[cut - 1].trimStart().startsWith("#")) cut -= 1;
   const tools = lines.slice(0, cut);
 
   // The blank lines before sync's part belong to it.
@@ -261,6 +284,29 @@ function hostAbsence(office: Office, item: InstalledPackage): string {
   return `its ${item.manifest.host?.setting} setting is off`;
 }
 
+/** What changed in the part of a fragment after its [tools] table, from `before` to `after`, one line each. */
+function sectionChanges(office: Office, item: InstalledPackage, before: string, where: string): string[] {
+  const name = item.entry.name;
+  const lines: string[] = [];
+  const host = hostSection(office, item);
+  const install = item.manifest.host?.install?.description ?? "its host install";
+
+  if (host === undefined && before.includes(hostMarker(item))) lines.push(`removed package ${name}'s install of ${install} from ${where}: ${hostAbsence(office, item)}`);
+  else if (host !== undefined && !before.includes(host.trim())) lines.push(`wrote package ${name}'s install of ${install} to ${where}: mise install installs it once, through the link (or mise run ${name}:install)`);
+
+  const system = item.manifest.system;
+  const state = systemState(office, item);
+  const part = systemSection(office, item);
+  const wanted = part.ok ? part.value : undefined;
+
+  if (system === undefined || state === undefined) return lines;
+
+  if (wanted === undefined && before.includes(systemMarker(item))) lines.push(`removed package ${name}'s system setup, ${system.description}, from ${where}: ${state.applies ? "it no longer applies" : state.reason}; what it installed stays on the machine`);
+  else if (wanted !== undefined && !before.includes(wanted.trim())) lines.push(`wrote package ${name}'s system setup, ${system.description}, to ${where}: run ${systemApplyCommand} once on this machine (it may ask for sudo); office never runs it`);
+
+  return lines;
+}
+
 /**
  * Makes each installed package's fragment hold the tools it wants in this office and its host
  * install when that applies, and deletes the fragment of a package that wants neither or that
@@ -276,13 +322,22 @@ export function syncTools(office: Office, installed: InstalledPackage[], declare
     const where = relative(office.dir, path);
     const current = existsSync(path) ? readFileSync(path, "utf8") : undefined;
     const tools = wantedTools(office, item);
-    const section = hostSection(office, item);
+    const composed = fragmentSection(office, item);
 
     if (current !== undefined && fragmentPackage(current) !== name) {
       changes.push(`FAILED package ${name}: ${where} is not the fragment office sync writes for it, so its tools aren't written; rename that file`);
 
       continue;
     }
+
+    if (!composed.ok) {
+      changes.push(`FAILED package ${name}: ${composed.errors.join("; ")}; ${where} is left as it was`);
+
+      continue;
+    }
+
+    const section = composed.value;
+    const before = current === undefined ? "" : splitFragment(current).rest.join("\n");
 
     if (Object.keys(tools).length === 0 && section === undefined) {
       if (current === undefined) continue;
@@ -308,11 +363,7 @@ export function syncTools(office: Office, installed: InstalledPackage[], declare
 
     if (current !== undefined && next.added.length === 0 && next.removed.length === 0 && !next.section) changes.push(`rewrote the header comment of ${where}, which says who changes what in it`);
 
-    if (next.section) {
-      const description = item.manifest.host?.install?.description ?? "its host install";
-
-      changes.push(section === undefined ? `removed package ${name}'s install of ${description} from ${where}: ${hostAbsence(office, item)}` : `wrote package ${name}'s install of ${description} to ${where}: mise install installs it once, through the link (or mise run ${name}:install)`);
-    }
+    if (next.section) changes.push(...sectionChanges(office, item, before, where));
   }
 
   for (const [path, owner] of packageFragments(office)) {
@@ -357,11 +408,13 @@ function hostNotes(office: Office, item: InstalledPackage): FragmentReport {
 /** What `office check` says of a package's fragment and its host install. */
 export function fragmentNotes(office: Office, item: InstalledPackage): FragmentReport {
   const wanted = Object.keys(wantedTools(office, item));
-  const section = hostSection(office, item);
+  const composed = fragmentSection(office, item);
+  const section = composed.ok ? composed.value : undefined;
   const path = fragmentPath(office, item.entry.name);
   const where = relative(office.dir, path);
   const host = hostNotes(office, item);
-  const report = (ok: boolean, notes: string[]): FragmentReport => ({ ok: ok && host.ok, notes: [...notes, ...host.notes] });
+  const system = systemNotes(office, item);
+  const report = (ok: boolean, notes: string[]): FragmentReport => ({ ok: ok && host.ok && system.ok && composed.ok, notes: [...notes, ...host.notes, ...system.notes, ...(composed.ok ? [] : composed.errors)] });
 
   if (!existsSync(path)) {
     return wanted.length === 0 && section === undefined ? report(true, []) : report(false, [`tools ${wanted.join(", ")} are missing: ${where} doesn't exist; office sync writes it`]);
@@ -384,7 +437,7 @@ export function fragmentNotes(office: Office, item: InstalledPackage): FragmentR
 
   if (extra.length > 0) notes.push(`${where} holds ${extra.join(", ")}, which the package no longer declares here; office sync removes ${extra.length === 1 ? "it" : "them"}`);
 
-  if (stale) notes.push(`${where} ${section === undefined ? "still holds the package's host install" : "lacks or differs from the package's host install"}; office sync rewrites it`);
+  if (stale) notes.push(`${where} ${section === undefined ? "still holds the package's host install or system setup" : "lacks or differs from the package's host install or system setup"}; office sync rewrites it`);
 
   return report(missing.length === 0 && extra.length === 0 && !stale, notes);
 }

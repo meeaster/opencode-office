@@ -304,7 +304,7 @@ test("check reports a host part sync would rewrite, and removing the package del
   await sync(loadOffice(office));
   writeFileSync(fragment(), readFileSync(fragment(), "utf8").replace("|| bun", "|| echo"));
 
-  expect(notes().notes).toContain(".office/mise/demo.toml lacks or differs from the package's host install; office sync rewrites it");
+  expect(notes().notes).toContain(".office/mise/demo.toml lacks or differs from the package's host install or system setup; office sync rewrites it");
 
   write(join(office, "office.yaml"), "name: t\nopencode:\n  mode: host\n  url: http://127.0.0.1:49999\n");
 

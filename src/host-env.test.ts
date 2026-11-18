@@ -164,7 +164,7 @@ test("a package's host block adds folders and variables to the environment file;
   write(join(office, "office.yaml"), `${readFileSync(join(office, "office.yaml"), "utf8")}  - name: other\n`);
   write(join(office, "packages/other/package.yaml"), "name: other\ndescription: Another.\nhost:\n  env:\n    DEMO_MODE: off\n");
 
-  expect(await sync(loadOffice(office))).toContain(`FAILED packages demo and other both set DEMO_MODE in their host block, so ${envFilePath()} sets neither; remove it from one`);
+  expect(await sync(loadOffice(office))).toContain(`FAILED packages demo and other both set DEMO_MODE in their host or system block, so ${envFilePath()} sets neither; remove it from one`);
   expect(readFileSync(envFilePath(), "utf8")).not.toContain("DEMO_MODE");
 });
 

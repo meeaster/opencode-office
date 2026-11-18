@@ -2,7 +2,7 @@
 
 An `office` package: browser automation for agents, with two tools that do different jobs.
 
-- **[agent-browser](https://github.com/vercel-labs/agent-browser)** drives a headless Chromium of its own, in either mode. Agents use it to verify UI work, for repeatable checks and for anything unattended. The office's container has Debian's Chromium, and `AGENT_BROWSER_EXECUTABLE_PATH` points agent-browser at it.
+- **[agent-browser](https://github.com/vercel-labs/agent-browser)** drives a headless Chromium of its own, in either mode. Agents use it to verify UI work, for repeatable checks and for anything unattended. The office's container has Debian's Chromium, and `AGENT_BROWSER_EXECUTABLE_PATH` points agent-browser at it. A host-mode office on Ubuntu under WSL can opt into Google Chrome from apt for it instead (see "System Chrome").
 - **[Browse](https://opencode.ai/browse)** drives the user's real Chrome, with their logins and extensions, through a relay and the Browse Chrome extension. Only a host-mode office has it.
 
 Sessions get each as an MCP server, `agent-browser` and `browse`, where it applies, and the `browser-automation` skill, which says which to use when (OpenCode's own `browser` skill covers its in-app browser, `tools.browser.*`, present when the desktop app is attached to a session).
@@ -29,6 +29,7 @@ Then run `office sync` and commit what it wrote: the package in `.office/package
 |---|---|
 | `agent_browser_tools` | The tool profiles the agent-browser MCP server starts with, as `agent-browser mcp --tools` takes them: `core` by default (navigation, snapshots, interaction, screenshots), a comma-separated list such as `core,network,debug`, or `all`. `agent-browser mcp --help` lists the profiles. Empty for no agent-browser server |
 | `browse` | `true` by default: a host-mode office installs Browse and sessions get the `browse` server. `false` for neither. No effect in container mode |
+| `system_chrome` | `false` by default. `true` in a host-mode office on Ubuntu 24.04 or 26.04 amd64 under WSL: agent-browser launches Google Chrome Stable from Google's apt repository, which the user installs once (see "System Chrome"). Independent of `browse`. No effect in container mode or on another machine |
 
 A change reaches sessions when `office sync` writes the resolved settings, without restarting OpenCode.
 
@@ -62,3 +63,19 @@ mise reads the fragment only through the link sync makes in its global conf.d, a
 The plugin registers `~/.local/bin/browse mcp` (or under `$XDG_BIN_HOME`, or `$OPENCODE_BROWSER_HOME/bin`) when the office is in host mode, `browse` is on and the file exists. It never looks on the PATH, where xdg-utils' unrelated `/usr/bin/browse` can come first. `office check` fails the package's line in host mode while Browse is missing, naming `mise install` and the task, and notes, without failing, that `browse` has no effect in a container-mode office.
 
 When the office moves to container mode, or `browse` is turned off, sync removes `bun`, the hook and the task from the fragment. The installed binary, its relay and the pairing stay with the machine: `~/.local/bin/browse uninstall` removes them.
+
+## System Chrome
+
+By default agent-browser on a host launches the Chrome for Testing it downloads itself (`agent-browser install`) into `~/.agent-browser/browsers/`, which nothing updates. With `system_chrome: true`, in a host-mode office on Ubuntu 24.04 or 26.04 amd64 under WSL, it launches `/usr/bin/google-chrome-stable` instead: Google Chrome Stable from Google's apt repository, the same binary WSLg runs when the user opens Chrome, patched by apt with the distribution's updates. Each agent-browser launch is headless, with a temporary profile of its own, so it never shares the user's Chrome profile, logins or windows. Browse, a separate setting, keeps driving the user's everyday Windows Chrome. The container is unchanged: Debian's Chromium, refreshed with the image (`office up --refresh`).
+
+It is the package's `system` block (see the office README's "Tools"). `office sync` writes the setup to `.office/mise/browser.toml` and `AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable` to the office's environment file, which terminals and the managed OpenCode server source. The user applies the setup once, which asks for sudo:
+
+```sh
+mise bootstrap --only packages,files
+```
+
+- **The repository.** `scripts/google-chrome-apt-source.sh` runs first, as the setup's `pre-packages` hook. When the source is missing it installs `ca-certificates`, `curl` and `gnupg` from the distribution, fetches Google's signing key over HTTPS checked against the distribution's CA certificates, accepts it only when its primary key is `EB4C 1BFD 4F04 2F6D DDCC EC91 7721 F63B D38B 4796` (Google's Linux package signing key), and writes the source exactly where and as Chrome's package does: `/etc/apt/sources.list.d/google-chrome.sources` (`https://dl.google.com/linux/chrome-stable/deb/ stable main`, amd64), `Signed-By: /usr/share/keyrings/google-chrome.gpg`. Chrome's postinst and its daily cron job take both over and keep Google's keys current, so there is one source and no second keyring. A `google-chrome.list` for Google's older address (Chrome's own from earlier releases, or one added by hand) is retired as Chrome's postinst retires it, with an `/etc/apt/keyrings/google-chrome.gpg` no source names any more. With the source in place it changes nothing and asks for no sudo.
+- **The packages.** apt installs `google-chrome-stable` with its own dependencies, and `system/google-chrome.toml` adds what agent-browser 0.43.0's `install --with-deps` list has that they don't bring on either release: `libnss3-tools` (certutil, for `--ca-cert`), `fonts-noto-color-emoji` and `fonts-noto-cjk`. agent-browser itself needs nothing installed: no `agent-browser install`, and never `--with-deps`.
+- **Updates.** It installs `unattended-upgrades` (Ubuntu has it already) and writes `/etc/apt/apt.conf.d/51office-google-chrome`, which adds `origin=Google LLC,label=Google,codename=stable,site=dl.google.com` (the Origin, Label and Codename of the repository's signed Release file) to `Unattended-Upgrade::Origins-Pattern`. An apt list adds to the others, so the distribution's origins and the administrator's stay; whether and when unattended-upgrades runs stays as `/etc/apt/apt.conf.d/20auto-upgrades` says.
+
+`office check` fails the package's line until Chrome, the source, certutil, both fonts, unattended-upgrades and the apt.conf.d file are on the machine, and notes a `system_chrome` that is on where it doesn't apply. The browser-automation skill tells each session which binary agent-browser launches, and when the OpenCode server started before the environment file set it: the managed server gets the variable when it restarts, which `office check` reports as pending. Seeing Chrome itself in a WSLg window is a separate check, at the desktop. Turning `system_chrome` off removes the setup and the variable; Chrome, its source and the apt.conf.d file stay (`sudo apt-get remove google-chrome-stable`, and delete `/etc/apt/apt.conf.d/51office-google-chrome`).

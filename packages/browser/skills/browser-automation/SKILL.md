@@ -11,7 +11,7 @@ Pick by whose browser the task needs:
 
 | Tool | Drives | Use for |
 |---|---|---|
-| `agent-browser` | A headless Chromium of its own, on the machine OpenCode runs on; both modes | Verifying UI work, repeatable checks, scraping public pages, anything unattended |
+| `agent-browser` | A headless Chromium of its own, on the machine OpenCode runs on, with a temporary profile; both modes. "This session's servers" says which binary it launches | Verifying UI work, repeatable checks, scraping public pages, anything unattended |
 | `browse` | Host mode only: the user's real Chrome, with their logins, cookies and extensions, through the Browse extension | Sites the user is signed in to, tasks in their session, handing control to the user (a login, a CAPTCHA, a confirmation) |
 | `tools.browser.*` | OpenCode's in-app browser, beside the session in the desktop app | Showing the user a page while you work on it, when those tools are present: only when the desktop app is attached to this session. OpenCode's own `browser` skill covers them |
 

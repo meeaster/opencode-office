@@ -1,0 +1,29 @@
+# Google Chrome Stable for agent-browser, from Google's repository, which the package's
+# scripts/google-chrome-apt-source.sh adds first. apt installs Chrome's own dependencies; the rest
+# are what agent-browser 0.43.0's `install --with-deps` list has that Chrome's don't bring on
+# Ubuntu 24.04 or 26.04, so agent-browser never needs to install anything itself.
+[bootstrap.packages]
+"apt:google-chrome-stable" = "latest"
+# certutil, with which agent-browser puts a --ca-cert into a temporary NSS database.
+"apt:libnss3-tools" = "latest"
+# Emoji and CJK glyphs for pages and screenshots, which Chrome's fonts lack.
+"apt:fonts-noto-color-emoji" = "latest"
+"apt:fonts-noto-cjk" = "latest"
+# Installs Chrome's updates with the distribution's, through the origin below. Ubuntu has it already;
+# its own settings (/etc/apt/apt.conf.d/20auto-upgrades and 50unattended-upgrades) stay as they are.
+"apt:unattended-upgrades" = "latest"
+
+# Adds Google's repository to the origins unattended-upgrades installs from, by the Origin, Label
+# and Codename its signed Release file gives, at its site. An apt list adds to what other files set,
+# so the distribution's origins and any the administrator configured still apply.
+[bootstrap.files."/etc/apt/apt.conf.d/51office-google-chrome"]
+owner = "root"
+group = "root"
+mode = "0644"
+content = """
+// Written by mise bootstrap for the office browser package's system Chrome (system_chrome):
+// unattended-upgrades installs Google Chrome Stable's updates from Google's signed repository.
+Unattended-Upgrade::Origins-Pattern {
+	"origin=Google LLC,label=Google,codename=stable,site=dl.google.com";
+};
+"""

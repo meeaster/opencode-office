@@ -374,6 +374,39 @@ const hostBlock = v.strictObject(
   mapping,
 );
 
+/** A file in the package, by a relative path without `..`. */
+function packageFile(extension: string, example: string) {
+  return v.pipe(v.string(), v.regex(new RegExp(`^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\\.${extension}$`), `must be a .${extension} file in the package, such as ${example}`), v.check((path) => !path.split("/").includes(".."), "must not climb out with .."));
+}
+
+/**
+ * A machine a system block supports, as `<os-release ID>-<VERSION_ID>-<dpkg architecture>`, with
+ * `-wsl` when it must be WSL: `ubuntu-24.04-amd64-wsl`.
+ */
+const systemPlatform = v.pipe(v.string(), v.regex(/^[a-z0-9]+-[0-9.]+-[a-z0-9]+(?:-wsl)?$/, "must be a platform such as ubuntu-24.04-amd64-wsl"));
+
+/**
+ * What a package sets up in a host-mode office's machine with its operating system's package
+ * manager, only while `setting` (which defaults to false) is on and the machine is one of
+ * `platforms`: mise `[bootstrap]` tables (`bootstrap`, a TOML file in the package) and a `prepare`
+ * script that runs as their `pre-packages` hook, both written to the package's mise fragment; and
+ * variables for the office's environment file. Office never applies it: the user runs
+ * `mise bootstrap --only packages,files` once, which may ask for sudo. `ready` lists the absolute
+ * paths whose presence shows it was applied, for `office check`.
+ */
+const systemBlock = v.strictObject(
+  {
+    setting: v.string(),
+    description: text,
+    platforms: v.pipe(v.array(systemPlatform, "must be a list of platforms"), v.minLength(1, "must name at least one platform")),
+    prepare: v.optional(packageFile("sh", "scripts/prepare.sh")),
+    bootstrap: packageFile("toml", "system/bootstrap.toml"),
+    ready: v.pipe(v.array(v.pipe(v.string(), v.regex(/^\/[A-Za-z0-9._@+/-]+$/, "must be an absolute path")), "must be a list of absolute paths"), v.minLength(1, "must name at least one path")),
+    env: v.nullish(v.record(hostVariable, hostValue, "must map variable names to values"), {}),
+  },
+  mapping,
+);
+
 /** A package's package.yaml: what can't be discovered from its folders. */
 export const packageManifestSchema = v.pipe(
   v.strictObject(
@@ -389,15 +422,25 @@ export const packageManifestSchema = v.pipe(
       // them to the office's .office/mise/<name>.toml, whose versions are the office's from then on.
       tools: miseTools,
       host: v.optional(hostBlock),
+      system: v.optional(systemBlock),
       cron: packageCron,
     },
-    "must be a mapping of name, namespace, description, settings or settings_schema, secrets, tools, host and cron",
+    "must be a mapping of name, namespace, description, settings or settings_schema, secrets, tools, host, system and cron",
   ),
   v.check((manifest) => manifest.settings === undefined || manifest.settings_schema === undefined, "choose settings or settings_schema, not both"),
   v.transform((manifest) => ({ ...manifest, settings: manifest.settings ?? {}, namespace: manifest.namespace ?? manifest.name })),
   v.forward(
     v.check((manifest) => manifest.settings_schema !== undefined || manifest.host?.setting === undefined || isTrueOrFalse(manifest.settings[manifest.host.setting]?.default), "must name one of the package's settings whose default is true or false"),
     ["host", "setting"],
+  ),
+  // A system setup runs as root on the user's machine, so a package offers it and the office opts in.
+  v.forward(
+    v.check((manifest) => manifest.settings_schema !== undefined || manifest.system === undefined || manifest.settings[manifest.system.setting]?.default === false, "must name one of the package's settings whose default is false: an office opts in"),
+    ["system", "setting"],
+  ),
+  v.forward(
+    v.check((manifest) => manifest.system === undefined || manifest.host === undefined || Object.keys(manifest.system.env).every((name) => !Object.hasOwn(manifest.host?.env ?? {}, name)), "sets a variable the host block also sets"),
+    ["system", "env"],
   ),
   // Every compose file of the office is interpolated with the same process environment, which wins
   // over a package's own values, so a package's secrets carry its namespace.

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { machineDirVariable } from "./host-env.ts";
 import { unitDirVariable } from "./host-server.ts";
 import { machineRecordVariable, miseConfigVariable } from "./machine.ts";
+import { systemPlatformVariable } from "./package-system.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "office-test-machine-"));
 
@@ -18,3 +19,6 @@ process.env[miseConfigVariable] = join(scratch, "mise-config");
 process.env[machineDirVariable] = join(scratch, "office-data");
 
 process.env[unitDirVariable] = join(scratch, "systemd-user");
+
+// No package system setup applies to the machine running the tests unless a test names its platform.
+process.env[systemPlatformVariable] = "";

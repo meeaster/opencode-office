@@ -19,6 +19,7 @@ import { join, resolve } from "node:path";
 
 import { hostToolsRoot } from "./host-tools.ts";
 import type { Office } from "./office.ts";
+import { systemVariables } from "./package-system.ts";
 import { hostApplies } from "./package-tools.ts";
 import type { InstalledPackage } from "./packages.ts";
 import { managedAgentEnvironment } from "./schema.ts";
@@ -113,12 +114,14 @@ function folder(item: InstalledPackage, entry: string): string {
   return entry.startsWith("/") ? entry : resolve(item.dir, entry);
 }
 
+/** A package's host block's folders and variables where it applies, then its system block's variables where that applies. */
 function packageEnvironment(office: Office, item: InstalledPackage): PackageEnvironment {
   const host = item.manifest.host;
+  const system = systemVariables(office, item);
 
-  if (host === undefined || !hostApplies(office, item)) return { name: item.entry.name, path: [], variables: [] };
+  if (host === undefined || !hostApplies(office, item)) return { name: item.entry.name, path: [], variables: system };
 
-  return { name: item.entry.name, path: host.path.map((entry) => folder(item, entry)), variables: Object.entries(host.env) };
+  return { name: item.entry.name, path: host.path.map((entry) => folder(item, entry)), variables: [...Object.entries(host.env), ...system] };
 }
 
 /** The environment file's content, and a problem per variable two packages both set. */
@@ -137,7 +140,7 @@ export function hostEnvironment(office: Office, installed: InstalledPackage[]): 
     for (const [name] of item.variables) setters.set(name, [...(setters.get(name) ?? []), item.name]);
   }
 
-  const problems = [...setters].flatMap(([name, names]) => (names.length > 1 ? [`packages ${names.join(" and ")} both set ${name} in their host block, so ${envFilePath()} sets neither; remove it from one`] : []));
+  const problems = [...setters].flatMap(([name, names]) => (names.length > 1 ? [`packages ${names.join(" and ")} both set ${name} in their host or system block, so ${envFilePath()} sets neither; remove it from one`] : []));
   const variables: [string, string][] = Object.entries(releaseAgeVariables);
   const path = [...(office.socketFirewall ? [hostWrappers()] : []), miseShims(), opencodeBin()];
 

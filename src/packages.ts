@@ -447,6 +447,10 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
     const gate = manifest.host?.setting;
 
     if (gate !== undefined && !v.is(v.boolean(), settings[gate])) errors.push(`${entry.name}.settings.${gate}: host.setting requires a boolean`);
+
+    const systemGate = manifest.system?.setting;
+
+    if (systemGate !== undefined && !v.is(v.boolean(), settings[systemGate])) errors.push(`${entry.name}.settings.${systemGate}: system.setting requires a boolean`);
   } else {
     for (const [key, value] of Object.entries(settings)) {
       if (!accepted.includes(key)) errors.push(`settings.${key}: ${entry.name} has no such setting (it accepts ${accepted.join(", ") || "none"}); remove it from the entry in office.yaml`);
