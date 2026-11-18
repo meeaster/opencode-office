@@ -99,7 +99,7 @@ pre-commit install
 |---|---|
 | `src/` | The CLI in TypeScript on Bun: `cli.ts` (arguments), `schema.ts` (the shape of `office.yaml`, `office.lock` and a package's `package.yaml`, shared with the `office` package's plugin), `office.ts` (reads `office.yaml`), `versions.ts` (pins, the lock, what was applied), `sfw.ts` (Socket Firewall: what is wrapped, the wrappers and the environment file), `host-env.ts` (a host-mode office's environment file and sfw folder), `host-tools.ts` (the programs the CLI runs on the host: its own mise, and the office package's tools), `hook.ts` (git's pre-commit hook in an office), `releases.ts` (release lookups on GitHub and the registry), `layout.ts` (what the folders should hold), `packages.ts` (the three kinds of package; installs, updates, restores and reads them), `package-services.ts` (the services packages add: validation, generated secrets, the applied copies), `migrate.ts` (moves an office from an earlier release's layout), `desktop.ts` (installs package panels on the desktop app's machine), `tool.ts` (the tool's own files, the built-in packages as offices get them, its version, the image's build folder), `build.ts` (compiles the executable), `vendor-artifact-share.ts` (regenerates the libraries the artifact-share package carries, from pinned devDependencies), `commands/` and `cron/` (`container.ts` for supercronic, `host.ts` for systemd timers). Runtime dependencies: `yaml` and `valibot` |
 | `bin/office` | Runs the CLI from the checkout with Bun |
-| `template/office/` | What `office init` copies once: `AGENTS.md`, `README.md`, `office.yaml`, `.opencode/opencode.jsonc`, `executor-apps/opencode/`, `cron/`, `mise.toml` (node), `machine.toml` (empty), `.pre-commit-config.yaml` (gitleaks), `.gitignore` |
+| `template/office/` | What `office init` copies once: `AGENTS.md`, `README.md`, `office.yaml`, `.opencode/opencode.jsonc`, `executor-apps/opencode/`, `mise.toml` (node), `machine.toml` (empty), `.pre-commit-config.yaml` (gitleaks), `.gitignore` |
 | `template/desk/` | What `office sync` scaffolds for a new desk, including its starter Executor app, which a desk with `app: false` in `office.yaml` goes without |
 | `packages/` | The built-in packages, embedded in the executable (see "Packages"): `office`, which every office has, and `knowledge`, `artifact-share`, `design` and `browser`. `packages/office/plugin/` is the source of the `office` package's plugin, with `instructions.ts`, which `office instructions` also runs; offices get it bundled with what it imports into one `plugin/index.js` |
 | `image/Dockerfile` | The base image: Debian 13 with OpenCode, Claude Code, mise and Socket Firewall at the office's versions and checksums (build arguments), sfw's wrappers (`office sfw-wrappers`), supercronic pinned by the tool, build tools, Chromium (with `AGENT_BROWSER_EXECUTABLE_PATH` pointing agent-browser at it) and the compiled `office`. Its apt layer upgrades Debian's packages as of the office's last refresh (the `APT_REFRESH` build argument). User `office`, uid 1000 |
@@ -271,12 +271,12 @@ Declare office-owned jobs by name in `office.yaml`:
 
 ```yaml
 cron:
-  update-references:
+  daily-report:
     schedule: '0 6 * * *'
-    script: cron/update-references.sh
+    script: cron/daily-report.sh
 ```
 
-Schedules are five-field UTC cron expressions or time macros such as `@daily`. The script must be a regular `.sh` file relative to its declaring office or package, with no symlinks. All jobs run under `/bin/sh` from the office root. `office cron list` shows IDs such as `office.update-references` and `package.<package>.<job>`; use `office cron run <job-id>` to run one directly in the execution environment you intend. Keep the job name when renaming its script: the ID tracks the job across renames.
+Schedules are five-field UTC cron expressions or time macros such as `@daily`. The script must be a regular `.sh` file relative to its declaring office or package, with no symlinks. All jobs run under `/bin/sh` from the office root. `office cron list` shows IDs such as `office.daily-report` and `package.office.update-references`; use `office cron run <job-id>` to run one directly in the execution environment you intend. Keep the job name when renaming its script: the ID tracks the job across renames.
 
 A package's `package.yaml` uses the same `cron:` mapping. A package job may also set `when: host`, `when: managed-host`, or `when: container`; omitting `when` makes it applicable in both modes. An office may change a package's schedule or disable a job under that package entry's `cron:` (alongside `settings`), for example:
 
@@ -293,10 +293,10 @@ In host mode, `office up` installs systemd user timers named `office-<name>-cron
 
 In container mode, the entrypoint generates the supercronic input in UTC. It first runs each due job once, including jobs with no successful run. Successful executions leave a stamp per qualified job ID under `$XDG_STATE_HOME/office/cron/<office>` (by default `~/.local/state/office/cron/<office>` in the home volume). `office up` recreates the container when its generated schedule changes.
 
-The template ships two jobs:
+The required `office` package supplies these daily jobs in both modes (plus `package.office.update-agent-clis` on managed hosts):
 
-- `cron/update-references.sh` (06:00): `office sync --references`.
-- `cron/upgrade-tools.sh` (06:30): `office upgrade-tools`.
+- `package.office.update-references` (06:00 UTC): `office sync --references`.
+- `package.office.upgrade-tools` (06:30 UTC): `office upgrade-tools`.
   - For each exact pin in the root's and each desk's `mise.toml`, `machine.toml` and the packages' fragments in `.office/mise/` (never a clone's), it asks `mise latest <tool> --minimum-release-age <age>` for the newest version at least that old and installs it; only after the install succeeds does it rewrite the pin, and a failed install keeps the old one.
   - For the five versions in `office.yaml`, it reads each project's newest hundred GitHub releases without a login, keeps the line the office runs (`v<semver>` tags for OpenCode, Claude Code, mise and sfw; Executor's `executor@2.…` pre-releases, not its v1 line), drops releases younger than the age, and takes the highest version, never a lower one than the pin. It confirms the release file, or Executor's image on ghcr.io, exists, then rewrites only those version lines in `office.yaml` and `office.lock`. A failed lookup (GitHub's rate limit, no network) skips that tool and is reported. It never rebuilds or restarts anything.
   - Ages come from `upgrades` in `office.yaml`: a tool's own, else `minimum_release_age`, else a day; sfw, in the path of every package download, waits at least three days unless it has its own.

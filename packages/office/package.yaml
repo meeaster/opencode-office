@@ -1,6 +1,12 @@
 name: office
 description: What every office needs from OpenCode, given by its plugin; the guidance for a session's folder, the office skill and the office-executor MCP server; and the tools the office CLI itself runs.
 cron:
+  update-references:
+    schedule: '0 6 * * *'
+    script: scripts/update-references.sh
+  upgrade-tools:
+    schedule: '30 6 * * *'
+    script: scripts/upgrade-tools.sh
   update-agent-clis:
     schedule: '30 7 * * *'
     script: scripts/update-agent-clis.sh

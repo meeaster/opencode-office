@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
@@ -62,7 +62,7 @@ function fixture(): void {
 
   mkdirSync(join(pkg, "scripts"), { recursive: true });
   copyFileSync(join(import.meta.dir, "../../packages/office/package.yaml"), join(pkg, "package.yaml"));
-  copyFileSync(join(import.meta.dir, "../../packages/office/scripts/update-agent-clis.sh"), join(pkg, "scripts/update-agent-clis.sh"));
+  cpSync(join(import.meta.dir, "../../packages/office/scripts"), join(pkg, "scripts"), { recursive: true });
 
   const place = shellQuote(root);
 
@@ -161,12 +161,12 @@ function calls(): string[] {
 
 test.skipIf(process.platform !== "linux")("manual package job screens the native update, restarts only for changed OpenCode and verifies the new PID", async () => {
   fixture();
-  expect((await result(job("list"))).out.trim()).toBe(agentUpdateJob);
+  expect((await result(job("list"))).out.trim().split("\n")).toContain(agentUpdateJob);
   const office = loadOffice(root);
   const vars = Object.fromEntries(hostEnvironment(office, []).environment.variables);
 
   expect(vars).toMatchObject({ DISABLE_AUTOUPDATER: "1", OPENCODE_DISABLE_AUTOUPDATE: "1", NPM_CONFIG_MIN_RELEASE_AGE: "3" });
-  expect(cronTimers(office, requireJobs(office))[0].calendar).toBe("*-*-* 07:30:00 UTC");
+  expect(cronTimers(office, requireJobs(office)).find((timer) => timer.description === agentUpdateJob)?.calendar).toBe("*-*-* 07:30:00 UTC");
   write("claude-next", "");
   const unchanged = await result();
 
@@ -189,9 +189,9 @@ test.skipIf(process.platform !== "linux")("the package schedule can change, but 
 
   const office = loadOffice(root);
 
-  expect(cronTimers(office, requireJobs(office))[0].calendar).toBe("*-*-* 09:15:00 UTC");
+  expect(cronTimers(office, requireJobs(office)).find((timer) => timer.description === agentUpdateJob)?.calendar).toBe("*-*-* 09:15:00 UTC");
   write("office.yaml", yaml.replace(", managed: true", "") + override);
-  expect((await result(job("list"))).out.trim()).toBe("");
+  expect((await result(job("list"))).out.trim().split("\n").sort()).toEqual(["package.office.update-references", "package.office.upgrade-tools"]);
   expect(Object.fromEntries(hostEnvironment(loadOffice(root), []).environment.variables)).not.toHaveProperty("DISABLE_AUTOUPDATER");
   expect(calls()).toEqual([]);
 });
