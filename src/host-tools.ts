@@ -27,7 +27,7 @@ import { parse } from "yaml";
 import { fetchBytes } from "./download.ts";
 import { toolPins } from "./mise-toml.ts";
 import { type Office, OfficeError } from "./office.ts";
-import { fragmentPath } from "./package-tools.ts";
+import { cliToolsPackage, fragmentPath } from "./package-tools.ts";
 import { newestRelease, type Candidate } from "./releases.ts";
 import { check, packageManifestSchema } from "./schema.ts";
 import { toolPath } from "./tool.ts";
@@ -66,9 +66,6 @@ export function officeToolNamed(key: string): string | undefined {
 
   return Object.entries(repositories).find(([tool, repository]) => name === tool || name === `pypi:${tool}` || name === repository || name.endsWith(`:${repository}`))?.[0];
 }
-
-/** The package whose tools the CLI runs. */
-const officePackage = "office";
 
 export function hostToolsRoot(): string {
   return join(process.env.XDG_DATA_HOME ?? join(homedir(), ".local/share"), "office/host-tools");
@@ -160,14 +157,14 @@ function newestMiseInstall(mise: string, command: OfficeCommand): InstalledTool 
 
 /** The versions `.office/mise/office.toml` pins, by tool: the office's own choice. */
 export function officePins(office: Office): Record<string, string> {
-  const path = fragmentPath(office, officePackage);
+  const path = fragmentPath(office, cliToolsPackage);
 
   return existsSync(path) ? Object.fromEntries(toolPins(readFileSync(path, "utf8")).map((pin) => [pin.tool, pin.version])) : {};
 }
 
 /** The versions this executable's office package starts its tools at. */
 export function startingVersions(): Record<string, string> {
-  const result = check(v.safeParse(packageManifestSchema, parse(readFileSync(toolPath(`packages/${officePackage}/package.yaml`), "utf8"))));
+  const result = check(v.safeParse(packageManifestSchema, parse(readFileSync(toolPath(`packages/${cliToolsPackage}/package.yaml`), "utf8"))));
 
   if (!result.ok) throw new OfficeError(`the office package's package.yaml doesn't read: ${result.errors.join("; ")}`);
 

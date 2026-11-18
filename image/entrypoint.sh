@@ -65,9 +65,9 @@ export OFFICE_EXECUTOR_TOKEN="${OFFICE_EXECUTOR_TOKEN:-${EXECUTOR_TOKEN:-}}"
 # The office's machine-wide mise files apply in every folder, as they do on a host-mode office's
 # machine; mise loads them only through links in its global conf.d in the home volume, named
 # office-<name>-…toml: each package's fragment in .office/mise/ (a file office sync wrote, by its
-# first line), the required office package's first, and the office's own machine.toml last, so it
-# wins (src/machine.ts names them the same way). Links from an earlier start go first, so a removed
-# file leaves none behind.
+# first line), the office package's first (the tools the office CLI runs), and the office's own
+# machine.toml last, so it wins (src/machine.ts names them the same way). Links from an earlier
+# start go first, so a removed file leaves none behind.
 conf_d="${MISE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/mise}/conf.d"
 mkdir -p "$conf_d"
 find "$conf_d" -maxdepth 1 -type l -name 'office-*.toml' -delete

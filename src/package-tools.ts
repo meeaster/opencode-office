@@ -24,6 +24,9 @@ import type { InstalledPackage } from "./packages.ts";
 /** Where sync writes packages' fragments: in the tool's `.office/`, where mise loads nothing by itself. */
 export const fragmentsFolder = ".office/mise";
 
+/** The package whose tools are the ones the office CLI itself runs: SOPS, age, gh and pre-commit (src/host-tools.ts). */
+export const cliToolsPackage = "office";
+
 /** The office's own machine-wide mise file, at its root, which mise doesn't load by itself either. */
 export const machineFile = "machine.toml";
 

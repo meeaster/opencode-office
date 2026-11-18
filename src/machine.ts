@@ -38,8 +38,7 @@ import { envFilePath, hostEnvironment, hostLayout, hostWrappers, realMise } from
 import { installedPackages } from "./layout.ts";
 import { oldFragments, oldMiseFiles } from "./migrate.ts";
 import { type Office, OfficeError, readConfig } from "./office.ts";
-import { fragmentOwner, machineFile, machineFiles } from "./package-tools.ts";
-import { requiredPackages } from "./packages.ts";
+import { cliToolsPackage, fragmentOwner, machineFile, machineFiles } from "./package-tools.ts";
 import { platformAsset } from "./releases.ts";
 import { check, type Lock } from "./schema.ts";
 import { envScript, wrapperFiles } from "./sfw.ts";
@@ -177,16 +176,17 @@ export function grantConsent(office: Office): string {
 }
 
 /**
- * A link's name in the global conf.d, where mise loads files by name and the last wins: the
- * required packages' fragments first (the office CLI's own tools, the base every office has), then
- * the other packages', then machine.toml, so the owner's choices win over every package's.
+ * A link's name in the global conf.d, where mise loads files by name and the last wins: the office
+ * package's fragment first (the tools the office CLI itself runs, the base every office has), then
+ * the other packages', then machine.toml, so the owner's choices win over every package's. The
+ * container's entrypoint names them the same way.
  */
 export function linkName(office: Office, file: string): string {
   if (file === join(office.dir, machineFile)) return `office-${office.name}-2-machine.toml`;
 
   const name = basename(file, ".toml");
 
-  return `office-${office.name}-${requiredPackages.includes(name) ? 0 : 1}-${name}.toml`;
+  return `office-${office.name}-${name === cliToolsPackage ? 0 : 1}-${name}.toml`;
 }
 
 type LinkFile = Extract<MachineFile, { kind: "link" }>;
