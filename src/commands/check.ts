@@ -3,7 +3,8 @@
 // containers are running, whether Executor is ready, each desk loads what it should on the OpenCode
 // server of the office's mode, the container runs the host's `office`, the cron jobs are
 // scheduled (supercronic, or the host's timers), and in container mode the image refresh timer is
-// active and the image's Debian packages are recent.
+// active and the image's Debian packages are recent. Last, for information, what sessions load from
+// outside the office (the session's home, folders above the office).
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -26,6 +27,7 @@ import { wrappedCommands } from "../sfw.ts";
 import { toolPins } from "../mise-toml.ts";
 import { fragmentNotes, machineFile, orphanFragments, strayFragments } from "../package-tools.ts";
 import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
+import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces, shadowing, withLoaded } from "../outside.ts";
 import { pinnedTools } from "../schema.ts";
 import { builtinFiles, builtinPackages, version } from "../tool.ts";
 import { changes, defaultPins, describeMove, executorImage, isTested, lockFile, lockLacksSfw, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
@@ -363,7 +365,10 @@ type Listing<Item> = { data: Item[] };
 
 type McpServer = { name: string; status: { status: string; error?: string } };
 
-type LoadedPlugin = { source: { type: string; path?: string }; state: { status: string; error?: string } };
+type LoadedPlugin = { id: string; source: { type: string; path?: string }; state: { status: string; error?: string } };
+
+/** The root session's skills and plugins as the server listed them. */
+type RootAnswer = { skills: { id: string; path: string }[]; plugins: LoadedPlugin[] };
 
 async function getJson<Result>(url: string, headers: Record<string, string> = {}): Promise<Result> {
   const response = await fetch(url, { headers, signal: AbortSignal.timeout(10_000) });
@@ -538,14 +543,16 @@ function servicesRunning(office: Office): string[] {
   return compose(office, ["ps", "--status", "running", "--format", "{{.Service}}"], { capture: true, profiles: "container" }).split("\n").filter(Boolean);
 }
 
-async function runtime(office: Office, report: Report): Promise<void> {
+/** The runtime checks; returns the root session's skills and plugins when the server listed them. */
+async function runtime(office: Office, report: Report): Promise<RootAnswer | undefined> {
   const running = servicesRunning(office);
+  let root: RootAnswer | undefined;
 
   if (!running.includes("opencode") && !running.includes("executor")) {
     report(true, "containers", `not running (start them with office up)`);
     gitChecks(office, report, false);
 
-    return;
+    return undefined;
   }
 
   report(office.opencode.mode === "container" || !running.includes("opencode"), "containers", `running: ${running.join(", ")}${office.opencode.mode === "host" ? ` (OpenCode on the host at ${office.opencode.url})` : ""}`);
@@ -581,7 +588,8 @@ async function runtime(office: Office, report: Report): Promise<void> {
 
       report(agents.data.length > 0, `${where}: agents`, agents.data.map((agent) => agent.id).join(", "));
 
-      const loaded = new Set((await getJson<Listing<{ id: string }>>(`${opencode}/api/skill`, headers)).data.map((skill) => skill.id));
+      const skills = (await getJson<Listing<{ id: string; path: string }>>(`${opencode}/api/skill`, headers)).data;
+      const loaded = new Set(skills.map((skill) => skill.id));
       const { expected, forbidden } = expectedSkills(office, desk);
       const missing = expected.filter((skill) => !loaded.has(skill));
       const leaked = forbidden.filter((skill) => loaded.has(skill));
@@ -601,7 +609,11 @@ async function runtime(office: Office, report: Report): Promise<void> {
       const byName = (answer: Listing<LoadedPlugin>) =>
         new Map(answer.data.flatMap(({ source, state }) => (source.type === "local" && source.path?.startsWith(folder) ? [[source.path.slice(folder.length), state] as const] : [])));
 
-      const states = byName(await settle(() => getJson<Listing<LoadedPlugin>>(`${opencode}/api/plugin`, headers), (answer) => plugins.every((name) => byName(answer).has(name))));
+      const pluginAnswer = await settle(() => getJson<Listing<LoadedPlugin>>(`${opencode}/api/plugin`, headers), (answer) => plugins.every((name) => byName(answer).has(name)));
+      const states = byName(pluginAnswer);
+
+      // What loads from outside is the same in every desk, so the root's answer stands for all.
+      if (desk === undefined) root = { skills, plugins: pluginAnswer.data };
 
       const pluginProblems = plugins.flatMap((name) => {
         const state = states.get(name);
@@ -634,6 +646,8 @@ async function runtime(office: Office, report: Report): Promise<void> {
   if (hasToken && health === 200) await appFrameworks(office, report);
 
   cron(office, report, running);
+
+  return root;
 }
 
 /** Whether Executor accepts the office's key, which OpenCode and the office's services use. */
@@ -847,6 +861,58 @@ function gitChecks(office: Office, report: Report, running: boolean): void {
   }
 }
 
+/**
+ * What sessions load from outside the office, for information: never a failure. Skills and plugins
+ * come from the server's answer when there is one, the rest from reading the session's home. The
+ * one warning is an outside skill or plugin with the name of one the office provides.
+ */
+function outsideSection(office: Office, report: Report, root: RootAnswer | undefined): void {
+  const places = sessionPlaces(office);
+  const onHost = (path: string) => places.fromSession(path);
+
+  const loaded: Loaded | undefined =
+    root === undefined
+      ? undefined
+      : {
+          // Built-in and plugin-embedded skills have skill:// paths.
+          skills: new Map(
+            root.skills.flatMap((skill) => {
+              const path = skill.path.includes("://") ? undefined : onHost(skill.path);
+
+              return path === undefined ? [] : [[skill.id, path] as const];
+            }),
+          ),
+          plugins: root.plugins.flatMap(({ id, source, state }) => {
+            const path = source.type === "local" && source.path !== undefined ? onHost(source.path) : undefined;
+
+            return path === undefined ? [] : [{ id, path, active: state.status === "active" }];
+          }),
+        };
+
+  const scanned = scanOutside(places);
+  const items = loaded === undefined ? scanned : withLoaded(scanned, loaded, office.dir);
+  const lines = describeOutside(items, places.home);
+  const source = loaded === undefined ? "read from the folders" : "skills and plugins as the server reports loading them, the rest read from the folders";
+
+  if (lines.length === 0) console.log(`info outside the office: nothing in ${places.label} or above the office that sessions here load`);
+  else console.log(`info outside the office: sessions here also load these from ${places.label} or above the office (${source}); listed for information`);
+
+  for (const line of lines) console.log(`     - ${line}`);
+
+  const installed = installedPackages(office);
+
+  const provided: Provided = {
+    skills: new Map([
+      ...skillSelections(office).flatMap((selection) => selection.folders.map((id) => [id, `the office's skill ${relative(office.dir, join(selection.folder, id))}`] as const)),
+      ...library(office).map((id) => [id, `the office's library skill skills/${id}`] as const),
+      ...installed.installed.flatMap((item) => (item.plugin ? item.skills.map((id) => [id, `package ${item.entry.name}'s skill`] as const) : [])),
+    ]),
+    plugins: new Map([...installed.plugins.keys()].map((name) => [name, `package ${name}'s plugin`])),
+  };
+
+  for (const warning of shadowing(items, provided, places.home, loaded)) report("warn", "outside the office", warning);
+}
+
 /** Prints each check; returns whether all passed. */
 export async function check(office: Office): Promise<boolean> {
   let passed = true;
@@ -892,7 +958,7 @@ export async function check(office: Office): Promise<boolean> {
   report(apps.length > 0, "Executor apps", apps.map((app) => relative(office.dir, app.dir)).join(", ") || "none");
 
   versionChecks(office, report);
-  await runtime(office, report);
+  outsideSection(office, report, await runtime(office, report));
 
   return passed;
 }
