@@ -1,9 +1,11 @@
 // `office shell` and `office exec`: a shell, or one command, in the running opencode container as
 // its user, in the container folder matching the one they were run from, with the container's
-// persistent home and mise's tools. They never start or rebuild anything.
+// persistent home, mise's tools and the office's environment (the Socket Firewall wrappers first on
+// PATH). They never start or rebuild anything.
 import { isAbsolute, relative, resolve } from "node:path";
 
 import { containerOfficeDir, type Office, OfficeError } from "../office.ts";
+import { containerEnvFile } from "../sfw.ts";
 import { compose, composeAttached } from "./compose.ts";
 
 /** The container folder for a host folder: the same place in the office, else the office root. */
@@ -26,6 +28,9 @@ export function runInContainer(office: Office, command: string[] | undefined, fo
   // A terminal only when both ends are one, so piped output carries no terminal codes.
   const terminal = process.stdin.isTTY && process.stdout.isTTY;
 
-  // bash, not a login shell: Debian's /etc/profile would replace the PATH that puts mise's shims first.
-  return composeAttached(office, ["exec", ...(terminal ? [] : ["-T"]), "--user", "office", "--workdir", containerFolder(office, folder), "opencode", ...(command ?? ["bash"])]);
+  // bash, not a login shell: Debian's /etc/profile would replace the PATH that puts mise's shims
+  // first. docker exec skips the entrypoint, so the command sources the environment file it wrote.
+  const run = ["sh", "-c", `. ${containerEnvFile} 2>/dev/null; exec "$@"`, "sh", ...(command ?? ["bash"])];
+
+  return composeAttached(office, ["exec", ...(terminal ? [] : ["-T"]), "--user", "office", "--workdir", containerFolder(office, folder), "opencode", ...run]);
 }

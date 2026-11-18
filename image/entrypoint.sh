@@ -1,9 +1,19 @@
 #!/bin/sh
-# Starts an office's opencode container: writes the machine note, installs the tools the office's
-# mise.toml files declare, starts the office's cron jobs, then runs the command (OpenCode).
+# Starts an office's opencode container: writes the office's environment and the machine note,
+# installs the tools the office's mise.toml files declare, starts the office's cron jobs, then runs
+# the command (OpenCode).
 set -eu
 
 office=/home/office/workspace
+
+# The office's environment, for OpenCode, its agents' commands, the cron jobs and the installs
+# below: Socket Firewall's wrappers first on PATH unless office.yaml sets socket_firewall: false,
+# and package managers' minimum release ages. `office exec`, `office shell` and interactive bash
+# shells source the same file. An office.yaml that doesn't read gets the defaults.
+env_file=/etc/opencode/env.sh
+office env --container --office "$office" > "$env_file.new" && mv "$env_file.new" "$env_file"
+# shellcheck source=/dev/null
+. "$env_file"
 
 # Before OpenCode opens its database: sessions stored while the home was /home/assistant move to
 # /home/office. A failure stops here, so OpenCode never starts beside half-moved sessions.
@@ -28,6 +38,13 @@ for host in $(printf '%s' "${OFFICE_GH_HOSTS:-}" | tr ',' ' '); do
   gh_note="- HTTPS git remotes on ${OFFICE_GH_HOSTS} authenticate through \`gh\` (pinned in the office's \`mise.toml\`) with the user's GitHub login, shared read-only from the host, so fetch, pull and push work. Never run \`gh auth login\`, \`logout\` or \`switch\` here: the user manages that login on the host."
 done
 
+sfw_note='- Package managers take only releases at least three days old. Socket Firewall is off (`socket_firewall: false` in `office.yaml`).'
+case ":$PATH:" in
+  *:/usr/local/lib/office/sfw/bin:*)
+    sfw_note='- Package downloads go through Socket Firewall (`sfw`), which refuses packages Socket knows to be malicious: `npm`, `npx`, `pnpm`, `pip`, `pip3`, `uv`, `uvx` and `cargo` are wrappers that run `sfw <command>`, and `mise install`, `use` and `upgrade` run behind it too. A refused package is Socket'"'"'s verdict: never route around the wrappers (calling a real binary by its path, another registry); tell the user. Package managers take only releases at least three days old.'
+    ;;
+esac
+
 # Where the agent is running; /etc/opencode/opencode.jsonc loads this as an instruction.
 cat > /etc/opencode/machine.md <<EOF
 # Machine
@@ -37,6 +54,7 @@ cat > /etc/opencode/machine.md <<EOF
 - Executor is at http://executor:4400 on the container network; the user opens its dashboard at ${OFFICE_EXECUTOR_DASHBOARD:-http://localhost:41440}.
 - Pass \`--server http://127.0.0.1:4096\` to every \`opencode\` command, so it uses this container's server (its password is in \`OPENCODE_PASSWORD\`); without it most commands start a second server on the same database. Never run \`opencode service\`.
 - When an Executor tool returns an approval link, give the user the link and wait for them to approve before resuming.
+${sfw_note}
 ${git_note}
 ${gh_note}
 EOF
@@ -60,7 +78,8 @@ if [ -f "$office/machine.toml" ]; then
   ln -s "$office/machine.toml" "$conf_d/office-${OFFICE_NAME:-unnamed}-2-machine.toml"
 fi
 
-# A failed install (offline, a typo) must not keep OpenCode from starting. The machine-wide tools
+# A failed install (offline, a typo) must not keep OpenCode from starting. Each `mise install` goes
+# through Socket Firewall, as mise is the wrapper first on PATH when it is on. The machine-wide tools
 # install from the filesystem root, where only global config applies, since a mise.toml in the
 # office may pin the same tool at another version.
 for config in "$office/mise.toml" "$office"/*/mise.toml; do

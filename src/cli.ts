@@ -10,6 +10,7 @@ import { officeInstructions } from "../packages/office/plugin/instructions.ts";
 import { deploy } from "./commands/apps.ts";
 import { check } from "./commands/check.ts";
 import { down, up } from "./commands/compose.ts";
+import { containerEnvText } from "./commands/env.ts";
 import { credentials } from "./commands/executor.ts";
 import { guiDev } from "./commands/gui.ts";
 import { init } from "./commands/init.ts";
@@ -23,8 +24,9 @@ import { upgradeTools } from "./commands/upgrade.ts";
 import { catchUp, runJob, wrappedCrontab } from "./cron/container.ts";
 import { migrateHome } from "./home-migration.ts";
 import { releaseMachine } from "./machine.ts";
-import { currentOffice, findOffice, OfficeError } from "./office.ts";
+import { currentOffice, findOffice, type Office, OfficeError } from "./office.ts";
 import { age } from "./schema.ts";
+import { writeContainerWrappers } from "./sfw.ts";
 import { version } from "./tool.ts";
 
 const usage = `usage: office <command> [--office <dir>]
@@ -73,6 +75,10 @@ const usage = `usage: office <command> [--office <dir>]
                                jobs missed since their last success, or run one job and stamp it
   migrate-home                 the container's start: move sessions and logins stored under
                                /home/assistant, the old home, to this home
+  env --container              print the opencode container's environment file: the Socket
+                               Firewall wrappers on PATH and package managers' release ages
+  sfw-wrappers                 the image's build: write the Socket Firewall wrappers into
+                               /usr/local/lib/office/sfw
 
   --version                    print the version and the commit this office was built from
 
@@ -135,6 +141,7 @@ async function main(): Promise<void> {
       references: { type: "boolean" },
       upgrade: { type: "boolean" },
       refresh: { type: "boolean" },
+      container: { type: "boolean" },
       origin: { type: "string" },
       version: { type: "boolean" },
       help: { type: "boolean", short: "h" },
@@ -211,6 +218,10 @@ async function main(): Promise<void> {
     else if (rest[0] === "catch-up") catchUp(dir, text);
     else if (rest[0] === "run" && rest[1] !== undefined) process.exitCode = runJob(dir, rest.slice(1).join(" "));
     else throw new OfficeError("usage: office cron crontab | catch-up | run <command>");
+  } else if (command === "env" && flags.container === true) {
+    process.stdout.write(containerEnvText(containerOffice(flags)));
+  } else if (command === "sfw-wrappers") {
+    for (const path of writeContainerWrappers()) console.log(`office: wrote ${path}`);
   } else if (command === "migrate-home") {
     for (const line of migrateHome(homedir())) console.log(`office: ${line}`);
   } else if (command === "apps" && rest[0] === "deploy") {
@@ -222,6 +233,20 @@ async function main(): Promise<void> {
   } else {
     console.error(usage);
     process.exitCode = 2;
+  }
+}
+
+/**
+ * The office the container runs, for its environment file. At image build there is none, and an
+ * office.yaml that doesn't read must not keep the container from starting, so both get the defaults.
+ */
+function containerOffice(flags: { office?: string }): Office | undefined {
+  try {
+    return currentOffice(flags);
+  } catch (error) {
+    if (flags.office !== undefined) console.error(`office: ${error instanceof Error ? error.message : String(error)}; the container's environment takes the defaults, with the Socket Firewall on`);
+
+    return undefined;
   }
 }
 
