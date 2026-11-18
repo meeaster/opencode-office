@@ -1,0 +1,9 @@
+# This office's machine-wide mise config: tools, at exact versions, and settings it wants on the
+# whole machine rather than only in the office. It is the office's own file, edited freely; office
+# sync never rewrites it, and office upgrade-tools bumps its exact versions as it does mise.toml's.
+#
+# The other files in this folder are packages' fragments, whose tool lists office sync owns. In a
+# host-mode office, office sync links each file here into mise's global conf.d (once office setup
+# has your yes), and this one last, so it wins over the packages' there; the container links them
+# inside itself. In a folder with a mise.toml (the office's, a desk's, a project's), that file wins.
+[tools]

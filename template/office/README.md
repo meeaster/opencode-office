@@ -25,6 +25,7 @@ Portable owner credentials are SOPS-encrypted in `secrets/executor-owner.enc.jso
 | `packages/` | Packages written in this office |
 | `knowledge/` | Articles every session sees listed, through the `knowledge` package |
 | `mise.toml` | Tools every desk gets; a desk's own `mise.toml` adds more |
+| `.mise/conf.d/` | Machine-wide tools: `machine.toml` is the office's own, and `<package>.toml` holds a package's tools, whose list `office sync` owns. In host mode, once you agree in `office setup`, sync links each into mise's global conf.d so they apply in every folder; the container does the same inside itself |
 | `executor/apps/` | Executor apps the whole office shares, such as `opencode` (start a session and wait for it) |
 | `cron/` | `crontab` and the scripts it runs, for jobs that need the file system: in the container, or as systemd user timers in host mode. A job missed while the computer was off runs at the next start. `upgrade-tools.sh` commits daily bumps of the `mise.toml` pins as the office's git identity, else `office cron`; revert such a commit to undo it |
 | `references/` | Read-only clones, gitignored |
