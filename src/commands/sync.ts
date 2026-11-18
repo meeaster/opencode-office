@@ -2,8 +2,9 @@
 // moves an office from an earlier release's layout (src/migrate.ts), scaffolds desks that are
 // declared but missing, copies declared skills into the library, installs, updates, restores and
 // removes packages, writes the mise tools packages declare into the office's .mise/conf.d/
-// (src/package-tools.ts), links enabled library skills and package plugins, and installs package
-// panels on the desktop app's machine. A package's skills aren't linked: its plugin registers them, so sync
+// (src/package-tools.ts) and, in a host-mode office the user agreed may manage its machine, links
+// them into mise's global conf.d (src/machine.ts), links enabled library skills and package plugins,
+// and installs package panels on the desktop app's machine. A package's skills aren't linked: its plugin registers them, so sync
 // removes the links earlier releases made.
 // It never rewrites AGENTS.md, other hand-written content, an existing app or a file a package's
 // template created; it deletes such a file only with its package, and only while unchanged.
@@ -11,6 +12,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlin
 import { join, relative } from "node:path";
 
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
+import { syncMachine } from "../machine.ts";
 import { cloneOrFetch, cloneShallow, copyFromRepository, isClone, refreshClone } from "../git.ts";
 import { clones, installedPackages, oldKnowledgePlugin, packageLink, pluginLinks, skillSelections } from "../layout.ts";
 import { migrate } from "../migrate.ts";
@@ -262,6 +264,7 @@ export async function sync(loaded: Office, { referencesOnly = false } = {}): Pro
   for (const item of installed.installed) changes.push(...installPackage(office, item));
 
   changes.push(...syncTools(office, installed.installed, packages.map((item) => item.entry.name)));
+  changes.push(...syncMachine(office));
 
   changes.push(...linkSkills(office));
   changes.push(...linkPlugins(office));

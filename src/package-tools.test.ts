@@ -226,7 +226,7 @@ test("a host-mode office with the switch on gets the host tools, the install hoo
     write(join(dir, "home/.local/bin/demo"), "");
 
     expect(notes()).toEqual({ ok: true, notes: ["tools jq, bun in .mise/conf.d/demo.toml", "Demo installed in ~/.local/bin/demo; it updates itself"] });
-    expect(await sync(loadOffice(office))).toEqual([]);
+    expect(await sync(loadOffice(office))).toEqual([expect.stringMatching(/^not linking .mise\/conf.d\//)]);
   } finally {
     process.env.HOME = home;
   }
@@ -238,7 +238,8 @@ test("switching to container mode or turning the setting off removes the host pa
   await sync(loadOffice(office));
   writeFileSync(fragment(), readFileSync(fragment(), "utf8").replace('"jq" = "1.7.1"', '"jq" = "1.8.0"'));
 
-  expect(await sync(loadOffice(office))).toEqual([]);
+  // Only the note that the office may not write outside its folder yet: nothing changed.
+  expect(await sync(loadOffice(office))).toEqual([expect.stringMatching(/^not linking .mise\/conf.d\//)]);
 
   mode("container");
 

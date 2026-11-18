@@ -116,7 +116,8 @@ const settingValue = v.union([v.string(), v.number(), v.boolean()], "must be tex
 const packageEntry = v.pipe(
   v.strictObject(
     {
-      name,
+      // `machine` is the office's own machine-wide mise fragment, .mise/conf.d/machine.toml.
+      name: v.pipe(name, v.check((value) => value !== "machine", "is reserved: .mise/conf.d/machine.toml is the office's own machine-wide mise file")),
       repo: v.optional(text),
       path: v.optional(text),
       ref: v.optional(text),

@@ -22,6 +22,7 @@ import { update } from "./commands/update.ts";
 import { upgradeTools } from "./commands/upgrade.ts";
 import { catchUp, runJob, wrappedCrontab } from "./cron/container.ts";
 import { migrateHome } from "./home-migration.ts";
+import { releaseMachine } from "./machine.ts";
 import { currentOffice, findOffice, OfficeError } from "./office.ts";
 import { age } from "./schema.ts";
 import { version } from "./tool.ts";
@@ -29,16 +30,21 @@ import { version } from "./tool.ts";
 const usage = `usage: office <command> [--office <dir>]
 
   init <dir> [--name <name>]   create an office from the template, with one example desk
-  setup [--owner-email <email>] [--generate-age-key] [--install-deps]
+  setup [--owner-email <email>] [--generate-age-key] [--install-deps] [--manage-machine]
                                guide resumable onboarding (explicit consent to create a host identity)
                                --install-deps authorizes host mise/SOPS/age (and gh) installs and
                                updates, using exact stable releases at least 3d old. office.yaml's
-                               git block declares the commit identity and GitHub (credentials: gh)
+                               git block declares the commit identity and GitHub (credentials: gh).
+                               --manage-machine lets a host-mode office link its tools into mise's
+                               global conf.d, as interactive setup asks
   executor credentials [--password-only]
                                deliberately reveal the stored encrypted owner login, even offline
-  sync [--references]          clone and update, scaffold missing desks, copy and link library
-                               skills, install, restore and link packages, install their panels
-                               on the desktop app's machine, migrate old layouts
+  sync [--references | --release-machine]
+                               clone and update, scaffold missing desks, copy and link library
+                               skills, install, restore and link packages, link a host-mode
+                               office's tools into mise's global conf.d, install panels on the
+                               desktop app's machine, migrate old layouts. --release-machine only
+                               removes every file the office wrote on this machine, and its consent
   check                        report drift from office.yaml and the tool, and the running
                                containers' state
   instructions [folder]        print the office guidance a session started in <folder> gets
@@ -123,6 +129,8 @@ async function main(): Promise<void> {
       "owner-email": { type: "string" },
       "generate-age-key": { type: "boolean" },
       "install-deps": { type: "boolean" },
+      "manage-machine": { type: "boolean" },
+      "release-machine": { type: "boolean" },
       "password-only": { type: "boolean" },
       references: { type: "boolean" },
       upgrade: { type: "boolean" },
@@ -161,7 +169,9 @@ async function main(): Promise<void> {
 
     if (text !== "") console.log(text);
   } else if (command === "sync") {
-    const changes = await sync(currentOffice(flags), { referencesOnly: flags.references === true });
+    if (flags["release-machine"] && flags.references) throw new OfficeError("usage: office sync [--references | --release-machine]");
+
+    const changes = flags["release-machine"] ? releaseMachine(currentOffice(flags)) : await sync(currentOffice(flags), { referencesOnly: flags.references === true });
 
     for (const line of changes) console.log(line);
 
@@ -173,7 +183,7 @@ async function main(): Promise<void> {
   } else if (command === "up") {
     await up(currentOffice(flags), { upgrade: flags.upgrade === true, refresh: flags.refresh === true });
   } else if (command === "setup") {
-    await setup(currentOffice(flags), { ownerEmail: flags["owner-email"], generateAgeKey: flags["generate-age-key"] === true, installDeps: flags["install-deps"] === true });
+    await setup(currentOffice(flags), { ownerEmail: flags["owner-email"], generateAgeKey: flags["generate-age-key"] === true, installDeps: flags["install-deps"] === true, manageMachine: flags["manage-machine"] === true });
   } else if (command === "shell") {
     if (rest.length > 0) throw new OfficeError("usage: office shell (to run a command: office exec -- <command...>)");
 

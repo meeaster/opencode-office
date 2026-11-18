@@ -8,6 +8,7 @@ import * as v from "valibot";
 import { git } from "../git.ts";
 import { githubStep, planGithub, unreachableSources } from "../github.ts";
 import { hostTool, onboardHostTools } from "../host-tools.ts";
+import { claim, consentCommand, consentQuestion, grantConsent, ownedElsewhere } from "../machine.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile, updateConfig } from "../office.ts";
 import { decrypt, encrypt, initializeIdentity, parsed, prepareSecrets, requireTool } from "../secrets.ts";
 import { deploy } from "./apps.ts";
@@ -20,6 +21,7 @@ type SetupOptions = {
   ownerEmail?: string;
   generateAgeKey: boolean;
   installDeps?: boolean;
+  manageMachine?: boolean;
 };
 
 async function question(text: string): Promise<string> {
@@ -92,6 +94,8 @@ export async function setup(initial: Office, options: SetupOptions): Promise<voi
   office = await commitIdentity(office, ask);
   office = await githubStep(office, github, ask);
 
+  await machineConsent(office, options.manageMachine === true, ask);
+
   // A login alone proves nothing: read every source as sync will, before cloning starts.
   const unreachable = unreachableSources(office);
 
@@ -133,6 +137,35 @@ export async function setup(initial: Office, options: SetupOptions): Promise<voi
   } else {
     console.log(`Provider authentication remains human-controlled: use /connect in OpenCode and /models. For Claude Agent in container mode: docker exec -it office-${office.name}-opencode-1 claude auth login, then connect Claude Agent in OpenCode. Other provider logins are independent.`);
   }
+}
+
+/**
+ * A host-mode office manages its machine, writing files outside its folder (links in mise's global
+ * conf.d), only once the user says yes: here, or with --manage-machine unattended. The yes is the
+ * machine record itself, which names this office; without it sync writes nothing there and says
+ * so. Refusing or skipping goes on with setup.
+ */
+async function machineConsent(office: Office, granted: boolean, ask: ((text: string) => Promise<string>) | undefined): Promise<void> {
+  if (office.opencode.mode !== "host") return;
+
+  const current = claim(office);
+
+  if (current.kind === "other") {
+    console.log(`Machine: ${ownedElsewhere(current.record)}`);
+
+    return;
+  }
+
+  if (current.kind === "ours" || granted) {
+    console.log(grantConsent(office));
+
+    return;
+  }
+
+  const answer = ask === undefined ? "unattended" : await ask(consentQuestion(office));
+
+  if (answer === "yes") console.log(grantConsent(office));
+  else console.log(`Machine: office ${office.name} writes nothing outside its folder, so its tools apply only inside it; to allow it later, run ${consentCommand}`);
 }
 
 function globalGit(key: string): string | undefined {

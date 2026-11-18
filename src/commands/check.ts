@@ -15,6 +15,7 @@ import { clones, installedPackages, library, oldKnowledgePlugin, pluginLinks, sk
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, pulledLocalFolders } from "../migrate.ts";
 import { executorEnvFile, type Office, readEnvFile } from "../office.ts";
 import { packageComposeFile, serviceStatus, sharedNamespaces } from "../package-services.ts";
+import { machineReport } from "../machine.ts";
 import { fragmentNotes, orphanFragments } from "../package-tools.ts";
 import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
 import { pinnedTools } from "../schema.ts";
@@ -728,6 +729,9 @@ export async function check(office: Office): Promise<boolean> {
   for (const problem of problems) console.log(`     - ${problem}`);
 
   await packageChecks(office, report);
+
+  for (const line of machineReport(office)) report(line.ok, line.name, line.detail);
+
   panelChecks(office, report);
 
   const apps = appFolders(office);
