@@ -9,8 +9,8 @@ import { join, relative } from "node:path";
 
 import { cronTimers, hasSystemd, refreshTimer, timerStates } from "../cron/host.ts";
 import { configFile, installedPanelNames, locate, panelDir, panelId, panelState, readPanelRecord, removalNote } from "../desktop.ts";
-import { ghConfigDir, ghLogin, ghPin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
-import { installedTool } from "../host-tools.ts";
+import { ghConfigDir, ghLogin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
+import { officeTool, officePins } from "../host-tools.ts";
 import { clones, installedPackages, library, oldKnowledgePlugin, pluginLinks, skillSelections } from "../layout.ts";
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, oldMiseFiles, pulledLocalFolders, versionsLackSfw } from "../migrate.ts";
 import { executorEnvFile, type Office, readEnvFile } from "../office.ts";
@@ -717,7 +717,7 @@ function gitChecks(office: Office, report: Report, running: boolean): void {
     return;
   }
 
-  const gh = installedTool("gh");
+  const gh = officeTool(office, "gh");
 
   if (gh === undefined) {
     report(false, "GitHub", "office.yaml shares the host's gh login, but gh isn't installed on this host (office setup --install-deps)");
@@ -741,9 +741,9 @@ function gitChecks(office: Office, report: Report, running: boolean): void {
 
   if (!container) return;
 
-  const pin = ghPin(office);
+  const pin = officePins(office).gh;
 
-  report(pin !== undefined, "GitHub: container gh", pin === undefined ? "mise.toml doesn't pin gh, so the container can't use the login (office setup adds it)" : `gh ${pin} from mise.toml`);
+  report(pin !== undefined, "GitHub: container gh", pin === undefined ? ".office/mise/office.toml doesn't hold the office package's gh, so the container can't use the login (office sync writes it)" : `gh ${pin} from .office/mise/office.toml, the office package's tools`);
 
   if (!running) return;
 

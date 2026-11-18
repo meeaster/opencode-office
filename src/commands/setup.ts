@@ -7,14 +7,14 @@ import * as v from "valibot";
 
 import { git } from "../git.ts";
 import { githubStep, planGithub, unreachableSources } from "../github.ts";
-import { hostTool, onboardHostTools } from "../host-tools.ts";
+import { onboardHostTools, requireOfficeTool } from "../host-tools.ts";
 import { envFilePath, sourceLine } from "../host-env.ts";
 import { claim, consentCommand, consentQuestion, grantConsent, ownedElsewhere } from "../machine.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile, updateConfig } from "../office.ts";
 import { decrypt, encrypt, initializeIdentity, parsed, prepareSecrets, requireTool } from "../secrets.ts";
 import { deploy } from "./apps.ts";
 import { check } from "./check.ts";
-import { assertGatewayMode, ports, startExecutor, up } from "./compose.ts";
+import { assertGatewayMode, installingMise, ports, startExecutor, up } from "./compose.ts";
 import { bootstrapExecutor } from "./executor.ts";
 import { sync } from "./sync.ts";
 
@@ -48,10 +48,10 @@ export async function setup(initial: Office, options: SetupOptions): Promise<voi
 
   const ask = process.stdin.isTTY && process.stdout.isTTY ? question : undefined;
 
-  // Anonymous reads first, so gh is offered only to an office that uses it or has private sources.
+  // Anonymous reads of the sources, before any login: the GitHub step below asks for one only when needed.
   const github = planGithub(office);
 
-  await onboardHostTools(options.installDeps === true, ask, { gh: github.needed });
+  await onboardHostTools(office, options.installDeps === true, ask, { installer: () => installingMise(office) });
 
   if (options.generateAgeKey) initializeIdentity(office);
 
@@ -79,7 +79,7 @@ export async function setup(initial: Office, options: SetupOptions): Promise<voi
 
     // No temporary plaintext; SOPS decrypts the encrypted stdin directly.
     try {
-      execFileSync(hostTool("sops"), ["decrypt", "--input-type", "json", "--output-type", "json", "/dev/stdin"], {
+      execFileSync(requireOfficeTool(office, "sops"), ["decrypt", "--input-type", "json", "--output-type", "json", "/dev/stdin"], {
         input: probe, stdio: ["pipe", "ignore", "pipe"], cwd: office.dir,
       });
     } catch {

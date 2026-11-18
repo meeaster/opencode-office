@@ -185,7 +185,7 @@ function removeExecutorFiles(office: Office): void {
  * The mise that installs the office's tools: the wrapper that runs installs through Socket Firewall
  * when the office wrote it and sfw is installed, else the host's mise.
  */
-function installingMise(office: Office): string {
+export function installingMise(office: Office): string {
   const wrapper = join(hostWrappers(), "mise");
 
   return office.socketFirewall && claim(office).kind === "ours" && existsSync(wrapper) && existsSync(hostLayout("").sfw) ? wrapper : hostTool("mise");

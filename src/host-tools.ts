@@ -1,31 +1,66 @@
-// Host-only dependencies. Office's mise state is separate from the user's tool selections.
+// The programs the office CLI runs on the host. A tool the CLI itself calls belongs to the CLI:
+//
+// - mise, which installs everything else, is the one program it keeps privately, in host-tools, off
+//   PATH, at the newest stable release three days old: it is needed before any office exists.
+// - SOPS, age (with age-keygen), gh and pre-commit are the required `office` package's tools, in
+//   every office's `.office/mise/office.toml` like any package's, at versions the office owns
+//   (`office upgrade-tools` bumps them). The CLI runs the version that file pins, as mise installed
+//   it, found through `mise which --tool`: no shims, PATH, link or consent needed, so it works from
+//   cron, systemd timers and CI, in either mode, before office sync has linked anything. Until that
+//   version is installed, the newest copy found anywhere serves: one mise installed, on PATH, or a
+//   private one an earlier release left in host-tools.
+//
+// `office setup` installs the pinned versions with mise into mise's own install folder (through
+// Socket Firewall where it applies), the same installs a host-mode office's links then select, so
+// the machine holds one copy of each. It keeps one more thing in host-tools: `bin/gh`, a link to
+// that gh, the stable path git's credential helper names, since the install's own path changes
+// with every version.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, renameSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 import * as v from "valibot";
+import { parse } from "yaml";
 
 import { fetchBytes } from "./download.ts";
-import { OfficeError } from "./office.ts";
+import { toolPins } from "./mise-toml.ts";
+import { type Office, OfficeError } from "./office.ts";
+import { fragmentPath } from "./package-tools.ts";
 import { newestRelease, type Candidate } from "./releases.ts";
-import { check } from "./schema.ts";
+import { check, packageManifestSchema } from "./schema.ts";
+import { toolPath } from "./tool.ts";
 import { compareVersions } from "./versions.ts";
 
-type Tool = "mise" | "sops" | "age" | "age-keygen" | "gh";
+/** A command the office CLI runs that comes from the office package's tools. */
+export type OfficeCommand = "sops" | "age" | "age-keygen" | "gh" | "pre-commit";
 
-/** The host tools office installs through its own mise. gh is wanted only by offices that use GitHub. */
-type MiseTool = "sops" | "age" | "gh";
+type Tool = "mise" | OfficeCommand;
 
 export type InstalledTool = { path: string; version: string };
 
-type Proposal = { tool: MiseTool; version: string; installed: InstalledTool | undefined };
+/** The office package's tool each command comes from, by its key in `.office/mise/office.toml`. */
+const packageTool = { sops: "sops", age: "age", "age-keygen": "age", gh: "gh", "pre-commit": "pre-commit" } satisfies Record<OfficeCommand, string>;
 
-const backends: Record<MiseTool, string> = { sops: "github:getsops/sops[bin=sops]", age: "github:FiloSottile/age", gh: "github:cli/cli" };
+/** The commands of each of the office package's tools. */
+function commandsOf(tool: string): OfficeCommand[] {
+  return tool === "age" ? ["age", "age-keygen"] : tool === "sops" || tool === "gh" || tool === "pre-commit" ? [tool] : [];
+}
+
+/** What the office's secrets need before anything else; gh and pre-commit only serve what uses them. */
+const required: OfficeCommand[] = ["sops", "age", "age-keygen"];
+
+/** The package whose tools the CLI runs. */
+const officePackage = "office";
 
 export function hostToolsRoot(): string {
   return join(process.env.XDG_DATA_HOME ?? join(homedir(), ".local/share"), "office/host-tools");
+}
+
+/** The stable link to the office's gh that git's credential helper names. */
+export function ghLink(): string {
+  return join(hostToolsRoot(), "bin/gh");
 }
 
 function reported(tool: Tool, path: string): InstalledTool | undefined {
@@ -41,7 +76,7 @@ function reported(tool: Tool, path: string): InstalledTool | undefined {
   return undefined;
 }
 
-/** PATH wins ties; a managed copy wins only if newer (even when PATH is too recent to install). */
+/** The newest of the copy on PATH and the private one in host-tools; PATH wins ties. */
 export function installedTool(tool: Tool): InstalledTool | undefined {
   const external = reported(tool, tool);
   const managed = reported(tool, join(hostToolsRoot(), "bin", tool));
@@ -53,12 +88,110 @@ export function installedTool(tool: Tool): InstalledTool | undefined {
   return compareVersions(managed.version, external.version) > 0 ? managed : external;
 }
 
-export function hostTool(tool: Tool): string {
+/** mise, on PATH or the private copy: the one program office installs for itself. */
+export function hostTool(tool: "mise"): string {
   const installed = installedTool(tool);
 
   if (installed === undefined) throw new OfficeError(`${tool} is missing or cannot report its version; run office setup --install-deps, or install it on the host PATH`);
 
   return installed.path;
+}
+
+/**
+ * Runs mise outside any office and without its config files: `which --tool` and `ls` read only its
+ * installs, which no config selects, and `install` of exact versions selects nothing.
+ */
+function runMise(mise: string, args: string[]): string {
+  return execFileSync(mise, args, {
+    cwd: "/", encoding: "utf8", timeout: 600_000, stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, MISE_NO_CONFIG: "1", MISE_YES: "1", MISE_NO_AUTO_UPDATE: "1" },
+  }).trim();
+}
+
+/** `command` from mise's install of `tool` at `version`, or undefined when that version isn't installed. */
+function miseCopy(mise: string, command: OfficeCommand, version: string): InstalledTool | undefined {
+  let path;
+
+  try {
+    path = runMise(mise, ["which", command, `--tool=${packageTool[command]}@${version}`]);
+  } catch {
+    return undefined;
+  }
+
+  const found = reported(command, path);
+
+  return found?.version === version ? found : undefined;
+}
+
+const installsSchema = v.array(v.object({ version: v.string(), installed: v.optional(v.boolean()) }));
+
+/** The newest version of `tool` mise has installed, whichever config selects it or none. */
+function newestMiseInstall(mise: string, command: OfficeCommand): InstalledTool | undefined {
+  let versions;
+
+  try {
+    versions = check(v.safeParse(installsSchema, JSON.parse(runMise(mise, ["ls", "--installed", "--json", packageTool[command]]))));
+  } catch {
+    return undefined;
+  }
+
+  if (!versions.ok) return undefined;
+
+  const newest = versions.value.filter((entry) => entry.installed !== false && /^\d+\.\d+\.\d+$/.test(entry.version)).map((entry) => entry.version).sort(compareVersions).at(-1);
+
+  return newest === undefined ? undefined : miseCopy(mise, command, newest);
+}
+
+/** The versions `.office/mise/office.toml` pins, by tool: the office's own choice. */
+export function officePins(office: Office): Record<string, string> {
+  const path = fragmentPath(office, officePackage);
+
+  return existsSync(path) ? Object.fromEntries(toolPins(readFileSync(path, "utf8")).map((pin) => [pin.tool, pin.version])) : {};
+}
+
+/** The versions this executable's office package starts its tools at. */
+export function startingVersions(): Record<string, string> {
+  const result = check(v.safeParse(packageManifestSchema, parse(readFileSync(toolPath(`packages/${officePackage}/package.yaml`), "utf8"))));
+
+  if (!result.ok) throw new OfficeError(`the office package's package.yaml doesn't read: ${result.errors.join("; ")}`);
+
+  return result.value.tools;
+}
+
+/** What the office wants installed: its fragment's versions, and the package's starting ones until sync writes the fragment. */
+function wantedVersions(office: Office) {
+  return { ...startingVersions(), ...officePins(office) };
+}
+
+/** Where the CLI found an office command, and whether it is the version the office pins. */
+export type OfficeTool = InstalledTool & { pinned: string | undefined };
+
+/**
+ * A command of the office package's tools: the version `.office/mise/office.toml` pins, as mise
+ * installed it, else the newest copy mise installed, on PATH or in host-tools.
+ */
+export function officeTool(office: Office, command: OfficeCommand): OfficeTool | undefined {
+  const pinned = officePins(office)[packageTool[command]];
+  const mise = installedTool("mise")?.path;
+  const exact = mise === undefined || pinned === undefined ? undefined : miseCopy(mise, command, pinned);
+
+  if (exact !== undefined) return { ...exact, pinned };
+
+  const found = [mise === undefined ? undefined : newestMiseInstall(mise, command), installedTool(command)]
+    .filter((candidate) => candidate !== undefined)
+    .sort((left, right) => compareVersions(left.version, right.version))
+    .at(-1);
+
+  return found === undefined ? undefined : { ...found, pinned };
+}
+
+/** The path of an office command, or an error saying how to install it. */
+export function requireOfficeTool(office: Office, command: OfficeCommand): string {
+  const found = officeTool(office, command);
+
+  if (found === undefined) throw new OfficeError(`${command} isn't installed on this host: office setup --install-deps installs the version the office package pins in .office/mise/office.toml${office.opencode.mode === "host" ? " (as does office up once office sync has linked it)" : ""}, or install it on PATH`);
+
+  return found.path;
 }
 
 export function needsInstall(installed: InstalledTool | undefined, candidate: string): boolean {
@@ -120,76 +253,74 @@ export async function installMise(candidate: Candidate): Promise<void> {
   }
 }
 
-function miseCommand(mise: string, args: string[]): string {
-  const root = hostToolsRoot();
+/** Points `link` at `target`, replacing what was there in one rename. */
+function relink(link: string, target: string): void {
+  const temporary = `${link}.${process.pid}.new`;
 
-  // Running outside the office avoids trusting/loading its mise.toml during host onboarding.
-  mkdirSync(root, { recursive: true });
+  mkdirSync(join(link, ".."), { recursive: true });
 
   try {
-    return execFileSync(mise, args, {
-      cwd: root, encoding: "utf8", timeout: 600_000, stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        MISE_DATA_DIR: join(root, "mise/data"),
-        MISE_CONFIG_DIR: join(root, "mise/config"),
-        MISE_CACHE_DIR: join(root, "mise/cache"),
-        MISE_STATE_DIR: join(root, "mise/state"),
-        MISE_GLOBAL_CONFIG_FILE: join(root, "mise/config/config.toml"),
-        MISE_NO_AUTO_UPDATE: "1",
-        MISE_USE_VERSIONS_HOST: "0",
-        MISE_PRERELEASES: "0",
-        MISE_YES: "1",
-        MISE_NO_CONFIG: "1",
-      },
-    }).trim();
+    symlinkSync(target, temporary);
+    renameSync(temporary, link);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
+/** Whether anything, a dangling link included, is at `path`. */
+function occupied(path: string): boolean {
+  try {
+    lstatSync(path);
+
+    return true;
   } catch {
-    throw new OfficeError(`mise ${args[0]} failed for host dependencies. It must support "latest <github:owner/repo> --minimum-release-age 3d" and exact-version install/which. Check network access and rerun office setup --install-deps, or install the tool manually on PATH (command output withheld)`);
+    return false;
   }
 }
 
-export function latestHostVersion(mise: string, tool: MiseTool): string {
-  const result = check(v.safeParse(
-    v.pipe(v.string(), v.regex(/^\d+\.\d+\.\d+$/)),
-    miseCommand(mise, ["latest", backends[tool], "--minimum-release-age", "3d"]),
-  ));
-
-  if (!result.ok) throw new OfficeError(`mise returned no exact stable version for ${tool} at least three days old`);
-
-  return result.value;
+/** Where `path` leads, or undefined for a dangling link or nothing. */
+function resolved(path: string): string | undefined {
+  try {
+    return realpathSync(path);
+  } catch {
+    return undefined;
+  }
 }
 
-export function installHostVersion(mise: string, tool: MiseTool, version: string): void {
-  requireHostPlatform(process.platform, process.arch);
+/**
+ * Removes what earlier releases installed privately in host-tools once the office's copy of the
+ * same command is installed: their sops, age and age-keygen links, and their own mise folders once
+ * nothing links into them. `bin/gh` becomes the link to the office's gh. Returns what it did.
+ */
+function retirePrivateCopies(installed: Map<OfficeCommand, InstalledTool>): string[] {
+  const root = hostToolsRoot();
+  const lines: string[] = [];
+  const gh = installed.get("gh");
 
-  const exact = `${backends[tool]}@${version}`;
-
-  miseCommand(mise, ["install", exact]);
-
-  const commands: Tool[] = tool === "age" ? ["age", "age-keygen"] : [tool];
-  const bin = join(hostToolsRoot(), "bin");
-
-  mkdirSync(bin, { recursive: true });
-
-  for (const command of commands) {
-    const current = installedTool(command);
-
-    // Repairing a missing age-keygen must not move an existing newer age backwards.
-    if (current !== undefined && compareVersions(current.version, version) > 0) continue;
-
-    const path = miseCommand(mise, ["which", command, `--tool=${exact}`]);
-
-    if (reported(command, path)?.version !== version) throw new OfficeError(`installed ${command} does not report ${version}; previous selection preserved`);
-
-    const temporary = join(bin, `.${command}-${process.pid}.new`);
-
-    try {
-      symlinkSync(path, temporary);
-      renameSync(temporary, join(bin, command));
-    } finally {
-      rmSync(temporary, { force: true });
-    }
+  if (gh !== undefined && resolved(ghLink()) !== resolved(gh.path)) {
+    relink(ghLink(), gh.path);
+    lines.push(`gh: ${ghLink()} now links to gh ${gh.version}, the office's, so git's credential helper keeps one path across versions`);
   }
+
+  for (const command of required) {
+    const path = join(root, "bin", command);
+
+    if (!installed.has(command) || !occupied(path)) continue;
+
+    rmSync(path);
+    lines.push(`${command}: removed ${path}, a private copy from an earlier release; office runs the office's ${command} ${installed.get(command)?.version}`);
+  }
+
+  const privateMise = join(root, "mise");
+  const bin = join(root, "bin");
+  const linked = existsSync(bin) && readdirSync(bin).some((name) => resolved(join(bin, name))?.startsWith(`${privateMise}/`));
+
+  if (existsSync(privateMise) && !linked) {
+    rmSync(privateMise, { recursive: true, force: true });
+    lines.push(`removed ${privateMise}, where earlier releases installed private copies of these tools`);
+  }
+
+  return lines;
 }
 
 function describe(tool: string, installed: InstalledTool | undefined, version: string): void {
@@ -197,22 +328,28 @@ function describe(tool: string, installed: InstalledTool | undefined, version: s
 }
 
 type OnboardOptions = {
-  /** Also install or update gh, for an office whose sources or credentials use GitHub. gh stays optional. */
-  gh?: boolean;
+  /** The mise that installs the office's tools: the Socket Firewall wrapper where it applies, else mise itself. */
+  installer?: () => string;
   lookupMise?: () => Promise<Candidate | undefined>;
 };
 
+/** A tool of the office package that isn't installed at the office's version. */
+type Proposal = { tool: string; version: string; current: InstalledTool | undefined };
+
 /**
- * Permission is scoped to this setup invocation, never a persistent auto-update preference. SOPS
- * and age are required; gh is optional here, and the GitHub step says when an office needs it.
+ * `office setup`'s dependencies: mise, privately, then the office package's tools at the versions
+ * the office pins, installed by mise into its own install folder. Permission is scoped to this
+ * setup invocation, never a persistent auto-update preference: `--install-deps` or one yes covers
+ * all of it. SOPS and age are required; gh and pre-commit serve only what uses them.
  */
 export async function onboardHostTools(
+  office: Office,
   installDeps: boolean,
   confirm: ((text: string) => Promise<string>) | undefined,
-  { gh = false, lookupMise = async () => (await newestRelease("mise", "3d")).chosen }: OnboardOptions = {},
+  { installer = () => hostTool("mise"), lookupMise = async () => (await newestRelease("mise", "3d")).chosen }: OnboardOptions = {},
 ): Promise<void> {
-  const tools: MiseTool[] = gh ? ["sops", "age", "gh"] : ["sops", "age"];
-  const names = gh ? "SOPS, age and gh" : "SOPS and age";
+  const wanted = wantedVersions(office);
+  const names = Object.entries(wanted).map(([tool, version]) => `${tool} ${version}`).join(", ");
   const candidate = await lookupMise();
 
   if (candidate === undefined) throw new OfficeError("no stable mise release at least three days old was found");
@@ -221,24 +358,12 @@ export async function onboardHostTools(
   const miseNeeded = needsInstall(mise, candidate.version);
   let authorized = installDeps;
 
-  if (miseNeeded) describe("mise", mise, candidate.version);
-
-  // Bootstrap/update mise first: an old copy may not support release-age lookup.
-  // This single consent covers the staged SOPS/age (and gh) lookup and installation too.
+  // Bootstrap/update mise first: the office's tools install through it. One consent covers both.
   if (miseNeeded) {
-    console.log(`Office can install verified mise ${candidate.version} (published ${candidate.published}), then resolve and install/update ${names} to exact stable releases at least three days old in ${hostToolsRoot()}. No global selections or shell profiles change.`);
+    describe("mise", mise, candidate.version);
+    console.log(`Office can install verified mise ${candidate.version} (published ${candidate.published}) in ${hostToolsRoot()}, then the tools this office pins in .office/mise/office.toml (${names}) with it, into mise's own install folder. No mise config, global selection or shell profile changes.`);
 
     if (!authorized && confirm !== undefined) authorized = (await confirm("Install these host dependencies? [yes/no]")) === "yes";
-
-    if (!authorized && mise === undefined) {
-      if (installedTool("sops") === undefined || installedTool("age") === undefined || installedTool("age-keygen") === undefined) {
-        throw new OfficeError("host dependencies are missing; rerun office setup --install-deps to authorize installation, or install mise, SOPS and age manually on PATH");
-      }
-
-      console.log(`Keeping installed ${names}; mise installation declined, so update lookup was skipped.`);
-
-      return;
-    }
 
     if (authorized) {
       await installMise(candidate);
@@ -246,44 +371,75 @@ export async function onboardHostTools(
     }
   }
 
-  if (mise === undefined) throw new OfficeError("installed mise is not executable");
-
   const proposals: Proposal[] = [];
 
-  for (const tool of tools) {
-    const version = latestHostVersion(mise.path, tool);
-    const installed = installedTool(tool);
+  for (const [tool, version] of Object.entries(wanted)) {
+    const commands = commandsOf(tool);
+    const present = mise !== undefined && commands.every((command) => miseCopy(mise.path, command, version) !== undefined);
 
-    if (needsInstall(installed, version) || (tool === "age" && needsInstall(installedTool("age-keygen"), version))) {
-      proposals.push({ tool, version, installed });
-    } else {
-      console.log(`${tool}: keeping ${installed?.version} (eligible stable: ${version})`);
+    if (present) continue;
+
+    const current = commands[0] === undefined ? undefined : officeTool(office, commands[0]);
+
+    proposals.push({ tool, version, current });
+  }
+
+  if (proposals.length > 0 && !miseNeeded) {
+    for (const proposal of proposals) describe(proposal.tool, proposal.current, proposal.version);
+
+    if (!authorized) {
+      console.log(`mise (${mise?.path ?? "missing"}) installs them into its own install folder; no mise config, global selection or shell profile changes.`);
+
+      if (confirm !== undefined) authorized = (await confirm("Install the office's tools? [yes/no]")) === "yes";
     }
   }
 
-  for (const proposal of proposals) {
-    if (proposal.tool === "age" && !needsInstall(proposal.installed, proposal.version)) {
-      describe("age-keygen", installedTool("age-keygen"), proposal.version);
-    } else {
-      describe(proposal.tool, proposal.installed, proposal.version);
-    }
-  }
+  if (mise === undefined || (proposals.length > 0 && !authorized)) {
+    const missing = required.filter((command) => officeTool(office, command) === undefined);
 
-  if (!authorized && !miseNeeded && proposals.length > 0) {
-    console.log(`Installs use ${hostToolsRoot()}; system executables, global mise selections and shell profiles are not changed.`);
+    if (missing.length > 0) throw new OfficeError(`required host dependencies (${missing.join(", ")}) are missing; rerun office setup --install-deps, or install them manually on PATH`);
 
-    if (confirm !== undefined) authorized = (await confirm("Install/update these host dependencies? [yes/no]")) === "yes";
-  }
-
-  if (!authorized) {
-    if (proposals.some((proposal) => proposal.tool !== "gh" && proposal.installed === undefined) || installedTool("age-keygen") === undefined) {
-      throw new OfficeError("required host dependencies are missing; rerun office setup --install-deps or install them manually on PATH");
-    }
-
-    if (miseNeeded || proposals.length > 0) console.log("Updates not authorized; continuing with installed tools. No dependency was changed.");
+    console.log("Installation not authorized; continuing with the installed tools. Nothing was changed.");
 
     return;
   }
 
-  for (const proposal of proposals) installHostVersion(mise.path, proposal.tool, proposal.version);
+  if (miseNeeded && !authorized) console.log(`Keeping mise ${mise.version}; its update wasn't authorized.`);
+
+  if (proposals.length > 0) {
+    requireHostPlatform(process.platform, process.arch);
+
+    try {
+      runMise(installer(), ["install", ...proposals.map((proposal) => `${proposal.tool}@${proposal.version}`)]);
+    } catch {
+      // Checked command by command below; a required one missing fails setup.
+    }
+  }
+
+  const installed = new Map<OfficeCommand, InstalledTool>();
+  const failed: string[] = [];
+
+  for (const [tool, version] of Object.entries(wanted)) {
+    for (const command of commandsOf(tool)) {
+      const found = miseCopy(mise.path, command, version);
+
+      if (found === undefined) failed.push(`${command} ${version}`);
+      else installed.set(command, found);
+    }
+  }
+
+  for (const line of retirePrivateCopies(installed)) console.log(line);
+
+  if (failed.length === 0) {
+    console.log(`The office's tools: ${names}, installed by mise`);
+
+    return;
+  }
+
+  const missing = required.filter((command) => !installed.has(command) && officeTool(office, command) === undefined);
+  const message = `mise didn't install ${failed.join(", ")}; check network access and rerun office setup --install-deps (mise's output withheld)`;
+
+  if (missing.length > 0) throw new OfficeError(message);
+
+  console.log(`Warning: ${message}`);
 }

@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import * as v from "valibot";
 
-import { hostTool } from "./host-tools.ts";
+import { requireOfficeTool } from "./host-tools.ts";
 import { type Office, OfficeError } from "./office.ts";
 import { check } from "./schema.ts";
 
@@ -108,7 +108,7 @@ export function requireTool(tool: string, args = ["--version"]): void {
 
 export function decrypt(office: Office, file: string): string {
   requireHostIdentity(office);
-  const sops = hostTool("sops");
+  const sops = requireOfficeTool(office, "sops");
 
   try {
     return execFileSync(sops, ["decrypt", "--output-type", "json", source(office, file)], {
@@ -120,7 +120,7 @@ export function decrypt(office: Office, file: string): string {
 }
 
 export function encrypt(office: Office, file: string, plaintext: string): string {
-  const sops = hostTool("sops");
+  const sops = requireOfficeTool(office, "sops");
 
   try {
     return execFileSync(sops, ["encrypt", "--filename-override", source(office, file), "--input-type", "json", "--output-type", "json", "/dev/stdin"], {
@@ -153,7 +153,7 @@ export function ownerRecord(office: Office): Owner {
 
 /** Explicit consent only; never replace an identity or amend existing recipients. */
 export function initializeIdentity(office: Office): void {
-  const keygen = hostTool("age-keygen");
+  const keygen = requireOfficeTool(office, "age-keygen");
 
   const key = requireHostIdentity(office);
 

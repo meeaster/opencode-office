@@ -1,9 +1,10 @@
 // GitHub for an office, over HTTPS through gh: which declared sources are on a GitHub host and
-// whether they read without a login, the host's gh login and git wiring, the gh the container gets
-// from the office's mise.toml, and the host's gh configuration shared read-only with the container.
+// whether they read without a login, the host's gh login and git wiring, and the host's gh
+// configuration shared read-only with the container. gh is one of the office package's tools, so
+// the host's CLI and the container both run the version .office/mise/office.toml pins.
 // One login, made on the host, serves host-side cloning, the container's agents and its cron jobs.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
@@ -11,9 +12,8 @@ import * as v from "valibot";
 import { parse } from "yaml";
 
 import { git } from "./git.ts";
-import { type InstalledTool, installedTool, latestHostVersion } from "./host-tools.ts";
+import { ghLink, type InstalledTool, officeTool } from "./host-tools.ts";
 import { clones } from "./layout.ts";
-import { toolPins } from "./mise-toml.ts";
 import { type Office, OfficeError, updateConfig } from "./office.ts";
 import { check } from "./schema.ts";
 import { compareVersions } from "./versions.ts";
@@ -153,9 +153,10 @@ function ghEnvironment(gh: InstalledTool, { prompts = false } = {}): NodeJS.Proc
 
   if (!prompts) env.GH_PROMPT_DISABLED = "1";
 
-  // A managed gh isn't on PATH: GH_PATH makes gh record its stable link in git config, not the
-  // versioned file behind it, which an update replaces.
-  if (gh.path.includes("/")) env.GH_PATH = gh.path;
+  // GH_PATH is the program `gh auth setup-git` names in git config: the stable link office keeps to
+  // the office's gh, not the versioned install behind it, which an upgrade replaces.
+  if (existsSync(ghLink())) env.GH_PATH = ghLink();
+  else if (gh.path.includes("/")) env.GH_PATH = gh.path;
 
   return env;
 }
@@ -230,43 +231,13 @@ function loginCommand(gh: InstalledTool, host: string, container: boolean): stri
   return ["auth", "login", "--hostname", host, "--git-protocol", "https", "--web", ...extra];
 }
 
-// The keys a mise.toml can declare gh under: its registry name or a backend for cli/cli.
-const ghKeys = new Set(["gh", "aqua:cli/cli", "github:cli/cli", "ubi:cli/cli", "cli/cli"]);
-
-/** The gh version the office's root mise.toml declares, or undefined. */
-export function ghPin(office: Office): string | undefined {
-  const path = join(office.dir, "mise.toml");
-
-  return existsSync(path) ? toolPins(readFileSync(path, "utf8")).find((pin) => ghKeys.has(pin.tool))?.version : undefined;
-}
-
-/** A mise.toml's text with gh pinned at the end of its [tools] table, every other line kept. */
-export function addGhPin(text: string, version: string): string {
-  const lines = text.split("\n");
-  const entry = [`# The GitHub CLI: git's HTTPS credential helper in the container, with the host's gh login.`, `gh = "${version}"`];
-  const header = lines.findIndex((line) => /^\s*\[tools\]\s*(#.*)?$/.test(line));
-
-  if (header === -1) return `${text}${text === "" || text.endsWith("\n") ? "" : "\n"}\n[tools]\n${entry.join("\n")}\n`;
-
-  let end = header + 1;
-
-  // The table runs to the next table header; its last non-blank line is where gh goes after.
-  for (let index = header + 1; index < lines.length && !/^\s*\[/.test(lines[index]); index++) {
-    if (lines[index].trim() !== "") end = index + 1;
-  }
-
-  lines.splice(end, 0, ...entry);
-
-  return lines.join("\n");
-}
-
 type Ask = ((text: string) => Promise<string>) | undefined;
 
 /**
  * The GitHub step of `office setup`. office.yaml's `git.credentials: gh` declares that the office
  * uses the host's gh login and authorizes what that needs; without it, the step only asks to add
  * it, interactively, when a source doesn't read without a login. Resumable: it inspects gh, the
- * login, git's helper and the office's gh pin each run, and returns the office re-read.
+ * login and git's helper each run, and returns the office re-read.
  */
 export async function githubStep(office: Office, plan: GithubPlan, ask: Ask): Promise<Office> {
   let current = office;
@@ -286,7 +257,7 @@ export async function githubStep(office: Office, plan: GithubPlan, ask: Ask): Pr
     if (ask === undefined) throw new OfficeError(guidance);
 
     console.log(`GitHub (${plan.hosts.join(", ")}): ${reasons}`);
-    console.log(`Setting up GitHub uses one gh login made on this host: gh as git's HTTPS credential helper (gh auth setup-git, which writes your global git config)${office.opencode.mode === "container" ? ", a gh pin in mise.toml, and the host's gh configuration shared read-only with the opencode container" : ""}.`);
+    console.log(`Setting up GitHub uses one gh login made on this host: gh as git's HTTPS credential helper (gh auth setup-git, which writes your global git config)${office.opencode.mode === "container" ? ", and the host's gh configuration shared read-only with the opencode container" : ""}.`);
 
     if ((await ask("Set up GitHub and record git.credentials: gh in office.yaml? [yes/no]")) !== "yes") throw new OfficeError(guidance);
 
@@ -295,9 +266,9 @@ export async function githubStep(office: Office, plan: GithubPlan, ask: Ask): Pr
   }
 
   const container = current.opencode.mode === "container";
-  const gh = installedTool("gh");
+  const gh = officeTool(current, "gh");
 
-  if (gh === undefined) throw new OfficeError("office.yaml uses GitHub through gh (git.credentials: gh), but gh isn't installed on this host: rerun office setup --install-deps, or install gh on PATH");
+  if (gh === undefined) throw new OfficeError("office.yaml uses GitHub through gh (git.credentials: gh), but gh isn't installed on this host: rerun office setup --install-deps, which installs the office package's gh, or install gh on PATH");
 
   if (container && process.getuid?.() !== 1000) console.log(`GitHub: warning: the container user is uid 1000 and this host user is uid ${process.getuid?.()}, so the container can't read ${ghConfigDir()}`);
 
@@ -334,18 +305,6 @@ export async function githubStep(office: Office, plan: GithubPlan, ask: Ask): Pr
     console.log(`GitHub: git uses ${gitHelper(host)} for https://${host}`);
   }
 
-  if (container && ghPin(current) === undefined) {
-    const mise = installedTool("mise");
-
-    if (mise === undefined) throw new OfficeError("mise is needed to look up gh's version; rerun office setup --install-deps");
-
-    const pin = latestHostVersion(mise.path, "gh");
-    const path = join(current.dir, "mise.toml");
-
-    writeFileSync(path, addGhPin(existsSync(path) ? readFileSync(path, "utf8") : "", pin));
-    console.log(`GitHub: pinned gh ${pin}, the newest stable release at least three days old, in mise.toml so the container installs it (review and commit it)`);
-  }
-
   if (container) console.log(`GitHub: ready; office up shares ${ghConfigDir()} read-only with the opencode container`);
   else console.log("GitHub: ready");
 
@@ -373,7 +332,7 @@ function cause(error: string, loggedIn: boolean | undefined): string {
  * per source that doesn't read, with the likely cause.
  */
 export function unreachableSources(office: Office): string[] {
-  const gh = installedTool("gh");
+  const gh = officeTool(office, "gh");
 
   return sources(office).flatMap((source) => {
     const result = reach(source.url);

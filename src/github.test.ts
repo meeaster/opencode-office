@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { addGhPin, unshareable } from "./github.ts";
+import { unshareable } from "./github.ts";
 import { loadOffice, updateConfig } from "./office.ts";
 
 let dir: string;
@@ -14,15 +14,6 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
-});
-
-test("gh is pinned at the end of [tools], keeping comments and later tables", () => {
-  const text = "# Tools every desk gets.\n[tools]\nnode = \"26.13.1\"\n# Runs the hook.\npre-commit = \"4.7.0\"\n\n[env]\nFOO = \"1\"\n";
-
-  expect(addGhPin(text, "2.104.0")).toBe(
-    "# Tools every desk gets.\n[tools]\nnode = \"26.13.1\"\n# Runs the hook.\npre-commit = \"4.7.0\"\n# The GitHub CLI: git's HTTPS credential helper in the container, with the host's gh login.\ngh = \"2.104.0\"\n\n[env]\nFOO = \"1\"\n",
-  );
-  expect(addGhPin("[env]\nFOO = \"1\"", "2.104.0")).toBe("[env]\nFOO = \"1\"\n\n[tools]\n# The GitHub CLI: git's HTTPS credential helper in the container, with the host's gh login.\ngh = \"2.104.0\"\n");
 });
 
 test("office.yaml edits change only the fields they set, and an invalid value is never written", () => {

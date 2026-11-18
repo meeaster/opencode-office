@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
-import { hostTool, hostToolsRoot, installedTool, installMise, miseAsset, needsInstall, onboardHostTools, verifyDigest } from "./host-tools.ts";
+import { ghLink, hostToolsRoot, installedTool, installMise, miseAsset, needsInstall, officeTool, onboardHostTools, requireOfficeTool, startingVersions, verifyDigest } from "./host-tools.ts";
+import { loadOffice, type Office } from "./office.ts";
 import { type Candidate, type Release, selectToolRelease } from "./releases.ts";
 
 let dir: string;
@@ -37,31 +38,82 @@ function candidate(version = "2026.11.7"): Candidate {
 }
 
 function executable(path: string, version: string): void {
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `#!${process.execPath}\nconsole.log(${JSON.stringify(version)});\n`, { mode: 0o755 });
 }
 
-// A real subprocess seam, not a module mock: records exact requests and supplies tool executables.
-function fakeMise(version = "2026.11.7"): void {
-  writeFileSync(join(dir, "path/mise"), `#!${process.execPath}
+/** An office whose .office/mise/office.toml pins `pins`, or has none. */
+function office(pins?: Record<string, string>): Office {
+  const root = join(dir, "office");
+
+  mkdirSync(join(root, ".office/mise"), { recursive: true });
+  writeFileSync(join(root, "office.yaml"), "name: t\n");
+
+  if (pins !== undefined) {
+    writeFileSync(join(root, ".office/mise/office.toml"), `# The mise tools of package office.\n[tools]\n${Object.entries(pins).map(([tool, version]) => `"${tool}" = "${version}"`).join("\n")}\n`);
+  }
+
+  return loadOffice(root);
+}
+
+/** Where the fake mise installs a tool's commands. */
+const installs = () => join(dir, "installs");
+
+/** Puts `command` of `tool` at `version` among the fake mise's installs. */
+function installed(tool: string, version: string, command = tool): string {
+  const path = join(installs(), tool, version, command);
+
+  executable(path, command === "gh" ? `gh version ${version} (2026-11-01)` : `${command} ${version}`);
+
+  return path;
+}
+
+// A real subprocess seam, not a module mock: records each request with its folder and whether it
+// read config, and installs, finds and lists tools in a folder of its own, as mise does.
+function fakeMise(at = join(dir, "path/mise"), version = "2026.11.7", { fail = "" } = {}): void {
+  executable(at, version);
+  writeFileSync(at, `#!${process.execPath}
 const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
-const root = ${JSON.stringify(dir)};
-fs.appendFileSync(path.join(root, "requests"), JSON.stringify(args) + "\\n");
+const installs = ${JSON.stringify(installs())};
+fs.appendFileSync(${JSON.stringify(join(dir, "requests"))}, JSON.stringify({ args, cwd: process.cwd(), noConfig: process.env.MISE_NO_CONFIG }) + "\\n");
+const commands = (tool) => tool === "age" ? ["age", "age-keygen"] : [tool];
+const write = (file, line) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, "#!${process.execPath}\\nconsole.log(" + JSON.stringify(line) + ");\\n", { mode: 0o755 }); };
 if (args[0] === "--version") { console.log(${JSON.stringify(version)}); process.exit(0); }
-if (args[0] === "latest") { console.log(args[1].includes("sops") ? "3.13.3" : args[1].includes("cli/cli") ? "2.104.0" : "1.3.2"); process.exit(0); }
 if (args[0] === "install") {
-  if (Object.keys(process.env).some(k => k === "MISE_DATA_DIR" && !process.env[k].startsWith(root))) process.exit(1);
-  const age = args[1].includes("age@");
-  const names = age ? ["age", "age-keygen"] : args[1].includes("cli/cli") ? ["gh"] : ["sops"];
-  const version = args[1].split("@").at(-1);
-  for (const name of names) fs.writeFileSync(path.join(root, "installed-" + name), "#!${process.execPath}\\nconsole.log(" + JSON.stringify(version) + ");\\n", { mode: 0o755 });
+  for (const spec of args.slice(1)) {
+    const [tool, version] = spec.split("@");
+    if (tool === ${JSON.stringify(fail)}) continue;
+    for (const command of commands(tool)) write(path.join(installs, tool, version, command), command === "gh" ? "gh version " + version + " (2026-11-01)" : command + " " + version);
+  }
   process.exit(0);
 }
-if (args[0] === "which") { console.log(path.join(root, "installed-" + args[1])); process.exit(0); }
+if (args[0] === "which") {
+  const [tool, version] = args[2].replace("--tool=", "").split("@");
+  const file = path.join(installs, tool, version, args[1]);
+  if (!fs.existsSync(file)) process.exit(1);
+  console.log(file);
+  process.exit(0);
+}
+if (args[0] === "ls") {
+  const folder = path.join(installs, args[3]);
+  console.log(JSON.stringify((fs.existsSync(folder) ? fs.readdirSync(folder) : []).map((version) => ({ version, installed: true, active: false }))));
+  process.exit(0);
+}
 process.exit(1);
 `, { mode: 0o755 });
 }
+
+type Request = { args: string[]; cwd: string; noConfig: string | undefined };
+
+function requests(): Request[] {
+  const path = join(dir, "requests");
+
+  return existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
+}
+
+const pins = { sops: "3.13.3", age: "1.3.2", gh: "2.104.0", "pre-commit": "4.7.0" };
 
 test("three days means 72 hours inclusive; prereleases, drafts, invalid dates and floating tags never qualify", () => {
   const now = new Date("2026-11-16T12:00:00Z");
@@ -80,104 +132,137 @@ test("three days means 72 hours inclusive; prereleases, drafts, invalid dates an
   expect(needsInstall({ path: "mise", version: "2026.11.9" }, "2026.11.8")).toBe(false);
 });
 
-test("PATH wins ties, managed wins when newer, PATH newer is never downgraded", () => {
-  const bin = join(hostToolsRoot(), "bin");
+test("the office package starts every office at exact versions of the tools the CLI runs", () => {
+  expect(Object.keys(startingVersions())).toEqual(["sops", "age", "gh", "pre-commit"]);
 
-  mkdirSync(bin, { recursive: true });
-  executable(join(dir, "path/sops"), "sops 3.13.2");
-  executable(join(bin, "sops"), "sops 3.13.3");
-  expect(hostTool("sops")).toBe(join(bin, "sops"));
-  executable(join(dir, "path/sops"), "sops 3.13.3");
-  expect(hostTool("sops")).toBe("sops");
+  for (const version of Object.values(startingVersions())) expect(version).toMatch(/^\d+\.\d+\.\d+$/);
+});
+
+test("the CLI runs the version the office pins, as mise installed it, over newer copies on PATH and in host-tools, from any folder", () => {
+  fakeMise();
+
+  const pinned = installed("sops", "3.13.3");
+
   executable(join(dir, "path/sops"), "sops 3.14.0");
-  expect(installedTool("sops")?.version).toBe("3.14.0");
-  expect(hostTool("sops")).toBe("sops");
+  executable(join(hostToolsRoot(), "bin/sops"), "sops 3.15.0");
+
+  expect(officeTool(office(pins), "sops")).toEqual({ path: pinned, version: "3.13.3", pinned: "3.13.3" });
+  expect(requests().at(-1)).toEqual({ args: ["which", "sops", "--tool=sops@3.13.3"], cwd: "/", noConfig: "1" });
+
+  // No shims, PATH entry or session-local selection: a new process from another folder finds it too.
+  const child = Bun.spawnSync([process.execPath, "-e", `import {requireOfficeTool} from ${JSON.stringify(join(import.meta.dir, "host-tools.ts"))}; import {loadOffice} from ${JSON.stringify(join(import.meta.dir, "office.ts"))}; console.log(requireOfficeTool(loadOffice(${JSON.stringify(join(dir, "office"))}), "sops"));`], { env: process.env, cwd: tmpdir() });
+
+  expect(new TextDecoder().decode(child.stdout).trim()).toBe(pinned);
+});
+
+test("until the pinned version is installed, the newest copy anywhere serves; with none, the error says how to install it", () => {
+  fakeMise();
+
+  const older = installed("age", "1.2.0", "age-keygen");
+
+  expect(officeTool(office(pins), "age-keygen")).toEqual({ path: older, version: "1.2.0", pinned: "1.3.2" });
+
+  executable(join(dir, "path/age-keygen"), "v1.2.1");
+
+  expect(officeTool(office(pins), "age-keygen")?.path).toBe("age-keygen");
+  expect(() => requireOfficeTool(office(pins), "gh")).toThrow("office setup --install-deps installs the version the office package pins in .office/mise/office.toml");
 });
 
 test("unattended missing dependencies require permission and do not create managed state", async () => {
-  await expect(onboardHostTools(false, undefined, { lookupMise: async () => candidate() })).rejects.toThrow("--install-deps");
+  await expect(onboardHostTools(office(), false, undefined, { lookupMise: async () => candidate() })).rejects.toThrow("--install-deps");
   expect(existsSync(hostToolsRoot())).toBe(false);
 });
 
-test("declining updates keeps compatible old tools without installation", async () => {
-  fakeMise("2026.11.2");
-  executable(join(dir, "path/sops"), "sops 3.12.0");
-  executable(join(dir, "path/age"), "1.2.0");
-  executable(join(dir, "path/age-keygen"), "1.2.0");
-  let prompts = 0;
-
-  await onboardHostTools(false, async () => { prompts++;
-
- return "no"; }, { lookupMise: async () => candidate() });
-  expect(prompts).toBe(1);
-  expect(readFileSync(join(dir, "requests"), "utf8")).not.toContain('"install"');
-  expect(installedTool("sops")?.version).toBe("3.12.0");
-});
-
-test("authorized fresh SOPS/age install uses exact resolved versions and works without shell activation", async () => {
+test("an authorized setup installs the office's pinned versions with mise, from / without config, once, and links gh", async () => {
   fakeMise();
-  await onboardHostTools(true, undefined, { lookupMise: async () => candidate() });
+  await onboardHostTools(office({ ...pins, sops: "3.13.2" }), true, undefined, { lookupMise: async () => candidate() });
 
-  const requests = readFileSync(join(dir, "requests"), "utf8");
+  expect(requests().filter((request) => request.args[0] === "install")).toEqual([{ args: ["install", "sops@3.13.2", "age@1.3.2", "gh@2.104.0", "pre-commit@4.7.0"], cwd: "/", noConfig: "1" }]);
+  expect(requireOfficeTool(office(), "sops")).toBe(join(installs(), "sops/3.13.2/sops"));
+  expect(readlinkSync(ghLink())).toBe(join(installs(), "gh/2.104.0/gh"));
 
-  expect(requests).toContain('["latest","github:getsops/sops[bin=sops]","--minimum-release-age","3d"]');
-  expect(requests).toContain('["install","github:getsops/sops[bin=sops]@3.13.3"]');
-  expect(requests).toContain('["install","github:FiloSottile/age@1.3.2"]');
-  expect(hostTool("sops")).toBe(join(hostToolsRoot(), "bin/sops"));
-  expect(installedTool("age-keygen")?.version).toBe("1.3.2");
+  writeFileSync(join(dir, "requests"), "");
+  await onboardHostTools(office(), false, async () => { throw new Error("unexpected prompt"); }, { lookupMise: async () => candidate() });
 
-  // No inherited PATH changes or session-local selection is needed in a new process.
-  const child = Bun.spawnSync([process.execPath, "-e", `import {hostTool} from ${JSON.stringify(join(import.meta.dir, "host-tools.ts"))}; console.log(hostTool("sops"));`], { env: process.env });
-
-  expect(child.exitCode).toBe(0);
-  expect(new TextDecoder().decode(child.stdout).trim()).toBe(join(hostToolsRoot(), "bin/sops"));
+  expect(requests().some((request) => request.args[0] === "install")).toBe(false);
 });
 
-test("one update confirmation supplies managed tools without replacing older PATH executables", async () => {
+test("before sync writes the fragment, setup installs the package's starting versions", async () => {
+  fakeMise();
+  await onboardHostTools(office(), true, undefined, { lookupMise: async () => candidate() });
+
+  expect(requests().find((request) => request.args[0] === "install")?.args.slice(1)).toEqual(Object.entries(startingVersions()).map(([tool, version]) => `${tool}@${version}`));
+});
+
+test("installs go through the installer setup passes, such as the Socket Firewall wrapper", async () => {
+  fakeMise();
+  fakeMise(join(dir, "wrapper/mise"));
+  await onboardHostTools(office(pins), true, undefined, { installer: () => join(dir, "wrapper/mise"), lookupMise: async () => candidate() });
+
+  expect(requests().filter((request) => request.args[0] === "install")).toHaveLength(1);
+  expect(officeTool(office(), "pre-commit")?.version).toBe("4.7.0");
+});
+
+test("declining keeps compatible tools on PATH, with one prompt and no install", async () => {
   fakeMise();
   executable(join(dir, "path/sops"), "sops 3.12.0");
   executable(join(dir, "path/age"), "1.2.0");
   executable(join(dir, "path/age-keygen"), "1.2.0");
-  const original = readFileSync(join(dir, "path/sops"), "utf8");
-  let prompts = 0;
 
-  await onboardHostTools(false, async () => {
-    prompts++;
+  const prompts: string[] = [];
 
-    return "yes";
+  await onboardHostTools(office(pins), false, async (text) => {
+    prompts.push(text);
+
+    return "no";
   }, { lookupMise: async () => candidate() });
-  expect(prompts).toBe(1);
-  expect(installedTool("sops")?.version).toBe("3.13.3");
-  expect(installedTool("age")?.version).toBe("1.3.2");
-  expect(readFileSync(join(dir, "path/sops"), "utf8")).toBe(original);
+
+  expect(prompts).toEqual(["Install the office's tools? [yes/no]"]);
+  expect(requests().some((request) => request.args[0] === "install")).toBe(false);
+  expect(officeTool(office(), "sops")?.version).toBe("3.12.0");
 });
 
-test("mise's non-exact or prerelease answer is rejected before install", async () => {
-  writeFileSync(join(dir, "path/mise"), `#!${process.execPath}
-console.log(process.argv[2] === "--version" ? "2026.11.7" : "3.14.0-rc.1");
-`, { mode: 0o755 });
-  await expect(onboardHostTools(true, undefined, { lookupMise: async () => candidate() })).rejects.toThrow("no exact stable version");
-  expect(existsSync(join(hostToolsRoot(), "bin/sops"))).toBe(false);
-});
-
-test("newer installed tools are kept, including versions inside the waiting period", async () => {
-  fakeMise("2026.11.9");
-  executable(join(dir, "path/sops"), "sops 3.14.0");
-  executable(join(dir, "path/age"), "1.4.0");
-  executable(join(dir, "path/age-keygen"), "1.4.0");
-  await onboardHostTools(true, async () => { throw new Error("unexpected prompt"); }, { lookupMise: async () => candidate() });
-  expect(readFileSync(join(dir, "requests"), "utf8")).not.toContain('"install"');
-  expect(hostTool("sops")).toBe("sops");
-});
-
-test("repairing missing age-keygen keeps a newer managed age selected", async () => {
+test("once the office's copies are installed, an earlier release's private copies in host-tools go, and bin/gh links to the office's gh", async () => {
   fakeMise();
-  executable(join(dir, "path/sops"), "sops 3.13.3");
+
+  const privateCopies = join(hostToolsRoot(), "mise/data/installs");
+
   mkdirSync(join(hostToolsRoot(), "bin"), { recursive: true });
-  executable(join(hostToolsRoot(), "bin/age"), "1.4.0");
-  await onboardHostTools(true, undefined, { lookupMise: async () => candidate() });
-  expect(installedTool("age")?.version).toBe("1.4.0");
-  expect(installedTool("age-keygen")?.version).toBe("1.3.2");
+
+  for (const [command, version] of [["sops", "3.13.0"], ["age", "1.2.0"], ["age-keygen", "1.2.0"], ["gh", "2.103.3"]]) {
+    executable(join(privateCopies, command), `${command} ${version}`);
+    symlinkSync(join(privateCopies, command), join(hostToolsRoot(), "bin", command));
+  }
+
+  await onboardHostTools(office(pins), true, undefined, { lookupMise: async () => candidate() });
+
+  for (const command of ["sops", "age", "age-keygen"]) expect(existsSync(join(hostToolsRoot(), "bin", command))).toBe(false);
+
+  expect(readlinkSync(ghLink())).toBe(join(installs(), "gh/2.104.0/gh"));
+  expect(existsSync(join(hostToolsRoot(), "mise"))).toBe(false);
+});
+
+test("a required tool mise didn't install fails setup; an optional one only warns", async () => {
+  fakeMise(undefined, undefined, { fail: "sops" });
+  await expect(onboardHostTools(office(pins), true, undefined, { lookupMise: async () => candidate() })).rejects.toThrow("mise didn't install sops 3.13.3");
+
+  rmSync(installs(), { recursive: true });
+  rmSync(hostToolsRoot(), { recursive: true });
+  fakeMise(undefined, undefined, { fail: "gh" });
+  await onboardHostTools(office(pins), true, undefined, { lookupMise: async () => candidate() });
+
+  expect(officeTool(office(), "sops")?.version).toBe("3.13.3");
+  expect(existsSync(ghLink())).toBe(false);
+});
+
+test("PATH wins ties against host-tools' private mise, which wins when newer", () => {
+  const bin = join(hostToolsRoot(), "bin");
+
+  executable(join(dir, "path/mise"), "2026.11.2");
+  executable(join(bin, "mise"), "2026.11.7");
+  expect(installedTool("mise")?.path).toBe(join(bin, "mise"));
+  executable(join(dir, "path/mise"), "2026.11.7");
+  expect(installedTool("mise")?.path).toBe("mise");
 });
 
 test("integrity failures fail closed, and bootstrap checks the exact executable version before selection", async () => {
@@ -204,45 +289,4 @@ test("integrity failures fail closed, and bootstrap checks the exact executable 
 
   expect(() => verifyDigest(bytes, null, "mise")).toThrow("no authoritative");
   expect(() => miseAsset("2026.11.7", "win32", "x64")).toThrow("WSL");
-});
-
-test("gh is optional: unattended runs never require it, and an authorized run installs the exact version", async () => {
-  fakeMise();
-  executable(join(dir, "path/sops"), "sops 3.13.3");
-  executable(join(dir, "path/age"), "1.3.2");
-  executable(join(dir, "path/age-keygen"), "1.3.2");
-
-  await onboardHostTools(false, undefined, { gh: true, lookupMise: async () => candidate() });
-  expect(installedTool("gh")).toBeUndefined();
-
-  await onboardHostTools(true, undefined, { gh: true, lookupMise: async () => candidate() });
-  expect(readFileSync(join(dir, "requests"), "utf8")).toContain('["install","github:cli/cli@2.104.0"]');
-  expect(hostTool("gh")).toBe(join(hostToolsRoot(), "bin/gh"));
-});
-
-test("an older gh joins the one grouped confirmation; declining keeps it, and a newer gh is never replaced", async () => {
-  fakeMise();
-  executable(join(dir, "path/sops"), "sops 3.12.0");
-  executable(join(dir, "path/age"), "1.3.2");
-  executable(join(dir, "path/age-keygen"), "1.3.2");
-  executable(join(dir, "path/gh"), "gh version 2.103.3 (2026-10-26)");
-  const prompts: string[] = [];
-
-  await onboardHostTools(false, async (text) => {
-    prompts.push(text);
-
-    return "no";
-  }, { gh: true, lookupMise: async () => candidate() });
-  expect(prompts).toHaveLength(1);
-  expect(installedTool("gh")?.version).toBe("2.103.3");
-
-  await onboardHostTools(false, async () => "yes", { gh: true, lookupMise: async () => candidate() });
-  expect(installedTool("gh")?.version).toBe("2.104.0");
-  expect(installedTool("sops")?.version).toBe("3.13.3");
-
-  executable(join(dir, "path/gh"), "gh version 2.105.0 (2026-11-15)");
-  writeFileSync(join(dir, "requests"), "");
-  await onboardHostTools(true, async () => { throw new Error("unexpected prompt"); }, { gh: true, lookupMise: async () => candidate() });
-  expect(readFileSync(join(dir, "requests"), "utf8")).not.toContain('"install"');
-  expect(hostTool("gh")).toBe("gh");
 });
