@@ -1,4 +1,5 @@
-# Blocks commits that contain secrets. Run `pre-commit install` once per clone.
+# Blocks commits that contain secrets. office setup installs git's hook in this clone with the office
+# package's pre-commit (pre-commit install); in another clone, run pre-commit install once.
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e # v8.30.1

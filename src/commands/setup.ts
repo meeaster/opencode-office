@@ -7,6 +7,7 @@ import * as v from "valibot";
 
 import { git } from "../git.ts";
 import { githubStep, planGithub, unreachableSources } from "../github.ts";
+import { installHook } from "../hook.ts";
 import { onboardHostTools, requireOfficeTool } from "../host-tools.ts";
 import { envFilePath, sourceLine } from "../host-env.ts";
 import { claim, consentCommand, consentQuestion, grantConsent, ownedElsewhere } from "../machine.ts";
@@ -109,6 +110,10 @@ export async function setup(initial: Office, options: SetupOptions): Promise<voi
   for (const line of changes) console.log(line);
 
   if (changes.some((line) => line.startsWith("FAILED"))) throw new OfficeError("sync failed; fix the reported source and rerun office setup");
+
+  const hook = installHook(office);
+
+  if (hook !== undefined) console.log(hook);
 
   let email = options.ownerEmail;
 

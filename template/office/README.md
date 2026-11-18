@@ -36,7 +36,7 @@ Portable owner credentials are SOPS-encrypted in `secrets/executor-owner.enc.jso
 
 ## Conventions
 
-- Run `pre-commit install` once in each clone, before your first commit. The container installs pre-commit from `mise.toml`, so commits made there run the hook too.
+- `office init` and `office setup` install git's pre-commit hook in this clone (`pre-commit install`, with the pre-commit the office package provides in `.office/mise/office.toml`), so commits run the gitleaks hook; they leave a hook of your own alone, and `office check` says the hook's state. In another clone, run `pre-commit install` there before your first commit. The container has the same pre-commit, so commits made there run the hook too.
 - OpenCode, Claude Code, Executor and mise run at the versions in `office.yaml`. The daily `upgrade-tools` job bumps them and commits as the office's git identity (else `office cron`); nothing restarts until you run `office up --upgrade`, which backs up and applies them (`office up` alone keeps the applied versions and says what is pending). After changing a version by hand, run `office pin`. An office never goes back to an older OpenCode or Executor.
 - `office pair` prints a one-time link that connects the OpenCode app or a browser to this office.
 

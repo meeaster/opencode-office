@@ -5,6 +5,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { basename, resolve } from "node:path";
 
 import { git } from "../git.ts";
+import { installHook } from "../hook.ts";
 import { loadOffice, OfficeError } from "../office.ts";
 import { defaultPins, writeLock } from "../versions.ts";
 import { copyTemplate, sync } from "./sync.ts";
@@ -33,5 +34,9 @@ export async function init(target: string, name: string | undefined) {
   // main whatever git's default branch is on this machine.
   if (!existsSync(resolve(dir, ".git"))) git(["init", "--quiet", "--initial-branch=main", dir]);
 
-  return { dir, changes };
+  // The gitleaks hook guards the first commit too, when this machine already has the office's
+  // pre-commit; otherwise office setup installs both.
+  const hook = installHook(loadOffice(dir));
+
+  return { dir, changes: hook === undefined ? changes : [...changes, hook] };
 }

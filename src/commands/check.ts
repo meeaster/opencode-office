@@ -10,6 +10,7 @@ import { join, relative } from "node:path";
 import { cronTimers, hasSystemd, refreshTimer, timerStates } from "../cron/host.ts";
 import { configFile, installedPanelNames, locate, panelDir, panelId, panelState, readPanelRecord, removalNote } from "../desktop.ts";
 import { ghConfigDir, ghLogin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
+import { hookNote, hookState } from "../hook.ts";
 import { officeTool, officePins } from "../host-tools.ts";
 import { clones, installedPackages, library, oldKnowledgePlugin, pluginLinks, skillSelections } from "../layout.ts";
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, oldMiseFiles, pulledLocalFolders, versionsLackSfw } from "../migrate.ts";
@@ -710,6 +711,10 @@ function gitChecks(office: Office, report: Report, running: boolean): void {
       ? "none in office.yaml: upgrade-tools commits as office cron, other commits use git's own config"
       : `${office.git.name} <${office.git.email}>, the default for ${office.opencode.mode === "container" ? "the container's commits" : "the office's cron jobs (a host server's agents use the host's own git config)"}`,
   );
+
+  const hook = hookNote(hookState(office));
+
+  report(hook.warn ? "warn" : true, "pre-commit hook", hook.detail);
 
   if (office.git?.credentials !== "gh") {
     report(true, "GitHub", "office.yaml doesn't use the host's gh login; only sources that read without a login clone, and agents can't push over HTTPS (add credentials: gh under git: to use it)");
