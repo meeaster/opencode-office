@@ -128,6 +128,18 @@ const licenseNames = ["LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"];
  * abbreviated SHA.
  */
 export function copyFromRepository({ repo, ref, path }: { repo: string; ref?: string; path: string }, to: string, marker: string): string {
+  return withCheckout(repo, ref, (checkout) => {
+    copyFolder(checkout, path, to, marker, `${repo}${ref === undefined ? "" : `@${ref}`}`);
+
+    return head(checkout);
+  });
+}
+
+/**
+ * Runs `use` on a shallow checkout of `repo` at `ref` in a temporary folder, removed afterwards.
+ * A failed fetch of what looks like an abbreviated SHA says so.
+ */
+export function withCheckout<Result>(repo: string, ref: string | undefined, use: (checkout: string) => Result): Result {
   const checkout = mkdtempSync(join(tmpdir(), "office-copy-"));
 
   try {
@@ -139,20 +151,31 @@ export function copyFromRepository({ repo, ref, path }: { repo: string; ref?: st
       throw new Error(`${error instanceof Error ? error.message.trim() : String(error)}${hint}`, { cause: error });
     }
 
-    const source = join(checkout, path);
-
-    if (!existsSync(join(source, marker))) throw new Error(`${repo}${ref === undefined ? "" : `@${ref}`} has no ${path}/${marker}`);
-
-    cpSync(source, to, { recursive: true });
-
-    const license = licenseNames.find((name) => existsSync(join(checkout, name)));
-
-    if (license !== undefined && !licenseNames.some((name) => existsSync(join(to, name)))) cpSync(join(checkout, license), join(to, license));
-
-    return head(checkout);
+    return use(checkout);
   } finally {
     rmSync(checkout, { recursive: true, force: true });
   }
+}
+
+/** The commit a checkout is at. */
+export function checkoutCommit(checkout: string): string {
+  return head(checkout);
+}
+
+/**
+ * Copies the folder `path` of a checkout into `to`, with the repository's licence when the folder
+ * has none of its own. The folder must hold `marker`; `label` names the checkout in the error.
+ */
+export function copyFolder(checkout: string, path: string, to: string, marker: string, label: string): void {
+  const source = join(checkout, path);
+
+  if (!existsSync(join(source, marker))) throw new Error(`${label} has no ${path}/${marker}`);
+
+  cpSync(source, to, { recursive: true });
+
+  const license = licenseNames.find((name) => existsSync(join(checkout, name)));
+
+  if (license !== undefined && !licenseNames.some((name) => existsSync(join(to, name)))) cpSync(join(checkout, license), join(to, license));
 }
 
 /** A working clone that agents commit in: cloned in full when missing, otherwise only fetched. */

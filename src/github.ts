@@ -14,7 +14,7 @@ import { parse } from "yaml";
 import { git } from "./git.ts";
 import { ghLink, type InstalledTool, officeTool } from "./host-tools.ts";
 import { clones } from "./layout.ts";
-import { type Office, OfficeError, updateConfig } from "./office.ts";
+import { type Office, OfficeError, skillGroups, updateConfig } from "./office.ts";
 import { check } from "./schema.ts";
 import { compareVersions } from "./versions.ts";
 import { inherit, progress, say, stream, warn } from "./report/index.ts";
@@ -26,7 +26,7 @@ export function sources(office: Office): Source[] {
   return [
     // Desk repositories are working clones that agents commit in and push from.
     ...clones(office).map((clone) => ({ what: `${clone.kind} ${clone.name}`, url: clone.url, pushes: clone.kind !== "reference" && clone.kind !== "plugin" })),
-    ...office.skills.copied.map((skill) => ({ what: `copied skill ${skill.name}`, url: skill.repo, pushes: false })),
+    ...skillGroups(office).map((group) => ({ what: group.grouped ? `copied skills ${group.skills.map((skill) => skill.name).join(", ")}` : `copied skill ${group.skills[0].name}`, url: group.repo, pushes: false })),
     ...office.packages.flatMap((entry) => (entry.source === undefined ? [] : [{ what: `package ${entry.name}`, url: entry.source.repo, pushes: false }])),
   ];
 }

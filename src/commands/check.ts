@@ -20,7 +20,8 @@ import { officeCommands, officePins, officeTool, officeToolNamed, required } fro
 import { clones, installedPackages, library, oldKnowledgePlugin, pluginLinks, skillSelections } from "../layout.ts";
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, oldMiseFiles, pulledLocalFolders, versionsLackSfw } from "../migrate.ts";
 import { oldExecutorAppDirs } from "../executor-app-layout.ts";
-import { executorEnvFile, type Office, readEnvFile } from "../office.ts";
+import { executorEnvFile, type Office, readEnvFile, skillGroups } from "../office.ts";
+import { isCurrent, readSkillRecord, skillDir } from "../skill-copies.ts";
 import { packageComposeFile, serviceStatus, sharedNamespaces } from "../package-services.ts";
 import { envFilePath, hostWrappers, sourceLine, sourcedBy } from "../host-env.ts";
 import { claim, machineReport, matchesServerUnit, requireServerConsent } from "../machine.ts";
@@ -99,8 +100,11 @@ async function drift(office: Office): Promise<string[]> {
     if (plugins.wanted.get(name) !== target) problems.push(`.opencode/plugins/${name} links to ${target}, the plugin of no declared package (office sync removes it)`);
   }
 
-  for (const skill of office.skills.copied) {
-    if (!libraryIds.includes(skill.name)) problems.push(`copied skill skills/${skill.name} is missing`);
+  for (const group of skillGroups(office)) {
+    for (const skill of group.skills) {
+      if (!libraryIds.includes(skill.name)) problems.push(`copied skill skills/${skill.name} is missing`);
+      else if (group.grouped && !isCurrent(readSkillRecord(skillDir(office, skill.name)), skill, group.ref)) problems.push(`copied skill skills/${skill.name} isn't the copy of ${skill.path} at ${group.ref} that office.yaml pins (office sync copies it, unless it was edited)`);
+    }
   }
 
   for (const selection of skillSelections(office)) {

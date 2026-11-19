@@ -3,7 +3,7 @@
 // office plugin shares.
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, posix, resolve } from "node:path";
 
 import * as v from "valibot";
 import { isMap, isNode, isScalar, isSeq, parse, parseDocument, stringify } from "yaml";
@@ -19,7 +19,33 @@ export type Repository = OfficeConfig["references"][number];
 
 export type Desk = { name: string } & OfficeConfig["desks"][string];
 
-export type CopiedSkill = OfficeConfig["skills"]["copied"][number];
+/** One skill skills.copied copies into `skills/<name>/`: the folder `path` of `repo` at `ref`. */
+export type CopiedSkill = { name: string; repo: string; ref?: string; path: string };
+
+/**
+ * An entry of skills.copied, at `index` in the list: a group of skills from one repository at one
+ * pinned ref, which `office skills update` can move along `track`, or (`grouped: false`) one skill
+ * listed alone, as offices did before groups, which sync copies once and never replaces.
+ */
+export type SkillGroup = { index: number; grouped: boolean; repo: string; ref?: string; track?: string; skills: CopiedSkill[] };
+
+/** skills.copied, each entry as a group with each skill's path resolved against the group's base. */
+export function skillGroups(office: Pick<Office, "skills">): SkillGroup[] {
+  return office.skills.copied.map((entry, index) => {
+    if (!("skills" in entry)) return { index, grouped: false, repo: entry.repo, ref: entry.ref, skills: [entry] };
+
+    const base = entry.base ?? ".";
+
+    const skills = entry.skills.map((skill) => ({ name: skill.name, repo: entry.repo, ref: entry.ref, path: posix.join(base, skill.path) }));
+
+    return { index, grouped: true, repo: entry.repo, ref: entry.ref, track: entry.track, skills };
+  });
+}
+
+/** Every skill skills.copied copies, groups included. */
+export function copiedSkills(office: Pick<Office, "skills">): CopiedSkill[] {
+  return skillGroups(office).flatMap((group) => group.skills);
+}
 
 export type PackageEntry = OfficeConfig["packages"][number];
 
@@ -211,6 +237,18 @@ export function withoutKeys(text: string, path: (string | number)[], keys: strin
   }
 
   return cuts.reduceRight((result, [start, end]) => `${result.slice(0, start)}${result.slice(end)}`, text);
+}
+
+/**
+ * office.yaml's text with the scalar already at `path` (such as `packages.2.ref`) replaced by
+ * `value`, quoted as YAML needs, keeping every other character as written.
+ */
+export function withScalar(text: string, path: (string | number)[], value: string): string {
+  const node = parseDocument(text).getIn(path, true);
+
+  if (!isScalar(node) || node.range === undefined || node.range === null) throw new OfficeError(`office.yaml: set ${where(path)} to ${value} by hand`);
+
+  return `${text.slice(0, node.range[0])}${stringify(value).trimEnd()}${text.slice(node.range[1])}`;
 }
 
 /** office.yaml's text without the item `value` of the list at `path`, keeping every other line as written. */

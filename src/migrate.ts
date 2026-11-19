@@ -114,7 +114,7 @@ function builtinEntries(office: Office): Migrated {
   if (names.length === 0) return { office, changes: [] };
 
   const updated = editConfig(office, (text) =>
-    names.reduce((result, name) => withoutKeys(result, ["packages", office.packages.findIndex((entry) => entry.name === name)], ["repo", "path", "ref"]), text),
+    names.reduce((result, name) => withoutKeys(result, ["packages", office.packages.findIndex((entry) => entry.name === name)], ["repo", "path", "ref", "track"]), text),
   );
 
   return { office: updated, changes: names.map((name) => `made ${name} a built-in package in office.yaml: dropped its repo, path and ref, so it follows this office executable`) };

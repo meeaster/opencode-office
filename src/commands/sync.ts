@@ -15,14 +15,15 @@ import { claudeFiles } from "../claude.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { collectJobs } from "../cron/jobs.ts";
 import { syncMachine } from "../machine.ts";
-import { cloneOrFetchStreamed, cloneShallowStreamed, copyFromRepository, discardFailedClone, isClone, refreshCloneStreamed } from "../git.ts";
+import { cloneOrFetchStreamed, cloneShallowStreamed, discardFailedClone, isClone, refreshCloneStreamed } from "../git.ts";
 import { clones, installedPackages, oldKnowledgePlugin, packageLink, pluginLinks, skillSelections } from "../layout.ts";
 import { migrate } from "../migrate.ts";
 import { packageComposeFile } from "../package-services.ts";
 import { syncTools } from "../package-tools.ts";
-import type { CopiedSkill, Desk, Office } from "../office.ts";
+import { type Desk, type Office, skillGroups } from "../office.ts";
 import { silentStage, type Stage } from "../report/index.ts";
-import { fetchPackage, installBuiltin, type InstalledPackage, installPackage, pulledDir, pulledFolders, removePackage, resolvePackages, sourceFile } from "../packages.ts";
+import { fetchPackage, installBuiltin, type InstalledPackage, installPackage, pulledDir, pulledFolders, removePackage, resolvePackages } from "../packages.ts";
+import { describeGroup, stageGroup } from "../skill-copies.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
 
 /** "release-notes" → "Release notes", for titles in scaffolded files. */
@@ -95,15 +96,18 @@ function scaffoldDesk(office: Office, desk: Desk): string[] {
 }
 
 /**
- * Copies one skill folder of a git repository at a ref into `to` and records where it came from
- * in `.source.json`, so a later check can compare the copied commit with upstream.
+ * Copies skills.copied into the library at the refs office.yaml pins, one group at a time: a
+ * missing copy, and a group's copy whose record names another ref. A skill listed alone is copied
+ * once and never replaced. Pins only move with `office skills update`.
  */
-function copySkill(skill: CopiedSkill, to: string): string {
-  const commit = copyFromRepository(skill, to, "SKILL.md");
+function copySkills(office: Office): string[] {
+  return skillGroups(office).flatMap((group) => {
+    const staged = stageGroup(office, group, group.ref);
 
-  writeFileSync(join(to, sourceFile), `${JSON.stringify({ repo: skill.repo, ref: skill.ref ?? null, path: skill.path, commit, copied: new Date().toISOString() }, null, 2)}\n`);
+    if (staged.ok) return staged.apply();
 
-  return commit;
+    return [group.grouped ? `FAILED ${describeGroup(group)} at ${group.ref}: ${staged.reason}` : `FAILED to copy skills/${group.skills[0].name}: ${staged.reason}`];
+  });
 }
 
 /** Makes each .opencode/skills/ hold exactly the enabled library skills as relative links. */
@@ -310,20 +314,22 @@ export async function sync(loaded: Office, { referencesOnly = false, stage = sil
     for (const path of scaffoldDesk(office, desk)) changes.push(`created ${relative(office.dir, path)}`);
   }
 
-  for (const skill of office.skills.copied) {
-    const to = join(office.dir, "skills", skill.name);
+  changes.push(...copySkills(office));
+  await syncPackages(office, changes, stage);
+  changes.push(...claudeFiles(office.dir, true));
+  changes.push(...linkSkills(office));
+  changes.push(...excludePluginClones(office));
 
-    if (existsSync(to)) continue;
+  return reported;
+}
 
-    try {
-      const commit = copySkill(skill, to);
-
-      changes.push(`copied skills/${skill.name} from ${skill.repo} at ${commit}`);
-    } catch (error) {
-      changes.push(`FAILED to copy skills/${skill.name}: ${error instanceof Error ? error.message.trim() : String(error)}`);
-    }
-  }
-
+/**
+ * Installs, updates, restores and removes the office's packages at the refs office.yaml pins, then
+ * applies them: settings and template files, their mise tools (linked machine-wide where the
+ * office manages the machine), plugin links and desktop panels. `office sync` and `office packages
+ * update` both apply packages this way. Each change goes to `changes`.
+ */
+export async function syncPackages(office: Office, changes: { push: (...lines: string[]) => void }, stage: Stage = silentStage): Promise<void> {
   const { packages } = resolvePackages(office);
 
   for (const item of packages) {
@@ -367,15 +373,9 @@ export async function sync(loaded: Office, { referencesOnly = false, stage = sil
 
   stage.detail("writing the packages' tools and linking skills and plugins");
   changes.push(...syncTools(office, installed.installed, packages.map((item) => item.entry.name)));
-  changes.push(...claudeFiles(office.dir, true));
   changes.push(...syncMachine(office));
-
-  changes.push(...linkSkills(office));
   changes.push(...linkPlugins(office));
-  changes.push(...excludePluginClones(office));
   changes.push(...installPanels(office, installed.installed, removedPanels));
-
-  return reported;
 }
 
 /**

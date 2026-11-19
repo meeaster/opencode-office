@@ -17,6 +17,7 @@ import { guiDev } from "./commands/gui.ts";
 import { init, nextSteps } from "./commands/init.ts";
 import { pair } from "./commands/pair.ts";
 import { pin } from "./commands/pin.ts";
+import { updatePackages, updateSkills } from "./commands/pins.ts";
 import { setup } from "./commands/setup.ts";
 import { sessionInstructions } from "./commands/session-instructions.ts";
 import { runInContainer } from "./commands/shell.ts";
@@ -53,6 +54,13 @@ const usage = `usage: office <command> [--office <dir>]
                                office's tools into mise's global conf.d, install panels on the
                                desktop app's machine, migrate old layouts. --release-machine only
                                removes every file the office wrote on this machine, and its consent
+  skills update                move each skills.copied group with a track to the newest commit of
+                               its branch, or of its highest stable SemVer tag matching a pattern
+                               such as v2.*; recopy the whole group and record the commit as its ref.
+                               A group missing a skill, or with edits the copy would lose, stays put
+  packages update              likewise for packages from other repositories with a track, then
+                               apply them as sync does. Neither command syncs anything else, and
+                               office sync applies pins without moving them
   check                        report drift from office.yaml and the tool, the running
                                containers and opted-in managed OpenCode
   instructions [folder]        print the office guidance a session started in <folder> gets
@@ -243,6 +251,13 @@ async function main(): Promise<void> {
       stage.done(summarize(changes));
       reporter.finish([]);
     }, { verbose });
+  } else if ((command === "skills" || command === "packages") && rest[0] === "update" && rest.length === 1) {
+    const office = currentOffice(flags);
+    const lines = command === "skills" ? updateSkills(office) : await updatePackages(office);
+
+    for (const line of lines) (line.startsWith("FAILED") ? console.error : console.log)(line);
+
+    if (lines.some((line) => line.startsWith("FAILED"))) process.exitCode = 1;
   } else if (command === "check") {
     if (!(await check(currentOffice(flags)))) process.exitCode = 1;
   } else if (command === "up") {

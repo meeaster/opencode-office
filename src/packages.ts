@@ -216,7 +216,7 @@ export function readRecord(dir: string): PackageRecord | undefined {
 }
 
 /** Package files that differ from the copy the record describes, each with what happened to it. */
-export function localEdits(dir: string, record: PackageRecord): string[] {
+export function localEdits(dir: string, record: Pick<PackageRecord, "files">): string[] {
   const now = fileHashes(dir);
 
   return [
@@ -317,7 +317,7 @@ export async function installBuiltin(office: Office, name: string): Promise<stri
  * ref, and restores one whose files were edited. Returns one line per change; a failure starts
  * with FAILED.
  */
-export function fetchPackage(office: Office, name: string, source: NonNullable<PackageEntry["source"]>): string[] {
+export function fetchPackage(office: Office, name: string, source: Pick<NonNullable<PackageEntry["source"]>, "repo" | "path" | "ref">): string[] {
   const dir = pulledDir(office, name);
   const where = relative(office.dir, dir);
   const record = readRecord(dir);
@@ -334,7 +334,7 @@ export function fetchPackage(office: Office, name: string, source: NonNullable<P
       // .template.json would make this office skip template files it never received.
       for (const file of records) rmSync(join(staging, file), { force: true });
 
-      writeJson(join(staging, sourceFile), { ...source, commit: copied, files: fileHashes(staging), copied: new Date().toISOString() });
+      writeJson(join(staging, sourceFile), { repo: source.repo, path: source.path, ref: source.ref, commit: copied, files: fileHashes(staging), copied: new Date().toISOString() });
 
       return copied;
     });

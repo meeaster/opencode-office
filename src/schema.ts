@@ -161,13 +161,62 @@ export const modelReference = v.pipe(
   v.regex(/^[^/#\s]+\/[^#\s]+(?:#[^#\s]+)?$/, "must be a model such as openai/gpt-6-luna#low: provider/model, with an optional #variant"),
 );
 
+/**
+ * What a copied skill group or a package from a repository follows when `office skills update` or
+ * `office packages update` advances its pin: a branch name, or a pattern of stable SemVer tags with
+ * `*`, such as `v2.*`, of which the highest version wins.
+ */
+export const track = v.pipe(
+  text,
+  v.regex(/^[A-Za-z0-9._\/*+-]+$/, "must be a branch such as main, or a tag pattern such as v2.*"),
+  v.check((value) => !value.split("/").includes("..") && !value.startsWith("/") && !value.endsWith("/"), "must be a branch such as main, or a tag pattern such as v2.*"),
+);
+
+/** A folder of a repository, relative to its root (or a group's base), without `..`. */
+const repositoryPath = v.pipe(
+  text,
+  v.check((value) => !value.startsWith("/") && !value.split("/").includes(".."), "must be a relative path inside the repository, without .."),
+);
+
+const copiedSkill = v.strictObject({ name, repo: text, ref: v.optional(text), path: text }, mapping);
+
+// A group of skills from one repository at one pinned ref: each skill is a name, copied from
+// <base>/<name>, or { name, path } with path relative to base (the repository's root by default).
+// Both forms parse to { name, path }.
+const skillGroup = v.strictObject(
+  {
+    repo: text,
+    ref: text,
+    track: v.optional(track),
+    base: v.optional(repositoryPath),
+    skills: v.pipe(
+      v.array(
+        v.union([v.pipe(name, v.transform((skill) => ({ name: skill, path: skill }))), v.strictObject({ name, path: repositoryPath }, mapping)], "must be a skill name or { name, path }"),
+        "must be a list",
+      ),
+      v.minLength(1, "must list at least one skill"),
+    ),
+  },
+  mapping,
+);
+
+/** An entry of skills.copied: one skill, as offices have always listed them, or a group from one repository. */
+const copiedEntry = v.lazy((input) => (v.is(v.object({ skills: v.unknown() }), input) ? skillGroup : copiedSkill));
+
+type CopiedEntry = v.InferOutput<typeof copiedSkill> | v.InferOutput<typeof skillGroup>;
+
+/** The library names the entries of skills.copied copy into, in order. */
+export function copiedNames(entries: CopiedEntry[]): string[] {
+  return entries.flatMap((entry) => ("skills" in entry ? entry.skills.map((skill) => skill.name) : [entry.name]));
+}
+
 const skills = v.nullish(
   v.strictObject(
     {
       enabled: names,
       copied: v.pipe(
-        v.nullish(v.array(v.strictObject({ name, repo: text, ref: v.optional(text), path: text }, mapping), "must be a list"), []),
-        v.check(uniqueNames, "lists a name twice"),
+        v.nullish(v.array(copiedEntry, "must be a list"), []),
+        v.check((entries) => new Set(copiedNames(entries)).size === copiedNames(entries).length, "lists a skill name twice"),
       ),
     },
     mapping,
@@ -216,19 +265,22 @@ const packageEntry = v.pipe(
       repo: v.optional(text),
       path: v.optional(text),
       ref: v.optional(text),
+      // What `office packages update` moves ref to; without it, ref stays where it is.
+      track: v.optional(track),
       settings: v.pipe(v.nullish(v.record(v.string(), settingValue, "must map setting names to values")), v.transform((settings) => settings ?? {})),
       cron: cronOverrides,
     },
     mapping,
   ),
   v.check((entry) => (entry.repo === undefined ? entry.path === undefined && entry.ref === undefined : entry.path !== undefined && entry.ref !== undefined), "needs repo, path and ref together, or none of them for a built-in package or one in packages/<name>/"),
+  v.check((entry) => entry.track === undefined || entry.repo !== undefined, "track needs repo, path and ref: only a package from another repository follows a branch or tags"),
   v.check((entry) => entry.name !== "office" || entry.repo === undefined, "the required office package is built in: its entry can only configure settings and cron"),
   // The check above makes the three all present or all absent; `source` carries that as a type.
-  v.transform(({ name: packageName, settings, cron, repo, path, ref }) => ({
+  v.transform(({ name: packageName, settings, cron, repo, path, ref, track: follows }) => ({
     name: packageName,
     settings,
     cron,
-    source: repo !== undefined && path !== undefined && ref !== undefined ? { repo, path, ref } : undefined,
+    source: repo !== undefined && path !== undefined && ref !== undefined ? { repo, path, ref, track: follows } : undefined,
   })),
 );
 
