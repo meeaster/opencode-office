@@ -58,6 +58,25 @@ function record(path: string): { commit: string; ref: string | null } {
 
 const skill = (text: string) => `---\nname: x\ndescription: ${text}\n---\n${text}\n`;
 
+test("refresh keeps both updated pins through full sync and stops before up on a failed reference", () => {
+  const repo = join(dir, "upstream");
+  const old = commit(repo, { "demo/package.yaml": "name: demo\ndescription: Before\n", "x/SKILL.md": skill("Before") });
+  const next = commit(repo, { "demo/package.yaml": "name: demo\ndescription: After\n", "x/SKILL.md": skill("After") });
+
+  write(join(dir, "office/office.yaml"), `name: test\nstate: ${dir}/state\npackages:\n  - { name: demo, repo: ${repo}, ref: ${old}, track: main, path: demo }\nskills:\n  copied:\n    - { repo: ${repo}, ref: ${old}, track: main, skills: [x] }\nreferences: [{ name: missing, url: ${dir}/missing }]\n`);
+  const result = office("refresh");
+
+  expect(result.status).toBe(1);
+  expect(result.out).toContain("packages: done: 1 updated");
+  expect(result.out).toContain("skills: done: 1 updated");
+  expect(result.out).toContain("sync: FAILED");
+  expect(result.out).not.toContain("services:");
+  expect(result.out).not.toContain("check:");
+  expect(record(".office/packages/demo").commit).toBe(next);
+  expect(record("skills/x").commit).toBe(next);
+  expect(read(join(dir, "office/office.yaml"))).not.toContain(old);
+});
+
 test("skills update moves each tracked group along its tags or branch, all its copies at once, and touches no package, reference or untracked pin", () => {
   const skills = join(dir, "skills-repo");
   const other = join(dir, "other-repo");

@@ -31,7 +31,7 @@ import { releaseMachine } from "./machine.ts";
 import { currentOffice, type Office, OfficeError } from "./office.ts";
 import { packageSecret } from "./package-services.ts";
 import { decrypt } from "./secrets.ts";
-import { reported } from "./report/index.ts";
+import { onTerminal, reported, type Reporter, type Stage } from "./report/index.ts";
 import { age } from "./schema.ts";
 import { writeContainerWrappers } from "./sfw.ts";
 import { version } from "./tool.ts";
@@ -69,6 +69,8 @@ const usage = `usage: office <command> [--office <dir>]
                                office sync applies pins without moving them
   check                        report drift from office.yaml and the tool, the running
                                containers and opted-in managed OpenCode
+  refresh [--verbose]          update tracked package and skill pins, run a full sync, start
+                               services with ordinary up, then check office health
   instructions [folder]        print the office guidance a session started in <folder> gets
   instructions --session <id>  print each stored instruction entry from a running OpenCode server
   context --model <provider/model#variant>
@@ -109,8 +111,8 @@ const usage = `usage: office <command> [--office <dir>]
                                /usr/local/lib/office/sfw
 
   --version                    print the version and the commit this office was built from
-  --verbose                    setup, sync and up without a terminal: print every line of the
-                               commands they run, not only a failed command's last lines
+  --verbose                    show all check results in a terminal; with plain progress, show
+                               every subprocess line, not only a failed command's last lines
 
 Commands other than init and update act on the office in the current folder or above it, or
 --office.`;
@@ -249,15 +251,7 @@ async function main(): Promise<void> {
     await reported("sync", officeContext(office), async (reporter) => {
       const stage = flags.packages ? reporter.stage("Packages", { key: "packages" }) : reporter.stage("Repositories and packages", { key: "repos" });
       const changes = await sync(office, { scope: flags.packages ? "packages" : flags.references ? "references" : "all", stage, verbose });
-      const failed = changes.filter((line) => line.startsWith("FAILED")).length;
-
-      if (failed > 0) {
-        stage.fail(summarize(changes));
-
-        throw new OfficeError(`${failed} of the changes failed (above); fix them and run office sync again`);
-      }
-
-      stage.done(summarize(changes));
+      finishSync(stage, changes);
       reporter.finish([]);
     }, { verbose });
   } else if ((command === "skills" || command === "packages") && rest[0] === "update" && rest.length === 1) {
@@ -271,8 +265,34 @@ async function main(): Promise<void> {
 
       reporter.finish([]);
     }, { verbose: flags.verbose === true });
+  } else if (command === "refresh") {
+    if (rest.length || Object.keys(flags).some(key => !["office", "verbose"].includes(key))) throw new OfficeError("usage: office refresh [--office <dir>] [--verbose]");
+    const verbose = flags.verbose === true;
+    const office = currentOffice(flags);
+
+    await reported("refresh", officeContext(office), async reporter => {
+      await updatePackages(office, reporter.stage("Remote packages", { key: "packages" }), { apply: false });
+      await updateSkills(currentOffice(flags), reporter.stage("Copied skill groups", { key: "skills" }));
+      const stage = reporter.stage("Repositories and packages", { key: "sync" });
+
+      finishSync(stage, await sync(currentOffice(flags), { stage, verbose }));
+      const synced = currentOffice(flags);
+      const services = reporter.stage("Services", { key: "services" });
+
+      services.done(await up(synced));
+      await checkStage(synced, reporter, verbose);
+      reporter.finish([]);
+    }, { verbose });
   } else if (command === "check") {
-    if (!(await check(currentOffice(flags)))) process.exitCode = 1;
+    const office = currentOffice(flags);
+    const verbose = flags.verbose === true;
+
+    if (onTerminal()) {
+      await reported("check", officeContext(office), async reporter => {
+        await checkStage(office, reporter, verbose);
+        reporter.finish([]);
+      }, { verbose });
+    } else if (!(await check(office))) process.exitCode = 1;
   } else if (command === "up") {
     const office = currentOffice(flags);
 
@@ -357,7 +377,31 @@ async function main(): Promise<void> {
   }
 }
 
-/** What setup, sync and up show first: the office, its mode and its folder. */
+function finishSync(stage: Stage, changes: string[]) {
+  const summary = summarize(changes);
+
+  if (changes.some(line => line.startsWith("FAILED"))) {
+    stage.fail(summary);
+
+    throw new OfficeError("Fix the sync failures above and run the command again");
+  }
+
+  stage.done(summary);
+}
+
+async function checkStage(office: Office, reporter: Reporter, verbose: boolean) {
+  const stage = reporter.stage("Health check", { key: "check" });
+  const ok = await check(office, reporter.interactive ? stage : undefined, verbose);
+
+  if (!reporter.interactive) {
+    if (ok) stage.done("office check passed");
+    else stage.fail("office check found problems");
+  }
+
+  if (!ok) throw new OfficeError("Fix the reported checks and run office check again");
+}
+
+/** What progress commands show first: the office, its mode and its folder. */
 function officeContext(office: Office): string {
   const home = homedir();
   const dir = office.dir === home || office.dir.startsWith(`${home}/`) ? `~${office.dir.slice(home.length)}` : office.dir;

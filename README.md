@@ -153,7 +153,13 @@ _.path = ["{{ config_root }}/.office/claude/bin"]
 
 If `[env]` already exists, add only the `_.path` line there; if it already sets `_.path`, add the launcher directory to the existing list. Keep all other entries. Review and trust the changed file with `mise trust mise.toml` if mise asks. Remove the path entry to opt out.
 
-### What setup, sync and up print
+### Refresh an office
+
+Run `office refresh` to update tracked package pins, update copied skill groups, run a full sync (including references), start services with ordinary `office up`, then run `office check`. These stages run in order. Sync applies the package settings and integrations once, using the new pins. If a stage fails, later stages do not run; successful changes already made remain on disk for review. Use `office sync` instead to apply existing pins without moving them. `office refresh` does not upgrade the CLI or imply `office up --upgrade`.
+
+### What progress commands print
+
+`office check` and the final check in `office refresh` use Clack in a terminal: progress by area, totals, and the full warnings and failures. Use `--verbose` for every successful check and the outside-office inventory. When piped, `office check` keeps its original plain lines and exit status: warnings pass, failures exit nonzero.
 
 `office setup`, `office sync` and `office up` show what runs now, in stages. Setup's are, in order: Tools, Secrets, Git and GitHub, This machine (host mode only), Repositories and packages, System packages, Services, Apps and Checks; `office sync` is the Repositories and packages stage alone and `office up` the Services stage alone. Each stage ends in one line with a short summary and its time.
 
