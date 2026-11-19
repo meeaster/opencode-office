@@ -19,7 +19,7 @@ let dir: string;
 
 let office: string;
 
-const variables = [machineRecordVariable, miseConfigVariable, machineDirVariable, "HOME", "ZDOTDIR", "OFFICE_ENV_FILE"] as const;
+const variables = [machineRecordVariable, miseConfigVariable, machineDirVariable, "HOME", "ZDOTDIR", "OFFICE_ENV_FILE", "XDG_DATA_HOME"] as const;
 
 const saved = new Map(variables.map((name) => [name, process.env[name]]));
 
@@ -32,6 +32,8 @@ beforeEach(() => {
   process.env.HOME = join(dir, "home");
   delete process.env.ZDOTDIR;
   delete process.env.OFFICE_ENV_FILE;
+  // mise's shims and the default data folder follow XDG_DATA_HOME, which the temporary home replaces.
+  delete process.env.XDG_DATA_HOME;
 });
 
 afterEach(() => {
