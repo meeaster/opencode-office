@@ -27,7 +27,8 @@ import { hostLayout, hostWrappers } from "../host-env.ts";
 import { markServerStopped, planServer, serverIncumbent, startServer } from "../host-server.ts";
 import { claim, globalConfD, installSfw, removeUnwantedServer, requireServerConsent, stopRecordedServer, writeServerUnit } from "../machine.ts";
 import { machineFiles } from "../package-tools.ts";
-import { packageComposeFile, preparePackageServices, serviceFiles, serviceSettings, type UpgradedServices } from "../package-services.ts";
+import { appliedSpawns, packageComposeFile, preparePackageServices, serviceFiles, serviceSettings, type UpgradedServices } from "../package-services.ts";
+import { sweepSpawned } from "../package-spawns.ts";
 import { reconcileHostServices } from "../package-host-services.ts";
 import type { Lock } from "../schema.ts";
 import { prepareSecrets } from "../secrets.ts";
@@ -495,13 +496,15 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
     for (const path of await backUpPackages(office, services.upgraded)) say(`backed up to ${path}`, "office: ");
   }
 
-  services.apply();
+  // What the services of a package that stops created themselves goes with them, as on office down.
+  const finishSweep = sweepSpawned(services.apply(), "removing what stopped packages' services created");
 
   if (office.opencode.mode === "host") {
     // An opencode container left from container mode would answer on the old port.
     progress("starting the containers");
     await composeStreamed(office, ["rm", "--stop", "--force", "opencode"], { profiles: "container", pins });
     await composeStreamed(office, ["up", "-d", "--build", "--remove-orphans"], { pins });
+    finishSweep();
     writeExecutorFiles(office);
 
     // Before the tools, so their installs go through it.
@@ -526,6 +529,7 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
     // A changed schedule or enabled set needs a new container even when its image is unchanged.
     progress("starting the containers");
     await composeStreamed(office, ["up", "-d", "--build", "--remove-orphans"], { pins, cronRevision: cronRevision(jobs) });
+    finishSweep();
     writeExecutorFiles(office);
   }
 
@@ -586,12 +590,24 @@ export async function startExecutor(office: Office): Promise<void> {
   if (!(await waitForExecutor())) throw new OfficeError("Executor didn't become ready; fix its startup and rerun office setup");
 }
 
-/** Stops the office's containers, whichever mode started them, and its timers. */
+/**
+ * Stops the office's containers, whichever mode started them, and its timers. What packages'
+ * services created themselves (their spawns labels) goes too: its containers first, since one
+ * attached to the office's network keeps Compose from removing it, then its networks.
+ */
 export function down(office: Office): void {
   reconcileHostServices(office, "down");
   markServerStopped(office);
   removeTimers(office);
   stopRecordedServer(office);
-  compose(office, ["down"], { profiles: "container" });
+
+  const finishSweep = sweepSpawned([...appliedSpawns(office).values()], "removing what packages' services created");
+
+  try {
+    compose(office, ["down"], { profiles: "container" });
+  } finally {
+    finishSweep();
+  }
+
   removeExecutorFiles(office);
 }

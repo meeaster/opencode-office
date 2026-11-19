@@ -98,8 +98,8 @@ plugins: []
 # skills, tools and MCP servers, and each file of its template/ is copied once into the office (a
 # file you delete stays deleted). A package is one of three kinds:
 # - built-in, listed by name alone: shipped inside the office executable (knowledge, browser,
-#   artifact-share, design), installed in .office/packages/<name>/ and updated along with office. The
-#   office package is always installed; list it only to override its cron defaults.
+#   artifact-share, design, aws-emulator), installed in .office/packages/<name>/ and updated along
+#   with office. The office package is always installed; list it only to override its cron defaults.
 # - with repo, path and ref (a tag or a full commit SHA): copied from that repository into
 #   .office/packages/<name>/, and updated when ref changes. With track (a branch, or a tag
 #   pattern such as v1.*), office packages update moves ref to the newest match's commit.

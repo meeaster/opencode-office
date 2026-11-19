@@ -480,6 +480,35 @@ const systemBlock = v.strictObject(
   mapping,
 );
 
+/** The one variable a `spawns` label may hold, which office replaces with the office's name. */
+export const spawnsOfficeName = "${OFFICE_NAME}";
+
+/**
+ * The Docker label a package's services put on the containers, networks and volumes they create
+ * through the Docker socket, as `key=value`. The value holds `${OFFICE_NAME}` and nothing else to
+ * interpolate, so each office's label is its own; the package's namespace has to be one of its
+ * parts too (manifest check below). Keys under com.docker. are Docker's and Compose's own.
+ */
+const spawnsBlock = v.strictObject(
+  {
+    label: v.pipe(
+      v.string("must be a label such as tool_namespace=office-${OFFICE_NAME}-tool"),
+      v.regex(/^[A-Za-z0-9][A-Za-z0-9._-]*=[A-Za-z0-9._${}-]+$/, "must be one key=value label of letters, digits and . _ -, such as tool_namespace=office-${OFFICE_NAME}-tool"),
+      v.check((label) => !label.startsWith("com.docker."), "must not use a com.docker. key, which Docker and Compose set themselves"),
+      v.check((label) => label.split(spawnsOfficeName).length === 2 && !/[${}]/.test(label.replace(spawnsOfficeName, "")), "its value must hold ${OFFICE_NAME} once and nothing else to interpolate, so it names only this office's resources"),
+    ),
+  },
+  mapping,
+);
+
+/** Whether `namespace` is one of the `-`, `_` or `.` separated parts of a spawns label's value. */
+function spawnsNamesNamespace(label: string, namespace: string): boolean {
+  const value = label.slice(label.indexOf("=") + 1).replace(spawnsOfficeName, "\0");
+
+  // A namespace is lowercase letters, digits and dashes, so it needs no escaping.
+  return new RegExp(`(?:^|[-_.\\0])${namespace}(?:$|[-_.\\0])`).test(value);
+}
+
 /** A package's package.yaml: what can't be discovered from its folders. */
 export const packageManifestSchema = v.pipe(
   v.strictObject(
@@ -499,8 +528,10 @@ export const packageManifestSchema = v.pipe(
       system: v.optional(systemBlock),
       cron: packageCron,
       executor_app: v.optional(executorAppBlock),
+      // The label on Docker resources its services create themselves, which `office down` removes.
+      spawns: v.optional(spawnsBlock),
     },
-    "must be a mapping of name, namespace, description, settings or settings_schema, secrets, tools, host, system, cron and executor_app",
+    "must be a mapping of name, namespace, description, settings or settings_schema, secrets, tools, host, system, cron, executor_app and spawns",
   ),
   v.check((manifest) => manifest.settings === undefined || manifest.settings_schema === undefined, "choose settings or settings_schema, not both"),
   v.transform((manifest) => ({ ...manifest, settings: manifest.settings ?? {}, namespace: manifest.namespace ?? manifest.name })),
@@ -530,6 +561,11 @@ export const packageManifestSchema = v.pipe(
   v.forward(
     v.check((manifest) => Object.keys(manifest.settings).every((setting) => manifest.secrets[settingVariable(manifest.namespace, setting)] === undefined), "a name is also the variable of one of the package's settings"),
     ["secrets"],
+  ),
+  // Two packages of an office can't share a label: namespaces are unique.
+  v.forward(
+    v.check((manifest) => manifest.spawns === undefined || spawnsNamesNamespace(manifest.spawns.label, manifest.namespace), "its value must name the package's namespace (its name unless it sets namespace:) as a part between - _ or ., such as office-${OFFICE_NAME}-tool"),
+    ["spawns", "label"],
   ),
 );
 

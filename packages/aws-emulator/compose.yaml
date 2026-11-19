@@ -1,0 +1,60 @@
+# Floci (https://github.com/floci-io/floci), a local AWS emulator, and its web console, in the
+# office's compose project.
+#
+# Images are pinned by tag and digest. To move to another release, change the tag and digest
+# together and check the settings below against that release's docs (https://floci.io/floci/);
+# `office up --upgrade` applies it.
+
+services:
+  floci:
+    image: floci/floci:2.5.0@sha256:a0fbf944d7f338cc0856f1ef83831ea749ff2be71956eb7a7fce08fc21458e19
+    restart: unless-stopped
+    networks:
+      default:
+        # localhost.floci.io and every name under it resolve to 127.0.0.1 in public DNS, the
+        # published port; on the compose network Docker's DNS resolves this alias to Floci. So the
+        # one endpoint, and the URLs Floci returns (an SQS QueueUrl, a virtual-hosted S3 bucket),
+        # work from the host and from the office's containers alike. The containers Floci starts
+        # get the same names from its own DNS server.
+        aliases: [localhost.floci.io]
+    environment:
+      # Floci listens on the published port inside its container too, so the advertised address
+      # answers on the compose network as well as on the host.
+      FLOCI_PORT: ${FLOCI_PORT}
+      FLOCI_BASE_URL: http://localhost.floci.io:${FLOCI_PORT}
+      FLOCI_HOSTNAME: localhost.floci.io
+      FLOCI_STORAGE_MODE: ${FLOCI_STORAGE}
+      # The console is the floci-ui service below, so Floci never launches one of its own.
+      FLOCI_SERVICES_UI_ENABLED: "false"
+      # Every loopback bind-address setting Floci 2.5.0 documents, for the host ports Docker
+      # publishes for containers Floci starts. EC2 instance SSH (2200-2299) and security-group
+      # ports (30000-30999), EKS, OpenSearch and Amazon MQ have none; see the README's "Security".
+      FLOCI_SERVICES_UI_BIND_ADDRESS: 127.0.0.1
+      FLOCI_SERVICES_ECS_HOST_PORT_BIND_ADDRESS: 127.0.0.1
+      # Names and labels (floci_namespace) every container and volume Floci starts, so it never
+      # collides with another Floci on the same Docker daemon and can be found and removed.
+      FLOCI_DOCKER_RESOURCE_NAMESPACE: office-${OFFICE_NAME}-floci
+      # The port-forwarding sidecar of EC2 security-group ports, which Floci would otherwise pull
+      # as latest.
+      FLOCI_SERVICES_EC2_SOCAT_IMAGE: alpine/socat:1.8.1.3@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
+    ports:
+      - "127.0.0.1:${FLOCI_PORT}:${FLOCI_PORT}"
+    volumes:
+      # Lambda, RDS, ElastiCache, ECS and EC2 instances are containers Floci starts on the host's
+      # Docker: this gives Floci control of it.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Floci's state, used when storage isn't memory.
+      - floci-data:/app/data
+
+  floci-ui:
+    image: floci/floci-ui:0.7.0@sha256:90dcaa588f9b3cd3cb5ccc98559286574391001e46735b7be4373364d51f7dfe
+    restart: unless-stopped
+    environment:
+      FLOCI_ENDPOINT: http://floci:${FLOCI_PORT}
+    depends_on:
+      - floci
+    ports:
+      - "127.0.0.1:${FLOCI_UI_PORT}:4500"
+
+volumes:
+  floci-data:

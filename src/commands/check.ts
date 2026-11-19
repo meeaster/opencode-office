@@ -22,7 +22,8 @@ import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillS
 import { oldExecutorAppDirs } from "../executor-app-layout.ts";
 import { executorEnvFile, type Office, readEnvFile, skillGroups } from "../office.ts";
 import { isCurrent, readSkillRecord, skillDir } from "../skill-copies.ts";
-import { packageComposeFile, serviceStatus, sharedNamespaces } from "../package-services.ts";
+import { appliedServices, appliedSpawns, packageComposeFile, parseCompose, serviceStatus, sharedNamespaces } from "../package-services.ts";
+import { listSpawned, planSweep, sweepIsEmpty } from "../package-spawns.ts";
 import { hostServiceStatus } from "../package-host-services.ts";
 import { envFilePath, hostWrappers, sourceLine, sourcedBy } from "../host-env.ts";
 import { claim, machineReport, matchesServerUnit, requireServerConsent } from "../machine.ts";
@@ -559,6 +560,39 @@ function servicesRunning(office: Office): string[] {
   return compose(office, ["ps", "--status", "running", "--format", "{{.Service}}"], { capture: true, profiles: "container" }).split("\n").filter(Boolean);
 }
 
+/**
+ * One warning per package whose services are stopped while containers or networks carrying its
+ * spawns label remain, which office down removes. Its volumes are expected to stay.
+ */
+function spawnChecks(office: Office, report: Report): void {
+  const labels = appliedSpawns(office);
+
+  if (labels.size === 0) return;
+
+  let running: string[];
+
+  try {
+    running = servicesRunning(office);
+  } catch {
+    running = [];
+  }
+
+  const applied = appliedServices(office);
+
+  for (const [name, label] of labels) {
+    const read = parseCompose(applied.get(name) ?? "");
+
+    if (read.ok && Object.keys(read.value.services).some((service) => running.includes(service))) continue;
+
+    const { found, errors } = listSpawned([label]);
+    const sweep = planSweep([label], found);
+    const left = [...(sweep.containers.length > 0 ? [`containers ${sweep.containers.join(", ")}`] : []), ...(sweep.networks.length > 0 ? [`networks ${sweep.networks.join(", ")}`] : [])];
+
+    if (errors.length > 0) report("warn", `package ${name}: spawned resources`, errors.join("; "));
+    else if (!sweepIsEmpty(sweep)) report("warn", `package ${name}: spawned resources`, `its services are stopped, but ${left.join(" and ")} labelled ${label} remain; office down removes them`);
+  }
+}
+
 /** The runtime checks; returns the root session's skills and plugins when the server listed them. */
 async function runtime(office: Office, report: Report, stage?: Stage): Promise<RootAnswer | undefined> {
   stage?.detail("containers and Executor");
@@ -972,6 +1006,7 @@ export async function check(office: Office, stage?: Stage, verbose = false): Pro
   }
 
   await packageChecks(office, report);
+  spawnChecks(office, report);
 
   stage?.detail("host tools and machine settings");
   officeToolChecks(office, report);

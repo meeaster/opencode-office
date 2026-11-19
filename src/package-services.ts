@@ -19,6 +19,7 @@ import { installedPackages } from "./layout.ts";
 import { type Office, OfficeError, readEnvFile } from "./office.ts";
 import { type InstalledPackage, resolvePackages } from "./packages.ts";
 import { check, type ComposeFile, composeFileSchema, type PackageManifest, type Parsed, scalarSetting, settingVariable } from "./schema.ts";
+import { spawnsLabel } from "./package-spawns.ts";
 import { say } from "./report/index.ts";
 
 /** The file at a package's root that gives it services. */
@@ -27,7 +28,7 @@ export const packageComposeFile = "compose.yaml";
 /** The office's own services, which no package may define or change. */
 const coreServices = ["executor", "opencode"];
 
-/** The state folder of package services: `<name>.env` (secrets) and `<name>/` (the applied copy, its settings and include file). */
+/** The state folder of package services: `<name>.env` (secrets) and `<name>/` (the applied copy, its settings, include file and spawns label). */
 function servicesState(office: Office): string {
   return join(office.state, "packages");
 }
@@ -49,6 +50,24 @@ export function packageSecret(office: Office, name: string, key: string): string
 
 function appliedDir(office: Office, name: string): string {
   return join(servicesState(office), name);
+}
+
+/** The file beside a package's applied copy holding its spawns label for this office. */
+const spawnsFile = "spawns.label";
+
+function readSpawns(dir: string): string | undefined {
+  const path = join(dir, spawnsFile);
+
+  return existsSync(path) ? readFileSync(path, "utf8").trim() || undefined : undefined;
+}
+
+/** Each applied package's spawns label for this office, by package name. */
+export function appliedSpawns(office: Office): Map<string, string> {
+  return new Map([...appliedServices(office).keys()].flatMap((name) => {
+    const label = readSpawns(appliedDir(office, name));
+
+    return label === undefined ? [] : [[name, label] as const];
+  }));
 }
 
 export function parseCompose(text: string): Parsed<ComposeFile> {
@@ -240,7 +259,8 @@ export type UpgradedServices = { name: string; services: string[]; volumes: stri
 /**
  * Decides which package compose files `office up` runs, refusing an invalid one it would apply,
  * and says which wait for `--upgrade`. `upgraded` lists the applied files an upgrade replaces, for
- * backing up first; `apply` writes the state the compose project then runs.
+ * backing up first; `apply` writes the state the compose project then runs, and returns the spawns
+ * labels of packages whose services it stopped, for a sweep.
  */
 export function preparePackageServices(office: Office, upgrade: boolean) {
   const { installed } = installedPackages(office);
@@ -282,7 +302,9 @@ export function preparePackageServices(office: Office, upgrade: boolean) {
     return [{ name: change.name, services: read.ok ? Object.keys(read.value.services) : [], volumes }];
   });
 
-  const apply = () => {
+  const apply = (): string[] => {
+    const dropped: string[] = [];
+
     mkdirSync(servicesState(office), { recursive: true, mode: 0o700 });
     chmodSync(servicesState(office), 0o700);
 
@@ -290,6 +312,10 @@ export function preparePackageServices(office: Office, upgrade: boolean) {
       const dir = appliedDir(office, change.name);
 
       if (change.to === undefined) {
+        const label = readSpawns(dir);
+
+        if (label !== undefined) dropped.push(label);
+
         rmSync(dir, { recursive: true, force: true });
         say(
           listed.has(change.name)
@@ -322,6 +348,13 @@ export function preparePackageServices(office: Office, upgrade: boolean) {
       const settings = join(dir, "settings.env");
 
       writeFileSync(settings, settingsEnv(item));
+
+      // The label describes what the applied copy runs, so a copy waiting for --upgrade keeps its own.
+      if (!plan.pending.includes(item.entry.name)) {
+        if (item.manifest.spawns === undefined) rmSync(join(dir, spawnsFile), { force: true });
+        else writeFileSync(join(dir, spawnsFile), `${spawnsLabel(item.manifest.spawns.label, office.name)}\n`);
+      }
+
       writeFileSync(
         join(dir, "include.yaml"),
         `# Written by office up: package ${item.entry.name}'s applied compose file, with its folder for relative paths and its own variables.\n${stringify({
@@ -329,6 +362,8 @@ export function preparePackageServices(office: Office, upgrade: boolean) {
         })}`,
       );
     }
+
+    return dropped;
   };
 
   return { upgraded, apply };
