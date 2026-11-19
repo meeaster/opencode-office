@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -8,7 +8,7 @@ import { parse } from "yaml";
 
 import { compose, composeArguments } from "./commands/compose.ts";
 import { loadOffice } from "./office.ts";
-import { composeProblems, ensureSecrets, planServices, preparePackageServices, secretsPath } from "./package-services.ts";
+import { composeProblems, ensureSecrets, packageSecret, planServices, preparePackageServices, secretsPath } from "./package-services.ts";
 import { check, packageManifestSchema } from "./schema.ts";
 
 let dir: string;
@@ -104,6 +104,25 @@ test("a namespaced package's services and settings follow its namespace, and two
   write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: canvas\n    settings:\n      url: https://example.com\n  - name: doop\n");
   write(join(office, "packages/doop/package.yaml"), "name: doop\ndescription: d\n");
   expect(() => preparePackageServices(loadOffice(office), false)).toThrow("packages canvas and doop claim the same namespace, doop");
+});
+
+test("a package without services gets declared secrets on up, and get reveals only current declarations", () => {
+  write(join(dir, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: notes\n  - name: plain\n");
+  write(join(dir, "packages/notes/package.yaml"), "name: notes\ndescription: test\nsecrets:\n  NOTES_KEY:\n    generate: hex\n    bytes: 32\n");
+  write(join(dir, "packages/plain/package.yaml"), "name: plain\ndescription: test\n");
+  const office = loadOffice(dir);
+
+  expect(() => packageSecret(office, "notes", "NOTES_KEY")).toThrow("run office up");
+  preparePackageServices(office, false).apply();
+  const key = packageSecret(office, "notes", "NOTES_KEY");
+
+  expect(key).toMatch(/^[0-9a-f]{64}$/);
+  expect(existsSync(secretsPath(office, "plain"))).toBe(false);
+  expect(existsSync(join(office.state, "packages/notes/include.yaml"))).toBe(false);
+  preparePackageServices(office, false).apply();
+  expect(packageSecret(office, "notes", "NOTES_KEY")).toBe(key);
+  write(join(dir, "packages/notes/package.yaml"), "name: notes\ndescription: test\n");
+  expect(() => packageSecret(office, "notes", "NOTES_KEY")).toThrow("declares");
 });
 
 test("secrets are generated once: a later run adds only new ones and keeps every value", () => {

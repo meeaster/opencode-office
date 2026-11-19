@@ -29,6 +29,8 @@ import { executeJob, requireJobs } from "./cron/jobs.ts";
 import { migrateHome } from "./home-migration.ts";
 import { releaseMachine } from "./machine.ts";
 import { currentOffice, type Office, OfficeError } from "./office.ts";
+import { packageSecret } from "./package-services.ts";
+import { decrypt } from "./secrets.ts";
 import { reported } from "./report/index.ts";
 import { age } from "./schema.ts";
 import { writeContainerWrappers } from "./sfw.ts";
@@ -48,6 +50,8 @@ const usage = `usage: office <command> [--office <dir>]
                                installs through mise only on a yes in a terminal
   executor credentials [--password-only]
                                deliberately reveal the stored encrypted owner login, even offline
+  secrets get <package> <key>  write one declared, generated package secret to stdout
+  secrets decrypt <file>       decrypt an office-relative SOPS JSON/YAML file to stdout as JSON
   sync [--references | --release-machine]
                                clone and update, scaffold missing desks, copy and link library
                                skills, install, restore and link packages, link a host-mode
@@ -288,6 +292,12 @@ async function main(): Promise<void> {
     process.exitCode = runInContainer(currentOffice(flags), rest);
   } else if (command === "executor" && rest[0] === "credentials") {
     credentials(currentOffice(flags), flags["password-only"] === true);
+  } else if (command === "secrets") {
+    const [action, target, key] = rest;
+
+    if (action === "get" && rest.length === 3) process.stdout.write(packageSecret(currentOffice(flags), target, key));
+    else if (action === "decrypt" && rest.length === 2) process.stdout.write(decrypt(currentOffice(flags), target));
+    else throw new OfficeError("usage: office secrets get <package> <key> | office secrets decrypt <file>");
   } else if (command === "pin") {
     for (const line of await pin(currentOffice(flags))) console.log(line);
   } else if (command === "pair") {
