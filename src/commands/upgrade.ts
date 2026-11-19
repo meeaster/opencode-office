@@ -268,7 +268,7 @@ export async function upgradeTools(office: Office): Promise<boolean> {
 
   await notify(office, {
     title: failures.length === 0 ? "Tools upgraded" : "Tool upgrade needs attention",
-    body: `${lines.join("\n")}${report.length > 0 ? `\nCommitted locally as ${committer(office).name}; revert the commit to undo.` : ""}${versions.moves.length > 0 ? "\nNothing restarted: `office up --upgrade` applies the new versions in office.yaml." : ""}`,
+    body: `${lines.join("\n")}${report.length > 0 ? `\nCommitted locally as ${committer(office).name}; revert the commit to undo.` : ""}${versions.moves.length > 0 ? "\n`office up --upgrade` applies the new versions in office.yaml." : ""}`,
   });
 
   return failures.length === 0;

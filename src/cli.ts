@@ -93,8 +93,9 @@ const usage = `usage: office <command> [--office <dir>]
   apps adopt <catalog-id>      copy an installed Executor app's source into executor-apps/<catalog-id>
   gui dev <package>            install a local package's panel on the desktop app's machine each
                                time its build writes the bundle
-  upgrade-tools                bump exact pins in mise.toml files, machine.toml, .office/mise/
-                               and office.yaml's versions, and commit them
+  upgrade-tools [--apply]      bump exact pins in mise.toml files, machine.toml, .office/mise/
+                               and office.yaml's versions, and commit them; --apply then runs
+                               up --upgrade, even when the pins were already current
   update [--check] [--minimum-release-age <age> | --version <release>]
                                replace this office executable with the newest eligible release
                                (minimum age: 0d by default), or exactly <release>; --check only reports.
@@ -175,6 +176,7 @@ async function main(): Promise<void> {
       references: { type: "boolean" },
       packages: { type: "boolean" },
       upgrade: { type: "boolean" },
+      apply: { type: "boolean" },
       refresh: { type: "boolean" },
       container: { type: "boolean" },
       origin: { type: "string" },
@@ -201,6 +203,8 @@ async function main(): Promise<void> {
   if (flags.session !== undefined && command !== "instructions") throw new OfficeError("--session is an option for office instructions");
 
   if (flags.packages && command !== "sync") throw new OfficeError("--packages is an option for office sync");
+
+  if (flags.apply && command !== "upgrade-tools") throw new OfficeError("--apply is an option for office upgrade-tools");
 
   if (flags.model !== undefined && command !== "context") throw new OfficeError("--model is an option for office context");
 
@@ -293,13 +297,24 @@ async function main(): Promise<void> {
         reporter.finish([]);
       }, { verbose });
     } else if (!(await check(office))) process.exitCode = 1;
-  } else if (command === "up") {
+  } else if (command === "up" || command === "upgrade-tools") {
+    if (command === "upgrade-tools") {
+      if (!(await upgradeTools(currentOffice(flags)))) {
+        process.exitCode = 1;
+
+        return;
+      }
+
+      if (!flags.apply) return;
+    }
+
+    // Read the office after bumping so up sees the newly written pins.
     const office = currentOffice(flags);
 
     await reported("up", officeContext(office), async (reporter) => {
       const stage = reporter.stage("Services", { key: "services" });
 
-      stage.done(await up(office, { upgrade: flags.upgrade === true, refresh: flags.refresh === true }));
+      stage.done(await up(office, { upgrade: command === "upgrade-tools" || flags.upgrade === true, refresh: command === "up" && flags.refresh === true }));
       reporter.finish([]);
     }, { verbose: flags.verbose === true });
   } else if (command === "setup") {
@@ -329,8 +344,6 @@ async function main(): Promise<void> {
     console.log(await pair(currentOffice(flags), flags.origin));
   } else if (command === "down") {
     down(currentOffice(flags));
-  } else if (command === "upgrade-tools") {
-    if (!(await upgradeTools(currentOffice(flags)))) process.exitCode = 1;
   } else if (command === "host-agent-cli-update" && rest.length === 0) {
     const office = currentOffice(flags);
 
