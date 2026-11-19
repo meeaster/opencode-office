@@ -10,6 +10,7 @@ import { agentUpdateJob, updateAgentClis } from "./commands/agent-cli-update.ts"
 import { adopt, deploy } from "./commands/apps.ts";
 import { check } from "./commands/check.ts";
 import { down, up } from "./commands/compose.ts";
+import { contextReport } from "./commands/context.ts";
 import { containerEnvText } from "./commands/env.ts";
 import { credentials } from "./commands/executor.ts";
 import { guiDev } from "./commands/gui.ts";
@@ -56,6 +57,11 @@ const usage = `usage: office <command> [--office <dir>]
                                containers and opted-in managed OpenCode
   instructions [folder]        print the office guidance a session started in <folder> gets
   instructions --session <id>  print each stored instruction entry from a running OpenCode server
+  context [folder] [--model <provider/model#variant>]
+                               measure the tokens the office adds to the first request of a
+                               session in <folder>, against an empty folder, with each of
+                               office.yaml's context.models (or just --model) on the running
+                               OpenCode server (host mode)
   up [--upgrade] [--refresh] | down
                                start or stop this office's containers. up runs the versions it
                                last applied; --upgrade applies office.yaml's newer ones;
@@ -143,6 +149,7 @@ async function main(): Promise<void> {
     options: {
       office: { type: "string" },
       session: { type: "string" },
+      model: { type: "string" },
       name: { type: "string" },
       "owner-email": { type: "string" },
       "generate-age-key": { type: "boolean" },
@@ -177,6 +184,8 @@ async function main(): Promise<void> {
 
   if (flags.session !== undefined && command !== "instructions") throw new OfficeError("--session is an option for office instructions");
 
+  if (flags.model !== undefined && command !== "context") throw new OfficeError("--model is an option for office context");
+
   if (command === "init") {
     if (rest[0] === undefined) throw new OfficeError("usage: office init <dir> [--name <name>]");
 
@@ -194,6 +203,15 @@ async function main(): Promise<void> {
       : await sessionInstructions(currentOffice(flags), flags.session);
 
     if (text !== "") console.log(text);
+  } else if (command === "context") {
+    if (rest.length > 1) throw new OfficeError("usage: office context [folder] [--model <provider/model#variant>]");
+
+    const office = currentOffice(flags);
+    const report = await contextReport(office, resolve(rest[0] ?? flags.office ?? process.cwd()), flags.model === undefined ? office.contextModels : [flags.model]);
+
+    console.log(report.text);
+
+    if (report.failed) process.exitCode = 1;
   } else if (command === "sync") {
     if (flags["release-machine"] && flags.references) throw new OfficeError("usage: office sync [--references | --release-machine]");
 

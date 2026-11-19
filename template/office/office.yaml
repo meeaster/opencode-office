@@ -110,3 +110,10 @@ packages:
 #  - name: artifact-share
 #    settings:
 #      url: https://<owner>.github.io/<repository>
+
+# The models office context measures with (OpenCode's provider/model#variant), on a host-mode
+# OpenCode server: the tokens the office adds to a session's first request, per model.
+# context:
+#   models:
+#     - openai/gpt-6-luna#low
+#     - claude-agent/haiku#low
