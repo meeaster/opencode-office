@@ -4,8 +4,8 @@
 // - `sfw/sfw`, the pinned Socket Firewall, which `office up` downloads and checks against office.lock;
 // - `sfw/package-manager.sh` and `sfw/bin/`, the wrappers (src/sfw.ts), which `office sync` writes;
 // - `env.sh`, the environment agents and the user's terminal share: PATH entries (the wrappers, mise's
-//   shims, OpenCode's bin, then what packages declare) and plain variables (the release ages, then
-//   what packages declare). The user sources it from their shell's startup file; the OpenCode
+//   shims, OpenCode's bin, then what packages declare) and plain variables (the release ages for
+//   package managers and mise, from `tools.minimum_release_age`, then what packages declare). The user sources it from their shell's startup file; the OpenCode
 //   server's unit will source it once the office owns that unit.
 //
 // Each is a file in the machine record (src/machine.ts), written only with the user's consent. The
@@ -141,7 +141,7 @@ export function hostEnvironment(office: Office, installed: InstalledPackage[]): 
   }
 
   const problems = [...setters].flatMap(([name, names]) => (names.length > 1 ? [`packages ${names.join(" and ")} both set ${name} in their host or system block, so ${envFilePath()} sets neither; remove it from one`] : []));
-  const variables: [string, string][] = Object.entries(releaseAgeVariables);
+  const variables: [string, string][] = releaseAgeVariables(office.tools.minimumReleaseAge);
   const path = [...(office.socketFirewall ? [hostWrappers()] : []), miseShims(), opencodeBin()];
 
   if (office.opencode.managed !== undefined) variables.push(...Object.entries(managedAgentEnvironment));
