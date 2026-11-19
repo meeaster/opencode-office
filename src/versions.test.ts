@@ -62,7 +62,7 @@ test("an office.yaml that pins another sfw than an old lock holds asks for offic
 
   const office = loadOffice(dir);
 
-  expect(office.versions?.sfw).toBe("1.15.6");
+  expect(office.tools.runtimes.sfw.version).toBe("1.15.6");
   expect(() => wantedPins(office)).toThrow("office.lock doesn't match office.yaml for sfw (1.16.0, office.yaml 1.15.6): run office pin");
   expect(migrate(office).changes).toEqual([]);
   expect(lockLacksSfw(dir)).toBe(true);
@@ -74,8 +74,14 @@ test("a lock round-trips sfw's platform digests", () => {
   expect(readLock(dir)).toEqual(defaultPins);
 });
 
-test("socket_firewall is on unless office.yaml turns it off", () => {
+test("Socket Firewall is on unless sfw's enabled, or socket_firewall before tools, turns it off", () => {
   writeFileSync(join(dir, "office.yaml"), "name: firewall\n");
+  expect(loadOffice(dir).socketFirewall).toBe(true);
+
+  writeFileSync(join(dir, "office.yaml"), "name: firewall\ntools:\n  sfw: { version: 1.16.0, enabled: false }\n");
+  expect(loadOffice(dir).socketFirewall).toBe(false);
+
+  writeFileSync(join(dir, "office.yaml"), "name: firewall\ntools:\n  sfw:\n    enabled: true\n");
   expect(loadOffice(dir).socketFirewall).toBe(true);
 
   writeFileSync(join(dir, "office.yaml"), "name: firewall\nsocket_firewall: false\n");
@@ -83,18 +89,35 @@ test("socket_firewall is on unless office.yaml turns it off", () => {
 
   writeFileSync(join(dir, "office.yaml"), "name: firewall\nsocket_firewall: off-ish\n");
   expect(() => loadOffice(dir)).toThrow("socket_firewall: must be true or false");
+
+  writeFileSync(join(dir, "office.yaml"), "name: firewall\ntools:\n  sfw: { enabled: off-ish }\n");
+  expect(() => loadOffice(dir)).toThrow("tools.sfw.enabled: must be true or false");
 });
 
-test("sfw waits at least three days unless office.yaml gives it its own age", () => {
-  writeFileSync(join(dir, "office.yaml"), "name: ages\nupgrades:\n  minimum_release_age: 1d\n");
+test("upgrade-tools waits a runtime's own age, else the office's, and the office's for every mise tool", () => {
+  writeFileSync(join(dir, "office.yaml"), "name: ages\n");
+  expect(ageFor(loadOffice(dir))).toBe("3d");
   expect(ageFor(loadOffice(dir), "sfw")).toBe("3d");
-  expect(ageFor(loadOffice(dir), "mise")).toBe("1d");
 
-  writeFileSync(join(dir, "office.yaml"), "name: ages\nupgrades:\n  minimum_release_age: 1w\n");
-  expect(ageFor(loadOffice(dir), "sfw")).toBe("1w");
+  writeFileSync(join(dir, "office.yaml"), "name: ages\ntools:\n  minimum_release_age: 1d\n  opencode: { version: 2.3.2, minimum_release_age: 0d }\n  executor:\n    version: 2.0.0-beta.49\n    minimum_release_age: 7d\n  claude: 2.1.327\n");
 
-  writeFileSync(join(dir, "office.yaml"), "name: ages\nupgrades:\n  sfw: 12h\n");
-  expect(ageFor(loadOffice(dir), "sfw")).toBe("12h");
+  const office = loadOffice(dir);
+
+  expect(ageFor(office)).toBe("1d");
+  expect(ageFor(office, "opencode")).toBe("0d");
+  expect(ageFor(office, "executor")).toBe("7d");
+  expect(ageFor(office, "claude")).toBe("1d");
+  expect(ageFor(office, "sfw")).toBe("1d");
+
+  // Before tools: upgrades' default is every runtime's, sfw's too, but mise tools wait three days.
+  writeFileSync(join(dir, "office.yaml"), "name: ages\nupgrades:\n  minimum_release_age: 1d\n  sfw: 12h\n  npm:wrangler: 2d\n");
+
+  const old = loadOffice(dir);
+
+  expect(ageFor(old)).toBe("3d");
+  expect(ageFor(old, "mise")).toBe("1d");
+  expect(ageFor(old, "sfw")).toBe("12h");
+  expect(old.tools.ignoredAges).toEqual(["npm:wrangler"]);
 });
 
 function release(tag: string, published: string, names: string[]): Release {

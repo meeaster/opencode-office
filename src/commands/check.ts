@@ -20,7 +20,7 @@ import { officeCommands, officePins, officeTool, officeToolNamed, required } fro
 import { clones, installedPackages, library, oldKnowledgePlugin, pluginLinks, skillSelections } from "../layout.ts";
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, oldMiseFiles, pulledLocalFolders, versionsLackSfw } from "../migrate.ts";
 import { oldExecutorAppDirs } from "../executor-app-layout.ts";
-import { executorEnvFile, type Office, readEnvFile, skillGroups } from "../office.ts";
+import { executorEnvFile, type Office, readEnvFile, skillGroups, toolsBlock } from "../office.ts";
 import { isCurrent, readSkillRecord, skillDir } from "../skill-copies.ts";
 import { packageComposeFile, serviceStatus, sharedNamespaces } from "../package-services.ts";
 import { hostServiceStatus } from "../package-host-services.ts";
@@ -144,7 +144,7 @@ async function drift(office: Office): Promise<string[]> {
   problems.push(...orphanFragments(office, listed), ...strayFragments(office), ...oldToolFragments(office), ...packagesFileProblems(office, installedPackages(office).installed, listed));
 
   if (versionsLackSfw(office)) problems.push("office.yaml's versions don't pin sfw (Socket Firewall), which earlier releases didn't pin, so the tool's default applies (office sync pins it)");
-  else if (office.versions?.sfw === defaultPins.sfw.version && lockLacksSfw(office.dir)) problems.push(`${lockFile} has no sfw entry, as earlier releases wrote it (office sync adds it)`);
+  else if (office.tools.runtimes.sfw.version === defaultPins.sfw.version && lockLacksSfw(office.dir)) problems.push(`${lockFile} has no sfw entry, as earlier releases wrote it (office sync adds it)`);
 
   for (const { from, to } of oldMiseFiles(office)) {
     problems.push(`${relative(office.dir, from)} is where earlier releases kept it, and mise loads it there as the office's project config (office sync moves it to ${relative(office.dir, to)})`);
@@ -681,10 +681,62 @@ async function executorKey(office: Office, report: Report): Promise<void> {
   }
 }
 
+/** An age as hours when it is one office.yaml can hold (36h, 3d, 2w), else undefined. */
+function hours(age: string): number | undefined {
+  const match = /^(\d+)([hdw])$/.exec(age);
+
+  return match === null ? undefined : Number(match[1]) * (match[2] === "h" ? 1 : match[2] === "d" ? 24 : 168);
+}
+
+/**
+ * Notes on office.yaml's `tools`, none a failure: an office.yaml still on `versions`, `upgrades` and
+ * `socket_firewall`, with the block to write in their place; ages `upgrades` gave mise tools, which
+ * no longer apply; and a `[settings] minimum_release_age` in the office's machine.toml or mise.toml
+ * other than the office's, which MISE_MINIMUM_RELEASE_AGE in the office's environment overrides.
+ */
+export function toolsNotes(office: Office): string[] {
+  const { tools } = office;
+  const notes: string[] = [];
+
+  if (tools.legacy.length > 0) {
+    const keys = tools.legacy.length === 1 ? tools.legacy[0] : `${tools.legacy.slice(0, -1).join(", ")} and ${tools.legacy.at(-1)}`;
+
+    notes.push(`office.yaml uses ${keys}, which tools: replaces; it still reads as before, but put this in place of ${tools.legacy.length === 1 ? "it" : "them"}:\n${toolsBlock(tools).trimEnd()}`);
+  }
+
+  if (tools.ignoredAges.length > 0) {
+    notes.push(`upgrades gives ${tools.ignoredAges.join(", ")} an age of ${tools.ignoredAges.length === 1 ? "its" : "their"} own, which no longer applies: every mise tool waits the office's ${tools.minimumReleaseAge}`);
+  }
+
+  for (const name of ["machine.toml", "mise.toml"]) {
+    const path = join(office.dir, name);
+    let setting: unknown;
+
+    try {
+      setting = existsSync(path) ? (Bun.TOML.parse(readFileSync(path, "utf8")) as { settings?: { minimum_release_age?: unknown } }).settings?.minimum_release_age : undefined;
+    } catch {
+      continue;
+    }
+
+    if (typeof setting !== "string" || setting === tools.minimumReleaseAge) continue;
+
+    const same = hours(setting);
+
+    if (same !== undefined && same === hours(tools.minimumReleaseAge)) continue;
+
+    notes.push(`${name} sets minimum_release_age = "${setting}" under [settings], but the office's environment sets MISE_MINIMUM_RELEASE_AGE=${tools.minimumReleaseAge} (tools.minimum_release_age in office.yaml), which wins wherever it is loaded; remove the setting or change the office's age`);
+  }
+
+  return notes;
+}
+
 /** Whether Socket Firewall is on, and where it applies in the office's mode. */
 function firewallChecks(office: Office, report: Report): void {
+  const age = office.tools.minimumReleaseAge;
+  const ages = hours(age) === 0 ? "package managers and mise take releases as soon as they're published (tools.minimum_release_age: 0)" : `package managers and mise take only releases at least ${age} old`;
+
   if (!office.socketFirewall) {
-    report("warn", "Socket Firewall", "off (socket_firewall: false in office.yaml): package downloads aren't checked; package managers still take only releases at least three days old");
+    report("warn", "Socket Firewall", `off (enabled: false for sfw under tools in office.yaml): package downloads aren't checked; ${ages}`);
 
     return;
   }
@@ -699,8 +751,8 @@ function firewallChecks(office: Office, report: Report): void {
     true,
     "Socket Firewall",
     office.opencode.mode === "host"
-      ? `on: ${wrappedCommands.join(", ")} and mise installs go through sfw, from ${hostWrappers()} first on PATH in ${envFilePath()} (each file is on its machine line below)`
-      : `on: the image's sfw, with ${wrappedCommands.join(", ")} and mise wrapped, first on PATH in the container (office env --container shows the file); office up rebuilds the image when the pin moves`,
+      ? `on: ${wrappedCommands.join(", ")} and mise installs go through sfw, from ${hostWrappers()} first on PATH in ${envFilePath()} (each file is on its machine line below); ${ages}`
+      : `on: the image's sfw, with ${wrappedCommands.join(", ")} and mise wrapped, first on PATH in the container (office env --container shows the file); office up rebuilds the image when the pin moves; ${ages}`,
   );
 }
 
@@ -732,7 +784,7 @@ function versionChecks(office: Office, report: Report): void {
     return;
   }
 
-  report(true, "versions", office.versions === undefined ? `office.yaml has no versions block, so the tool's defaults apply: ${list(wanted)}` : `${list(wanted)}, matching office.lock`);
+  report(true, "versions", office.tools.pinsVersions ? `${list(wanted)}, matching office.lock` : `office.yaml pins no versions, so the tool's defaults apply: ${list(wanted)}`);
 
   const untested = tools.filter((tool) => !isTested(tool, wanted[tool].version));
 
@@ -975,6 +1027,8 @@ export async function check(office: Office, stage?: Stage, verbose = false): Pro
 
   stage?.detail("host tools and machine settings");
   officeToolChecks(office, report);
+
+  for (const note of toolsNotes(office)) report("warn", "tools", note);
 
   firewallChecks(office, report);
 

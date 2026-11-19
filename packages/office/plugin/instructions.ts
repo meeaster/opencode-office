@@ -8,13 +8,13 @@ import { dirname, join, relative, sep } from "node:path";
 
 import * as v from "valibot";
 
-import { check, type OfficeConfig, officeSchema, type Parsed } from "../../../src/schema.ts";
+import { check, type OfficeConfig, officeSchema, type Parsed, resolveTools } from "../../../src/schema.ts";
 import sessionScope from "../claude/session-scope.txt" with { type: "text" };
 
 // What the text uses from office.yaml, read through the schema the CLI uses.
 type DeskInfo = { name: string } & OfficeConfig["desks"][string];
 
-type OfficeInfo = { name: string; desks: DeskInfo[]; references: OfficeConfig["references"]; catalogApps: string[]; socketFirewall: boolean };
+type OfficeInfo = { name: string; desks: DeskInfo[]; references: OfficeConfig["references"]; catalogApps: string[]; socketFirewall: boolean; minimumReleaseAge: string };
 
 function readOffice(office: string): Parsed<OfficeInfo> {
   // The plugin and the compiled `office` both run on Bun, which parses YAML itself.
@@ -23,6 +23,7 @@ function readOffice(office: string): Parsed<OfficeInfo> {
   if (!result.ok) return result;
 
   const config = result.value;
+  const tools = resolveTools(config);
 
   return {
     ok: true,
@@ -31,7 +32,8 @@ function readOffice(office: string): Parsed<OfficeInfo> {
       desks: Object.entries(config.desks).map(([name, desk]) => ({ name, ...desk })),
       references: config.references,
       catalogApps: config.executor?.catalog_apps ?? [],
-      socketFirewall: config.socket_firewall,
+      socketFirewall: tools.socketFirewall,
+      minimumReleaseAge: tools.minimumReleaseAge,
     },
   };
 }
@@ -118,8 +120,10 @@ function sharedSections(office: OfficeInfo, apps: string[]): string[] {
 function firewallLines(office: OfficeInfo): string[] {
   if (!office.socketFirewall) return [];
 
+  const ages = /^0+[hdw]$/.test(office.minimumReleaseAge) ? "Package managers take new releases as soon as they're published." : `Package managers take only releases at least ${office.minimumReleaseAge} old (\`tools.minimum_release_age\` in \`office.yaml\`), so a just-published version isn't found yet.`;
+
   return [
-    "- Package downloads go through Socket Firewall (`sfw`) wherever the office's environment is loaded (the container, the managed host OpenCode service, or a shell that sources `~/.local/share/office/env.sh`): `npm`, `npx`, `pnpm`, `pip`, `pip3`, `uv`, `uvx` and `cargo` are wrappers that run `sfw <command>`, and `mise install`, `use` and `upgrade` run behind it. A refused package fails the command with `=== Socket Firewall ===` and `blocked <ecosystem> package: name: …; reason: malware`: tell the user, and never route around the wrappers (a real binary by its path, another registry). Package managers take only releases at least three days old. A script that runs a mise-managed tool many times runs faster under `mise exec -- <script>`, which keeps the wrappers first.",
+    "- Package downloads go through Socket Firewall (`sfw`) wherever the office's environment is loaded (the container, the managed host OpenCode service, or a shell that sources `~/.local/share/office/env.sh`): `npm`, `npx`, `pnpm`, `pip`, `pip3`, `uv`, `uvx` and `cargo` are wrappers that run `sfw <command>`, and `mise install`, `use` and `upgrade` run behind it. A refused package fails the command with `=== Socket Firewall ===` and `blocked <ecosystem> package: name: …; reason: malware`: tell the user, and never route around the wrappers (a real binary by its path, another registry). " + ages + " A script that runs a mise-managed tool many times runs faster under `mise exec -- <script>`, which keeps the wrappers first.",
   ];
 }
 

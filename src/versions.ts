@@ -13,7 +13,7 @@ import { check, type HostPlatform, type Lock, type PinnedTool, pinnedTools, stor
 
 export type Pin = Lock[PinnedTool];
 
-/** What a new office starts at, and what an office without a `versions` block runs. */
+/** What a new office starts at, and what a runtime office.yaml gives no version runs. */
 export const defaultPins: Lock = {
   opencode: { version: "2.3.0", digest: "sha256:fc0f81522aceeabac47693d88389efa2bc517ce74c2c38fd6967819fcc6e4d3b" },
   claude: { version: "2.1.322", digest: "sha256:3d2bc5ae54d4d4cd63510e9fcca5b6d48d2b18806708df8c8f691aa486c5dca8" },
@@ -44,7 +44,7 @@ export const tested: Record<PinnedTool, { from: string; to: string }> = {
 
 /**
  * The tools `office up` applies in each OpenCode mode: everything in the container; in host mode
- * Executor, and sfw while socket_firewall is on, which `office up` installs on the machine.
+ * Executor, and sfw while Socket Firewall is on, which `office up` installs on the machine.
  */
 export function toolsFor(office: Office): PinnedTool[] {
   if (office.opencode.mode !== "host") return [...pinnedTools];
@@ -87,7 +87,7 @@ function compareParts(left: string[], right: string[]): number {
 
 /** The version office.yaml asks for: its pin, else the tool's default. */
 export function wantedVersion(office: Office, tool: PinnedTool): string {
-  return office.versions?.[tool] ?? defaultPins[tool].version;
+  return office.tools.runtimes[tool].version ?? defaultPins[tool].version;
 }
 
 export const lockFile = "office.lock";
@@ -148,11 +148,11 @@ export function hostPlatform(platform = process.platform, arch = process.arch): 
 }
 
 /**
- * The pins office.yaml asks for, verified by office.lock. An office without a `versions` block runs
+ * The pins office.yaml asks for, verified by office.lock. An office.yaml that pins no versions runs
  * the tool's defaults. Throws, naming `office pin`, when the lock is missing or doesn't match.
  */
 export function wantedPins(office: Office): Lock {
-  if (office.versions === undefined) return defaultPins;
+  if (!office.tools.pinsVersions) return defaultPins;
 
   const lock = readLock(office.dir);
 

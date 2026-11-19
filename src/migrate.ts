@@ -381,9 +381,9 @@ function moveMiseFiles(office: Office): string[] {
   return changes;
 }
 
-/** Whether office.yaml pins versions but not sfw, which earlier releases didn't pin. */
+/** Whether office.yaml's `versions` block, from before `tools`, pins versions but not sfw, which earlier releases didn't pin. */
 export function versionsLackSfw(office: Office): boolean {
-  return office.versions !== undefined && office.versions.sfw === undefined;
+  return office.tools.legacy.includes("versions") && office.tools.runtimes.sfw.version === undefined;
 }
 
 /**
@@ -402,7 +402,7 @@ function pinSfw(office: Office): Migrated {
 
   const lock = readLock(current.dir);
 
-  if (lock !== undefined && lockLacksSfw(current.dir) && current.versions?.sfw === defaultPins.sfw.version) {
+  if (lock !== undefined && lockLacksSfw(current.dir) && current.tools.runtimes.sfw.version === defaultPins.sfw.version) {
     writeLock(current.dir, lock);
     changes.push(`added sfw ${defaultPins.sfw.version} to ${lockFile}, with the SHA-256 of each platform's release file`);
   }
