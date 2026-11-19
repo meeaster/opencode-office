@@ -3,7 +3,7 @@
 # does). A tool wanted in every folder on the machine goes in machine.toml beside this file instead,
 # which applies everywhere through a link in mise's global conf.d; inside the office this file wins.
 # The tools the office CLI itself runs (SOPS, age, gh and pre-commit, for the gitleaks hook) come
-# from the office package, in .office/mise/office.toml: pinning one here too only overrides it.
+# from the office package, in machine.packages.toml: pinning one here too only overrides it.
 [tools]
 node = "26.13.1"
 

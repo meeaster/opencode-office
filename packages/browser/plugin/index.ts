@@ -3,7 +3,7 @@
 // `browser` itself, for its in-app browser.)
 //
 // - agent-browser drives a headless Chromium of its own. The package declares it as a mise tool,
-//   so `office sync` writes it into the office's .office/mise/browser.toml, which mise reads through
+//   so `office sync` writes it into the office's machine.packages.toml, which mise reads through
 //   a link in its global conf.d, and it is on the PATH of the office's container (mise's shims) and
 //   of a host whose mise installs it. It launches AGENT_BROWSER_EXECUTABLE_PATH when that is set:
 //   the container's Chromium, or Google Chrome from apt on a host that opted in (system_chrome),
@@ -132,7 +132,7 @@ function servers(settings: Settings, mode: Mode): Servers {
   const browse = findBrowse();
 
   if (settings.agentBrowserTools === "") absent.push("`agent-browser`: turned off (the package's `agent_browser_tools` setting is empty)");
-  else if (agentBrowser === undefined) absent.push("`agent-browser`: the command isn't on this server's PATH (the office's `.office/mise/browser.toml` declares it, through a link in mise's global conf.d; `office up` installs it)");
+  else if (agentBrowser === undefined) absent.push("`agent-browser`: the command isn't on this server's PATH (the office's `machine.packages.toml` declares it, through a link in mise's global conf.d; `office up` installs it)");
   else present.set("agent-browser", [agentBrowser, "mcp", "--tools", settings.agentBrowserTools]);
 
   if (mode === "container") {

@@ -1,6 +1,6 @@
 // Installs Browse's binary as ~/.local/bin/browse, from the stable channel of Anomaly's release
 // service, as https://opencode.ai/browse/install does without its setup step: no `browse install`,
-// no agent configs, no pairing. The package's mise fragment runs it, in a host-mode office, when
+// no agent configs, no pairing. The package's mise fragment (.office/mise/browser.toml) runs it, in a host-mode office, when
 // that file is missing (its postinstall hook) or on demand (`mise run browser:install`). From then
 // on Browse updates itself, as its Chrome extension does; office never pins it.
 //

@@ -24,7 +24,8 @@ host:
     creates: ~/.local/bin/browse
     script: scripts/install-browse.ts
 # Google Chrome from apt, for agent-browser, where the office opts in: sync writes the setup to the
-# fragment and the variable to the office's environment file; the user applies the setup once.
+# package's fragment, .office/mise/browser.toml, and the variable to the office's environment file;
+# the user applies the setup once.
 system:
   setting: system_chrome
   description: Google Chrome Stable from Google's apt repository, for agent-browser

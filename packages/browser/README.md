@@ -23,7 +23,7 @@ packages:
   - name: browser
 ```
 
-Then run `office sync` and commit what it wrote: the package in `.office/packages/browser/`, which updates with `office` and is read-only there, and `.office/mise/browser.toml`, the mise fragment sync keeps for it.
+Then run `office sync` and commit what it wrote: the package in `.office/packages/browser/`, which updates with `office` and is read-only there, `machine.packages.toml`, where sync keeps every package's mise tools, and in a host-mode office `.office/mise/browser.toml`, the package's mise setup.
 
 | Setting | |
 |---|---|
@@ -35,13 +35,13 @@ A change reaches sessions when `office sync` writes the resolved settings, witho
 
 ## agent-browser
 
-`package.yaml` declares it as a mise tool, `npm:agent-browser`, at the version an office starts at. The fragment pins it from then on: `office upgrade-tools` bumps it with the office's other pins, and sync never changes it. To pin another version, change it there, or set `"npm:agent-browser"` in the office's `machine.toml`, which wins over the fragment everywhere, or its `mise.toml`, which wins in the office's folders. It needs Node to run: the template's `mise.toml` pins it for the office's folders, so for `agent-browser` in other folders too, pin `node` in `machine.toml`.
+`package.yaml` declares it as a mise tool, `npm:agent-browser`, at the version the package was tested with. The office's `machine.packages.toml` pins it from then on: `office upgrade-tools` bumps it with the office's other pins, and sync changes it only to raise it to a newer version a package update declares. To pin another version, change it there, or, to stay below the package's version, set `"npm:agent-browser"` in the office's `machine.toml`, which wins over `machine.packages.toml` everywhere (`office check` warns), or its `mise.toml`, which wins in the office's folders. It needs Node to run: the template's `mise.toml` pins it for the office's folders, so for `agent-browser` in other folders too, pin `node` in `machine.toml`.
 
 The container installs it at start, and in host mode `office up` does. The plugin registers `agent-browser mcp --tools <profiles>` when `agent-browser` is on the OpenCode server's PATH: mise's shims put it there in the container; a host server needs mise's shims or activation on its PATH.
 
 ## Browse
 
-In a host-mode office with `browse` on, sync adds to the fragment `bun` (which runs the install script), a `[hooks]` `postinstall` and a `browser:install` task:
+In a host-mode office with `browse` on, sync adds `bun` (which runs the install script) to `machine.packages.toml`, and writes `.office/mise/browser.toml`, the package's fragment, with a `[hooks]` `postinstall` and a `browser:install` task:
 
 ```toml
 [hooks]
@@ -62,7 +62,7 @@ mise reads the fragment only through the link sync makes in its global conf.d, a
 
 The plugin registers `~/.local/bin/browse mcp` (or under `$XDG_BIN_HOME`, or `$OPENCODE_BROWSER_HOME/bin`) when the office is in host mode, `browse` is on and the file exists. It never looks on the PATH, where xdg-utils' unrelated `/usr/bin/browse` can come first. `office check` fails the package's line in host mode while Browse is missing, naming `mise install` and the task, and notes, without failing, that `browse` has no effect in a container-mode office.
 
-When the office moves to container mode, or `browse` is turned off, sync removes `bun`, the hook and the task from the fragment. The installed binary, its relay and the pairing stay with the machine: `~/.local/bin/browse uninstall` removes them.
+When the office moves to container mode, or `browse` is turned off, sync removes `bun` from `machine.packages.toml` (unless another package declares it) and the hook and the task from the fragment. The installed binary, its relay and the pairing stay with the machine: `~/.local/bin/browse uninstall` removes them.
 
 ## System Chrome
 
