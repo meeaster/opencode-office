@@ -1,9 +1,11 @@
 // `office upgrade-tools`: bumps each exact pin in the office's own mise.toml files (the root's and
 // each desk's), its machine-wide mise files (machine.toml, and machine.packages.toml, whose package
-// comments stay as they are), and the five versions office.yaml pins, to the newest release at least the
-// office's minimum release age old, and commits the changed files alone under the office's git
-// identity (office.yaml's `git`), else "office cron". mise.toml pins are looked up and installed
-// through mise; the five versions on GitHub (and Executor's image on its registry), and only
+// comments stay as they are), and the runtimes' versions in office.yaml, to the newest release at
+// least the office's minimum release age old (`tools.minimum_release_age`, or a runtime's own), and
+// commits the changed files alone under the office's git identity (office.yaml's `git`), else
+// "office cron". mise.toml pins are looked up and installed through mise, at the age the office's
+// environment gives package managers too, so an install never asks for a release they refuse; the
+// runtimes' versions on GitHub (and Executor's image on its registry), and only
 // recorded: `office up --upgrade` applies them. Files with uncommitted changes are left for the
 // user. A failed install or lookup keeps the old pin. Never pushes.
 import { spawnSync } from "node:child_process";
@@ -15,26 +17,20 @@ import { entryPattern, toolPins } from "../mise-toml.ts";
 import { installedTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";
 import { pinnedMachineFiles } from "../package-tools.ts";
-import { isScalar, parseDocument } from "yaml";
+import { type Document, isMap, isNode, isScalar, parseDocument } from "yaml";
 
-import type { Office } from "../office.ts";
-import { ageMs, newestRelease, pinFor } from "../releases.ts";
-import { packageAge } from "../sfw.ts";
-import { pinnedTools } from "../schema.ts";
+import { type Office, OfficeError } from "../office.ts";
+import { newestRelease, pinFor } from "../releases.ts";
+import { type PinnedTool, pinnedTools } from "../schema.ts";
 import { compareVersions as compareSemver, lockFile, wantedPins, writeLock } from "../versions.ts";
 
 /**
- * How old a tool's release must be: its own age in office.yaml's `upgrades`, else the default
- * there, else a day. Socket Firewall sits in the path of every package download, so without its own
- * age it waits at least the three days packages do.
+ * How old a release must be before the job takes it: a runtime's own age under `tools`, else the
+ * office's `tools.minimum_release_age`; a mise tool (`runtime` undefined) always takes the office's,
+ * which is also what its package manager waits in the office's environment.
  */
-export function ageFor(office: Office, tool: string): string {
-  const own = office.upgrades[tool];
-  const general = office.upgrades.minimum_release_age ?? "1d";
-
-  if (own !== undefined) return own;
-
-  return tool === "sfw" && ageMs(general) < ageMs(packageAge) ? packageAge : general;
+export function ageFor(office: Office, runtime?: PinnedTool): string {
+  return runtime === undefined ? office.tools.minimumReleaseAge : office.tools.runtimes[runtime].minimumReleaseAge;
 }
 
 /**
@@ -92,7 +88,7 @@ function upgradeFile(office: Office, path: string) {
 
     if (!exact.ok || exact.out !== pin.version) continue;
 
-    const newest = mise(["latest", pin.tool, "--minimum-release-age", ageFor(office, pin.tool)], dir);
+    const newest = mise(["latest", pin.tool, "--minimum-release-age", ageFor(office)], dir);
 
     if (!newest.ok || newest.out === "") {
       failures.push(`${pin.tool}: couldn't find the newest version (${newest.error})`);
@@ -117,42 +113,92 @@ function upgradeFile(office: Office, path: string) {
   return { moves, failures };
 }
 
-/** Runs the upgrade over the office; returns whether everything that was tried succeeded. */
-/**
- * Rewrites only the text of each moved version in office.yaml, so every comment and the layout
- * stay as the user wrote them. A tool the block doesn't list yet is added at its end.
- */
-function setVersions(text: string, moves: Move[]): string {
-  const document = parseDocument(text, { keepSourceTokens: true });
-  const edits: { start: number; end: number; value: string }[] = [];
-  const added: string[] = [];
+/** A text edit: `value` in place of `start`–`end`. */
+type Edit = { start: number; end: number; value: string };
 
-  for (const move of moves) {
-    const node = document.getIn(["versions", move.tool], true);
+/** The indentation of the line `at` is on, up to `at`. */
+function columnOf(text: string, at: number): number {
+  return at - text.lastIndexOf("\n", at - 1) - 1;
+}
 
-    if (isScalar(node) && node.range !== undefined && node.range !== null) edits.push({ start: node.range[0], end: node.range[1], value: move.to });
-    else added.push(`  ${move.tool}: ${move.to}`);
-  }
+/** Where the line after the one `at` is on starts. */
+function nextLine(text: string, at: number): number {
+  const newline = text.indexOf("\n", at);
 
-  let result = text;
-
-  for (const edit of edits.sort((left, right) => right.start - left.start)) result = `${result.slice(0, edit.start)}${edit.value}${result.slice(edit.end)}`;
-
-  if (added.length > 0) result = result.replace(/^versions:[^\n]*\n((?:[ \t]+[^\n]*\n)*)/m, (block) => `${block}${added.join("\n")}\n`);
-
-  return result;
+  return newline === -1 ? text.length : newline + 1;
 }
 
 /**
- * Bumps the five versions office.yaml pins to the highest release of each line at least its age
+ * The edit that sets one runtime's version under `block` (`tools`, or `versions` before it): the
+ * version's text replaced in the short form (`opencode: 2.3.2`) or in a mapping, flow or block
+ * (`{ version: 2.3.2, minimum_release_age: 0d }`), in the quotes it had; a mapping without one gets
+ * `version` first; a runtime the block doesn't list is added after its last entry, in the short form.
+ */
+function versionEdit(document: Document, text: string, block: "tools" | "versions", tool: PinnedTool, version: string): Edit {
+  const entry = document.getIn([block, tool], true);
+  const scalar = isMap(entry) ? entry.get("version", true) : entry;
+
+  if (isScalar(scalar) && scalar.range !== undefined && scalar.range !== null) {
+    const quote = text[scalar.range[0]];
+
+    return { start: scalar.range[0], end: scalar.range[1], value: quote === "'" || quote === '"' ? `${quote}${version}${quote}` : version };
+  }
+
+  if (isMap(entry) && entry.range !== undefined && entry.range !== null) {
+    if (entry.flow === true) {
+      const open = text.indexOf("{", entry.range[0]) + 1;
+
+      return { start: open, end: open, value: ` version: ${version},` };
+    }
+
+    const first = entry.items[0]?.key;
+    const start = isNode(first) ? first.range?.[0] : undefined;
+
+    if (start !== undefined) return { start, end: start, value: `version: ${version}\n${" ".repeat(columnOf(text, start))}` };
+  }
+
+  const map = document.get(block, true);
+
+  if (entry === undefined && isMap(map) && map.flow !== true && map.items.length > 0) {
+    const first = map.items[0].key;
+    const last = map.items[map.items.length - 1];
+    const indent = isNode(first) && first.range !== undefined && first.range !== null ? columnOf(text, first.range[0]) : 2;
+    const end = isNode(last.value) ? last.value.range?.[1] : isNode(last.key) ? last.key.range?.[1] : undefined;
+
+    if (end !== undefined) {
+      const at = nextLine(text, Math.max(end - 1, 0));
+      const newline = at > 0 && text[at - 1] !== "\n" ? "\n" : "";
+
+      return { start: at, end: at, value: `${newline}${" ".repeat(indent)}${tool}: ${version}\n` };
+    }
+  }
+
+  throw new OfficeError(`set ${block}.${tool} to ${version} in office.yaml by hand`);
+}
+
+/**
+ * Rewrites only the text of each moved version in office.yaml, under `tools` or, in an office.yaml
+ * from before it, `versions`, so every comment, quote and the layout stay as the user wrote them.
+ * It never moves an office.yaml from `versions` to `tools`.
+ */
+export function setVersions(text: string, moves: { tool: PinnedTool; to: string }[]): string {
+  const document = parseDocument(text, { keepSourceTokens: true });
+  const block = document.has("tools") ? "tools" : "versions";
+  const edits = moves.map((move) => versionEdit(document, text, block, move.tool, move.to));
+
+  return edits.sort((left, right) => right.start - left.start).reduce((result, edit) => `${result.slice(0, edit.start)}${edit.value}${result.slice(edit.end)}`, text);
+}
+
+/**
+ * Bumps the runtimes' versions office.yaml pins to the highest release of each line at least its age
  * old, rewriting office.yaml (keeping its comments and layout) and office.lock. A lookup that
  * fails (GitHub's rate limit, no network) skips that tool and is reported.
  */
 async function upgradeVersions(office: Office): Promise<{ moves: Move[]; failures: string[]; changed: string[] }> {
   const none = { moves: [], failures: [], changed: [] };
 
-  if (office.versions === undefined) {
-    console.log("skipped the office's versions: office.yaml has no versions block, so the tool's defaults apply");
+  if (!office.tools.pinsVersions) {
+    console.log("skipped the office's versions: office.yaml pins none, so the tool's defaults apply");
 
     return none;
   }
@@ -171,7 +217,7 @@ async function upgradeVersions(office: Office): Promise<{ moves: Move[]; failure
     return { ...none, failures: [`office.yaml's versions: ${error instanceof Error ? error.message : String(error)}`] };
   }
 
-  const moves: Move[] = [];
+  const moves: (Move & { tool: PinnedTool })[] = [];
   const failures: string[] = [];
   const next = { ...lock };
 
@@ -191,8 +237,15 @@ async function upgradeVersions(office: Office): Promise<{ moves: Move[]; failure
   if (moves.length === 0) return { ...none, failures };
 
   const path = join(office.dir, "office.yaml");
+  let text;
 
-  writeFileSync(path, setVersions(readFileSync(path, "utf8"), moves));
+  try {
+    text = setVersions(readFileSync(path, "utf8"), moves);
+  } catch (error) {
+    return { ...none, failures: [`office.yaml's versions: ${error instanceof Error ? error.message : String(error)}`] };
+  }
+
+  writeFileSync(path, text);
   writeLock(office.dir, next);
 
   return { moves, failures, changed: ["office.yaml", lockFile] };

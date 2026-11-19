@@ -34,33 +34,28 @@ opencode: container
 #   email: you@example.com
 #   credentials: gh
 
-# The versions this office runs in its containers. office.lock (written by `office pin`; don't
-# edit it) holds their checksums: run `office pin` after changing a version by hand. The daily
-# upgrade-tools job bumps them; `office up --upgrade` applies a bump, `office up` never does. In
-# host mode only Executor's applies, and sfw's, which office up installs on the machine.
-versions:
+# The tools this office runs and how old a release must be before anything takes it.
+# minimum_release_age covers package managers (npm, pnpm, uv and pip, through the office's
+# environment), mise and the tools in its files, and each runtime below without an age of its own.
+# The runtimes are the versions the containers run; in host mode only Executor's applies, and sfw's,
+# which office up installs on the machine. office.lock (written by `office pin`; don't edit it)
+# holds their checksums: run `office pin` after changing a version by hand. The daily upgrade-tools
+# job bumps them; `office up --upgrade` applies a bump, `office up` never does. Give a runtime its
+# own age with the mapping form, as executor has: it publishes a beta almost daily, and each upgrade
+# means a backup, a restart and redeploying every app. sfw is Socket Firewall, which checks every
+# package download against Socket's list of malicious packages: npm, npx, pnpm, pip, pip3, uv, uvx
+# and cargo run through wrappers first on PATH, and mise's installs go through it too, in the
+# container and, in host mode, on the machine (through ~/.local/share/office/env.sh, which you
+# source from your shell). To turn it off, write sfw as { version: ..., enabled: false }; the
+# release age still applies.
+tools:
+  minimum_release_age: 3d
   opencode: __OPENCODE_VERSION__
   claude: __CLAUDE_VERSION__
   codex: __CODEX_VERSION__
-  executor: __EXECUTOR_VERSION__
+  executor: { version: __EXECUTOR_VERSION__, minimum_release_age: 7d }
   mise: __MISE_VERSION__
-  # Socket Firewall, which every package download goes through (see socket_firewall below).
   sfw: __SFW_VERSION__
-
-# How old a release must be before the upgrade-tools job moves to it: one default, and per-tool
-# ages for the versions above or any tool in a mise.toml. Executor publishes a beta almost daily,
-# and each upgrade means a backup, a restart and redeploying every app, so it waits longer. sfw
-# waits at least three days unless it has its own age here.
-upgrades:
-  minimum_release_age: 1d
-  executor: 7d
-
-# Socket Firewall (sfw, pinned above) checks every package download against Socket's list of
-# malicious packages: npm, npx, pnpm, pip, pip3, uv, uvx and cargo run through wrappers first on
-# PATH, and mise's installs go through it too, in the container and, in host mode, on the machine
-# (through ~/.local/share/office/env.sh, which you source from your shell). Package managers also
-# wait three days before taking a new release. Set to false to turn the firewall off.
-socket_firewall: true
 
 # Read-only clones under references/, listed for every session.
 references: []

@@ -16,7 +16,7 @@
 // - The record exists only once the user said yes: `office setup` asks (or takes
 //   `--manage-machine`) and writes it. Until then `office sync` writes nothing here and says what to
 //   run.
-// - `office sync` removes a file when its fragment goes or socket_firewall turns off, and everything
+// - `office sync` removes a file when its fragment goes or Socket Firewall turns off, and everything
 //   (with the record) when the office leaves host mode or `office sync --release-machine` asks;
 //   `office down` leaves them. `office sync` writes the generated files; `office up` installs sfw at
 //   the version it applies, as it applies the office's other pins.
@@ -239,7 +239,7 @@ function sfwDigest(pin: Lock["sfw"]): string | undefined {
 
 /**
  * Everything the office wants on the machine in host mode: the links, the environment file, and
- * while socket_firewall is on, the wrappers (the mise wrapper only where a real mise is found)
+ * while Socket Firewall is on, the wrappers (the mise wrapper only where a real mise is found)
  * and sfw. Problems in what packages declare come back as lines.
  */
 /** What the office wants on the machine, and the problems that kept something out. */
@@ -347,7 +347,7 @@ function removalReason(office: Office, file: MachineFile): string {
 
   if (file.kind === "link" && file.target === join(office.dir, packagesFile)) return `as ${packagesFile} is gone`;
 
-  if (file.path.startsWith(`${hostLayout("").root}/`)) return office.socketFirewall ? "as office no longer writes it" : "as office.yaml sets socket_firewall: false";
+  if (file.path.startsWith(`${hostLayout("").root}/`)) return office.socketFirewall ? "as office no longer writes it" : "as office.yaml turns Socket Firewall off";
 
   // Earlier releases linked every file in .mise/conf.d/, the office's own fragments too, which are its project config now.
   if (file.kind === "link" && file.target !== join(office.dir, machineFile) && file.target.startsWith(join(office.dir, oldFragments))) {
@@ -745,7 +745,7 @@ function sfwLine(office: Office, file: MachineFile): MachineLine {
 /**
  * `office up`'s part on the machine in host mode: installs sfw at `pin`, checked against office.lock's
  * SHA-256 for this machine and its own `--version`, and records it. Nothing without consent, or with
- * socket_firewall off; an installed copy at the same digest stays. Returns one line per change.
+ * Socket Firewall off; an installed copy at the same digest stays. Returns one line per change.
  */
 export async function installSfw(office: Office, pin: Lock["sfw"], download: (url: string, what: string) => Promise<Uint8Array> = fetchBytes): Promise<string[]> {
   if (!office.socketFirewall || office.opencode.mode !== "host") return [];
@@ -757,7 +757,7 @@ export async function installSfw(office: Office, pin: Lock["sfw"], download: (ur
   const platform = hostPlatform();
   const digest = sfwDigest(pin);
 
-  if (platform === undefined || digest === undefined) throw new OfficeError(`office installs Socket Firewall on Linux and macOS, x64 and arm64, not ${process.platform}-${process.arch}; set socket_firewall: false in office.yaml`);
+  if (platform === undefined || digest === undefined) throw new OfficeError(`office installs Socket Firewall on Linux and macOS, x64 and arm64, not ${process.platform}-${process.arch}; give sfw enabled: false under tools in office.yaml`);
 
   const path = hostLayout("").sfw;
   const record = current.record;

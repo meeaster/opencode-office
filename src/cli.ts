@@ -94,21 +94,22 @@ const usage = `usage: office <command> [--office <dir>]
   gui dev <package>            install a local package's panel on the desktop app's machine each
                                time its build writes the bundle
   upgrade-tools [--apply]      bump exact pins in mise.toml files, machine.toml,
-                               machine.packages.toml and office.yaml's versions, and commit
-                               them; --apply then runs up --upgrade, even when the pins were
-                               already current
+                               machine.packages.toml and office.yaml's tools to releases at
+                               least tools.minimum_release_age old (or a runtime's own), and
+                               commit them; --apply then runs up --upgrade, even when the pins
+                               were already current
   update [--check] [--minimum-release-age <age> | --version <release>]
                                replace this office executable with the newest eligible release
                                (minimum age: 0d by default), or exactly <release>; --check only reports.
                                Offices pick it up with office sync and office up; it never
-                               changes office.yaml's versions
+                               changes office.yaml's tools
   cron list | run <job-id>      list applicable YAML jobs or run one by its qualified ID
   cron supercronic | catch-up   container internals: print generated supercronic input or run
                                jobs missed since their last success
   migrate-home                 the container's start: move sessions and logins stored under
                                /home/assistant, the old home, to this home
   env --container              print the opencode container's environment file: the Socket
-                               Firewall wrappers on PATH and package managers' release ages
+                               Firewall wrappers on PATH and package managers' and mise's release ages
   sfw-wrappers                 the image's build: write the Socket Firewall wrappers into
                                /usr/local/lib/office/sfw
 

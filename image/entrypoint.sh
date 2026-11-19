@@ -7,8 +7,8 @@ set -eu
 office=/home/office/workspace
 
 # The office's environment, for OpenCode, its agents' commands, the cron jobs and the installs
-# below: Socket Firewall's wrappers first on PATH unless office.yaml sets socket_firewall: false,
-# and package managers' minimum release ages. `office exec`, `office shell` and interactive bash
+# below: Socket Firewall's wrappers first on PATH unless office.yaml turns it off, and the minimum
+# release age (tools.minimum_release_age) in each package manager's variable and mise's. `office exec`, `office shell` and interactive bash
 # shells source the same file. An office.yaml that doesn't read gets the defaults.
 env_file=/etc/opencode/env.sh
 office env --container --office "$office" > "$env_file.new" && mv "$env_file.new" "$env_file"
@@ -38,10 +38,15 @@ for host in $(printf '%s' "${OFFICE_GH_HOSTS:-}" | tr ',' ' '); do
   gh_note="- HTTPS git remotes on ${OFFICE_GH_HOSTS} authenticate through \`gh\` (from the office package's tools in \`machine.packages.toml\`) with the user's GitHub login, shared read-only from the host, so fetch, pull and push work. Never run \`gh auth login\`, \`logout\` or \`switch\` here: the user manages that login on the host."
 done
 
-sfw_note='- Package managers take only releases at least three days old. Socket Firewall is off (`socket_firewall: false` in `office.yaml`).'
+# The age the environment file gave mise, which is the office's.
+age_note="Package managers and mise take only releases at least ${MISE_MINIMUM_RELEASE_AGE:-3d} old (\`tools.minimum_release_age\` in \`office.yaml\`)."
+case "${MISE_MINIMUM_RELEASE_AGE:-3d}" in
+  0h | 0d | 0w | 00*) age_note="Package managers and mise take new releases as soon as they're published (\`tools.minimum_release_age\` in \`office.yaml\`)." ;;
+esac
+sfw_note="- ${age_note} Socket Firewall is off (\`enabled: false\` for sfw under \`tools\` in \`office.yaml\`)."
 case ":$PATH:" in
   *:/usr/local/lib/office/sfw/bin:*)
-    sfw_note='- Package downloads go through Socket Firewall (`sfw`), which refuses packages Socket knows to be malicious: `npm`, `npx`, `pnpm`, `pip`, `pip3`, `uv`, `uvx` and `cargo` are wrappers that run `sfw <command>`, and `mise install`, `use` and `upgrade` run behind it too. A refused package is Socket'"'"'s verdict: never route around the wrappers (calling a real binary by its path, another registry); tell the user. Package managers take only releases at least three days old.'
+    sfw_note='- Package downloads go through Socket Firewall (`sfw`), which refuses packages Socket knows to be malicious: `npm`, `npx`, `pnpm`, `pip`, `pip3`, `uv`, `uvx` and `cargo` are wrappers that run `sfw <command>`, and `mise install`, `use` and `upgrade` run behind it too. A refused package is Socket'"'"'s verdict: never route around the wrappers (calling a real binary by its path, another registry); tell the user. '"${age_note}"
     ;;
 esac
 

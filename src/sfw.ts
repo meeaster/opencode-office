@@ -2,7 +2,8 @@
 // makes goes through it. sfw runs a command behind a local proxy that refuses packages Socket knows
 // to be malicious, so the office puts a folder of wrappers first on PATH, one per package manager,
 // each running `sfw <tool>`, and a `mise` wrapper that routes mise's installs through it. Package
-// managers also wait the minimum release age below before they take a new release.
+// managers and mise also wait the office's minimum release age (`tools.minimum_release_age`)
+// before they take a new release, whether or not the firewall is on.
 //
 // This module is the one list of what is wrapped and of the variables, and writes the wrappers and
 // the environment file both for the container (its image and entrypoint) and for a host-mode
@@ -10,22 +11,43 @@
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** How old a package release must be before a package manager takes it, and before upgrade-tools moves sfw. */
-export const packageAge = "3d";
-
 /** The package managers whose commands go through sfw, by the names their wrappers have on PATH. */
 export const wrappedCommands = ["npm", "npx", "pnpm", "pip", "pip3", "uv", "uvx", "cargo"] as const;
 
+/** An age such as 36h, 3d or 2w (src/schema.ts) in hours. */
+function ageHours(age: string): number {
+  const amount = Number(age.slice(0, -1));
+
+  return age.endsWith("h") ? amount : age.endsWith("w") ? amount * 168 : amount * 24;
+}
+
+/** `count` of `unit`, as uv reads a duration: 1 day, 3 days. */
+function plural(count: number, unit: string): string {
+  return `${count} ${unit}${count === 1 ? "" : "s"}`;
+}
+
 /**
- * The variables that make package managers wait `packageAge` before they take a release: npm in
- * days, pnpm in minutes, uv as a duration it reads relative to now, pip as an ISO 8601 duration.
+ * The variables that make package managers and mise wait `age` before they take a release, each in
+ * its own unit: npm in days and pip in whole days (`PnD`), both rounded up so they never wait less;
+ * pnpm in minutes; uv as a duration in days or hours; mise as the age itself. With no age, npm and
+ * pnpm are set to 0, which pnpm needs to drop its own one-day default, and mise to the zero age,
+ * which turns off its; uv and pip, which wait for nothing unless told, aren't set, since a cutoff
+ * also leaves out files an index gives no upload time.
  */
-export const releaseAgeVariables = {
-  NPM_CONFIG_MIN_RELEASE_AGE: "3",
-  pnpm_config_minimum_release_age: "4320",
-  UV_EXCLUDE_NEWER: "3 days",
-  PIP_UPLOADED_PRIOR_TO: "P3D",
-} satisfies Record<string, string>;
+export function releaseAgeVariables(age: string): [string, string][] {
+  const hours = ageHours(age);
+  const days = Math.ceil(hours / 24);
+
+  if (hours === 0) return [["NPM_CONFIG_MIN_RELEASE_AGE", "0"], ["pnpm_config_minimum_release_age", "0"], ["MISE_MINIMUM_RELEASE_AGE", age]];
+
+  return [
+    ["NPM_CONFIG_MIN_RELEASE_AGE", String(days)],
+    ["pnpm_config_minimum_release_age", String(hours * 60)],
+    ["UV_EXCLUDE_NEWER", hours % 24 === 0 ? plural(hours / 24, "day") : plural(hours, "hour")],
+    ["PIP_UPLOADED_PRIOR_TO", `P${days}D`],
+    ["MISE_MINIMUM_RELEASE_AGE", age],
+  ];
+}
 
 /**
  * Set by a wrapper for the command it runs behind sfw: a wrapper that finds it set runs the real
@@ -69,7 +91,7 @@ const dropFromPath = (variable: string, entry: string) => [
 
 /** Refuses to run a download without sfw, rather than run it unchecked: a host-mode office's sfw comes with `office up`. */
 function missingSfw(layout: SfwLayout, indent: string): string[] {
-  const message = `office: Socket Firewall is not installed at ${layout.sfw}, so this download doesn't run; run office up in the office (or set socket_firewall: false in its office.yaml and run office sync)`;
+  const message = `office: Socket Firewall is not installed at ${layout.sfw}, so this download doesn't run; run office up in the office (or give sfw enabled: false under tools in its office.yaml and run office sync)`;
 
   return [`if [ ! -x ${shellQuote(layout.sfw)} ]; then`, `${indent}echo ${shellQuote(message)} >&2`, `${indent}exit 127`, "fi"];
 }
@@ -184,9 +206,9 @@ export const containerEnvFile = "/etc/opencode/env.sh";
 /** mise's shims in the container user's home, which the image's PATH already puts first. */
 const containerShims = "/home/office/.local/share/mise/shims";
 
-/** The container's environment: the wrappers first unless the office turned the firewall off, mise's shims, and the release ages. */
-export function containerEnvironment(socketFirewall: boolean): Environment {
-  return { path: [...(socketFirewall ? [containerLayout.bin] : []), containerShims], variables: Object.entries(releaseAgeVariables) };
+/** The container's environment: the wrappers first unless the office turned the firewall off, mise's shims, and the release ages for `age`. */
+export function containerEnvironment(socketFirewall: boolean, age: string): Environment {
+  return { path: [...(socketFirewall ? [containerLayout.bin] : []), containerShims], variables: releaseAgeVariables(age) };
 }
 
 /** Writes the image's wrappers (`office sfw-wrappers`, run as root when the image is built). */

@@ -83,8 +83,8 @@ COPY --chmod=755 office /usr/local/bin/office
 # Socket Firewall's wrappers, which `office` writes from its one list (src/sfw.ts): npm, npx, pnpm,
 # pip, pip3, uv, uvx and cargo, each running `sfw <command>`, and mise, whose installs go through
 # sfw. The entrypoint puts their folder first on PATH, through the environment file it writes at
-# start from office.yaml (socket_firewall); this one, the defaults, is for a container that can't
-# read it. Interactive bash shells source it too, as `office exec` and `office shell` do.
+# start from office.yaml (Socket Firewall on or off, and tools.minimum_release_age); this one, the
+# defaults, is for a container that can't read it. Interactive bash shells source it too, as `office exec` and `office shell` do.
 RUN office sfw-wrappers \
  && office env --container > /etc/opencode/env.sh \
  && chown office:office /etc/opencode/env.sh \

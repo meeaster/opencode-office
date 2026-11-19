@@ -19,7 +19,7 @@ let dir: string;
 
 let office: string;
 
-const variables = [machineRecordVariable, miseConfigVariable, machineDirVariable, "HOME", "ZDOTDIR", "OFFICE_ENV_FILE"] as const;
+const variables = [machineRecordVariable, miseConfigVariable, machineDirVariable, "HOME", "ZDOTDIR", "OFFICE_ENV_FILE", "XDG_DATA_HOME"] as const;
 
 const saved = new Map(variables.map((name) => [name, process.env[name]]));
 
@@ -32,6 +32,8 @@ beforeEach(() => {
   process.env.HOME = join(dir, "home");
   delete process.env.ZDOTDIR;
   delete process.env.OFFICE_ENV_FILE;
+  // mise's shims and the default data folder follow XDG_DATA_HOME, which the temporary home replaces.
+  delete process.env.XDG_DATA_HOME;
 });
 
 afterEach(() => {
@@ -49,8 +51,8 @@ function write(path: string, content: string): void {
 }
 
 /** A host-mode office with consent, a local package `demo` whose host block declares `host`, and the firewall as `firewall` says. */
-function makeOffice({ firewall = true, host = "" } = {}): void {
-  write(join(office, "office.yaml"), `name: t\nopencode:\n  mode: host\n  url: http://127.0.0.1:49999\n${firewall ? "" : "socket_firewall: false\n"}packages:\n  - name: demo\n`);
+function makeOffice({ firewall = true, host = "", tools = "" } = {}): void {
+  write(join(office, "office.yaml"), `name: t\nopencode:\n  mode: host\n  url: http://127.0.0.1:49999\n${firewall ? tools : `tools:\n${tools.replace(/^tools:\n/, "")}  sfw: { enabled: false }\n`}packages:\n  - name: demo\n`);
   write(join(office, "packages/demo/package.yaml"), `name: demo\ndescription: A demo package.\n${host}`);
 }
 
@@ -141,6 +143,25 @@ test("office up installs sfw checked against the lock, records it, and leaves it
   expect(await sync(loadOffice(office))).toEqual([]);
 });
 
+test("the environment file carries the office's minimum release age, and sync rewrites it when the age changes", async () => {
+  makeOffice({ tools: "tools:\n  minimum_release_age: 36h\n" });
+  grantConsent(loadOffice(office));
+  await sync(loadOffice(office));
+
+  const variables = () => Bun.spawnSync(["sh", "-c", `. '${envFilePath()}'; printf '%s|%s|%s|%s|%s' "$NPM_CONFIG_MIN_RELEASE_AGE" "$pnpm_config_minimum_release_age" "\${UV_EXCLUDE_NEWER-unset}" "\${PIP_UPLOADED_PRIOR_TO-unset}" "$MISE_MINIMUM_RELEASE_AGE"`], { env: { PATH: "/usr/bin:/bin" } }).stdout.toString();
+
+  expect(variables()).toBe("2|2160|36 hours|P2D|36h");
+
+  makeOffice({ tools: "tools:\n  minimum_release_age: 0d\n" });
+  expect(await sync(loadOffice(office))).toContain(`rewrote ${envFilePath()}, the office's environment file`);
+  expect(variables()).toBe("0|0|unset|unset|0d");
+
+  // With the firewall off the ages still apply.
+  makeOffice({ firewall: false });
+  await sync(loadOffice(office));
+  expect(variables()).toBe("3|4320|3 days|P3D|3d");
+});
+
 test("turning the firewall off removes sfw and its wrappers and rewrites the environment file; leaving host mode removes the rest", async () => {
   makeOffice();
   grantConsent(loadOffice(office));
@@ -153,8 +174,8 @@ test("turning the firewall off removes sfw and its wrappers and rewrites the env
 
   const changes = await sync(loadOffice(office));
 
-  expect(changes).toContain(`removed ${sfwPath()}, as office.yaml sets socket_firewall: false`);
-  expect(changes).toContain(`removed ${join(hostWrappers(), "npm")}, as office.yaml sets socket_firewall: false`);
+  expect(changes).toContain(`removed ${sfwPath()}, as office.yaml turns Socket Firewall off`);
+  expect(changes).toContain(`removed ${join(hostWrappers(), "npm")}, as office.yaml turns Socket Firewall off`);
   expect(changes).toContain(`rewrote ${envFilePath()}, the office's environment file`);
   expect(existsSync(join(data(), "sfw"))).toBe(false);
   expect(readFileSync(envFilePath(), "utf8")).not.toContain(hostWrappers());
@@ -203,6 +224,7 @@ test("a host block's folders and variables are plain: no shell code, PATH separa
   expect(errors("  path: [\"a:b\"]\n")).toHaveLength(1);
   expect(errors("  path: [../elsewhere]\n")).toEqual(["host.path[0]: must not climb out with .."]);
   expect(errors("  env:\n    PATH: /bin\n")).toEqual([expect.stringContaining("is set by office itself")]);
+  expect(errors("  env:\n    MISE_MINIMUM_RELEASE_AGE: 1h\n")).toEqual([expect.stringContaining("is set by office itself")]);
   expect(errors("  env:\n    OFFICE_X: y\n")).toHaveLength(1);
   expect(errors("  env:\n    \"A B\": y\n")).toEqual([expect.stringContaining("must be an environment variable name")]);
   expect(errors("  env:\n    MULTI: \"a\\nb\"\n")).toEqual([expect.stringContaining("must be one line of plain text")]);

@@ -102,6 +102,21 @@ for (const shell of ["sh", "bash", "zsh"]) {
 }
 
 test("the container's environment has the wrappers only while the firewall is on, and the release ages either way", () => {
-  expect(containerEnvironment(true)).toEqual({ path: ["/usr/local/lib/office/sfw/bin", "/home/office/.local/share/mise/shims"], variables: Object.entries(releaseAgeVariables) });
-  expect(containerEnvironment(false).path).toEqual(["/home/office/.local/share/mise/shims"]);
+  expect(containerEnvironment(true, "3d")).toEqual({ path: ["/usr/local/lib/office/sfw/bin", "/home/office/.local/share/mise/shims"], variables: releaseAgeVariables("3d") });
+  expect(containerEnvironment(false, "1d")).toEqual({ path: ["/home/office/.local/share/mise/shims"], variables: releaseAgeVariables("1d") });
+});
+
+test("each package manager and mise get the office's age in their own unit, never shorter", () => {
+  const variables = (age: string) => Object.fromEntries(releaseAgeVariables(age));
+
+  expect(variables("3d")).toEqual({ NPM_CONFIG_MIN_RELEASE_AGE: "3", pnpm_config_minimum_release_age: "4320", UV_EXCLUDE_NEWER: "3 days", PIP_UPLOADED_PRIOR_TO: "P3D", MISE_MINIMUM_RELEASE_AGE: "3d" });
+  expect(variables("1d")).toEqual({ NPM_CONFIG_MIN_RELEASE_AGE: "1", pnpm_config_minimum_release_age: "1440", UV_EXCLUDE_NEWER: "1 day", PIP_UPLOADED_PRIOR_TO: "P1D", MISE_MINIMUM_RELEASE_AGE: "1d" });
+  // npm and pip count whole days, so a day and a half rounds up to two.
+  expect(variables("36h")).toEqual({ NPM_CONFIG_MIN_RELEASE_AGE: "2", pnpm_config_minimum_release_age: "2160", UV_EXCLUDE_NEWER: "36 hours", PIP_UPLOADED_PRIOR_TO: "P2D", MISE_MINIMUM_RELEASE_AGE: "36h" });
+  expect(variables("48h")).toEqual({ NPM_CONFIG_MIN_RELEASE_AGE: "2", pnpm_config_minimum_release_age: "2880", UV_EXCLUDE_NEWER: "2 days", PIP_UPLOADED_PRIOR_TO: "P2D", MISE_MINIMUM_RELEASE_AGE: "48h" });
+  expect(variables("1h")).toEqual({ NPM_CONFIG_MIN_RELEASE_AGE: "1", pnpm_config_minimum_release_age: "60", UV_EXCLUDE_NEWER: "1 hour", PIP_UPLOADED_PRIOR_TO: "P1D", MISE_MINIMUM_RELEASE_AGE: "1h" });
+  expect(variables("2w")).toEqual({ NPM_CONFIG_MIN_RELEASE_AGE: "14", pnpm_config_minimum_release_age: "20160", UV_EXCLUDE_NEWER: "14 days", PIP_UPLOADED_PRIOR_TO: "P14D", MISE_MINIMUM_RELEASE_AGE: "2w" });
+  // No wait: npm and pnpm (whose own default is a day) at zero, mise at the zero age, uv and pip unset.
+  expect(variables("0d")).toEqual({ NPM_CONFIG_MIN_RELEASE_AGE: "0", pnpm_config_minimum_release_age: "0", MISE_MINIMUM_RELEASE_AGE: "0d" });
+  expect(variables("0h")).toEqual({ NPM_CONFIG_MIN_RELEASE_AGE: "0", pnpm_config_minimum_release_age: "0", MISE_MINIMUM_RELEASE_AGE: "0h" });
 });

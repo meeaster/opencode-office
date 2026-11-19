@@ -56,15 +56,20 @@ function isRun(value: unknown): value is Run {
   return isRecord(value) && typeof value.root === "string" && typeof value.bundle === "string" && typeof value.panel === "string" && typeof value.cdpPort === "number";
 }
 
-/** The OpenCode version the office pins: `versions.opencode` in the nearest office.yaml at or above `from`. */
+/**
+ * The OpenCode version the office pins in the nearest office.yaml at or above `from`: `tools.opencode`,
+ * a version or a mapping with `version`, or `versions.opencode` in an office.yaml from before `tools`.
+ */
 function officeVersion(from: string): string | undefined {
   for (let dir = resolve(from); ; dir = dirname(dir)) {
     const file = join(dir, "office.yaml");
 
     if (existsSync(file)) {
       const office: unknown = Bun.YAML.parse(readFileSync(file, "utf8"));
+      const tools = isRecord(office) ? office.tools : undefined;
       const versions = isRecord(office) ? office.versions : undefined;
-      const version = isRecord(versions) ? versions.opencode : undefined;
+      const entry = isRecord(tools) ? tools.opencode : isRecord(versions) ? versions.opencode : undefined;
+      const version = isRecord(entry) ? entry.version : entry;
 
       return typeof version === "string" ? version : undefined;
     }
@@ -222,7 +227,7 @@ async function start(flags: { package?: string; version?: string; project?: stri
   if (flags.package === undefined) fail("--package <package folder> is required");
 
   const packageDir = resolve(flags.package);
-  const version = flags.version ?? officeVersion(packageDir) ?? fail("no versions.opencode in an office.yaml above the package; pass --version <x.y.z>");
+  const version = flags.version ?? officeVersion(packageDir) ?? fail("no OpenCode version under tools in an office.yaml above the package; pass --version <x.y.z>");
 
   // Checked before the first run's download.
   if (!existsSync(join(packageDir, "gui/dist/gui-experimental.cjs"))) fail(`${packageDir}/gui/dist/gui-experimental.cjs doesn't exist; build the panel first`);

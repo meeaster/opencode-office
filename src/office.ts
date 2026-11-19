@@ -8,7 +8,7 @@ import { dirname, join, posix, resolve } from "node:path";
 import * as v from "valibot";
 import { isMap, isNode, isScalar, isSeq, parse, parseDocument, stringify } from "yaml";
 
-import { check, type OfficeConfig, officeSchema, type PinnedTool } from "./schema.ts";
+import { check, type OfficeConfig, officeSchema, pinnedTools, type ResolvedTools, resolveTools } from "./schema.ts";
 
 /** Where the office is mounted in the `opencode` container, and so the folder sessions start in. */
 export const containerOfficeDir = "/home/office/workspace";
@@ -66,12 +66,10 @@ export type Office = {
   /** The commit identity and HTTPS credentials office.yaml sets; undefined leaves git's own config. */
   git: OfficeConfig["git"];
   secrets?: OfficeConfig["secrets"];
-  /** The versions office.yaml pins; undefined when it has no `versions` block (the tool's defaults apply). */
-  versions: Partial<Record<PinnedTool, string>> | undefined;
-  /** `upgrades` from office.yaml: `minimum_release_age` and per-tool ages. */
-  upgrades: Record<string, string>;
+  /** The runtimes' versions and every release age, from `tools` (or the keys before it). */
+  tools: ResolvedTools;
   cron: OfficeConfig["cron"];
-  /** Whether package downloads go through Socket Firewall (`socket_firewall`, on unless false). */
+  /** Whether package downloads go through Socket Firewall: on unless sfw's `enabled` under `tools` is false. */
   socketFirewall: boolean;
   references: Repository[];
   desks: Desk[];
@@ -139,6 +137,7 @@ export function readConfig(dir: string): OfficeConfig {
  */
 export function loadOffice(dir: string): Office {
   const config = readConfig(dir);
+  const tools = resolveTools(config);
 
   return {
     dir,
@@ -148,16 +147,40 @@ export function loadOffice(dir: string): Office {
     catalogApps: config.executor?.catalog_apps ?? [],
     git: config.git,
     secrets: config.secrets,
-    versions: config.versions,
-    upgrades: config.upgrades,
+    tools,
     cron: config.cron,
-    socketFirewall: config.socket_firewall,
+    socketFirewall: tools.socketFirewall,
     references: config.references,
     desks: Object.entries(config.desks).map(([deskName, desk]) => ({ name: deskName, ...desk })),
     skills: config.skills,
     plugins: config.plugins.map((plugin) => ({ name: plugin.name, url: plugin.repo, ref: plugin.ref })),
     packages: config.packages,
   };
+}
+
+/**
+ * The `tools` block that says what `tools` says, as office.yaml would hold it: the general age,
+ * then each runtime with a version, an age of its own or sfw turned off, in the short form when it
+ * has only a version. `office check` prints it for an office.yaml still on `versions`, `upgrades`
+ * and `socket_firewall`.
+ */
+export function toolsBlock(tools: ResolvedTools): string {
+  const lines = ["tools:", `  minimum_release_age: ${tools.minimumReleaseAge}`];
+
+  for (const tool of pinnedTools) {
+    const { version, minimumReleaseAge } = tools.runtimes[tool];
+    const fields = [
+      ...(version === undefined ? [] : [`version: ${version}`]),
+      ...(minimumReleaseAge === tools.minimumReleaseAge ? [] : [`minimum_release_age: ${minimumReleaseAge}`]),
+      ...(tool === "sfw" && !tools.socketFirewall ? ["enabled: false"] : []),
+    ];
+
+    if (fields.length === 0) continue;
+
+    lines.push(fields.length === 1 && version !== undefined ? `  ${tool}: ${version}` : `  ${tool}: { ${fields.join(", ")} }`);
+  }
+
+  return `${lines.join("\n")}\n`;
 }
 
 /**
