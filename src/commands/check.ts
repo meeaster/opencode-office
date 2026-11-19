@@ -23,6 +23,7 @@ import { oldExecutorAppDirs } from "../executor-app-layout.ts";
 import { executorEnvFile, type Office, readEnvFile, skillGroups } from "../office.ts";
 import { isCurrent, readSkillRecord, skillDir } from "../skill-copies.ts";
 import { packageComposeFile, serviceStatus, sharedNamespaces } from "../package-services.ts";
+import { hostServiceStatus } from "../package-host-services.ts";
 import { envFilePath, hostWrappers, sourceLine, sourcedBy } from "../host-env.ts";
 import { claim, machineReport, matchesServerUnit, requireServerConsent } from "../machine.ts";
 import { wrappedCommands } from "../sfw.ts";
@@ -37,6 +38,7 @@ import { changes, defaultPins, describeMove, executorImage, isTested, lockFile, 
 import { appFolders, deployedFrameworks } from "./apps.ts";
 import { compose, officeImage, ports, runningPins } from "./compose.ts";
 import { keyOrganization } from "./executor.ts";
+import type { Stage } from "../report/index.ts";
 
 /** Prints one check; "warn" is shown but doesn't fail `office check`. */
 type Report = (ok: boolean | "warn", name: string, detail: string) => void;
@@ -558,7 +560,8 @@ function servicesRunning(office: Office): string[] {
 }
 
 /** The runtime checks; returns the root session's skills and plugins when the server listed them. */
-async function runtime(office: Office, report: Report): Promise<RootAnswer | undefined> {
+async function runtime(office: Office, report: Report, stage?: Stage): Promise<RootAnswer | undefined> {
+  stage?.detail("containers and Executor");
   const running = servicesRunning(office);
   let root: RootAnswer | undefined;
 
@@ -595,6 +598,7 @@ async function runtime(office: Office, report: Report): Promise<RootAnswer | und
 
   for (const desk of [undefined, ...office.desks.map((entry) => entry.name)]) {
     const where = desk ?? "root";
+    stage?.detail(`${where}: agents, skills, plugins and MCP`);
     const headers = { ...auth, "x-opencode-directory": desk === undefined ? base : `${base}/${desk}` };
 
     try {
@@ -659,6 +663,8 @@ async function runtime(office: Office, report: Report): Promise<RootAnswer | und
 
   if (hasToken && health === 200) await appFrameworks(office, report);
 
+  stage?.detail("services and timers");
+  hostServiceStatus(office, report);
   cron(office, report, running);
 
   return root;
@@ -794,7 +800,8 @@ async function appFrameworks(office: Office, report: Report): Promise<void> {
     }
 
     const folders = appFolders(office).filter(folder => !folder.adopted);
-    const local = folders.filter((folder) => JSON.parse(readFileSync(join(folder.dir, "package.json"), "utf8")).dependencies?.apps !== served);
+    // A package's app is read-only; deploy sends it with the served version.
+    const local = folders.filter((folder) => folder.fromPackage === undefined && JSON.parse(readFileSync(join(folder.dir, "package.json"), "utf8")).dependencies?.apps !== served);
     const deployed = apps.filter((app) => app.apps !== served);
     const missing = folders.filter((folder) => !apps.some((app) => app.slug === folder.slug));
 
@@ -880,7 +887,7 @@ function gitChecks(office: Office, report: Report, running: boolean): void {
  * come from the server's answer when there is one, the rest from reading the session's home. The
  * one warning is an outside skill or plugin with the name of one the office provides.
  */
-function outsideSection(office: Office, report: Report, root: RootAnswer | undefined): void {
+function outsideSection(office: Office, report: Report, root: RootAnswer | undefined, info: (line: string) => void): void {
   const places = sessionPlaces(office);
   const onHost = (path: string) => places.fromSession(path);
 
@@ -908,10 +915,10 @@ function outsideSection(office: Office, report: Report, root: RootAnswer | undef
   const lines = describeOutside(items, places.home);
   const source = loaded === undefined ? "read from the folders" : "skills and plugins as the server reports loading them, the rest read from the folders";
 
-  if (lines.length === 0) console.log(`info outside the office: nothing in ${places.label} or above the office that sessions here load`);
-  else console.log(`info outside the office: sessions here also load these from ${places.label} or above the office (${source}); listed for information`);
+  if (lines.length === 0) info(`info outside the office: nothing in ${places.label} or above the office that sessions here load`);
+  else info(`info outside the office: sessions here also load these from ${places.label} or above the office (${source}); listed for information`);
 
-  for (const line of lines) console.log(`     - ${line}`);
+  for (const line of lines) info(`     - ${line}`);
 
   const installed = installedPackages(office);
 
@@ -935,23 +942,38 @@ function outsideSection(office: Office, report: Report, root: RootAnswer | undef
   for (const line of describeIgnoredSkills(ignoredSkills(office.dir, ignored, places.home), places.home)) report(line.ok ? true : "warn", "ignored skill folders", line.text);
 }
 
-/** Prints each check; returns whether all passed. */
-export async function check(office: Office): Promise<boolean> {
-  let passed = true;
+/** Without a terminal stage, keep each original plain-text line for scripts and setup. */
+export async function check(office: Office, stage?: Stage, verbose = false): Promise<boolean> {
+  let passed = 0;
+  let warnings = 0;
+  let failed = 0;
 
   const report: Report = (ok, name, detail) => {
-    console.log(`${ok === "warn" ? "WARN" : ok ? "ok  " : "FAIL"} ${name}: ${detail}`);
-    passed &&= ok !== false;
+    const line = `${ok === "warn" ? "WARN" : ok ? "ok  " : "FAIL"} ${name}: ${detail}`;
+
+    if (ok === "warn") warnings++;
+    else if (ok) passed++;
+    else failed++;
+
+    if (!stage) console.log(line);
+    else if (ok === "warn") stage.warn(line);
+    else if (!ok) stage.error(line);
+    else if (verbose) stage.note(line);
   };
 
+  stage?.detail("office folders and packages");
   const problems = await drift(office);
 
   report(problems.length === 0, "office.yaml and folders", problems.length === 0 ? "in sync" : `${problems.length} problems`);
 
-  for (const problem of problems) console.log(`     - ${problem}`);
+  for (const problem of problems) {
+    if (stage) stage.error(problem);
+    else console.log(`     - ${problem}`);
+  }
 
   await packageChecks(office, report);
 
+  stage?.detail("host tools and machine settings");
   officeToolChecks(office, report);
 
   firewallChecks(office, report);
@@ -980,7 +1002,18 @@ export async function check(office: Office): Promise<boolean> {
   report(apps.length > 0, "Executor apps", apps.map((app) => relative(office.dir, app.dir)).join(", ") || "none");
 
   versionChecks(office, report);
-  outsideSection(office, report, await runtime(office, report));
+  const root = await runtime(office, report, stage);
 
-  return passed;
+  stage?.detail("outside skills and plugins");
+  outsideSection(office, report, root, line => {
+    if (!stage) console.log(line);
+    else if (verbose) stage.note(line);
+  });
+
+  const summary = `${passed} passed, ${warnings} warnings, ${failed} failed`;
+
+  if (failed) stage?.fail(summary);
+  else stage?.done(summary);
+
+  return failed === 0;
 }

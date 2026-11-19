@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -38,14 +38,14 @@ test("sync refreshes a reference that is its own clone, and refuses a plain fold
   mkdirSync(join(office, "references/plain"), { recursive: true });
   writeFileSync(join(office, "references/plain/keep.md"), "not a clone\n");
 
-  const first = await sync(loadOffice(office), { referencesOnly: true });
+  const first = await sync(loadOffice(office), { scope: "references" });
 
   expect(first).toContain("cloned reference references/up");
   expect(first).toContain(`FAILED reference references/plain: ${join(office, "references/plain")} holds a folder that isn't a repository of its own (no .git), not a clone; move it away so office sync can clone there`);
 
   commit("two");
 
-  expect(await sync(loadOffice(office), { referencesOnly: true })).toContain("updated reference references/up");
+  expect(await sync(loadOffice(office), { scope: "references" })).toContain("updated reference references/up");
 });
 
 test("sync reports each clone as a part while it runs, keeps git's error for one that fails, and returns the same lines in office.yaml's order", async () => {
@@ -67,13 +67,13 @@ test("sync reports each clone as a part while it runs, keeps git's error for one
   const lines: string[] = [];
   const reporter = new PlainReporter("office sync", false, (line) => lines.push(line), (line) => lines.push(line));
   const stage = reporter.stage("Repositories and packages", { key: "repos" });
-  const changes = await sync(loadOffice(office), { referencesOnly: true, stage });
+  const changes = await sync(loadOffice(office), { scope: "references", stage });
 
   expect(changes.slice(0, 5)).toEqual(["a", "b", "c", "d", "e"].map((name) => `cloned reference references/${name}`));
   expect(changes[5]).toStartWith("FAILED reference references/missing: Command failed: git fetch --quiet --depth 1 origin HEAD\n");
   expect(summarize(changes)).toBe("5 cloned, 1 failed");
 
-  expect(lines[0]).toBe("repos: cloning and updating 6 sources, 4 at a time");
+  expect(lines[0]).toBe("repos: cloning and updating 6 sources, up to 8 at a time (4 new clones)");
 
   for (const name of ["a", "b", "c", "d", "e"]) {
     expect(lines).toContain(`repos: cloning references/${name}`);
@@ -87,11 +87,15 @@ test("sync reports each clone as a part while it runs, keeps git's error for one
   expect(lines.some((line) => line.startsWith("repos: | references/missing: ") && line.includes("nowhere"))).toBe(true);
   // A rerun updates nothing: every part says current, and there is no change to return.
   lines.length = 0;
-  writeFileSync(join(office, "office.yaml"), `name: t\nreferences:\n${["a", "b"].map((name) => `  - { name: ${name}, url: ${upstream} }\n`).join("")}`);
+  const existing = [..."abcdefghi"];
 
-  expect(await sync(loadOffice(office), { referencesOnly: true, stage: reporter.stage("Repositories and packages", { key: "repos" }) })).toEqual([]);
-  expect(lines[0]).toBe("repos: cloning and updating 2 sources, 4 at a time");
-  expect(lines.slice(1).sort()).toEqual(["repos: references/a: current", "repos: references/b: current", "repos: updating references/a", "repos: updating references/b"]);
+  for (const name of existing.slice(5)) cpSync(join(office, "references/a"), join(office, "references", name), { recursive: true });
+  writeFileSync(join(office, "office.yaml"), `name: t\nreferences:\n${existing.map((name) => `  - { name: ${name}, url: ${upstream} }\n`).join("")}`);
+
+  expect(await sync(loadOffice(office), { scope: "references", stage: reporter.stage("Repositories and packages", { key: "repos" }) })).toEqual([]);
+  expect(lines.slice(1, 9)).toEqual(existing.slice(0, 8).map(name => `repos: updating references/${name}`));
+  expect(lines.indexOf("repos: updating references/i")).toBeGreaterThan(lines.findIndex(line => line.endsWith(": current")));
+  expect(lines.filter(line => line.endsWith(": current"))).toHaveLength(9);
   expect(summarize([])).toBe("already in sync");
 });
 
@@ -126,21 +130,38 @@ test("a shallow clone that fails leaves nothing behind, and one an earlier relea
 
   const realError = expect.stringMatching(/^FAILED reference references\/up: Command failed: git fetch --quiet --depth 1 origin missing-branch\n.*missing-branch/);
 
-  expect(await sync(loadOffice(office), { referencesOnly: true })).toEqual([realError]);
+  expect(await sync(loadOffice(office), { scope: "references" })).toEqual([realError]);
   expect(existsSync(join(office, "references/up"))).toBe(false);
   // The same again: still the real error, not git rev-parse on an empty repository.
-  expect(await sync(loadOffice(office), { referencesOnly: true })).toEqual([realError]);
+  expect(await sync(loadOffice(office), { scope: "references" })).toEqual([realError]);
 
   // What a failed clone left before: an empty folder holding only an initialised .git with the remote.
   mkdirSync(join(office, "references/up"), { recursive: true });
   git(["init", "--quiet", join(office, "references/up")]);
   git(["remote", "add", "origin", upstream], join(office, "references/up"));
-  expect(await sync(loadOffice(office), { referencesOnly: true })).toEqual([realError]);
+  expect(await sync(loadOffice(office), { scope: "references" })).toEqual([realError]);
   // The folder was there before this clone, so only what the clone made goes.
   expect(existsSync(join(office, "references/up/.git"))).toBe(false);
 
   writeFileSync(join(office, "office.yaml"), `name: t\nreferences:\n  - { name: up, url: ${upstream} }\n`);
-  expect(await sync(loadOffice(office), { referencesOnly: true })).toEqual(["cloned reference references/up"]);
+  expect(await sync(loadOffice(office), { scope: "references" })).toEqual(["cloned reference references/up"]);
   expect(() => cloneShallow(upstream, "missing-branch", join(dir, "blocking"))).toThrow("missing-branch");
   expect(existsSync(join(dir, "blocking"))).toBe(false);
+});
+
+test("packages-only sync applies changed settings and plugin links without visiting unrelated Git remotes", async () => {
+  const pkg = join(dir, "packages/demo");
+  const upstream = join(dir, "unavailable");
+
+  mkdirSync(join(pkg, "plugin"), { recursive: true });
+  writeFileSync(join(pkg, "package.yaml"), "name: demo\ndescription: Demo\nsettings:\n  title: { description: Title, default: Before }\n");
+  writeFileSync(join(dir, "office.yaml"), `name: demo\npackages: [{ name: demo, settings: { title: After } }]\nreferences: [{ name: docs, url: ${upstream} }]\ndesks: { work: { repos: [{ name: example, url: ${upstream} }] } }\nplugins: [{ name: other, repo: ${upstream} }]\n`);
+
+  const changes = await sync(loadOffice(dir), { scope: "packages" });
+
+  expect(changes.filter(line => line.startsWith("FAILED"))).toEqual([]);
+  expect(JSON.parse(readFileSync(join(pkg, ".settings.json"), "utf8")).title).toBe("After");
+  expect(existsSync(join(dir, ".opencode/plugins/demo"))).toBe(true);
+
+  for (const path of ["references/docs", "work/repos/example", ".opencode/plugins/other"]) expect(existsSync(join(dir, path))).toBe(false);
 });

@@ -28,6 +28,7 @@ import { markServerStopped, planServer, serverIncumbent, startServer } from "../
 import { claim, globalConfD, installSfw, removeUnwantedServer, requireServerConsent, stopRecordedServer, writeServerUnit } from "../machine.ts";
 import { machineFiles } from "../package-tools.ts";
 import { packageComposeFile, preparePackageServices, serviceFiles, serviceSettings, type UpgradedServices } from "../package-services.ts";
+import { reconcileHostServices } from "../package-host-services.ts";
 import type { Lock } from "../schema.ts";
 import { prepareSecrets } from "../secrets.ts";
 import { placeExecutable, toolPath, unpackedImage } from "../tool.ts";
@@ -528,6 +529,7 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
     writeExecutorFiles(office);
   }
 
+  reconcileHostServices(office, upgrade ? "upgrade" : "up");
   writeApplied(office, pins, office.opencode.mode === "container" ? refreshed : applied?.refreshed);
 
   // A new Executor serves a new apps framework; every app must match it.
@@ -586,6 +588,7 @@ export async function startExecutor(office: Office): Promise<void> {
 
 /** Stops the office's containers, whichever mode started them, and its timers. */
 export function down(office: Office): void {
+  reconcileHostServices(office, "down");
   markServerStopped(office);
   removeTimers(office);
   stopRecordedServer(office);

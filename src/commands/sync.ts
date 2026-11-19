@@ -180,23 +180,12 @@ function removeOldKnowledgePlugin(office: Office): string[] {
   return [`${removed}. Sessions no longer list knowledge/ articles; to keep that, add \`- name: knowledge\` under packages: in office.yaml and run office sync again`];
 }
 
-/** How many clones and fetches run at once. */
-const concurrency = 4;
-
-/** Runs `work` on each item, at most `limit` at once. */
-async function pool<T>(items: T[], limit: number, work: (item: T, index: number) => Promise<void>): Promise<void> {
-  let next = 0;
-
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      for (let index = next++; index < items.length; index = next++) await work(items[index], index);
-    }),
-  );
-}
+const fetchSlots = 8;
+const cloneSlots = 4;
 
 /**
- * Clones and updates the office's repositories, references and plugin clones, `concurrency` at
- * once, each reported as a part of `stage` as it runs. Returns one line per change, in office.yaml's
+ * Clones and updates the office's repositories, references and plugin clones, each reported
+ * as a part of `stage` as it runs. Returns one line per change, in office.yaml's
  * order, with a FAILED line for each that failed.
  */
 async function syncClones(office: Office, referencesOnly: boolean, stage: Stage, verbose: boolean): Promise<string[]> {
@@ -205,47 +194,60 @@ async function syncClones(office: Office, referencesOnly: boolean, stage: Stage,
 
   if (work.length === 0) return [];
 
-  stage.detail(`cloning and updating ${work.length} ${work.length === 1 ? "source" : "sources"}, ${concurrency} at a time`);
+  stage.detail(`cloning and updating ${work.length} ${work.length === 1 ? "source" : "sources"}, up to ${fetchSlots} at a time (${cloneSlots} new clones)`);
   stage.expect(work.length);
 
-  await pool(work, concurrency, async (clone, index) => {
+  const updates: (() => Promise<void>)[] = [];
+  const missing: (() => Promise<void>)[] = [];
+
+  for (const [index, clone] of work.entries()) {
     const where = relative(office.dir, clone.dir);
+    const shallow = clone.kind === "reference" || clone.kind === "plugin";
 
-    // A package plugin's link can stand where a plugins: entry of the same name is cloned; the
-    // entry wins, so git never runs through the link in the office's own repository.
-    if (clone.kind === "plugin" && packageLink(clone.dir) !== undefined) unlinkSync(clone.dir);
+    const failed = (message: string) => {
+      lines[index].push(`FAILED ${clone.kind} ${where}: ${message}`);
 
-    let part;
+      return message;
+    };
 
     try {
+      // A declared clone replaces a package plugin link; never fetch through the link.
+      if (clone.kind === "plugin" && packageLink(clone.dir) !== undefined) unlinkSync(clone.dir);
+
       // A shallow clone that failed under an earlier release left a .git with no commit; clone again.
-      const shallow = clone.kind === "reference" || clone.kind === "plugin";
-
       if (shallow) discardFailedClone(clone.dir);
-
       const present = isClone(clone.dir);
 
-      part = stage.part(where, present ? "updating" : "cloning");
+      (present ? updates : missing).push(async () => {
+        const part = stage.part(where, present ? "updating" : "cloning");
+        const options = { line: part.output, verbose };
 
-      const options = { line: part.output, verbose };
+        try {
+          const result = shallow
+            ? present ? await refreshCloneStreamed(clone.ref, clone.dir, options) : await cloneShallowStreamed(clone.url, clone.ref, clone.dir, options)
+            : await cloneOrFetchStreamed(clone.url, clone.ref, clone.dir, options);
 
-      const result =
-        shallow
-          ? present
-            ? await refreshCloneStreamed(clone.ref, clone.dir, options)
-            : await cloneShallowStreamed(clone.url, clone.ref, clone.dir, options)
-          : await cloneOrFetchStreamed(clone.url, clone.ref, clone.dir, options);
+          part.done(result);
 
-      part.done(result);
-
-      if (result !== "current" && result !== "fetched") lines[index].push(`${result} ${clone.kind} ${where}`);
+          if (result !== "current" && result !== "fetched") lines[index].push(`${result} ${clone.kind} ${where}`);
+        } catch (error) {
+          part.fail(failed(error instanceof Error ? error.message.trim() : String(error)));
+        }
+      });
     } catch (error) {
-      const message = error instanceof Error ? error.message.trim() : String(error);
-
-      (part ?? stage.part(where, "checking")).fail(message);
-      lines[index].push(`FAILED ${clone.kind} ${where}: ${message}`);
+      stage.part(where, "checking").fail(failed(error instanceof Error ? error.message.trim() : String(error)));
     }
-  });
+  }
+
+  // Half the workers may start new clones. All eight can drain existing-repo fetches.
+  await Promise.all(Array.from({ length: fetchSlots }, async (_, slot) => {
+    for (;;) {
+      const job = (slot < cloneSlots ? missing.shift() : undefined) ?? updates.shift();
+
+      if (!job) return;
+      await job();
+    }
+  }));
 
   return lines.flat();
 }
@@ -270,8 +272,7 @@ export function summarize(changes: string[]): string {
 }
 
 type SyncOptions = {
-  /** Only update references. */
-  referencesOnly?: boolean;
+  scope?: "all" | "references" | "packages";
   /** Where the sync reports as it goes: each clone as a part, then each change line. */
   stage?: Stage;
   /** Ask git for its progress, for a verbose plain run. */
@@ -280,10 +281,9 @@ type SyncOptions = {
 
 /**
  * Runs the sync and returns one line per change, each also reported to `stage` as it happens
- * (clones as parts, a line starting with FAILED as an error, the rest as notes). With
- * `referencesOnly`, it only updates references.
+ * (clones as parts, a line starting with FAILED as an error, the rest as notes).
  */
-export async function sync(loaded: Office, { referencesOnly = false, stage = silentStage, verbose = false }: SyncOptions = {}): Promise<string[]> {
+export async function sync(loaded: Office, { scope = "all", stage = silentStage, verbose = false }: SyncOptions = {}): Promise<string[]> {
   let office = loaded;
   const reported: string[] = [];
 
@@ -299,9 +299,15 @@ export async function sync(loaded: Office, { referencesOnly = false, stage = sil
     },
   };
 
-  reported.push(...(await syncClones(office, referencesOnly, stage, verbose)));
+  if (scope === "packages") {
+    await syncPackages(office, changes, stage);
 
-  if (referencesOnly) return reported;
+    return reported;
+  }
+
+  reported.push(...(await syncClones(office, scope === "references", stage, verbose)));
+
+  if (scope === "references") return reported;
 
   stage.detail("migrating, scaffolding desks, copying skills and installing packages");
 

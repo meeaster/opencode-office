@@ -36,6 +36,17 @@ export function secretsPath(office: Office, name: string): string {
   return join(servicesState(office), `${name}.env`);
 }
 
+export function packageSecret(office: Office, name: string, key: string): string {
+  const item = installedPackages(office).installed.find(({ entry }) => entry.name === name);
+
+  if (!item || !Object.hasOwn(item.manifest.secrets, key)) throw new OfficeError(`no installed package ${name} declares ${key}`);
+  const values = readEnvFile(secretsPath(office, name));
+
+  if (!Object.hasOwn(values, key)) throw new OfficeError(`${name}: ${key} has not been generated; run office up`);
+
+  return values[key];
+}
+
 function appliedDir(office: Office, name: string): string {
   return join(servicesState(office), name);
 }
@@ -298,13 +309,17 @@ export function preparePackageServices(office: Office, upgrade: boolean) {
     const running = appliedServices(office);
 
     for (const item of installed) {
-      if (!running.has(item.entry.name)) continue;
-
-      const dir = appliedDir(office, item.entry.name);
+      const hasServices = running.has(item.entry.name);
       const secrets = secretsPath(office, item.entry.name);
-      const settings = join(dir, "settings.env");
+
+      // Compose includes its env file even when the package declares no secrets.
+      if (!hasServices && Object.keys(item.manifest.secrets).length === 0) continue;
 
       for (const key of ensureSecrets(secrets, item.manifest.secrets)) say(`generated ${key} for package ${item.entry.name} in ${secrets}`, "office: ");
+
+      if (!hasServices) continue;
+      const dir = appliedDir(office, item.entry.name);
+      const settings = join(dir, "settings.env");
 
       writeFileSync(settings, settingsEnv(item));
       writeFileSync(

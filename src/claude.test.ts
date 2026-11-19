@@ -28,7 +28,7 @@ test("sync reconciles the launcher, mode and instruction-only settings, not owne
 
   writeFileSync(join(root, "office.yaml"), "name: claude-test\n");
   writeFileSync(config, original);
-  expect(await sync(loadOffice(root), { referencesOnly: true })).toEqual([]);
+  expect(await sync(loadOffice(root), { scope: "references" })).toEqual([]);
   expect(claudeFiles(root)).toHaveLength(2);
 
   const first = await sync(loadOffice(root));

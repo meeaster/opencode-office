@@ -142,7 +142,7 @@ export async function setup(initial: Office, options: SetupOptions, reporter: Re
     throw new OfficeError(`these sources don't read on this host, so nothing was cloned:\n${unreachable.map((line) => `  - ${line}`).join("\n")}\nFix them or office.yaml, then rerun office setup`);
   }
 
-  const changes = await sync(office, { referencesOnly: false, stage, verbose: options.verbose === true });
+  const changes = await sync(office, { stage, verbose: options.verbose === true });
 
   if (changes.some((line) => line.startsWith("FAILED"))) {
     stage.fail(summarize(changes));

@@ -1,8 +1,9 @@
 # Doop (https://github.com/kgoedecke/doop) and its Postgres, in the office's compose project.
 #
 # Doop publishes no container image, so this builds upstream's Dockerfile from the v0.15.0 release
-# commit. To move to another release, change the commit and the image tag together; `office up
-# --upgrade` applies the change after backing up doop-pg.
+# commit. To move to another release, change the commit and the image tag together, and check that
+# `command` below still ends with the CMD of upstream's Dockerfile; `office up --upgrade` applies
+# the change after backing up doop-pg.
 
 services:
   doop:
@@ -10,14 +11,37 @@ services:
     image: office-doop:v0.15.0
     build: https://github.com/kgoedecke/doop.git#9a4fb9ec442a982772b752004761eda3aca2633d
     restart: unless-stopped
+    # BETTER_AUTH_URL is the exact address the browser opens: sign-in, OAuth and every link Doop
+    # hands out use it. It is chosen at start, by the rule the package's plugin and Executor app
+    # follow: the url setting; else, when sessions sign in to Doop through the Executor app
+    # (executor_app and oauth), http://doop.localhost:<port>, the one name the browser and
+    # Executor's container both reach Doop at; else http://localhost:<port>. Then upstream's own
+    # command, as its Dockerfile runs it.
+    command:
+      - sh
+      - -c
+      - |
+        if [ -n "$$DOOP_URL" ]; then BETTER_AUTH_URL="$${DOOP_URL%/}"
+        elif [ "$$DOOP_EXECUTOR_APP" = true ] && [ "$$DOOP_OAUTH" = true ]; then BETTER_AUTH_URL="http://doop.localhost:$$PORT"
+        else BETTER_AUTH_URL="http://localhost:$$PORT"
+        fi
+        export BETTER_AUTH_URL
+        exec node_modules/.bin/tsx server/index.ts
+    networks:
+      default:
+        # Browsers resolve every *.localhost name to loopback, the published port; on the compose
+        # network Docker's DNS resolves this alias to Doop, so Executor discovers Doop's OAuth
+        # server, registers and exchanges codes at the address the browser signs in at.
+        aliases: [doop.localhost]
     environment:
       # Doop listens on the published port inside its container too. It builds asset and
       # screenshot addresses on BETTER_AUTH_URL, and its own Chromium loads frame assets from
-      # there when it renders a screenshot, so http://localhost:<port> must answer inside the
-      # container as well as in the browser.
+      # there when it renders a screenshot, so the address must answer inside the container as
+      # well as in the browser: Chromium resolves *.localhost to loopback itself.
       PORT: ${DOOP_PORT}
-      # The exact address the browser opens: OAuth, sign-in and every link Doop hands out use it.
-      BETTER_AUTH_URL: ${DOOP_URL:-http://localhost:${DOOP_PORT}}
+      DOOP_URL: ${DOOP_URL:-}
+      DOOP_EXECUTOR_APP: ${DOOP_EXECUTOR_APP:-false}
+      DOOP_OAUTH: ${DOOP_OAUTH:-false}
       # Browsers on this machine may open Doop by its loopback address even behind a proxy.
       TRUSTED_ORIGINS: http://localhost:${DOOP_PORT},http://127.0.0.1:${DOOP_PORT}
       # Signs sessions and OAuth tokens.

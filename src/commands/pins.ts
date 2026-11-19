@@ -107,7 +107,7 @@ export async function updateSkills(loaded: Office, stage: Stage): Promise<void> 
  * Resolves each tracked package from another repository, copies it at the commit found and records
  * that commit as its ref, then applies the packages as sync does, when any pin moved.
  */
-export async function updatePackages(loaded: Office, stage: Stage): Promise<void> {
+export async function updatePackages(loaded: Office, stage: Stage, { apply = true } = {}): Promise<void> {
   let office = loaded;
   const lines = new UpdateProgress(stage);
   const tracked = office.packages.flatMap((entry, index) => (entry.source === undefined ? [] : [{ entry, index, source: entry.source }]));
@@ -156,7 +156,7 @@ export async function updatePackages(loaded: Office, stage: Stage): Promise<void
     lines.push(`package ${entry.name}: pinned ${short(source.ref)} → ${found.commit} (${found.via})`, ...copied);
   }
 
-  if (lines.updated > 0) {
+  if (apply && lines.updated > 0) {
     stage.detail("applying packages");
     await syncPackages(office, lines, stage);
   }
