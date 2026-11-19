@@ -161,12 +161,6 @@ export const modelReference = v.pipe(
   v.regex(/^[^/#\s]+\/[^#\s]+(?:#[^#\s]+)?$/, "must be a model such as openai/gpt-6-luna#low: provider/model, with an optional #variant"),
 );
 
-// What `office context` measures with: the models it sends its probe requests to.
-const context = v.nullish(
-  v.strictObject({ models: v.nullish(v.array(modelReference, "must be a list of models such as openai/gpt-6-luna#low"), []) }, mapping),
-  {},
-);
-
 const skills = v.nullish(
   v.strictObject(
     {
@@ -278,9 +272,8 @@ export const officeSchema = v.pipe(v.strictObject(
     skills,
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
     packages: v.pipe(v.nullish(v.array(packageEntry, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
-    context,
   },
-  "must be a mapping of name, state, opencode, executor, git, secrets, versions, upgrades, cron, socket_firewall, references, desks, skills, plugins, packages and context",
+  "must be a mapping of name, state, opencode, executor, git, secrets, versions, upgrades, cron, socket_firewall, references, desks, skills, plugins and packages",
 ), v.forward(v.check(({ secrets, opencode }) => secrets?.server === undefined || (opencode !== "container" && opencode.mode === "host" && opencode.managed), "requires opencode.managed: true in host mode"), ["secrets", "server"]));
 
 export type OfficeConfig = v.InferOutput<typeof officeSchema>;

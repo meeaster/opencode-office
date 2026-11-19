@@ -69,7 +69,7 @@ office --version
 
 ```sh
 office update --check                        # report the newest eligible release, change nothing
-office update                                # install the newest release at least a day old
+office update                                # install the newest eligible release (default age: 0d)
 office update --minimum-release-age 7d       # or at least this old (hours, days or weeks)
 office update --version 0.1.0-20261116T163238Z   # exactly this release, whatever its age
 ```
@@ -120,22 +120,19 @@ pre-commit install
 | `office apps deploy` | Installs missing `executor.catalog_apps` and deploys Executor app folders in `executor-apps/*` and `<desk>/executor-apps/*`. It first type-checks local sources against the framework Executor serves. For office-authored apps it updates the `apps` dependency, supplies the mode-specific `office.ts` and links the OpenCode account when required |
 | `office apps adopt <catalog-id>` | Copies an installed Executor catalog app's currently deployed source into `executor-apps/<catalog-id>/` for customization. Future deployments target that app in place |
 | `office upgrade-tools` | Bumps each exact pin in the office's own `mise.toml` files (root and desks), its `machine.toml` and the packages' fragments in `.office/mise/` (see "Tools"), and the versions in `office.yaml`, to the newest release at least the office's minimum release age old, and commits the changed files alone as the office's git identity, else `office cron`. See "Cron" |
-| `office update [--check] [--minimum-release-age <age> \| --version <release>]` | Replaces this `office` executable with a release from GitHub: the newest at least a day (or `<age>`) old and newer than this one, or exactly `<release>`. `--check` only reports. It changes no office; see "Updating" |
+| `office update [--check] [--minimum-release-age <age> \| --version <release>]` | Replaces this `office` executable with the newest eligible GitHub release newer than this one (default minimum age: `0d`), or exactly `<release>`. `--check` only reports. It changes no office; see "Updating" |
 | `office cron list` / `office cron run <job-id>` | Lists enabled, applicable YAML jobs or runs one by its qualified ID; see "Cron" |
-| `office context [folder] [--model <provider/model#variant>]` | Measures the tokens the office adds to the first request of a session started in that folder (default: the current one), per model, on the running host-mode OpenCode server; see "Measuring what the office adds" |
+| `office context --model <provider/model#variant>` | Measures the tokens the office adds to the first request of a session started in the current folder on the running host-mode OpenCode server. Repeat `--model` to compare models; see "Measuring what the office adds" |
 
 ### Measuring what the office adds
 
-`office context [folder]` sends real requests to the office's running OpenCode server, so its numbers are exact for each model. For each model it starts a session in a fresh empty folder outside the office and one in the folder, sends each `Reply with exactly: OK`, reads the first request's tokens (input plus cache reads and writes, since some providers report almost everything as cache) and deletes the session. It prints both totals and the difference, then each plugin instruction entry of the folder's session with its size in characters. That is two small requests per model.
+Run `office context` in the folder you want to measure. Pass at least one model in OpenCode's `provider/model` notation, optionally followed by `#variant`:
 
-The models come from `office.yaml`, in OpenCode's notation; `--model` measures just one instead (quote it in shells that treat `#` specially). Without either, the command stops rather than use the server's default model.
-
-```yaml
-context:
-  models:
-    - openai/gpt-6-luna#low
-    - claude-agent/haiku#low
+```sh
+office context --model 'openai/gpt-6-luna#low' --model claude-agent/haiku
 ```
+
+For each model, the command sends two real requests: one from a fresh empty folder outside the office and one from the current folder. It prompts each session with `Reply with exactly: OK`, counts input tokens including cache reads and writes, and deletes the session. It prints both totals and the difference, followed by each plugin instruction entry and its size in characters. If your `office.yaml` has a `context.models` setting, remove the `context` block and pass those models with `--model` instead.
 
 A model whose request fails (for example a provider's "Insufficient balance") is reported with the provider's message, the others are still measured, and the command exits non-zero. Every probe session is titled `office context probe`; a run first deletes sessions with exactly that title, which an interrupted run left. It works only in host mode for now: in container mode the empty baseline folder would have to exist inside the container, and the command refuses.
 

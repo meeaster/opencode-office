@@ -1,7 +1,7 @@
 // `office update`: replaces this compiled `office` with a release from the tool's GitHub releases,
-// read without a login. By default it takes the newest release at least a minimum age old (1d,
-// or --minimum-release-age; office.yaml's ages don't apply, since one executable serves several
-// offices) and never moves to an older one; --version takes an exact release, whatever its age.
+// read without a login. By default it takes the newest eligible release without waiting.
+// --minimum-release-age sets a wait for this update; office.yaml's ages don't apply, since one
+// executable serves several offices. Only --version can install an older release.
 // The new executable is downloaded beside the old one, checked against the release's SHA256SUMS,
 // run once to confirm it reports the release's version and commit, and only then renamed over the
 // old one. It changes no office: each office picks it up with `office sync` and `office up`.

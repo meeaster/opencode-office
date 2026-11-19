@@ -114,14 +114,12 @@ test("parses OpenCode's provider/model#variant notation", () => {
   for (const bad of ["haiku", "openai/", "/haiku", "openai/gpt#", "openai/gpt#a#b", "openai/gpt 6"]) expect(() => parseModel(bad)).toThrow("provider/model");
 });
 
-test("office.yaml's context.models is read and checked", () => {
+test("office.yaml does not accept context models", () => {
   const { server } = fakeServer(() => ({}));
 
   cleanups.push(() => server.stop(true));
 
-  expect(officeAt(server).contextModels).toEqual([]);
-  expect(officeAt(server, "context:\n  models:\n    - openai/gpt-6-luna#low\n    - claude-agent/haiku\n").contextModels).toEqual(["openai/gpt-6-luna#low", "claude-agent/haiku"]);
-  expect(() => officeAt(server, "context:\n  models: [haiku]\n")).toThrow("context.models[0]");
+  expect(() => officeAt(server, "context:\n  models: [provider/model]\n")).toThrow("context");
 });
 
 test("counts input and cache tokens, reports the folder's entries and deletes every probe session", async () => {
@@ -188,15 +186,34 @@ test("removes only leftover sessions titled exactly as probes", async () => {
   expect([...sessions.keys()].sort()).toEqual(["ses_mine", "ses_other"]);
 });
 
-test("without models it stops and says how to add them, before contacting the server", async () => {
-  const { server, requests } = fakeServer(() => ({}));
+test("context requires --model, rejects a folder argument and measures the working directory", async () => {
+  const measured: string[] = [];
+
+  const { server, requests } = fakeServer((session, baseline) => {
+    if (!baseline) measured.push(`${session.model?.id} in ${session.directory}`);
+
+    return tokens(1, 0, 0);
+  });
 
   cleanups.push(() => server.stop(true));
 
   const office = officeAt(server);
+  const cwd = join(office.dir, "desk");
+  const command = [process.execPath, join(import.meta.dir, "../cli.ts"), "--office", office.dir, "context"];
 
-  await expect(contextReport(office, office.dir, [])).rejects.toThrow("add context.models to office.yaml");
+  for (const args of [[], [office.dir, "--model", "provider/one"]]) {
+    const invalid = Bun.spawnSync([...command, ...args], { cwd });
+
+    expect(invalid.exitCode).toBe(1);
+    expect(invalid.stderr.toString()).toContain("usage: office context --model");
+  }
+
   expect(requests).toHaveLength(0);
+
+  const run = Bun.spawn([...command, "--model", "provider/one", "--model", "provider/two"], { cwd, stdout: "pipe" });
+
+  expect(await run.exited).toBe(0);
+  expect(measured).toEqual([`one in ${cwd}`, `two in ${cwd}`]);
 });
 
 test("refuses in container mode", async () => {

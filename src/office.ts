@@ -52,8 +52,6 @@ export type Office = {
   skills: OfficeConfig["skills"];
   plugins: { name: string; url: string; ref?: string }[];
   packages: PackageEntry[];
-  /** `context.models`: the models `office context` probes, as `provider/model#variant`. */
-  contextModels: string[];
 };
 
 /** Walks up from `start` to the nearest folder holding office.yaml. */
@@ -133,7 +131,6 @@ export function loadOffice(dir: string): Office {
     skills: config.skills,
     plugins: config.plugins.map((plugin) => ({ name: plugin.name, url: plugin.repo, ref: plugin.ref })),
     packages: config.packages,
-    contextModels: config.context.models,
   };
 }
 

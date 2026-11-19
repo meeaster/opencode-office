@@ -192,7 +192,7 @@ export async function contextReport(office: Office, folder: string, models: stri
   }
 
   if (models.length === 0) {
-    throw new OfficeError("no models to measure with: add context.models to office.yaml (such as - openai/gpt-6-luna#low) or pass --model <provider/model#variant>");
+    throw new OfficeError("pass --model <provider/model#variant> to select a model to measure");
   }
 
   const parsed = models.map((text) => ({ text, model: parseModel(text) }));

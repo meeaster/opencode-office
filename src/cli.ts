@@ -57,11 +57,10 @@ const usage = `usage: office <command> [--office <dir>]
                                containers and opted-in managed OpenCode
   instructions [folder]        print the office guidance a session started in <folder> gets
   instructions --session <id>  print each stored instruction entry from a running OpenCode server
-  context [folder] [--model <provider/model#variant>]
+  context --model <provider/model#variant>
                                measure the tokens the office adds to the first request of a
-                               session in <folder>, against an empty folder, with each of
-                               office.yaml's context.models (or just --model) on the running
-                               OpenCode server (host mode)
+                               session in the current folder, against an empty folder, on the
+                               running host-mode OpenCode server. Repeat --model to compare models
   up [--upgrade] [--refresh] | down
                                start or stop this office's containers. up runs the versions it
                                last applied; --upgrade applies office.yaml's newer ones;
@@ -81,8 +80,8 @@ const usage = `usage: office <command> [--office <dir>]
   upgrade-tools                bump exact pins in mise.toml files, machine.toml, .office/mise/
                                and office.yaml's versions, and commit them
   update [--check] [--minimum-release-age <age> | --version <release>]
-                               replace this office executable with the newest release at least
-                               1d old (or <age>), or exactly <release>; --check only reports.
+                               replace this office executable with the newest eligible release
+                               (minimum age: 0d by default), or exactly <release>; --check only reports.
                                Offices pick it up with office sync and office up; it never
                                changes office.yaml's versions
   cron list | run <job-id>      list applicable YAML jobs or run one by its qualified ID
@@ -123,7 +122,7 @@ async function updateCommand(args: string[]): Promise<void> {
     return;
   }
 
-  const minimumAge = flags["minimum-release-age"] ?? "1d";
+  const minimumAge = flags["minimum-release-age"] ?? "0d";
 
   if (flags.version !== undefined && flags["minimum-release-age"] !== undefined) {
     throw new OfficeError(`--version installs that exact release, whatever its age, so it takes no --minimum-release-age\n${updateUsage}`);
@@ -149,7 +148,7 @@ async function main(): Promise<void> {
     options: {
       office: { type: "string" },
       session: { type: "string" },
-      model: { type: "string" },
+      model: { type: "string", multiple: true },
       name: { type: "string" },
       "owner-email": { type: "string" },
       "generate-age-key": { type: "boolean" },
@@ -204,10 +203,10 @@ async function main(): Promise<void> {
 
     if (text !== "") console.log(text);
   } else if (command === "context") {
-    if (rest.length > 1) throw new OfficeError("usage: office context [folder] [--model <provider/model#variant>]");
+    if (rest.length !== 0 || flags.model === undefined) throw new OfficeError("usage: office context --model <provider/model#variant>");
 
     const office = currentOffice(flags);
-    const report = await contextReport(office, resolve(rest[0] ?? flags.office ?? process.cwd()), flags.model === undefined ? office.contextModels : [flags.model]);
+    const report = await contextReport(office, process.cwd(), flags.model);
 
     console.log(report.text);
 
