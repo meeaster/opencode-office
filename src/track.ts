@@ -2,7 +2,7 @@
 // SemVer tag matching a pattern such as `v2.*`. Read with `git ls-remote`, so any Git host works
 // and no release API is involved; `office skills update` and `office packages update` record the
 // full commit SHA it returns.
-import { execFileSync } from "node:child_process";
+import { streamChecked } from "./report/index.ts";
 
 /** A tracked ref, resolved: the full commit SHA and how it was chosen, for messages. */
 export type Resolved = { commit: string; via: string };
@@ -57,10 +57,11 @@ function compare(left: number[], right: number[]): number {
   return 0;
 }
 
-function lsRemote(repo: string, args: string[]): { name: string; commit: string }[] {
-  const output = execFileSync("git", ["ls-remote", ...args, repo], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+async function lsRemote(repo: string, args: string[]): Promise<RemoteTag[]> {
+  // These lines are data, not progress messages: a repository can list thousands of tags.
+  const { stdout } = await streamChecked("git", ["ls-remote", ...args, repo], { line: () => {}, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
 
-  return output.split("\n").flatMap((line) => {
+  return stdout.split("\n").flatMap((line) => {
     const [commit, name] = line.split("\t");
 
     return commit !== undefined && name !== undefined && /^[0-9a-f]{40,64}$/.test(commit) ? [{ name, commit }] : [];
@@ -68,10 +69,10 @@ function lsRemote(repo: string, args: string[]): { name: string; commit: string 
 }
 
 /** The tags of `repo`, each at the commit it points to (an annotated tag's own commit, not the tag object). */
-export function remoteTags(repo: string): RemoteTag[] {
+async function remoteTags(repo: string): Promise<RemoteTag[]> {
   const tags = new Map<string, string>();
 
-  for (const { name, commit } of lsRemote(repo, ["--tags"])) {
+  for (const { name, commit } of await lsRemote(repo, ["--tags"])) {
     const peeled = name.endsWith("^{}");
     const tag = name.replace(/^refs\/tags\//, "").replace(/\^\{\}$/, "");
 
@@ -85,16 +86,16 @@ export function remoteTags(repo: string): RemoteTag[] {
  * Where `track` of `repo` is now: the branch's commit, or the highest stable tag matching the
  * pattern. Throws with a message saying what was looked for when nothing matches.
  */
-export function resolveTrack(repo: string, track: string): Resolved {
+export async function resolveTrack(repo: string, track: string): Promise<Resolved> {
   if (!isTagPattern(track)) {
-    const branch = lsRemote(repo, ["--heads"]).find((ref) => ref.name === `refs/heads/${track}`);
+    const branch = (await lsRemote(repo, ["--heads"])).find((ref) => ref.name === `refs/heads/${track}`);
 
     if (branch === undefined) throw new Error(`${repo} has no branch ${track}`);
 
     return { commit: branch.commit, via: `branch ${track}` };
   }
 
-  const tags = remoteTags(repo);
+  const tags = await remoteTags(repo);
   const found = highestTag(track, tags);
 
   if (found === undefined) throw new Error(`no stable SemVer tag of ${repo} matches ${track} (of ${tags.length} ${tags.length === 1 ? "tag" : "tags"}; prereleases don't count)`);

@@ -29,7 +29,7 @@ test("a tag pattern picks the highest stable version, not the newest push, and i
   expect(highestTag("*", [{ name: "v1.0.0", commit: "b" }, { name: "1.0.0", commit: "a" }])?.tag.name).toBe("1.0.0");
 });
 
-test("a branch resolves to its commit and a pattern to the commit an annotated tag points at, through git ls-remote", () => {
+test("a branch resolves to its commit and a pattern to the commit an annotated tag points at, through git ls-remote", async () => {
   const repo = join(dir, "repo");
 
   mkdirSync(repo);
@@ -45,8 +45,8 @@ test("a branch resolves to its commit and a pattern to the commit an annotated t
   git([...identity, "commit", "--quiet", "-am", "two"], repo);
   git(["tag", "v1.10.0-beta.1"], repo);
 
-  expect(resolveTrack(repo, "main")).toEqual({ commit: git(["rev-parse", "HEAD"], repo), via: "branch main" });
-  expect(resolveTrack(repo, "v1.*")).toEqual({ commit: first, via: "tag v1.2.0, the highest of 1 stable tag matching v1.*" });
-  expect(() => resolveTrack(repo, "v2.*")).toThrow("no stable SemVer tag");
-  expect(() => resolveTrack(repo, "develop")).toThrow("has no branch develop");
+  expect(await resolveTrack(repo, "main")).toEqual({ commit: git(["rev-parse", "HEAD"], repo), via: "branch main" });
+  expect(await resolveTrack(repo, "v1.*")).toEqual({ commit: first, via: "tag v1.2.0, the highest of 1 stable tag matching v1.*" });
+  await expect(resolveTrack(repo, "v2.*")).rejects.toThrow("no stable SemVer tag");
+  await expect(resolveTrack(repo, "develop")).rejects.toThrow("has no branch develop");
 });

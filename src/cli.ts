@@ -253,11 +253,15 @@ async function main(): Promise<void> {
     }, { verbose });
   } else if ((command === "skills" || command === "packages") && rest[0] === "update" && rest.length === 1) {
     const office = currentOffice(flags);
-    const lines = command === "skills" ? updateSkills(office) : await updatePackages(office);
 
-    for (const line of lines) (line.startsWith("FAILED") ? console.error : console.log)(line);
+    await reported(`${command} update`, officeContext(office), async (reporter) => {
+      const stage = reporter.stage(command === "skills" ? "Copied skill groups" : "Remote packages", { key: command });
 
-    if (lines.some((line) => line.startsWith("FAILED"))) process.exitCode = 1;
+      if (command === "skills") await updateSkills(office, stage);
+      else await updatePackages(office, stage);
+
+      reporter.finish([]);
+    }, { verbose: flags.verbose === true });
   } else if (command === "check") {
     if (!(await check(currentOffice(flags)))) process.exitCode = 1;
   } else if (command === "up") {

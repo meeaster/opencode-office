@@ -130,6 +130,9 @@ packages:
 
   expect(updated.err).toBe("");
   expect(updated.status).toBe(0);
+  expect(updated.out).toContain("office skills update: office t");
+  expect(updated.out).toContain("skills: checking alpha, beta (v2.*)");
+  expect(updated.out).toContain("skills: done: 2 updated");
   expect(updated.out).toContain(`skills alpha, beta from ${skills}: pinned ${v290.slice(0, 12)} → ${v2100} (tag v2.10.0, the highest of 2 stable tags matching v2.*)`);
   expect(updated.out).toContain(`skills gamma from ${other}: pinned ${gammaOne.slice(0, 12)} → ${gammaTwo} (branch main)`);
   expect(updated.out).toContain("skills fixed from");
@@ -165,10 +168,12 @@ test("a group missing a skill at the new tag, edited where it would be replaced,
   const missing = office("skills", "update");
 
   expect(missing.status).toBe(1);
-  expect(missing.err).toContain("FAILED skills alpha, beta");
-  expect(missing.err).toContain("tag v1.1.0");
-  expect(missing.err).toContain("has no beta/SKILL.md");
-  expect(missing.err).toContain(`pin left at ${v100.slice(0, 12)}`);
+  expect(missing.err).toContain("office skills update: stopped:");
+  expect(missing.out).toContain("skills: FAILED: 0 updated, 1 failed");
+  expect(missing.out).toContain("FAILED skills alpha, beta");
+  expect(missing.out).toContain("tag v1.1.0");
+  expect(missing.out).toContain("has no beta/SKILL.md");
+  expect(missing.out).toContain(`pin left at ${v100.slice(0, 12)}`);
   expect(read(join(dir, "office/office.yaml"))).toBe(before);
   expect(read(join(dir, "office/skills/alpha/SKILL.md"))).toBe(skill("alpha 1.0"));
 
@@ -180,7 +185,7 @@ test("a group missing a skill at the new tag, edited where it would be replaced,
   const edited = office("skills", "update");
 
   expect(edited.status).toBe(1);
-  expect(edited.err).toContain("skills/beta has local edits that replacing it would lose: SKILL.md (edited)");
+  expect(edited.out).toContain("skills/beta has local edits that replacing it would lose: SKILL.md (edited)");
   expect(read(join(dir, "office/office.yaml"))).toBe(before);
   expect(read(join(dir, "office/skills/alpha/SKILL.md"))).toBe(skill("alpha 1.0"));
   expect(read(join(dir, "office/skills/beta/SKILL.md"))).toBe("edited here\n");
@@ -203,8 +208,8 @@ test("a group missing a skill at the new tag, edited where it would be replaced,
   const none = office("skills", "update");
 
   expect(none.status).toBe(1);
-  expect(none.err).toContain("no stable SemVer tag");
-  expect(none.err).toContain("matches v9.*");
+  expect(none.out).toContain("no stable SemVer tag");
+  expect(none.out).toContain("matches v9.*");
   expect(read(join(dir, "office/office.yaml"))).toContain(`ref: ${v120}`);
 
   // A pin changed by hand is what sync applies, and sync doesn't advance it along the track.
@@ -252,6 +257,8 @@ packages:
 
   expect(updated.err).toBe("");
   expect(updated.status).toBe(0);
+  expect(updated.out).toContain("packages: applying packages");
+  expect(updated.out).toContain("packages: done: 1 updated");
   expect(updated.out).toContain(`package demo: pinned ${pkgOne.slice(0, 12)} → ${pkgTwo} (tag v1.1.0, the highest of 2 stable tags matching v1.*)`);
   expect(updated.out).toContain("package fixed: pinned");
   expect(read(join(dir, "office/office.yaml"))).toContain(`    ref: ${pkgTwo}\n    track: 'v1.*'`);
@@ -270,9 +277,10 @@ packages:
   const failed = office("packages", "update");
 
   expect(failed.status).toBe(1);
-  expect(failed.err).toContain("FAILED package demo: found ");
-  expect(failed.err).toContain("(tag v1.2.0, the highest of 3 stable tags matching v1.*), but");
-  expect(failed.err).toContain(`pin left at ${pkgTwo.slice(0, 12)}`);
+  expect(failed.err).toContain("office packages update: stopped:");
+  expect(failed.out).toContain("FAILED package demo: found ");
+  expect(failed.out).toContain("(tag v1.2.0, the highest of 3 stable tags matching v1.*), but");
+  expect(failed.out).toContain(`pin left at ${pkgTwo.slice(0, 12)}`);
   expect(read(join(dir, "office/office.yaml"))).toContain(`ref: ${pkgTwo}`);
   expect(record(".office/packages/demo").commit).toBe(pkgTwo);
 });
