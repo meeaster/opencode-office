@@ -7,7 +7,7 @@ description: Build, debug or verify an OpenCode plugin or desktop app panel, suc
 
 Every package in an office is an OpenCode plugin: `plugin/` is its server part and `gui/` its optional desktop app panel. The [plugin docs](https://opencode.ai/v2/docs/build/plugins) and their [GUI page](https://opencode.ai/v2/docs/build/plugins/gui) are the API source; read the pages for the parts you build. This skill holds what they don't say: how an office wires a package in, behaviour learned from running plugins, and how to prove a panel works.
 
-When the docs run out, read the OpenCode source ([anomalyco/opencode](https://github.com/anomalyco/opencode)) at the tag of the version the plugin runs on: `versions.opencode` in `office.yaml`, or `opencode --version` for a host server.
+When the docs run out, read the OpenCode source ([anomalyco/opencode](https://github.com/anomalyco/opencode)) at the tag of the version the plugin runs on: `tools.opencode` in `office.yaml` (its `version` in the mapping form), or `opencode --version` for a host server.
 
 | Question | Start at |
 |---|---|

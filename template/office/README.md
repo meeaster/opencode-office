@@ -18,7 +18,7 @@ Portable owner credentials are SOPS-encrypted in `secrets/executor-owner.enc.jso
 
 | Path | Holds |
 |---|---|
-| `office.yaml` | The versions the containers run (and Socket Firewall's), how old a release must be before the daily job bumps them, whether package downloads go through Socket Firewall (`socket_firewall`), the desks, references, desk repositories, enabled skills, copied skills and cloned plugins |
+| `office.yaml` | Under `tools`: the versions the containers run (and Socket Firewall's, and whether package downloads go through it), and how old a release must be before package managers, mise or the daily job take it. Also the desks, references, desk repositories, enabled skills, copied skills and cloned plugins |
 | `office.lock` | The checksum of each version in `office.yaml`, written by `office pin`; don't edit it |
 | `AGENTS.md`, `.opencode/opencode.jsonc` | Your instructions and config for every session. No tool writes to `AGENTS.md` |
 | `skills/<id>/` | The skill library. Only skills `office.yaml` enables are linked into a `.opencode/skills/` |
@@ -40,7 +40,7 @@ Portable owner credentials are SOPS-encrypted in `secrets/executor-owner.enc.jso
 ## Conventions
 
 - `office init` and `office setup` install git's pre-commit hook in this clone (`pre-commit install`, with the pre-commit the office package provides in `machine.packages.toml`), so commits run the gitleaks hook; they leave a hook of your own alone, and `office check` says the hook's state. In another clone, run `pre-commit install` there before your first commit. The container has the same pre-commit, so commits made there run the hook too.
-- OpenCode, Claude Code, Executor and mise run at the versions in `office.yaml`. The daily `upgrade-tools` job bumps them and commits as the office's git identity (else `office cron`); nothing restarts until you run `office up --upgrade`, which backs up and applies them (`office up` alone keeps the applied versions and says what is pending). After changing a version by hand, run `office pin`. An office never goes back to an older OpenCode or Executor.
+- OpenCode, Claude Code, Codex, Executor and mise run at the versions under `tools` in `office.yaml`. The daily `upgrade-tools` job bumps them once a release is `tools.minimum_release_age` old (or the runtime's own age) and commits as the office's git identity (else `office cron`); nothing restarts until you run `office up --upgrade`, which backs up and applies them (`office up` alone keeps the applied versions and says what is pending). After changing a version by hand, run `office pin`. An office never goes back to an older OpenCode or Executor.
 - `office pair` prints a one-time link that connects the OpenCode app or a browser to this office.
 
 - Change `office.yaml`, then run `office sync`. It clones, scaffolds missing desks, installs, updates, restores and removes packages and links library skills and package plugins; it never overwrites hand-written content.
