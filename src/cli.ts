@@ -52,12 +52,14 @@ const usage = `usage: office <command> [--office <dir>]
                                deliberately reveal the stored encrypted owner login, even offline
   secrets get <package> <key>  write one declared, generated package secret to stdout
   secrets decrypt <file>       decrypt an office-relative SOPS JSON/YAML file to stdout as JSON
-  sync [--references | --release-machine]
+  sync [--packages | --references | --release-machine]
                                clone and update, scaffold missing desks, copy and link library
                                skills, install, restore and link packages, link a host-mode
                                office's tools into mise's global conf.d, install panels on the
                                desktop app's machine, migrate old layouts. --release-machine only
-                               removes every file the office wrote on this machine, and its consent
+                               removes every file the office wrote on this machine, and its consent.
+                               --packages applies packages at their declared pins without refreshing
+                               desk repos, references or separately declared plugin clones
   skills update                move each skills.copied group with a track to the newest commit of
                                its branch, or of its highest stable SemVer tag matching a pattern
                                such as v2.*; recopy the whole group and record the commit as its ref.
@@ -169,6 +171,7 @@ async function main(): Promise<void> {
       "release-machine": { type: "boolean" },
       "password-only": { type: "boolean" },
       references: { type: "boolean" },
+      packages: { type: "boolean" },
       upgrade: { type: "boolean" },
       refresh: { type: "boolean" },
       container: { type: "boolean" },
@@ -194,6 +197,8 @@ async function main(): Promise<void> {
   }
 
   if (flags.session !== undefined && command !== "instructions") throw new OfficeError("--session is an option for office instructions");
+
+  if (flags.packages && command !== "sync") throw new OfficeError("--packages is an option for office sync");
 
   if (flags.model !== undefined && command !== "context") throw new OfficeError("--model is an option for office context");
 
@@ -224,7 +229,7 @@ async function main(): Promise<void> {
 
     if (report.failed) process.exitCode = 1;
   } else if (command === "sync") {
-    if (flags["release-machine"] && flags.references) throw new OfficeError("usage: office sync [--references | --release-machine]");
+    if ([flags["release-machine"], flags.references, flags.packages].filter(Boolean).length > 1) throw new OfficeError("usage: office sync [--packages | --references | --release-machine]");
 
     if (flags["release-machine"]) {
       const changes = releaseMachine(currentOffice(flags));
@@ -242,8 +247,8 @@ async function main(): Promise<void> {
     const verbose = flags.verbose === true;
 
     await reported("sync", officeContext(office), async (reporter) => {
-      const stage = reporter.stage("Repositories and packages", { key: "repos" });
-      const changes = await sync(office, { referencesOnly: flags.references === true, stage, verbose });
+      const stage = flags.packages ? reporter.stage("Packages", { key: "packages" }) : reporter.stage("Repositories and packages", { key: "repos" });
+      const changes = await sync(office, { scope: flags.packages ? "packages" : flags.references ? "references" : "all", stage, verbose });
       const failed = changes.filter((line) => line.startsWith("FAILED")).length;
 
       if (failed > 0) {
