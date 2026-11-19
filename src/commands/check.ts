@@ -23,6 +23,7 @@ import { oldExecutorAppDirs } from "../executor-app-layout.ts";
 import { executorEnvFile, type Office, readEnvFile, skillGroups } from "../office.ts";
 import { isCurrent, readSkillRecord, skillDir } from "../skill-copies.ts";
 import { packageComposeFile, serviceStatus, sharedNamespaces } from "../package-services.ts";
+import { hostServiceStatus } from "../package-host-services.ts";
 import { envFilePath, hostWrappers, sourceLine, sourcedBy } from "../host-env.ts";
 import { claim, machineReport, matchesServerUnit, requireServerConsent } from "../machine.ts";
 import { wrappedCommands } from "../sfw.ts";
@@ -653,6 +654,7 @@ async function runtime(office: Office, report: Report): Promise<RootAnswer | und
 
   if (hasToken && health === 200) await appFrameworks(office, report);
 
+  hostServiceStatus(office, report);
   cron(office, report, running);
 
   return root;

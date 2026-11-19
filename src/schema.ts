@@ -424,6 +424,11 @@ const hostValue = v.pipe(
 const hostBlock = v.strictObject(
   {
     setting: v.optional(v.string()),
+    services: v.optional(v.record(jobName, v.strictObject({
+      description: v.pipe(text, v.regex(/^[^\r\n\0]+$/, "must be one line")),
+      script: cronScript,
+      setting: v.optional(v.string()),
+    }, mapping))),
     tools: miseTools,
     install: v.optional(hostInstall),
     path: v.nullish(v.array(hostPathEntry, "must be a list of folders"), []),

@@ -716,6 +716,21 @@ To decrypt a SOPS file instead, `office secrets decrypt secrets/example.enc.yaml
 
 Only the compose file is snapshotted: a package that builds from files in its own folder builds from the current files whenever Compose rebuilds. Package services have no downgrade guard. Settings aren't gated either: `office up` passes the current ones. `office sync` says when a pulled-in package's copy adds or changes a `compose.yaml`, because its services run on this machine's Docker.
 
+### Host services
+
+In host mode a package can also run a long-lived process under the office's systemd user manager:
+
+```yaml
+host:
+  services:
+    bridge:
+      description: Connector MCP bridge
+      script: services/start-bridge.sh
+      # setting: enable_bridge  # optional boolean package setting
+```
+
+`office up` creates declared secrets, then enables and starts the unit. The script runs from the package directory with the host office environment; ship any dependencies it needs. `office check` reports its state. A changed unit definition waits for `office up --upgrade`; disabling or removing it takes effect on `office up`. `office down` disables and removes the office's generated units. Updating code at the same script path takes effect on the next service restart.
+
 ### Executor apps
 
 A package can ship an Executor app in `executor-app/` (a `package.json` and `index.ts`, as for the office's own apps) and declare it in `package.yaml`:

@@ -23,7 +23,7 @@ type Timer = { unit: string; calendar: string; description: string; args: string
 
 export const unitDirVariable = "OFFICE_SYSTEMD_USER_DIR";
 
-function unitDir(): string {
+export function unitDir(): string {
   return process.env[unitDirVariable] ?? join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "systemd/user");
 }
 
@@ -64,7 +64,7 @@ function quoted(text: string): string {
   return `"${text.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\r", "\\r").replaceAll("\n", "\\n").replaceAll("%", "%%")}"`;
 }
 
-function argument(text: string): string {
+export function argument(text: string): string {
   // "$$$$" is the replacement pattern for a literal "$$", systemd's escape for "$".
   return quoted(text).replaceAll("$", "$$$$");
 }
@@ -138,7 +138,7 @@ function generatedUnits(office: Office): string[] {
   });
 }
 
-function requireLocalUnit(file: string): void {
+export function requireLocalUnit(file: string): void {
   const fragment = systemctl(["show", "--property=FragmentPath", "--value", file], { capture: true }).trim();
 
   if (fragment !== "" && fragment !== join(unitDir(), file)) throw new OfficeError(`${file} is loaded from ${fragment}; office leaves it alone`);

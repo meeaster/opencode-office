@@ -11,7 +11,7 @@
 // hash of each file is recorded in `.source.json`, `office check` reports an edit and `office
 // sync` restores the copy. Every kind is committed with the office, so a clone needs nothing fetched.
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 import { Ajv2020 } from "ajv/dist/2020.js";
@@ -466,6 +466,16 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
 
       if (setting.default === undefined) errors.push(`settings.${key} is required; add it to the entry in office.yaml: ${setting.description}`);
       else settings[key] = setting.default;
+    }
+  }
+
+  for (const [id, service] of Object.entries(manifest.host?.services ?? {})) {
+    if (service.setting !== undefined && !v.is(v.boolean(), settings[service.setting])) errors.push(`${entry.name}: host.services.${id}.setting requires a boolean setting`);
+
+    const script = join(dir, service.script);
+
+    if (!statSync(script, { throwIfNoEntry: false })?.isFile() || relative(realpathSync(dir), realpathSync(script)).startsWith("..")) {
+      errors.push(`${entry.name}: host.services.${id}: ${service.script} must be a file inside the package`);
     }
   }
 
