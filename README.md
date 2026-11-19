@@ -444,6 +444,7 @@ namespace: share       # optional, for a package with services: what they're nam
 secrets:               # generated once, for a package with services; see "Services"
 tools:                 # mise tools it needs, at the exact version an office starts at; see "Tools"
   "npm:agent-browser": "0.43.0"
+executor_app: {}       # an Executor app in executor-app/; see "Executor apps"
 ```
 
 For structured settings, declare `settings_schema` **instead of** `settings` in `package.yaml`. This is a synchronous JSON Schema (draft 2020-12), written in YAML, for the entire settings mapping. For example:
@@ -714,6 +715,17 @@ To decrypt a SOPS file instead, `office secrets decrypt secrets/example.enc.yaml
 - `office down`, `office check` and every other command use the same applied files as `office up`.
 
 Only the compose file is snapshotted: a package that builds from files in its own folder builds from the current files whenever Compose rebuilds. Package services have no downgrade guard. Settings aren't gated either: `office up` passes the current ones. `office sync` says when a pulled-in package's copy adds or changes a `compose.yaml`, because its services run on this machine's Docker.
+
+### Executor apps
+
+A package can ship an Executor app in `executor-app/` (a `package.json` and `index.ts`, as for the office's own apps) and declare it in `package.yaml`:
+
+```yaml
+executor_app:
+  setting: executor_app   # optional: a setting whose default is true or false; the app deploys only while it's true
+```
+
+`office apps deploy` deploys it under the package's namespace beside the office's own apps, and `office check` lists it with them. Two apps with one slug, such as a package's and a folder in `executor-apps/`, are an error naming both. The folder is read-only in `.office/packages/`, so deploy never edits it: it sends `package.json` with the `apps` version Executor serves, and in place of the app's `package.ts` a generated module, `export const settings = {...}` with the package's resolved settings and `export const opencode = "host" | "container"`. The package's own `package.ts` holds the defaults in the same shape, for type-checking. Deploy then prints a link to Executor's connect page for each account of the app's own (scope `app`) that has nothing linked, or only an account of a provider the app no longer declares; the person whose account it is connects it there. The design package's `doop` app is the example.
 
 ### Upgrading an office from before built-in packages
 

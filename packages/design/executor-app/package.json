@@ -1,0 +1,13 @@
+{
+  "name": "doop",
+  "description": "Design on the office's Doop canvas through Doop's MCP tools, with one Doop account the office connects in Executor.",
+  "private": true,
+  "type": "module",
+  "executor": {
+    "title": "Doop"
+  },
+  "dependencies": {
+    "apps": "0.0.1-beta.138",
+    "@modelcontextprotocol/sdk": "1.32.1"
+  }
+}

@@ -788,7 +788,8 @@ async function appFrameworks(office: Office, report: Report): Promise<void> {
     }
 
     const folders = appFolders(office).filter(folder => !folder.adopted);
-    const local = folders.filter((folder) => JSON.parse(readFileSync(join(folder.dir, "package.json"), "utf8")).dependencies?.apps !== served);
+    // A package's app is read-only; deploy sends it with the served version.
+    const local = folders.filter((folder) => folder.fromPackage === undefined && JSON.parse(readFileSync(join(folder.dir, "package.json"), "utf8")).dependencies?.apps !== served);
     const deployed = apps.filter((app) => app.apps !== served);
     const missing = folders.filter((folder) => !apps.some((app) => app.slug === folder.slug));
 

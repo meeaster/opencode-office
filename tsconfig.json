@@ -12,5 +12,8 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["src", "packages", "bin/office"]
+  "include": ["src", "packages", "bin/office"],
+  // Executor app sources a package ships: `office apps deploy` type-checks them against the `apps`
+  // version Executor serves.
+  "exclude": ["packages/*/executor-app"]
 }

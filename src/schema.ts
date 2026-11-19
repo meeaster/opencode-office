@@ -432,6 +432,13 @@ const hostBlock = v.strictObject(
   mapping,
 );
 
+/**
+ * The Executor app a package ships in its `executor-app/` folder, which `office apps deploy`
+ * deploys under the package's namespace, and, with `setting`, only while that boolean setting is
+ * true.
+ */
+const executorAppBlock = v.strictObject({ setting: v.optional(v.string()) }, mapping);
+
 /** A file in the package, by a relative path without `..`. */
 function packageFile(extension: string, example: string) {
   return v.pipe(v.string(), v.regex(new RegExp(`^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\\.${extension}$`), `must be a .${extension} file in the package, such as ${example}`), v.check((path) => !path.split("/").includes(".."), "must not climb out with .."));
@@ -485,14 +492,19 @@ export const packageManifestSchema = v.pipe(
       host: v.optional(hostBlock),
       system: v.optional(systemBlock),
       cron: packageCron,
+      executor_app: v.optional(executorAppBlock),
     },
-    "must be a mapping of name, namespace, description, settings or settings_schema, secrets, tools, host, system and cron",
+    "must be a mapping of name, namespace, description, settings or settings_schema, secrets, tools, host, system, cron and executor_app",
   ),
   v.check((manifest) => manifest.settings === undefined || manifest.settings_schema === undefined, "choose settings or settings_schema, not both"),
   v.transform((manifest) => ({ ...manifest, settings: manifest.settings ?? {}, namespace: manifest.namespace ?? manifest.name })),
   v.forward(
     v.check((manifest) => manifest.settings_schema !== undefined || manifest.host?.setting === undefined || isTrueOrFalse(manifest.settings[manifest.host.setting]?.default), "must name one of the package's settings whose default is true or false"),
     ["host", "setting"],
+  ),
+  v.forward(
+    v.check((manifest) => manifest.settings_schema !== undefined || manifest.executor_app?.setting === undefined || isTrueOrFalse(manifest.settings[manifest.executor_app.setting]?.default), "must name one of the package's settings whose default is true or false"),
+    ["executor_app", "setting"],
   ),
   // A system setup runs as root on the user's machine, so a package offers it and the office opts in.
   v.forward(

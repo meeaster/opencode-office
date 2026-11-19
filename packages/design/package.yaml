@@ -8,6 +8,14 @@ settings:
   url:
     description: The exact address the browser opens Doop at, when a reverse proxy such as a Tailscale Service fronts it, such as https://doop.<tailnet>.ts.net, without a trailing slash; empty for http://localhost:<port>
     default: ""
+  executor_app:
+    description: Whether sessions reach Doop through the doop Executor app, with one Doop account a person connects in Executor for the whole office, instead of the doop MCP server and the agent key file; office apps deploy deploys the app
+    default: false
+  oauth:
+    description: Whether the doop Executor app offers signing in to Doop (OAuth) beside the agent key. Without url, Doop then opens at http://doop.localhost:<port>, which the browser and Executor's container both reach; with url, that address must reach Doop from Executor's container too. False offers only the agent key and keeps http://localhost:<port>
+    default: true
+executor_app:
+  setting: executor_app
 secrets:
   DOOP_BETTER_AUTH_SECRET:
     generate: hex

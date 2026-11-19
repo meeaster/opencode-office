@@ -1,7 +1,9 @@
 // Connects every session to the office's Doop as the `doop` MCP server, and registers the package's
-// doop skill.
+// doop skill. When the office turns on `executor_app`, sessions reach Doop through the package's
+// doop Executor app instead, and this plugin registers no MCP server, so the tools aren't offered
+// twice.
 //
-// Sessions authenticate with a Doop agent key, which acts as the account that minted it on every
+// Without the app, sessions authenticate with a Doop agent key, which acts as the account that minted it on every
 // request. OAuth can't work from the office's container: Doop names its BETTER_AUTH_URL, the
 // browser's localhost address, as the authorization server, which the container can't reach. The
 // key lives in the office's `.opencode/doop/agent-key`, which the package's template keeps out of
@@ -28,7 +30,7 @@ type Context = {
   };
 };
 
-type Settings = { port: number; url: string };
+type Settings = { port: number; url: string; executorApp: boolean; oauth: boolean };
 
 // OpenCode loads the plugin through the link `.opencode/plugins/design`; the real folder is the
 // package's, beside its skills/ and .settings.json.
@@ -41,14 +43,21 @@ const skillFile = join(packageDir, "skills/doop/SKILL.md");
  * the port as text, which reaches the compose file the same way.
  */
 function readSettings(): Settings {
-  const read: { port: number | string; url: string } = JSON.parse(readFileSync(join(packageDir, ".settings.json"), "utf8"));
+  const read: { port: number | string; url: string; executor_app?: boolean | string; oauth?: boolean | string } = JSON.parse(readFileSync(join(packageDir, ".settings.json"), "utf8"));
 
-  return { port: Number(read.port), url: read.url };
+  return { port: Number(read.port), url: read.url, executorApp: String(read.executor_app) === "true", oauth: String(read.oauth) === "true" };
 }
 
-/** The address the user's browser opens. */
+/**
+ * The address the user's browser opens, and Doop advertises, by the rule the package's compose file
+ * and Executor app follow: the url setting; else http://doop.localhost:<port> when sessions sign in
+ * to Doop through the Executor app, a name the browser and Executor's container both reach; else
+ * http://localhost:<port>.
+ */
 function browserAddress(settings: Settings): string {
-  return settings.url === "" ? `http://localhost:${settings.port}` : settings.url.replace(/\/+$/, "");
+  if (settings.url !== "") return settings.url.replace(/\/+$/, "");
+
+  return settings.executorApp && settings.oauth ? `http://doop.localhost:${settings.port}` : `http://localhost:${settings.port}`;
 }
 
 /**
@@ -69,6 +78,11 @@ function findOffice(directory: string): string | undefined {
   }
 }
 
+const executorConnection =
+  "Sessions reach it through Executor: the `doop` app's tools, found with office-executor's search, as described under \"Through Executor\". There is no `doop` MCP server.";
+
+const keyFileConnection = "Sessions reach it as the `doop` MCP server, with the agent key file, as described under \"With the agent key file\".";
+
 /** The skill as OpenCode registers it, with where this office's Doop opens. */
 function doopSkill(settings: Settings): Skill {
   const text = readFileSync(skillFile, "utf8");
@@ -85,7 +99,7 @@ function doopSkill(settings: Settings): Skill {
     name: "doop",
     description: line.slice("description:".length).trim().replace(/^(["'])(.*)\1$/, "$2"),
     path: skillFile,
-    content: `${text.slice(frontMatter[0].length)}\n## This office's Doop\n\nThe user opens it at ${browserAddress(settings)}.\n`,
+    content: `${text.slice(frontMatter[0].length)}\n## This office's Doop\n\nThe user opens it at ${browserAddress(settings)}. ${settings.executorApp ? executorConnection : keyFileConnection}\n`,
   };
 }
 
@@ -112,9 +126,10 @@ export default {
     // Read on each load of the MCP servers. Without a key there is nothing to connect with yet; the
     // skill tells the agent how the user creates one.
     await ctx.mcp.transform((editor) => {
-      const key = existsSync(keyFile) ? readFileSync(keyFile, "utf8").trim() : "";
+      const settings = readSettings();
+      const key = !settings.executorApp && existsSync(keyFile) ? readFileSync(keyFile, "utf8").trim() : "";
 
-      if (key !== "") editor.set("doop", { type: "remote", url: `${serverAddress(readSettings())}/mcp`, oauth: false, headers: { Authorization: `Bearer ${key}` } });
+      if (key !== "") editor.set("doop", { type: "remote", url: `${serverAddress(settings)}/mcp`, oauth: false, headers: { Authorization: `Bearer ${key}` } });
     });
 
     // OpenCode doesn't load its MCP servers again by itself when the key is saved, replaced or
