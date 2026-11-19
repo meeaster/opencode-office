@@ -1,9 +1,9 @@
 // `office sync`: makes the office's folders match office.yaml and the tool. It clones and updates,
 // moves an office from an earlier release's layout (src/migrate.ts), scaffolds desks that are
 // declared but missing, copies declared skills into the library, installs, updates, restores and
-// removes packages, writes the mise tools packages declare into the office's .office/mise/
-// (src/package-tools.ts) and, in a host-mode office the user agreed may manage its machine, links
-// them and machine.toml into mise's global conf.d (src/machine.ts), links enabled library skills and package plugins,
+// removes packages, writes the mise tools packages declare into machine.packages.toml and their
+// setup into .office/mise/ (src/package-tools.ts) and, in a host-mode office the user agreed may
+// manage its machine, links them and machine.toml into mise's global conf.d (src/machine.ts), links enabled library skills and package plugins,
 // and installs package panels on the desktop app's machine. A package's skills aren't linked: its plugin registers them, so sync
 // removes the links earlier releases made.
 // It never rewrites AGENTS.md, other hand-written content, an existing app or a file a package's

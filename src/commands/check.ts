@@ -27,7 +27,7 @@ import { envFilePath, hostWrappers, sourceLine, sourcedBy } from "../host-env.ts
 import { claim, machineReport, matchesServerUnit, requireServerConsent } from "../machine.ts";
 import { wrappedCommands } from "../sfw.ts";
 import { toolPins } from "../mise-toml.ts";
-import { fragmentNotes, machineFile, orphanFragments, strayFragments } from "../package-tools.ts";
+import { fragmentNotes, machineBelowFloors, machineFile, oldToolFragments, orphanFragments, packagesFile, packagesFileProblems, strayFragments } from "../package-tools.ts";
 import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
 import { describeIgnoredSkills, ignoredSkills, readIgnoredFolders } from "../../packages/office/plugin/ignored-skills.ts";
 import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces, shadowing, withLoaded } from "../outside.ts";
@@ -137,7 +137,9 @@ async function drift(office: Office): Promise<string[]> {
     if (!packages.some((item) => item.kind !== "local" && item.entry.name === folder)) problems.push(`.office/packages/${folder}/ is a package office.yaml no longer lists (office sync removes it)`);
   }
 
-  problems.push(...orphanFragments(office, packages.map((item) => item.entry.name)), ...strayFragments(office));
+  const listed = packages.map((item) => item.entry.name);
+
+  problems.push(...orphanFragments(office, listed), ...strayFragments(office), ...oldToolFragments(office), ...packagesFileProblems(office, installedPackages(office).installed, listed));
 
   if (versionsLackSfw(office)) problems.push("office.yaml's versions don't pin sfw (Socket Firewall), which earlier releases didn't pin, so the tool's default applies (office sync pins it)");
   else if (office.versions?.sfw === defaultPins.sfw.version && lockLacksSfw(office.dir)) problems.push(`${lockFile} has no sfw entry, as earlier releases wrote it (office sync adds it)`);
@@ -278,7 +280,8 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
 
     if (services.pending) notes.push(`its ${packageComposeFile} changed since office up applied it; office up --upgrade applies it`);
 
-    // A version the office changed is its own pin, not drift: only a missing or extra tool is.
+    // A version the office changed is its own pin, not drift: only a missing tool, or one below
+    // what the package needs, is.
     const tools = fragmentNotes(office, item);
 
     notes.push(...tools.notes);
@@ -303,6 +306,9 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
       if (!reported.has(name)) report(false, `package ${name}`, problem.message);
     }
   }
+
+  // machine.toml is the office's to hold a tool back, so a pin below a package's version only warns.
+  for (const line of machineBelowFloors(office, installed)) report("warn", machineFile, line);
 }
 
 /**
@@ -506,7 +512,7 @@ function officeVersions(office: Office, report: Report): void {
 
 /**
  * The tools the office CLI runs, the office package's: whether this host has the versions
- * .office/mise/office.toml pins, and which of them the office's own mise files pin too.
+ * machine.packages.toml pins, and which of them the office's own mise files pin too.
  */
 function officeToolChecks(office: Office, report: Report): void {
   const install = `office setup --install-deps${office.opencode.mode === "host" ? " or office up" : ""} installs it`;
@@ -524,13 +530,13 @@ function officeToolChecks(office: Office, report: Report): void {
     }
 
     const version = pins[command === "age-keygen" ? "age" : command];
-    const pin = version === undefined ? `the office package's ${command} isn't in .office/mise/office.toml (office sync writes it)` : `mise hasn't installed ${command} ${version}, the office's pin, on this host`;
+    const pin = version === undefined ? `the office package's ${command} isn't in ${packagesFile} (office sync writes it)` : `mise hasn't installed ${command} ${version}, the office's pin, on this host`;
     const detail = tool === undefined ? `${pin}, and there is no other copy; ${install}` : `${pin}, so office runs ${command} ${tool.version} from ${tool.path}; ${install}`;
 
     report(tool === undefined && required.includes(command) ? false : "warn", `office tool ${command}`, detail);
   }
 
-  if (found.length > 0) report(true, "office tools", `${found.join(", ")}: the versions .office/mise/office.toml pins, as mise installed them`);
+  if (found.length > 0) report(true, "office tools", `${found.join(", ")}: the versions ${packagesFile} pins, as mise installed them`);
 
   const files = ["mise.toml", ...office.desks.map((desk) => join(desk.name, "mise.toml")), machineFile];
 
@@ -542,7 +548,7 @@ function officeToolChecks(office: Office, report: Report): void {
   });
 
   if (duplicates.length > 0) {
-    report("warn", "office tools", `${duplicates.join("; ")}, which the office package now provides in .office/mise/office.toml; you can remove these pins. Where such a pin applies it wins over the package's, so agents can run another version than the office CLI does`);
+    report("warn", "office tools", `${duplicates.join("; ")}, which the office package now provides in ${packagesFile}; you can remove these pins unless one holds a tool back on purpose. Where such a pin applies it wins over the package's, so agents can run another version than the office CLI does`);
   }
 }
 
@@ -853,7 +859,7 @@ function gitChecks(office: Office, report: Report, running: boolean): void {
 
   const pin = officePins(office).gh;
 
-  report(pin !== undefined, "GitHub: container gh", pin === undefined ? ".office/mise/office.toml doesn't hold the office package's gh, so the container can't use the login (office sync writes it)" : `gh ${pin} from .office/mise/office.toml, the office package's tools`);
+  report(pin !== undefined, "GitHub: container gh", pin === undefined ? `${packagesFile} doesn't hold the office package's gh, so the container can't use the login (office sync writes it)` : `gh ${pin} from ${packagesFile}, the office package's tools`);
 
   if (!running) return;
 

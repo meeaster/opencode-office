@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -87,7 +87,8 @@ function mode(which: "host" | "container", settings = ""): void {
 
 const on = "    settings:\n      system: true\n";
 
-const fragment = () => readFileSync(join(office, ".office/mise/demo.toml"), "utf8");
+/** demo's fragment, or "" when it has none. */
+const fragment = () => (existsSync(join(office, ".office/mise/demo.toml")) ? readFileSync(join(office, ".office/mise/demo.toml"), "utf8") : "");
 
 function notes() {
   const loaded = loadOffice(office);
@@ -128,7 +129,8 @@ test("an office that opts in on a supported host gets the setup in the fragment 
   expect(notes()).toEqual({
     ok: false,
     notes: [
-      "tools jq in .office/mise/demo.toml",
+      "tools jq in machine.packages.toml",
+      "mise setup in .office/mise/demo.toml",
       "Demo is missing from ~/.local/bin/demo; office up installs it (or mise install, or mise run demo:install, once the office's tools are linked)",
       `Demo Browser from the distribution isn't set up on this machine yet (missing ${ready()}): run office setup in a terminal, which offers to apply it (mise asks for sudo)`,
     ],
@@ -148,7 +150,8 @@ test("the system block is independent of the host block's setting, and off by de
   await sync(loadOffice(office));
 
   expect(fragment()).not.toContain("[tasks.");
-  expect(fragment()).toEndWith(`[tools]\n"jq" = "1.7.1"\n\n${systemPart}`);
+  expect(fragment()).toEndWith(`so it applies in every folder.\n\n${systemPart}`);
+  expect(fragment()).not.toContain("[tools]");
 
   mode("host");
 
@@ -174,7 +177,7 @@ test("it applies only on the platforms the block names, in host mode, and a plat
 
     // Opting in where it can't apply is noted, without failing check.
     expect(fragment()).not.toContain("bootstrap");
-    expect(notes()).toEqual({ ok: true, notes: ["tools jq in .office/mise/demo.toml", `Demo Browser from the distribution isn't set up: ${why}`] });
+    expect(notes()).toEqual({ ok: true, notes: ["tools jq in machine.packages.toml", `Demo Browser from the distribution isn't set up: ${why}`] });
   }
 
   // A block's platform without -wsl covers the machine under WSL too.
@@ -188,7 +191,7 @@ test("it applies only on the platforms the block names, in host mode, and a plat
   expect(await sync(loadOffice(office))).toContain(
     "removed package demo's system setup, Demo Browser from the distribution, from .office/mise/demo.toml: the office runs OpenCode in its container (opencode: container); what it installed stays on the machine",
   );
-  expect(fragment()).toEndWith('[tools]\n"jq" = "1.7.1"\n');
+  expect(fragment()).toBe("");
 });
 
 test("the bootstrap file holds only [bootstrap.…] tables without hooks, and the block's paths stay in the package", async () => {
@@ -248,7 +251,8 @@ test("the built-in browser package leaves agent-browser's own Chromium alone by 
   write(join(office, "office.yaml"), "name: t\nopencode: container\npackages:\n  - name: browser\n    settings:\n      system_chrome: true\n");
   await sync(loadOffice(office));
 
-  expect(text()).toEndWith('[tools]\n"npm:agent-browser" = "0.43.0"\n');
+  expect(existsSync(join(office, ".office/mise/browser.toml"))).toBe(false);
+  expect(readFileSync(join(office, "machine.packages.toml"), "utf8")).toContain('\n"npm:agent-browser" = "0.43.0" # browser\n');
 });
 
 test("the machine's platform comes from os-release and the kernel, unless the variable names one", () => {

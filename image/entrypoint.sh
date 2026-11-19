@@ -35,7 +35,7 @@ for host in $(printf '%s' "${OFFICE_GH_HOSTS:-}" | tr ',' ' '); do
   git config --file "$gitconfig" --add "credential.https://$host.helper" ""
   # From the office root, so mise's shim finds the office's gh wherever git runs.
   git config --file "$gitconfig" --add "credential.https://$host.helper" "!cd $office && gh auth git-credential"
-  gh_note="- HTTPS git remotes on ${OFFICE_GH_HOSTS} authenticate through \`gh\` (from the office package's tools in \`.office/mise/office.toml\`) with the user's GitHub login, shared read-only from the host, so fetch, pull and push work. Never run \`gh auth login\`, \`logout\` or \`switch\` here: the user manages that login on the host."
+  gh_note="- HTTPS git remotes on ${OFFICE_GH_HOSTS} authenticate through \`gh\` (from the office package's tools in \`machine.packages.toml\`) with the user's GitHub login, shared read-only from the host, so fetch, pull and push work. Never run \`gh auth login\`, \`logout\` or \`switch\` here: the user manages that login on the host."
 done
 
 sfw_note='- Package managers take only releases at least three days old. Socket Firewall is off (`socket_firewall: false` in `office.yaml`).'
@@ -50,7 +50,7 @@ cat > /etc/opencode/machine.md <<EOF
 # Machine
 
 - You run in the \`opencode\` container of the \`${OFFICE_NAME:-unnamed}\` office, in Docker on the user's computer. The office root is mounted at \`~/workspace\`; files you change there are the user's office repository on the host.
-- The shell has git, build tools, Python 3, jq and ripgrep. Languages and CLIs come from mise: declare them in the nearest \`mise.toml\` (the office's or a desk's) and run \`mise install\`. The office's \`machine.toml\` and the packages' tools in \`.office/mise/\` apply in every folder, through links in mise's global conf.d; a \`mise.toml\` wins in its folder. The \`office\` command is installed.
+- The shell has git, build tools, Python 3, jq and ripgrep. Languages and CLIs come from mise: declare them in the nearest \`mise.toml\` (the office's or a desk's) and run \`mise install\`. The office's \`machine.toml\` and the packages' tools in \`machine.packages.toml\` apply in every folder, through links in mise's global conf.d; a \`mise.toml\` wins in its folder. The \`office\` command is installed.
 - Executor is at http://executor:4400 on the container network; the user opens its dashboard at ${OFFICE_EXECUTOR_DASHBOARD:-http://localhost:41440}.
 - Pass \`--server http://127.0.0.1:4096\` to every \`opencode\` command, so it uses this container's server (its password is in \`OPENCODE_PASSWORD\`); without it most commands start a second server on the same database. Never run \`opencode service\`.
 - When an Executor tool returns an approval link, give the user the link and wait for them to approve before resuming.
@@ -64,18 +64,19 @@ export OFFICE_EXECUTOR_TOKEN="${OFFICE_EXECUTOR_TOKEN:-${EXECUTOR_TOKEN:-}}"
 
 # The office's machine-wide mise files apply in every folder, as they do on a host-mode office's
 # machine; mise loads them only through links in its global conf.d in the home volume, named
-# office-<name>-…toml: each package's fragment in .office/mise/ (a file office sync wrote, by its
-# first line), the office package's first (the tools the office CLI runs), and the office's own
-# machine.toml last, so it wins (src/machine.ts names them the same way). Links from an earlier
-# start go first, so a removed file leaves none behind.
+# office-<name>-…toml: machine.packages.toml first (the packages' tools), then each package's
+# fragment in .office/mise/ (its setup; a file office sync wrote, by its first line), and the
+# office's own machine.toml last, so it wins (src/machine.ts names them the same way). Links from an
+# earlier start go first, so a removed file leaves none behind.
 conf_d="${MISE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/mise}/conf.d"
 mkdir -p "$conf_d"
 find "$conf_d" -maxdepth 1 -type l -name 'office-*.toml' -delete
+if [ -f "$office/machine.packages.toml" ]; then
+  ln -s "$office/machine.packages.toml" "$conf_d/office-${OFFICE_NAME:-unnamed}-0-packages.toml"
+fi
 for fragment in "$office"/.office/mise/*.toml; do
-  [ -f "$fragment" ] && head -n 1 "$fragment" | grep -q '^# The mise tools of package ' || continue
-  order=1
-  [ "$(basename "$fragment")" = office.toml ] && order=0
-  ln -s "$fragment" "$conf_d/office-${OFFICE_NAME:-unnamed}-$order-$(basename "$fragment")"
+  [ -f "$fragment" ] && head -n 1 "$fragment" | grep -Eq '^# The mise (setup|tools) of package ' || continue
+  ln -s "$fragment" "$conf_d/office-${OFFICE_NAME:-unnamed}-1-$(basename "$fragment")"
 done
 if [ -f "$office/machine.toml" ]; then
   ln -s "$office/machine.toml" "$conf_d/office-${OFFICE_NAME:-unnamed}-2-machine.toml"

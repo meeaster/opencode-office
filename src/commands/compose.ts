@@ -224,7 +224,7 @@ async function miseInstall(office: Office, dir: string, trust: string[] = []): P
 
 /**
  * Trusts and installs every office mise.toml with the host's mise, then the office's machine-wide
- * tools (machine.toml and the packages' fragments in .office/mise/), as the container does at
+ * tools (machine.packages.toml, the packages' fragments in .office/mise/ and machine.toml), as the container does at
  * start. Those load only through their links in mise's global conf.d, which need no trust, and a
  * mise.toml in the office may pin the same tool at another version, so they install from the
  * filesystem root, where only global config applies; their postinstall hooks run there.
@@ -239,7 +239,7 @@ async function installTools(office: Office): Promise<void> {
   if (machineFiles(office).length === 0) return;
 
   if (claim(office).kind !== "ours") {
-    say(`machine.toml and the packages' tools aren't linked into ${globalConfD()}, so they apply nowhere and nothing installs them; run office setup (unattended: office setup --manage-machine), then office sync and office up`, "office: ");
+    say(`machine.toml and the packages' tools in machine.packages.toml aren't linked into ${globalConfD()}, so they apply nowhere and nothing installs them; run office setup (unattended: office setup --manage-machine), then office sync and office up`, "office: ");
 
     return;
   }

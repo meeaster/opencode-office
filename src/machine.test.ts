@@ -44,13 +44,13 @@ function write(path: string, content: string): void {
 const host = "opencode:\n  mode: host\n  url: http://127.0.0.1:49999\n";
 
 /**
- * An office `name` at `at` in `mode`, with a local package `demo` that declares jq, and the office's
- * own machine.toml. Socket Firewall is off unless `firewall`, so tests of the links see only them
+ * An office `name` at `at` in `mode`, with a local package `demo` that declares jq and, in host mode,
+ * a host install (so it has a fragment), and the office's own machine.toml. Socket Firewall is off unless `firewall`, so tests of the links see only them
  * and the environment file.
  */
 function makeOffice(at: string, { name = "t", opencode = host, packages = "packages:\n  - name: demo\n", firewall = false } = {}): void {
   write(join(at, "office.yaml"), `name: ${name}\n${opencode}${firewall ? "" : "socket_firewall: false\n"}${packages}`);
-  write(join(at, "packages/demo/package.yaml"), 'name: demo\ndescription: A demo package.\ntools:\n  jq: "1.7.1"\n');
+  write(join(at, "packages/demo/package.yaml"), 'name: demo\ndescription: A demo package.\ntools:\n  jq: "1.7.1"\nhost:\n  install:\n    description: Demo\n    creates: ~/.local/bin/demo\n    script: scripts/install.ts\n');
   write(join(at, "machine.toml"), '# The office\'s own.\n[tools]\njq = "1.8.0"\n');
 }
 
@@ -93,31 +93,33 @@ test("without consent, sync writes nothing outside the office and says what to r
 
   const changes = await sync(loadOffice(office));
 
-  expect(changes).toContain(`not linking machine.toml and .office/mise/ into ${confD} or writing ${join(dir, "data/env.sh")} yet, so the office's tools apply nowhere: office writes outside its folder only once you agree; run office setup (unattended: office setup --manage-machine)`);
+  expect(changes).toContain(`not linking machine.toml, machine.packages.toml and .office/mise/ into ${confD} or writing ${join(dir, "data/env.sh")} yet, so the office's tools apply nowhere: office writes outside its folder only once you agree; run office setup (unattended: office setup --manage-machine)`);
   expect(existsSync(join(dir, "data"))).toBe(false);
   expect(existsSync(confD)).toBe(false);
   expect(readMachine()).toBeUndefined();
-  expect(machineReport(loadOffice(office))).toEqual([{ ok: false, name: "machine", detail: expect.stringContaining(`no consent for this office to manage this machine, so machine.toml and the packages' tools in .office/mise/ apply nowhere and ${join(dir, "data/env.sh")} isn't written; run office setup`) }]);
+  expect(machineReport(loadOffice(office))).toEqual([{ ok: false, name: "machine", detail: expect.stringContaining(`no consent for this office to manage this machine, so machine.toml and the packages' tools in machine.packages.toml apply nowhere and ${join(dir, "data/env.sh")} isn't written; run office setup`) }]);
 });
 
-test("with consent, sync links each fragment, machine.toml last, records them, and a second sync changes nothing", async () => {
+test("with consent, sync links machine.packages.toml first, each fragment, machine.toml last, records them, and a second sync changes nothing", async () => {
   makeOffice(office);
   grantConsent(loadOffice(office));
 
   const changes = await sync(loadOffice(office));
 
-  expect(changes).toContain(`linked ${confD}/office-t-1-demo.toml to .office/mise/demo.toml (package demo), so its tools apply in every folder on this machine`);
+  expect(changes).toContain(`linked ${confD}/office-t-1-demo.toml to .office/mise/demo.toml (package demo), so its setup applies in every folder on this machine`);
   expect(changes).toContain(`linked ${confD}/office-t-2-machine.toml to machine.toml (the office's own), so its tools apply in every folder on this machine`);
-  // mise loads conf.d by name and the last wins: after ordinary fragments, the required office package's first, and machine.toml after the packages'.
-  expect(changes).toContain(`linked ${confD}/office-t-0-office.toml to .office/mise/office.toml (package office), so its tools apply in every folder on this machine`);
-  expect(["10-loose.toml", ...links()].sort()).toEqual(["10-loose.toml", "office-t-0-office.toml", "office-t-1-demo.toml", "office-t-2-machine.toml"]);
+  // mise loads conf.d by name and the last wins: the packages' tools first, then their setup, and machine.toml last, so it wins over the packages' versions.
+  expect(changes).toContain(`linked ${confD}/office-t-0-packages.toml to machine.packages.toml (the packages' tools), so its tools apply in every folder on this machine`);
+  expect(links()).toEqual(["office-t-0-packages.toml", "office-t-1-demo.toml", "office-t-2-machine.toml"]);
   expect(readlinkSync(join(confD, "office-t-2-machine.toml"))).toBe(join(office, "machine.toml"));
+  // The office package has tools only, so no fragment of its own.
+  expect(existsSync(join(office, ".office/mise/office.toml"))).toBe(false);
   expect(readMachine()).toEqual({
     office: { name: "t", dir: office },
     consented: expect.any(String),
     files: [
+      { kind: "link", path: join(confD, "office-t-0-packages.toml"), package: null, target: join(office, "machine.packages.toml") },
       { kind: "link", path: join(confD, "office-t-1-demo.toml"), package: "demo", target: join(office, ".office/mise/demo.toml") },
-      { kind: "link", path: join(confD, "office-t-0-office.toml"), package: "office", target: join(office, ".office/mise/office.toml") },
       { kind: "link", path: join(confD, "office-t-2-machine.toml"), package: null, target: join(office, "machine.toml") },
       { kind: "file", path: join(dir, "data/env.sh"), package: null, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) },
     ],
@@ -133,8 +135,8 @@ test("removing a package removes its link; leaving host mode removes them all an
   makeOffice(office, { packages: "" });
 
   expect(await sync(loadOffice(office))).toContain(`removed ${confD}/office-t-1-demo.toml, as package demo no longer has a fragment`);
-  expect(links()).toEqual(["office-t-0-office.toml", "office-t-2-machine.toml"]);
-  expect(readMachine()?.files.map((file) => file.package)).toEqual(["office", null, null]);
+  expect(links()).toEqual(["office-t-0-packages.toml", "office-t-2-machine.toml"]);
+  expect(readMachine()?.files.map((file) => file.package)).toEqual([null, null, null]);
 
   makeOffice(office, { opencode: "opencode: container\n" });
 
@@ -181,7 +183,7 @@ test("a second host-mode office is refused, naming the one that manages the mach
   expect(() => grantConsent(loadOffice(other))).toThrow(OfficeError);
   expect(await sync(loadOffice(other))).toEqual(expect.arrayContaining([expect.stringContaining(`FAILED to link this office's tools on the machine: this machine is managed by office t in ${office}`)]));
   expect(machineReport(loadOffice(other))).toEqual([{ ok: false, name: "machine", detail: expect.stringContaining("managed by office t") }]);
-  expect(links()).toEqual(["office-t-0-office.toml", "office-t-1-demo.toml", "office-t-2-machine.toml"]);
+  expect(links()).toEqual(["office-t-0-packages.toml", "office-t-1-demo.toml", "office-t-2-machine.toml"]);
 
   // A copy of the same office beside it is another office too.
   const copy = join(dir, "copy");
@@ -202,8 +204,8 @@ test("an office that moved takes its record along and relinks its tools", async 
 
   expect(machineReport(loadOffice(moved)).map((line) => [line.ok, line.detail.split(";")[0]])).toEqual([
     [false, `the record names ${office}, where this office was`],
+    [false, `dangling: ${join(office, "machine.packages.toml")} is gone, so mise skips it silently`],
     [false, `dangling: ${join(office, ".office/mise/demo.toml")} is gone, so mise skips it silently`],
-    [false, `dangling: ${join(office, ".office/mise/office.toml")} is gone, so mise skips it silently`],
     [false, `dangling: ${join(office, "machine.toml")} is gone, so mise skips it silently`],
     [true, "written: the office's environment file"],
   ]);
@@ -273,13 +275,22 @@ const oldMachineHeader = `# This office's machine-wide mise config: tools, at ex
 # inside itself. In a folder with a mise.toml (the office's, a desk's, a project's), that file wins.
 `;
 
+/** The fragment an earlier release wrote for demo: its tools in a [tools] table, then its setup. */
+function oldFragment(version = "1.7.1"): string {
+  const setup = readFileSync(join(office, ".office/mise/demo.toml"), "utf8").split("\n\n").slice(1).join("\n\n");
+
+  return `# The mise tools of package demo. office sync owns which tools are here.\n\n[tools]\n"jq" = "${version}"\n\n${setup}`;
+}
+
 /** An office laid out as earlier releases left it: sync's fragment and machine.toml in .mise/conf.d/, beside one of the office's own. */
 async function oldLayout(): Promise<void> {
   makeOffice(office);
   await sync(loadOffice(office));
   rmSync(join(office, "machine.toml"));
   mkdirSync(join(office, ".mise/conf.d"), { recursive: true });
-  renameSync(join(office, ".office/mise/demo.toml"), join(office, ".mise/conf.d/demo.toml"));
+  write(join(office, ".mise/conf.d/demo.toml"), oldFragment());
+  rmSync(join(office, ".office/mise/demo.toml"));
+  rmSync(join(office, "machine.packages.toml"));
   write(join(office, ".mise/conf.d/machine.toml"), `${oldMachineHeader}[tools]\njq = "1.8.0"\n`);
   write(join(office, ".mise/conf.d/own.toml"), '[tools]\nnode = "26.13.1"\n');
 }
@@ -305,10 +316,12 @@ test("sync moves an earlier release's .mise/conf.d/ files out, relinks recorded 
 
   expect(changes).toContain("moved .mise/conf.d/demo.toml to .office/mise/demo.toml, where office sync keeps packages' tools, which mise loads only through their links in the global conf.d");
   expect(changes).toContain("moved .mise/conf.d/machine.toml to machine.toml, the office's own machine-wide mise file, which mise loads only through its link in the global conf.d");
+  expect(changes).toContain("moved package demo's tools (jq 1.7.1) from .office/mise/demo.toml to machine.packages.toml, where office sync keeps every package's tools");
   expect(changes).toContain(`relinked ${confD}/office-t-1-demo.toml to .office/mise/demo.toml (package demo)`);
   expect(changes).toContain(`relinked ${confD}/office-t-2-machine.toml to machine.toml (the office's own)`);
-  expect(changes).toContain(`removed ${confD}/office-t-1-own.toml, as .mise/conf.d/own.toml is the office's project config now: only machine.toml and the packages' fragments in .office/mise/ are linked`);
-  expect(links()).toEqual(["office-t-0-office.toml", "office-t-1-demo.toml", "office-t-2-machine.toml"]);
+  expect(changes).toContain(`linked ${confD}/office-t-0-packages.toml to machine.packages.toml (the packages' tools), so its tools apply in every folder on this machine`);
+  expect(changes).toContain(`removed ${confD}/office-t-1-own.toml, as .mise/conf.d/own.toml is the office's project config now: only machine.toml, machine.packages.toml and the packages' fragments in .office/mise/ are linked`);
+  expect(links()).toEqual(["office-t-0-packages.toml", "office-t-1-demo.toml", "office-t-2-machine.toml"]);
   expect(readFileSync(join(office, ".mise/conf.d/own.toml"), "utf8")).toBe('[tools]\nnode = "26.13.1"\n');
   expect(readlinkSync(join(confD, "office-t-2-machine.toml"))).toBe(join(office, "machine.toml"));
 
@@ -317,6 +330,39 @@ test("sync moves an earlier release's .mise/conf.d/ files out, relinks recorded 
 
   expect(machine).toStartWith("# This office's machine-wide mise config: tools, at exact versions, and mise settings it wants in\n");
   expect(machine).toEndWith('\n[tools]\njq = "1.8.0"\n');
+  expect(machineReport(loadOffice(office)).every((line) => line.ok === true)).toBe(true);
+  expect(await sync(loadOffice(office))).toEqual([]);
+});
+
+test("an office whose fragments still hold tools: sync moves them, keeps a bumped version, drops the office package's fragment and its link", async () => {
+  makeOffice(office);
+  grantConsent(loadOffice(office));
+  await sync(loadOffice(office));
+
+  // As the release before machine.packages.toml left it: every package's fragment holds its tools,
+  // the office package's linked first, and the office bumped gh past the package's version.
+  const officeTools = readFileSync(join(office, "machine.packages.toml"), "utf8").split("\n").filter((line) => /^"(sops|age|gh|pre-commit)"/.test(line)).map((line) => line.replace(/ #.*$/, "").replace(/"gh" = "[^"]+"/, '"gh" = "9.0.0"'));
+
+  write(join(office, ".office/mise/demo.toml"), oldFragment("1.8.0"));
+  write(join(office, ".office/mise/office.toml"), `# The mise tools of package office. office sync owns which tools are here.\n\n[tools]\n${officeTools.join("\n")}\n`);
+  rmSync(join(office, "machine.packages.toml"));
+  unlinkSync(join(confD, "office-t-0-packages.toml"));
+  symlinkSync(join(office, ".office/mise/office.toml"), join(confD, "office-t-0-office.toml"));
+  write(join(dir, "record/machine.json"), JSON.stringify({ ...readMachine(), files: [
+    { kind: "link", path: join(confD, "office-t-0-office.toml"), package: "office", target: join(office, ".office/mise/office.toml") },
+    ...(readMachine()?.files ?? []).filter((file) => !file.path.endsWith("-0-packages.toml")),
+  ] }));
+
+  const changes = await sync(loadOffice(office));
+
+  expect(changes).toContain("deleted .office/mise/office.toml, which held only package office's tools");
+  expect(changes).toContain(".office/mise/demo.toml now holds only package demo's mise setup");
+  expect(changes).toContain(`removed ${confD}/office-t-0-office.toml, as package office no longer has a fragment`);
+  expect(changes).toContain(`linked ${confD}/office-t-0-packages.toml to machine.packages.toml (the packages' tools), so its tools apply in every folder on this machine`);
+  expect(links()).toEqual(["office-t-0-packages.toml", "office-t-1-demo.toml", "office-t-2-machine.toml"]);
+  expect(readFileSync(join(office, "machine.packages.toml"), "utf8")).toContain('"gh" = "9.0.0" # office\n');
+  expect(readFileSync(join(office, "machine.packages.toml"), "utf8")).toEndWith('"jq" = "1.8.0" # demo\n');
+  expect(readFileSync(join(office, ".office/mise/demo.toml"), "utf8")).not.toContain("[tools]");
   expect(machineReport(loadOffice(office)).every((line) => line.ok === true)).toBe(true);
   expect(await sync(loadOffice(office))).toEqual([]);
 });

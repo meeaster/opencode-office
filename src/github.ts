@@ -1,7 +1,7 @@
 // GitHub for an office, over HTTPS through gh: which declared sources are on a GitHub host and
 // whether they read without a login, the host's gh login and git wiring, and the host's gh
 // configuration shared read-only with the container. gh is one of the office package's tools, so
-// the host's CLI and the container both run the version .office/mise/office.toml pins.
+// the host's CLI and the container both run the version machine.packages.toml pins.
 // One login, made on the host, serves host-side cloning, the container's agents and its cron jobs.
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";

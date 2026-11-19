@@ -255,7 +255,7 @@ export const reservedPackageNames = ["machine", "config", "mise"];
 const packageEntry = v.pipe(
   v.strictObject(
     {
-      // A package's tools go in .office/mise/<name>.toml. mise loads mise/config.toml and mise.toml
+      // A package's mise setup goes in .office/mise/<name>.toml. mise loads mise/config.toml and mise.toml
       // in place below .office/, which would make config and mise project config there, and machine
       // would be read as the office's own machine.toml.
       name: v.pipe(
@@ -479,8 +479,9 @@ export const packageManifestSchema = v.pipe(
       settings: v.optional(v.record(v.string(), packageSetting, "must map setting names to settings")),
       settings_schema: v.optional(v.union([v.boolean(), v.record(v.string(), settingValue)])),
       secrets: v.nullish(v.record(v.pipe(v.string(), v.regex(/^[A-Z][A-Z0-9_]*$/, "must be an environment variable name in capitals")), packageSecret, "must map variable names to how each is generated"), {}),
-      // mise tools the package needs, each at the version an office starts at; `office sync` writes
-      // them to the office's .office/mise/<name>.toml, whose versions are the office's from then on.
+      // mise tools the package needs, each at the version it was tested with: `office sync` writes
+      // them to the office's machine.packages.toml at that version, whose versions are the office's
+      // from then on, and raises one only to keep it at or above what a package declares.
       tools: miseTools,
       host: v.optional(hostBlock),
       system: v.optional(systemBlock),

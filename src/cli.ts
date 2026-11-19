@@ -85,8 +85,8 @@ const usage = `usage: office <command> [--office <dir>]
   apps adopt <catalog-id>      copy an installed Executor app's source into executor-apps/<catalog-id>
   gui dev <package>            install a local package's panel on the desktop app's machine each
                                time its build writes the bundle
-  upgrade-tools                bump exact pins in mise.toml files, machine.toml, .office/mise/
-                               and office.yaml's versions, and commit them
+  upgrade-tools                bump exact pins in mise.toml files, machine.toml,
+                               machine.packages.toml and office.yaml's versions, and commit them
   update [--check] [--minimum-release-age <age> | --version <release>]
                                replace this office executable with the newest eligible release
                                (minimum age: 0d by default), or exactly <release>; --check only reports.

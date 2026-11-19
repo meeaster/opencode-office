@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { ghLink, hostToolsRoot, installedTool, installMise, miseAsset, needsInstall, officeTool, officeToolNamed, onboardHostTools, requireOfficeTool, startingVersions, verifyDigest } from "./host-tools.ts";
+import { ghLink, hostToolsRoot, installedTool, installMise, miseAsset, needsInstall, officePins, officeTool, officeToolNamed, onboardHostTools, requireOfficeTool, startingVersions, verifyDigest } from "./host-tools.ts";
 import { loadOffice, type Office } from "./office.ts";
 import { type Candidate, type Release, selectToolRelease } from "./releases.ts";
 
@@ -42,15 +42,15 @@ function executable(path: string, version: string): void {
   writeFileSync(path, `#!${process.execPath}\nconsole.log(${JSON.stringify(version)});\n`, { mode: 0o755 });
 }
 
-/** An office whose .office/mise/office.toml pins `pins`, or has none. */
+/** An office whose machine.packages.toml pins `pins` (beside another package's tool), or has none. */
 function office(pins?: Record<string, string>): Office {
   const root = join(dir, "office");
 
-  mkdirSync(join(root, ".office/mise"), { recursive: true });
+  mkdirSync(root, { recursive: true });
   writeFileSync(join(root, "office.yaml"), "name: t\n");
 
   if (pins !== undefined) {
-    writeFileSync(join(root, ".office/mise/office.toml"), `# The mise tools of package office.\n[tools]\n${Object.entries(pins).map(([tool, version]) => `"${tool}" = "${version}"`).join("\n")}\n`);
+    writeFileSync(join(root, "machine.packages.toml"), `[tools]\n${Object.entries(pins).map(([tool, version]) => `"${tool}" = "${version}" # office`).join("\n")}\n"bun" = "1.4.4" # browser\n`);
   }
 
   return loadOffice(root);
@@ -169,7 +169,7 @@ test("until the pinned version is installed, the newest copy anywhere serves; wi
   executable(join(dir, "path/age-keygen"), "v1.2.1");
 
   expect(officeTool(office(pins), "age-keygen")?.path).toBe("age-keygen");
-  expect(() => requireOfficeTool(office(pins), "gh")).toThrow("office setup --install-deps installs the version the office package pins in .office/mise/office.toml");
+  expect(() => requireOfficeTool(office(pins), "gh")).toThrow("office setup --install-deps installs the version the office pins in machine.packages.toml");
 });
 
 test("unattended missing dependencies require permission and do not create managed state", async () => {
@@ -191,7 +191,19 @@ test("an authorized setup installs the office's pinned versions with mise, from 
   expect(requests().some((request) => request.args[0] === "install")).toBe(false);
 });
 
-test("before sync writes the fragment, setup installs the package's starting versions", async () => {
+test("the office's pins are its tools in machine.packages.toml only, else an earlier release's .office/mise/office.toml", () => {
+  expect(officePins(office(pins))).toEqual(pins);
+
+  const root = join(dir, "office");
+
+  rmSync(join(root, "machine.packages.toml"));
+  mkdirSync(join(root, ".office/mise"), { recursive: true });
+  writeFileSync(join(root, ".office/mise/office.toml"), '# The mise tools of package office.\n[tools]\n"gh" = "2.105.0"\n');
+
+  expect(officePins(loadOffice(root))).toEqual({ gh: "2.105.0" });
+});
+
+test("before sync writes machine.packages.toml, setup installs the package's starting versions", async () => {
   fakeMise();
   await onboardHostTools(office(), true, undefined, { lookupMise: async () => candidate() });
 

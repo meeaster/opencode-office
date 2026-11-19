@@ -170,7 +170,7 @@ test("a fresh machine: setup lists what is pending, applies it in the office's s
 
   const apply = calls.find((call) => call.command.includes("--only"));
 
-  expect(apply).toEqual({ command: ["/opt/mise", "bootstrap", "--only", "packages,files", "--yes"], cwd: "/", terminal: true, links: [join(office, ".office/mise/demo.toml"), join(office, ".office/mise/office.toml"), join(office, "machine.toml")] });
+  expect(apply).toEqual({ command: ["/opt/mise", "bootstrap", "--only", "packages,files", "--yes"], cwd: "/", terminal: true, links: [join(office, "machine.packages.toml"), join(office, ".office/mise/demo.toml"), join(office, "machine.toml")] });
   // mise read only the office's files when it planned, too.
   expect(calls.filter((call) => call.command.includes("plan")).every((call) => call.links.every((link) => link.startsWith(office)))).toBe(true);
   expect(printed.at(-1)).toBe("System setup: applied, and nothing is left to do");

@@ -1,6 +1,6 @@
 // `office upgrade-tools`: bumps each exact pin in the office's own mise.toml files (the root's and
-// each desk's), its machine-wide mise files (machine.toml and the packages' fragments in
-// .office/mise/), and the five versions office.yaml pins, to the newest release at least the
+// each desk's), its machine-wide mise files (machine.toml, and machine.packages.toml, whose package
+// comments stay as they are), and the five versions office.yaml pins, to the newest release at least the
 // office's minimum release age old, and commits the changed files alone under the office's git
 // identity (office.yaml's `git`), else "office cron". mise.toml pins are looked up and installed
 // through mise; the five versions on GitHub (and Executor's image on its registry), and only
@@ -14,7 +14,7 @@ import { git } from "../git.ts";
 import { entryPattern, toolPins } from "../mise-toml.ts";
 import { installedTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";
-import { machineFiles } from "../package-tools.ts";
+import { pinnedMachineFiles } from "../package-tools.ts";
 import { isScalar, parseDocument } from "yaml";
 
 import type { Office } from "../office.ts";
@@ -72,6 +72,11 @@ function compareVersions(left: string, right: string): number {
   return 0;
 }
 
+/** A [tools] line with its version replaced, and everything else on it, a trailing comment too, as it was. */
+export function withVersion(line: string, version: string): string {
+  return line.replace(entryPattern, (_, indent: string, name: string, middle: string, _version: string, rest: string) => `${indent}${name}${middle}${version}${rest}`);
+}
+
 /**
  * Upgrades one mise.toml. Returns the moves made and the failures. A pin counts as exact when
  * mise resolves it to itself, so ranges such as "26" or "latest" are left as they are.
@@ -103,7 +108,7 @@ function upgradeFile(office: Office, path: string) {
       continue;
     }
 
-    lines[pin.index] = lines[pin.index].replace(entryPattern, (_, indent: string, name: string, middle: string, _version: string, rest: string) => `${indent}${name}${middle}${newest.out}${rest}`);
+    lines[pin.index] = withVersion(lines[pin.index], newest.out);
     moves.push({ tool: pin.tool, from: pin.version, to: newest.out });
   }
 
@@ -194,15 +199,15 @@ async function upgradeVersions(office: Office): Promise<{ moves: Move[]; failure
 }
 
 export async function upgradeTools(office: Office): Promise<boolean> {
-  // The office's own files only: never one inside a desk's repos or under references/. Fragments
-  // a package's tools started in are the office's too, with the same ages.
+  // The office's own files only: never one inside a desk's repos or under references/. The
+  // versions of the packages' tools are the office's too, with the same ages.
   const projects = ["mise.toml", ...office.desks.map((desk) => join(desk.name, "mise.toml"))]
     .values()
     .map((name) => join(office.dir, name))
     .filter((path) => existsSync(path))
     .toArray();
 
-  const files = [...projects, ...machineFiles(office)];
+  const files = [...projects, ...pinnedMachineFiles(office)];
 
   const changed: string[] = [];
   const report: (Move & { file: string })[] = [];

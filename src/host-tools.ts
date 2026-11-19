@@ -3,7 +3,7 @@
 // - mise, which installs everything else, is the one program it keeps privately, in host-tools, off
 //   PATH, at the newest stable release three days old: it is needed before any office exists.
 // - SOPS, age (with age-keygen), gh and pre-commit are the required `office` package's tools, in
-//   every office's `.office/mise/office.toml` like any package's, at versions the office owns
+//   every office's `machine.packages.toml` like any package's, at versions the office owns
 //   (`office upgrade-tools` bumps them). The CLI runs the version that file pins, as mise installed
 //   it, found through `mise which --tool`: no shims, PATH, link or consent needed, so it works from
 //   cron, systemd timers and CI, in either mode, before office sync has linked anything. Until that
@@ -27,7 +27,7 @@ import { parse } from "yaml";
 import { fetchBytes } from "./download.ts";
 import { toolPins } from "./mise-toml.ts";
 import { type Office, OfficeError } from "./office.ts";
-import { cliToolsPackage, fragmentPath } from "./package-tools.ts";
+import { cliToolsPackage, fragmentPath, packagesFile, packagesPath } from "./package-tools.ts";
 import { newestRelease, type Candidate } from "./releases.ts";
 import { check, packageManifestSchema } from "./schema.ts";
 import { toolPath } from "./tool.ts";
@@ -42,7 +42,7 @@ type Tool = "mise" | OfficeCommand;
 
 export type InstalledTool = { path: string; version: string };
 
-/** The office package's tool each command comes from, by its key in `.office/mise/office.toml`. */
+/** The office package's tool each command comes from, by its key in `machine.packages.toml`. */
 const packageTool = { sops: "sops", age: "age", "age-keygen": "age", gh: "gh", "pre-commit": "pre-commit" } satisfies Record<OfficeCommand, string>;
 
 /** The commands of each of the office package's tools. */
@@ -161,11 +161,16 @@ function newestMiseInstall(mise: string, command: OfficeCommand): InstalledTool 
   return newest === undefined ? undefined : miseCopy(mise, command, newest);
 }
 
-/** The versions `.office/mise/office.toml` pins, by tool: the office's own choice. */
+/**
+ * The versions `machine.packages.toml` pins for the office package's tools: the office's own
+ * choice. An office an earlier release laid out, until office sync moves them, has them in
+ * `.office/mise/office.toml`.
+ */
 export function officePins(office: Office): Record<string, string> {
-  const path = fragmentPath(office, cliToolsPackage);
+  const path = [packagesPath(office), fragmentPath(office, cliToolsPackage)].find((candidate) => existsSync(candidate));
+  const tools = Object.keys(startingVersions());
 
-  return existsSync(path) ? Object.fromEntries(toolPins(readFileSync(path, "utf8")).map((pin) => [pin.tool, pin.version])) : {};
+  return path === undefined ? {} : Object.fromEntries(toolPins(readFileSync(path, "utf8")).filter((pin) => tools.includes(pin.tool)).map((pin) => [pin.tool, pin.version]));
 }
 
 /** The versions this executable's office package starts its tools at. */
@@ -177,7 +182,7 @@ export function startingVersions(): Record<string, string> {
   return result.value.tools;
 }
 
-/** What the office wants installed: its fragment's versions, and the package's starting ones until sync writes the fragment. */
+/** What the office wants installed: its versions in machine.packages.toml, and the package's starting ones until sync writes them. */
 function wantedVersions(office: Office) {
   return { ...startingVersions(), ...officePins(office) };
 }
@@ -186,7 +191,7 @@ function wantedVersions(office: Office) {
 export type OfficeTool = InstalledTool & { pinned: string | undefined; managed: boolean };
 
 /**
- * A command of the office package's tools: the version `.office/mise/office.toml` pins, as mise
+ * A command of the office package's tools: the version `machine.packages.toml` pins, as mise
  * installed it, else the newest copy mise installed, on PATH or in host-tools.
  */
 export function officeTool(office: Office, command: OfficeCommand): OfficeTool | undefined {
@@ -208,7 +213,7 @@ export function officeTool(office: Office, command: OfficeCommand): OfficeTool |
 export function requireOfficeTool(office: Office, command: OfficeCommand): string {
   const found = officeTool(office, command);
 
-  if (found === undefined) throw new OfficeError(`${command} isn't installed on this host: office setup --install-deps installs the version the office package pins in .office/mise/office.toml${office.opencode.mode === "host" ? " (as does office up once office sync has linked it)" : ""}, or install it on PATH`);
+  if (found === undefined) throw new OfficeError(`${command} isn't installed on this host: office setup --install-deps installs the version the office pins in ${packagesFile}${office.opencode.mode === "host" ? " (as does office up once office sync has linked it)" : ""}, or install it on PATH`);
 
   return found.path;
 }
@@ -380,7 +385,7 @@ export async function onboardHostTools(
   // Bootstrap/update mise first: the office's tools install through it. One consent covers both.
   if (miseNeeded) {
     describe("mise", mise, candidate.version);
-    say(`Office can install verified mise ${candidate.version} (published ${candidate.published}) in ${hostToolsRoot()}, then the tools this office pins in .office/mise/office.toml (${names}) with it, into mise's own install folder. No mise config, global selection or shell profile changes.`);
+    say(`Office can install verified mise ${candidate.version} (published ${candidate.published}) in ${hostToolsRoot()}, then the tools this office pins in ${packagesFile} (${names}) with it, into mise's own install folder. No mise config, global selection or shell profile changes.`);
 
     if (!authorized && confirm !== undefined) authorized = (await confirm("Install these host dependencies? [yes/no]")) === "yes";
 

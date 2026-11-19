@@ -1,9 +1,9 @@
 // What a host-mode office writes on its machine, outside its folder and its state: a link in mise's
-// global conf.d to each of the office's machine-wide mise files, its `machine.toml` and the packages'
-// fragments in `.office/mise/`, which mise loads nowhere else, so the office's tools apply in every
-// folder; and, in the office tool's data folder (src/host-env.ts), the environment file agents and
-// the user's terminal share, Socket Firewall's wrappers and sfw itself. The rules, for every such
-// file:
+// global conf.d to each of the office's machine-wide mise files, its `machine.toml`, the packages'
+// tools in `machine.packages.toml` and their setup in `.office/mise/`, which mise loads nowhere else,
+// so the office's tools apply in every folder; and, in the office tool's data folder
+// (src/host-env.ts), the environment file agents and the user's terminal share, Socket Firewall's
+// wrappers and sfw itself. The rules, for every such file:
 //
 // - Whole files only, each named `office-<office name>-…` in a folder others share (a real file also
 //   starts with a marker line; sfw, a program, can't, and its record holds its release's SHA-256).
@@ -39,7 +39,7 @@ import { type ServerPlan, serverUnit, serverUnitPath, userSystemd } from "./host
 import { installedPackages } from "./layout.ts";
 import { oldFragments, oldMiseFiles } from "./migrate.ts";
 import { type Office, OfficeError, readConfig } from "./office.ts";
-import { cliToolsPackage, fragmentOwner, machineFile, machineFiles } from "./package-tools.ts";
+import { fragmentOwner, machineFile, machineFiles, packagesFile } from "./package-tools.ts";
 import { platformAsset } from "./releases.ts";
 import { check, type Lock } from "./schema.ts";
 import { atomicWrite } from "./secrets.ts";
@@ -160,7 +160,7 @@ export function consentQuestion(office: Office): string {
   const firewall = office.socketFirewall ? `, Socket Firewall (sfw) and its wrappers for npm, pnpm, pip, uv, cargo and mise in ${hostLayout("").root}` : "";
   const server = office.opencode.managed === undefined ? "" : ` It also enables ${serverUnit(office)} for OpenCode.`;
 
-  return `Office ${office.name} runs OpenCode on this machine (host mode), so it manages the machine: it links its machine.toml and each package's tools in .office/mise/ into ${globalConfD()} as office-${office.name}-…toml, so its tools apply in every folder (without the links they apply nowhere), and writes ${envFilePath()}, the environment your shell and agents share${firewall}.${server} It lists each file it writes in ${machineRecordPath()}, changes no file it didn't write, and never edits your shell's startup files; office sync --release-machine removes them all. Allow it? [yes/no]`;
+  return `Office ${office.name} runs OpenCode on this machine (host mode), so it manages the machine: it links its machine.toml, the packages' tools in machine.packages.toml and their setup in .office/mise/ into ${globalConfD()} as office-${office.name}-…toml, so its tools apply in every folder (without the links they apply nowhere), and writes ${envFilePath()}, the environment your shell and agents share${firewall}.${server} It lists each file it writes in ${machineRecordPath()}, changes no file it didn't write, and never edits your shell's startup files; office sync --release-machine removes them all. Allow it? [yes/no]`;
 }
 
 /**
@@ -180,17 +180,17 @@ export function grantConsent(office: Office): string {
 }
 
 /**
- * A link's name in the global conf.d, where mise loads files by name and the last wins: the office
- * package's fragment first (the tools the office CLI itself runs, the base every office has), then
- * the other packages', then machine.toml, so the owner's choices win over every package's. The
- * container's entrypoint names them the same way.
+ * A link's name in the global conf.d, where mise loads files by name and the last wins:
+ * machine.packages.toml first (the packages' tools), then each package's fragment (its setup), then
+ * machine.toml, so the owner's choices win over the packages' versions. The container's entrypoint
+ * names them the same way.
  */
 export function linkName(office: Office, file: string): string {
   if (file === join(office.dir, machineFile)) return `office-${office.name}-2-machine.toml`;
 
-  const name = basename(file, ".toml");
+  if (file === join(office.dir, packagesFile)) return `office-${office.name}-0-packages.toml`;
 
-  return `office-${office.name}-${name === cliToolsPackage ? 0 : 1}-${name}.toml`;
+  return `office-${office.name}-1-${basename(file, ".toml")}.toml`;
 }
 
 type LinkFile = Extract<MachineFile, { kind: "link" }>;
@@ -207,12 +207,13 @@ function sha256(content: string | Uint8Array): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-/** The links the office wants in the global conf.d: one per machine-wide file, machine.toml and each package's fragment. */
+/** The links the office wants in the global conf.d: one per machine-wide file, machine.packages.toml, each package's fragment and machine.toml. */
 function wantedLinks(office: Office): Wanted[] {
   return machineFiles(office).map((target) => {
     const file: LinkFile = { kind: "link", path: join(globalConfD(), linkName(office, target)), package: fragmentOwner(target) ?? null, target };
+    const packages = target === join(office.dir, packagesFile);
 
-    return { file, what: `${relative(office.dir, target)} (${owner(file)})`, made: ", so its tools apply in every folder on this machine" };
+    return { file, what: `${relative(office.dir, target)} (${packages ? "the packages' tools" : owner(file)})`, made: packages || file.package === null ? ", so its tools apply in every folder on this machine" : ", so its setup applies in every folder on this machine" };
   });
 }
 
@@ -344,11 +345,13 @@ function removalReason(office: Office, file: MachineFile): string {
 
   if (file.package !== null) return `as ${owner(file)} no longer has a fragment`;
 
+  if (file.kind === "link" && file.target === join(office.dir, packagesFile)) return `as ${packagesFile} is gone`;
+
   if (file.path.startsWith(`${hostLayout("").root}/`)) return office.socketFirewall ? "as office no longer writes it" : "as office.yaml sets socket_firewall: false";
 
   // Earlier releases linked every file in .mise/conf.d/, the office's own fragments too, which are its project config now.
   if (file.kind === "link" && file.target !== join(office.dir, machineFile) && file.target.startsWith(join(office.dir, oldFragments))) {
-    return `as ${relative(office.dir, file.target)} is the office's project config now: only machine.toml and the packages' fragments in .office/mise/ are linked`;
+    return `as ${relative(office.dir, file.target)} is the office's project config now: only machine.toml, machine.packages.toml and the packages' fragments in .office/mise/ are linked`;
   }
 
   return `as ${machineFile} is gone`;
@@ -591,7 +594,7 @@ export function syncMachine(office: Office): string[] {
   if (current.kind === "free") {
     const firewall = office.socketFirewall ? ", and package downloads don't go through Socket Firewall" : "";
 
-    return [`not linking machine.toml and .office/mise/ into ${globalConfD()} or writing ${envFilePath()} yet, so the office's tools apply nowhere${firewall}: office writes outside its folder only once you agree; run ${consentCommand}`];
+    return [`not linking machine.toml, machine.packages.toml and .office/mise/ into ${globalConfD()} or writing ${envFilePath()} yet, so the office's tools apply nowhere${firewall}: office writes outside its folder only once you agree; run ${consentCommand}`];
   }
 
   const { wanted, problems } = wantedFiles(office);
@@ -661,8 +664,8 @@ export function machineReport(office: Office): MachineLine[] {
   const unwanted = oldMiseFiles(office).length > 0 ? "relinks or removes it once it has moved the files out of .mise/conf.d/" : "removes it";
 
   if (current.kind === "free") {
-    // mise loads machine.toml and .office/mise/ only through the links, so without them a host-mode office has none of its tools.
-    return [...lines, { ok: false, name: "machine", detail: `no consent for this office to manage this machine, so machine.toml and the packages' tools in .office/mise/ apply nowhere and ${envFilePath()} isn't written; run ${consentCommand}, then office sync` }];
+    // mise loads machine.toml, machine.packages.toml and .office/mise/ only through the links, so without them a host-mode office has none of its tools.
+    return [...lines, { ok: false, name: "machine", detail: `no consent for this office to manage this machine, so machine.toml and the packages' tools in machine.packages.toml apply nowhere and ${envFilePath()} isn't written; run ${consentCommand}, then office sync` }];
   }
 
   const { wanted, problems } = wantedFiles(office);

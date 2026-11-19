@@ -9,7 +9,7 @@ import * as v from "valibot";
 
 import { editConfig, type Office, updateConfig, withoutItem, withoutKeys } from "./office.ts";
 import { moveExecutorAppDirs } from "./executor-app-layout.ts";
-import { fragmentOwner, fragmentsFolder, machineFile } from "./package-tools.ts";
+import { fragmentOwner, fragmentsFolder, machineFile, moveFragmentTools } from "./package-tools.ts";
 import { isToolRepository, localDir, localFolders, pulledDir, readRecord, sourceFile } from "./packages.ts";
 import { check } from "./schema.ts";
 import { builtinPackages, toolPath } from "./tool.ts";
@@ -426,7 +426,9 @@ export function migrate(office: Office): Migrated {
     }
   }
 
-  changes.push(...removeExecutorEntry(current), ...removeOldOfficePlugin(current), ...movePulledPackages(current), ...moveMiseFiles(current));
+  // Earlier releases kept each package's tools in its fragment; they move to machine.packages.toml
+  // (src/package-tools.ts), and sync then fixes that file and the links.
+  changes.push(...removeExecutorEntry(current), ...removeOldOfficePlugin(current), ...movePulledPackages(current), ...moveMiseFiles(current), ...moveFragmentTools(current));
 
   return { office: current, changes };
 }

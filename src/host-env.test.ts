@@ -158,7 +158,7 @@ test("turning the firewall off removes sfw and its wrappers and rewrites the env
   expect(changes).toContain(`rewrote ${envFilePath()}, the office's environment file`);
   expect(existsSync(join(data(), "sfw"))).toBe(false);
   expect(readFileSync(envFilePath(), "utf8")).not.toContain(hostWrappers());
-  expect(readMachine()?.files.map((file) => file.path)).toEqual([join(globalConfD(), "office-t-0-office.toml"), envFilePath()]);
+  expect(readMachine()?.files.map((file) => file.path)).toEqual([join(globalConfD(), "office-t-0-packages.toml"), envFilePath()]);
 
   makeOffice({ firewall: true });
   await sync(loadOffice(office));
