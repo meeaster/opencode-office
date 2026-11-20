@@ -64,8 +64,7 @@ export function installedPackages(office: Office, rejected: ReadonlySet<string> 
           project(read.value, group.entries);
         }
       } catch (error) {
-        problems.push({ packages: [item.entry.name], message: String(error) });
-        continue;
+        read.value.machineProblem = String(error);
       }
 
       installed.push(read.value);

@@ -26,6 +26,7 @@ function asset(item: InstalledPackage, file: string) {
 export function project(item: InstalledPackage, rows: readonly { id: string; value: CollectionEntry }[], validateAssets = false) {
   const claims: MachineClaims = { tools: [], tasks: [] };
   const names = new Set<string>();
+  let system = item.manifest.system;
 
   for (const { id, value } of rows) {
     if (id === requirements.id) claims.tools.push(requirements.parse(value));
@@ -43,7 +44,7 @@ export function project(item: InstalledPackage, rows: readonly { id: string; val
         claims.install = installs.parse(value);
       }
     } else if (id === recipes.id) {
-      if (item.manifest.system) throw new Error(`duplicate system setup of ${item.entry.name}`);
+      if (system) throw new Error(`duplicate system setup of ${item.entry.name}`);
       const { name, ...recipe } = recipes.parse(value);
       v.parse(bootstrapFile, recipe.bootstrap);
       asset(item, recipe.bootstrap);
@@ -53,14 +54,14 @@ export function project(item: InstalledPackage, rows: readonly { id: string; val
       }
 
       const files = readBootstrap(item, recipe.bootstrap).files ?? {};
-      const system = v.parse(systemBlock, { ...recipe, ready: [...new Set([...recipe.ready, ...Object.keys(files)])] });
+      system = v.parse(systemBlock, { ...recipe, ready: [...new Set([...recipe.ready, ...Object.keys(files)])] });
 
       if (item.manifest.settings[system.setting]?.default !== false) throw new Error(`${name}: system recipe needs a default-off setting`);
 
-      item.manifest.system = system;
     }
   }
 
+  item.manifest.system = system;
   item.machine = claims;
 }
 
@@ -87,6 +88,11 @@ export function destinationProblems(office: Office, items: InstalledPackage[]): 
   }
 
   for (const item of items) {
+    if (item.machineProblem) {
+      problems.push(item.machineProblem);
+      continue;
+    }
+
     const host = item.manifest.host;
     const owner = item.entry.name;
 

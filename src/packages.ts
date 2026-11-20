@@ -92,6 +92,8 @@ export type ResolvedPackages = { packages: ResolvedPackage[]; problems: PackageP
 export type InstalledPackage = ResolvedPackage & {
   manifest: PackageManifest;
   machine?: MachineClaims;
+  /** A broken machine projection must not erase independent cron, plugin or Compose owners. */
+  machineProblem?: string;
   /** The settings with defaults applied, as the plugin and scripts read them from `.settings.json`. */
   settings: Record<string, SettingValue>;
   /** Skill IDs under `skills/`, each a folder with a SKILL.md, which the package's plugin registers. */

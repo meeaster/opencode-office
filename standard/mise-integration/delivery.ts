@@ -623,6 +623,8 @@ function setupNotes(office: Office, item: InstalledPackage, section: string | un
 
 /** What `office check` says of a package's tools, its fragment and its host install. */
 export function fragmentNotes(office: Office, item: InstalledPackage): FragmentReport {
+  if (item.machineProblem) return { ok: false, notes: [item.machineProblem] };
+
   const composed = fragmentSection(office, item);
   const parts = [toolNotes(office, item), setupNotes(office, item, composed.ok ? composed.value : undefined), hostNotes(office, item), systemNotes(office, item)];
 
