@@ -8,7 +8,7 @@
 // removes the links earlier releases made.
 // It never rewrites AGENTS.md, other hand-written content, an existing app or a file a package's
 // template created; it deletes such a file only with its package, and only while unchanged.
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { prepareReferenceRefresh } from "../../packages/references/tasks/refresh.ts";
@@ -19,7 +19,8 @@ import { installPanel, locate, panelBundle, panelId, removalNote } from "../desk
 import { collectJobs } from "../cron/jobs.ts";
 import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
 import { cloneOrFetchStreamed, cloneShallowStreamed, discardFailedClone, isClone, referenceGit, refreshCloneStreamed } from "../git.ts";
-import { clones, installedPackages, type InstalledPackages, oldKnowledgePlugin, packageLink, pluginLinks, skillSelections } from "../layout.ts";
+import { clones, installedPackages, skillSelections } from "../layout.ts";
+import { legacyPlugin, linkPlugins, packageLink, requirePluginDestination } from "../../standard/opencode/delivery.ts";
 import { migrate } from "../migrate.ts";
 import { definitionFiles } from "../package-definition.ts";
 import { packageComposeFile } from "../package-services.ts";
@@ -145,29 +146,6 @@ function linkSkills(office: Office): string[] {
   return changes;
 }
 
-/** Makes `.opencode/plugins/` hold a relative link to each declared package's plugin, and no other link to a package plugin. */
-function linkPlugins(office: Office, installed: InstalledPackages): string[] {
-  const { folder, wanted, links } = pluginLinks(office, installed.plugins);
-  const changes: string[] = [];
-
-  for (const [name, target] of links) {
-    if (installed.unread.has(name) || wanted.get(name) === target) continue;
-
-    unlinkSync(join(folder, name));
-    changes.push(`unlinked .opencode/plugins/${name}`);
-  }
-
-  for (const [name, target] of wanted) {
-    if (links.get(name) === target) continue;
-
-    mkdirSync(folder, { recursive: true });
-    symlinkSync(target, join(folder, name));
-    changes.push(`linked .opencode/plugins/${name}`);
-  }
-
-  return changes;
-}
-
 /**
  * Removes the knowledge plugin an earlier `office` wrote into each office, which the knowledge
  * package replaced; without that package declared, it says which entry keeps the listing.
@@ -225,6 +203,7 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
     try {
       // A declared clone replaces a package plugin link; never fetch through the link.
       if (clone.kind === "plugin" && packageLink(clone.dir) !== undefined) unlinkSync(clone.dir);
+      else if (clone.kind === "plugin" && lstatSync(clone.dir, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("owner symlink occupies the plugin clone path");
 
       // A shallow clone that failed under an earlier release left a .git with no commit; clone again.
       if (clone.kind === "plugin") discardFailedClone(clone.dir);
@@ -331,6 +310,7 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
 
   if (scope === "references") return syncClones(office, "references", stage, verbose);
 
+  requirePluginDestination(office);
   stage.detail("migrating, scaffolding desks, copying skills and installing packages");
 
   const migrated = migrate(office);
@@ -360,6 +340,7 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
  * update` both apply packages this way. Each change goes to `changes`.
  */
 export async function syncPackages(office: Office, changes: { push: (...lines: string[]) => void }, stage: Stage = silentStage): Promise<boolean> {
+  requirePluginDestination(office);
   const { packages, problems } = resolvePackages(office);
 
   if (problems.length) {
@@ -411,7 +392,7 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
 
   let installed = installedPackages(office, rejected);
 
-  if (!installed.unread.has("knowledge") && oldKnowledgePlugin(office)) {
+  if (!installed.unread.has("knowledge") && legacyPlugin(office, "knowledge")) {
     changes.push(...removeOldKnowledgePlugin(office));
     installed = installedPackages(office, rejected);
   }

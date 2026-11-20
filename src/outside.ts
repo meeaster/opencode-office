@@ -9,6 +9,7 @@ import * as v from "valibot";
 
 import { containerOfficeDir, type Office } from "./office.ts";
 import { check } from "./schema.ts";
+import { pluginSource } from "../standard/opencode/native.ts";
 
 export type OutsideKind = "config" | "instructions" | "skill" | "plugin" | "agent" | "command" | "MCP server";
 
@@ -205,12 +206,7 @@ function markdown(kind: OutsideKind, dir: string, nested: boolean, prefix = "", 
 const nothing = v.pipe(v.unknown(), v.transform((): string[] => []));
 
 // A plugin entry: a package or path, { package, options }, or V1's [package, options].
-const pluginName = v.union([
-  v.pipe(v.string(), v.transform((name) => [name])),
-  v.pipe(v.looseObject({ package: v.string() }), v.transform((entry) => [entry.package])),
-  v.pipe(v.tuple([v.string(), v.unknown()]), v.transform((entry) => [entry[0]])),
-  nothing,
-]);
+const pluginName = v.union([v.pipe(pluginSource, v.transform(name => [name])), nothing]);
 
 // A server has a type, a command or a url; V1 puts servers directly under `mcp`, V2 under `mcp.servers`.
 const server = v.union([v.looseObject({ type: v.string() }), v.looseObject({ command: v.array(v.string()) }), v.looseObject({ url: v.string() })]);

@@ -13,6 +13,7 @@ import { fragmentOwner, fragmentsFolder, machineFile, moveFragmentTools } from "
 import { legacyBuiltin, localDir, localFolders, pulledDir, readRecord, sourceFile } from "./packages.ts";
 import { check } from "./schema.ts";
 import { builtinPackages, toolPath } from "./tool.ts";
+import { legacyPlugin } from "../standard/opencode/delivery.ts";
 import { defaultPins, lockFile, lockLacksSfw, readLock, writeLock } from "./versions.ts";
 
 const oldPlugin = ".opencode/plugins/office";
@@ -20,16 +21,8 @@ const oldPlugin = ".opencode/plugins/office";
 /** A step that may edit office.yaml: the office as it now reads, and one line per change. */
 export type Migrated = { office: Office; changes: string[] };
 
-/**
- * Whether `.opencode/plugins/office` is a real folder: the copy of the tool's plugin earlier
- * releases wrote. office.yaml can't clone a plugin under that name, so nothing else puts one there.
- */
 export function hasOldOfficePlugin(office: Office): boolean {
-  try {
-    return lstatSync(join(office.dir, oldPlugin)).isDirectory();
-  } catch {
-    return false;
-  }
+  return legacyPlugin(office, "office");
 }
 
 /** Removes that copy, so the office package's plugin can be linked in its place. */
@@ -166,7 +159,7 @@ const opencodeConfig = ".opencode/opencode.jsonc";
 // Only the fields the migration reads; OpenCode checks the rest.
 const configSchema = v.looseObject({ mcp: v.optional(v.looseObject({ servers: v.optional(v.record(v.string(), v.unknown())) })) });
 
-type ExecutorEntry = { state: "absent" | "template" | "differs" } | { state: "unreadable"; error: string };
+type ExecutorEntry = { state: "absent" | "owner-link" | "template" | "differs" } | { state: "unreadable"; error: string };
 
 function parseJsonc(text: string): { ok: true; value: v.InferOutput<typeof configSchema> } | { ok: false; error: string } {
   let document;
@@ -185,6 +178,8 @@ function parseJsonc(text: string): { ok: true; value: v.InferOutput<typeof confi
 /** Whether the root's opencode.jsonc still declares office-executor, and whether as the template wrote it. */
 export function executorEntryState(office: Office): ExecutorEntry {
   const path = join(office.dir, opencodeConfig);
+
+  if (lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) return { state: "owner-link" };
 
   if (!existsSync(path)) return { state: "absent" };
 
@@ -286,7 +281,7 @@ export function withoutExecutorEntry(text: string): string | undefined {
 function removeExecutorEntry(office: Office): string[] {
   const entry = executorEntryState(office);
 
-  if (entry.state === "absent") return [];
+  if (entry.state === "absent" || entry.state === "owner-link") return [];
 
   if (entry.state === "unreadable") return [`FAILED ${opencodeConfig}: can't read it to remove the office-executor MCP server: ${entry.error}`];
 

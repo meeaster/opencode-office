@@ -19,7 +19,8 @@ import { ghConfigDir, ghLogin, githubHosts, gitHelper, isGhHelper, loginProblem,
 import { hookNote, hookState } from "../hook.ts";
 import { planServer, serverReport } from "../host-server.ts";
 import { officeCommands, officePins, officeTool, officeToolNamed, required } from "../host-tools.ts";
-import { clones, installedPackages, library, oldKnowledgePlugin, pluginLinks, skillSelections } from "../layout.ts";
+import { clones, installedPackages, library, skillSelections } from "../layout.ts";
+import { legacyPlugin, pluginLinks } from "../../standard/opencode/delivery.ts";
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, oldMiseFiles, pulledLocalFolders, versionsLackSfw } from "../migrate.ts";
 import { oldExecutorAppDirs } from "../executor-app-layout.ts";
 import { executorEnvFile, type Office, readEnvFile, skillGroups, toolsBlock } from "../office.ts";
@@ -108,7 +109,7 @@ async function drift(office: Office): Promise<string[]> {
   const loaded = installedPackages(office);
   const plugins = pluginLinks(office, loaded.plugins);
 
-  if (!loaded.unread.has("knowledge") && oldKnowledgePlugin(office)) problems.push(".opencode/plugins/knowledge/ is the knowledge plugin earlier releases of office wrote, which the knowledge package replaced (office sync removes it)");
+  if (!loaded.unread.has("knowledge") && legacyPlugin(office, "knowledge")) problems.push(".opencode/plugins/knowledge/ is the knowledge plugin earlier releases of office wrote, which the knowledge package replaced (office sync removes it)");
 
   for (const [name, target] of plugins.links) {
     if (!loaded.unread.has(name) && plugins.wanted.get(name) !== target) problems.push(`.opencode/plugins/${name} links to ${target}, the plugin of no declared package (office sync removes it)`);
@@ -306,7 +307,7 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
     if (plugins.has(entry.name)) {
       const pluginLinked = links.links.get(entry.name) === links.wanted.get(entry.name);
 
-      notes.push(pluginLinked ? `plugin linked as .opencode/plugins/${entry.name} (root, so every desk loads it)` : `plugin not linked; office sync links it as .opencode/plugins/${entry.name}`);
+      notes.push(pluginLinked ? `plugin linked as .opencode/plugins/${entry.name} (office-wide discovery)` : `plugin not linked; office sync links it as .opencode/plugins/${entry.name}`);
 
       if (!pluginLinked) ok = false;
     }

@@ -7,6 +7,7 @@ import { commandHelp, dispatchCommand } from "./direct-commands.ts";
 import * as v from "valibot";
 
 import { officeInstructions } from "../packages/office/plugin/instructions.ts";
+import { inspect } from "../standard/opencode/inspect.ts";
 import { agentUpdateJob, updateAgentClis } from "./commands/agent-cli-update.ts";
 import { adopt, deploy } from "./commands/apps.ts";
 import { check } from "./commands/check.ts";
@@ -75,6 +76,7 @@ const usage = `usage: office <command> [--office <dir>]
                                services with ordinary up, then check office health
   instructions [folder]        print the office guidance a session started in <folder> gets
   instructions --session <id>  print each stored instruction entry from a running OpenCode server
+  opencode inspect [folder]    list office-local native config and plugin sources on disk (offline)
   context --model <provider/model#variant>
                                measure the tokens the office adds to the first request of a
                                session in the current folder, against an empty folder, on the
@@ -237,6 +239,10 @@ async function main(): Promise<void> {
       : await sessionInstructions(currentOffice(flags), flags.session);
 
     if (text !== "") console.log(text);
+  } else if (command === "opencode" && rest[0] === "inspect") {
+    if (rest.length > 2 || Object.keys(flags).some(key => key !== "office")) throw new OfficeError("usage: office opencode inspect [folder] [--office <dir>]");
+
+    console.log(inspect(resolve(flags.office ?? ".", rest[1] ?? "."), flags.office).join("\n"));
   } else if (command === "context") {
     if (rest.length !== 0 || flags.model === undefined) throw new OfficeError("usage: office context --model <provider/model#variant>");
 

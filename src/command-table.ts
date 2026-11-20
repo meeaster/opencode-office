@@ -41,7 +41,7 @@ export function commandConflicts(groups: Owner[]): string[] {
         const first = owners.get(name);
 
         if (first) errors.push(`command ${name} claimed by both package ${first} and package ${owner.name}`);
-        else if (reserved.has(name.split(" ")[0]) || (name === "references list" && owner.name !== "references")) errors.push(`package ${owner.name}: command ${name} is reserved`);
+        else if (reserved.has(name.split(" ")[0]) || name === "opencode inspect" || name.startsWith("opencode inspect ") || (name === "references list" && owner.name !== "references")) errors.push(`package ${owner.name}: command ${name} is reserved`);
         owners.set(name, owner.name);
       }
     }

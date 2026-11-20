@@ -2,11 +2,12 @@
 // installed packages, and the library skill and package plugin links. `office sync` makes the
 // folders match; `office check` compares. Nothing of a package but its plugin is linked: the plugin
 // gives OpenCode whatever the package provides, its skills and MCP servers included.
-import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
+import { existsSync, readdirSync, readlinkSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { type Office, type Repository, skillsFolder } from "./office.ts";
 import { type InstalledPackage, type PackageProblem, readPackage, requiredPackages, resolvePackages } from "./packages.ts";
+import { planPlugins, pluginClones } from "../standard/opencode/delivery.ts";
 
 export type Clone = { name: string; url: string; ref?: string; kind: string; dir: string; stale?: boolean };
 
@@ -17,7 +18,7 @@ export function clones(office: Office, references: readonly (Repository & { stal
     ...office.desks.flatMap((desk) =>
       desk.repos.map((repo) => ({ ...repo, kind: `${desk.name} repo`, dir: join(office.dir, desk.name, "repos", repo.name) })),
     ),
-    ...office.plugins.map((plugin) => ({ ...plugin, kind: "plugin", dir: join(office.dir, ".opencode/plugins", plugin.name) })),
+    ...pluginClones(office),
   ];
 }
 
@@ -54,29 +55,9 @@ export function installedPackages(office: Office, rejected: ReadonlySet<string> 
     } else problems.push(...read.errors.map((message) => ({ packages: [item.entry.name], message })));
   }
 
-  // A package's plugin is linked under the package's name, which office.yaml keeps unique among
-  // packages; it can still meet a cloned plugin or one of the office's own.
-  const plugins = new Map<string, string>();
+  const plan = planPlugins(office, installed);
 
-  for (const { entry, dir, plugin } of installed) {
-    if (!plugin) continue;
-
-    const at = `.opencode/plugins/${entry.name}`;
-    const taken = occupied(join(office.dir, at)) && packageLink(join(office.dir, at)) === undefined;
-
-    const problem = office.plugins.some((cloned) => cloned.name === entry.name)
-      ? `its plugin would be ${at}, where the plugins: entry ${entry.name} is cloned`
-      : taken && entry.name === "office"
-        ? `its plugin would be ${at}, where earlier releases of office copied the tool's plugin; office sync replaces that copy with the link`
-        : taken
-          ? `its plugin would be ${at}, which holds a plugin of this office's own (not a link office sync made)`
-          : undefined;
-
-    if (problem === undefined) plugins.set(entry.name, join(dir, "plugin"));
-    else problems.push({ packages: [entry.name], message: `${problem}, so it isn't linked; rename one of them` });
-  }
-
-  return { selected, installed, plugins, problems, unread };
+  return { selected, installed, plugins: plan.plugins, problems: [...problems, ...plan.problems], unread };
 }
 
 export type InstalledPackages = {
@@ -88,67 +69,6 @@ export type InstalledPackages = {
   /** Selected but unresolved or unreadable: absence from `installed` cannot authorize cleanup. */
   unread: Set<string>;
 };
-
-function occupied(path: string): boolean {
-  try {
-    lstatSync(path);
-
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * The target of `path` when it is a link office sync made to a package plugin,
- * `../../.office/packages/<name>/plugin` or `../../packages/<name>/plugin`.
- */
-export function packageLink(path: string): string | undefined {
-  let target;
-
-  try {
-    target = readlinkSync(path);
-  } catch {
-    // Missing, or not a link.
-    return undefined;
-  }
-
-  return target.startsWith("../../packages/") || target.startsWith("../../.office/packages/") ? target : undefined;
-}
-
-/**
- * The package plugins of `.opencode/plugins/`: the links the office's packages want, by name with
- * their relative targets, and the links to package plugins there now.
- */
-export function pluginLinks(office: Office, plugins: Map<string, string>) {
-  const folder = join(office.dir, ".opencode/plugins");
-  const wanted = new Map([...plugins].map(([name, dir]) => [name, relative(folder, dir)]));
-  const links = new Map<string, string>();
-
-  for (const name of existsSync(folder) ? readdirSync(folder) : []) {
-    const target = packageLink(join(folder, name));
-
-    if (target !== undefined) links.set(name, target);
-  }
-
-  return { folder, wanted, links };
-}
-
-/**
- * Whether `.opencode/plugins/knowledge/` is the copy of the knowledge plugin an `office` before
- * the knowledge package wrote into each office, recognised by the banner its bundle starts with.
- */
-export function oldKnowledgePlugin(office: Office): boolean {
-  const dir = join(office.dir, ".opencode/plugins/knowledge");
-
-  return (
-    occupied(dir) &&
-    lstatSync(dir).isDirectory() &&
-    readdirSync(dir).join() === "index.js" &&
-    // Bun puts `// @bun` above the banner.
-    readFileSync(join(dir, "index.js"), "utf8").split("\n", 3).includes("// The office tool's knowledge plugin, bundled from its plugins/knowledge/. `office sync` replaces this copy; change the tool's.")
-  );
-}
 
 export type SkillSelection = {
   desk: string | undefined;

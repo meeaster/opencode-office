@@ -10,7 +10,7 @@
 // office to sync a panel wins; a record beside the bundle says which office that was.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,6 +18,7 @@ import { pathToFileURL } from "node:url";
 import * as v from "valibot";
 
 import { check } from "./schema.ts";
+import { pluginSource as nativePluginSource } from "../standard/opencode/native.ts";
 
 /** Where a package keeps its panel's built bundle; a package has a panel when this file exists. */
 export const panelBundle = "gui/dist/gui-experimental.cjs";
@@ -122,7 +123,7 @@ function windows(probe: Probe): Location {
 }
 
 /** Where the CLI runs, and the app machine it installs panels on. */
-export function locate(probe: Probe = systemProbe): Location {
+export function locate(probe: Probe = systemProbe, probeWindows = true): Location {
   const configDir = probe.env[configDirVariable];
   const panelsDir = probe.env[panelsDirVariable];
 
@@ -130,7 +131,7 @@ export function locate(probe: Probe = systemProbe): Location {
 
   if (probe.exists("/.dockerenv")) return { kind: "container" };
 
-  if (isWsl(probe)) return windows(probe);
+  if (isWsl(probe)) return probeWindows ? windows(probe) : { kind: "unreachable", reason: "Windows folders require a machine probe" };
 
   const config = probe.env.XDG_CONFIG_HOME || join(probe.home, ".config");
   const data = probe.env.XDG_DATA_HOME || join(probe.home, ".local/share");
@@ -212,6 +213,7 @@ const pluginSource = v.union([
 ]);
 
 const configSchema = v.looseObject({ plugins: v.optional(v.array(pluginSource)) });
+const registrationSchema = v.object({ plugins: v.optional(v.array(nativePluginSource), []) });
 
 function parseConfig(text: string) {
   let document;
@@ -310,9 +312,15 @@ export function isRegistered(machine: AppMachine, url: string): boolean | undefi
 
   if (!existsSync(path)) return false;
 
-  const read = parseConfig(readFileSync(path, "utf8"));
+  try {
+    if (!statSync(path).isFile()) return undefined;
 
-  return read.ok ? (read.value.plugins ?? []).includes(url) : undefined;
+    const read = check(v.safeParse(registrationSchema, Bun.JSONC.parse(readFileSync(path, "utf8"))));
+
+    return read.ok ? read.value.plugins.includes(url) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -380,9 +388,9 @@ export function installedPanelNames(machine: AppMachine): string[] {
 export function readPanelRecord(machine: AppMachine, name: string): PanelRecord | undefined {
   const path = join(panelDir(machine, name), panelRecordFile);
 
-  if (!existsSync(path)) return undefined;
-
   try {
+    if (!statSync(path, { throwIfNoEntry: false })?.isFile()) return undefined;
+
     const read = check(v.safeParse(recordSchema, JSON.parse(readFileSync(path, "utf8"))));
 
     return read.ok ? read.value : undefined;

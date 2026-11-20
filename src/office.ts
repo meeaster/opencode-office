@@ -115,11 +115,11 @@ function expandHome(path: string): string {
 }
 
 /** Parse office.yaml once, validating the fields needed by this reader. */
-export function readOfficeFields<S extends v.GenericSchema>(dir: string, schema: S): v.InferOutput<S> {
+export function readOfficeFields<S extends v.GenericSchema>(dir: string, schema: S, logLevel: "warn" | "error" = "warn"): v.InferOutput<S> {
   let document;
 
   try {
-    document = parse(readFileSync(join(dir, "office.yaml"), "utf8"), { stringKeys: true });
+    document = parse(readFileSync(join(dir, "office.yaml"), "utf8"), { stringKeys: true, logLevel });
   } catch (error) {
     throw new OfficeError(`office.yaml: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -139,8 +139,7 @@ export function readConfig(dir: string): OfficeConfig {
  * Reads the office at `dir`. `state` is where its runtime state lives on this machine:
  * office.yaml's optional `state`, else ~/.local/share/office/<name>.
  */
-export function loadOffice(dir: string): Office {
-  const config = readConfig(dir);
+export function loadOffice(dir: string, config = readConfig(dir)): Office {
   const tools = resolveTools(config);
 
   return {
