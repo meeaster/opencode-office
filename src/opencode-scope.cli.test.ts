@@ -451,6 +451,81 @@ test("typed registrations replace both conventions: one owned link, isolated pan
   expect(readlinkSync(link)).toBe("../../packages/common/extensions/server");
 }, 60_000);
 
+test("a convention package with a symlinked gui/dist keeps its link and panel; an authored claim through that symlink is refused", async () => {
+  const deliver = async (name: string, executable: string) => {
+    const f = fixture(name, "http://127.0.0.1:1");
+    const pkg = join(f.dir, "packages/common");
+    write(join(f.dir, "builds/common/gui-experimental.cjs"), "// built elsewhere in the office");
+    mkdirSync(join(pkg, "gui"));
+    symlinkSync("../../../builds/common", join(pkg, "gui/dist"));
+    const output = await f.run(["sync", "--packages"], 0, executable);
+    const link = readlinkSync(join(f.dir, ".opencode/plugins/common"));
+    const panel = readFileSync(join(f.env.OFFICE_APP_PANELS_DIR, "common/gui-experimental.cjs"), "utf8");
+
+    return { f, pkg, output, link, panel, plugins: JSON.parse(readFileSync(join(f.env.OFFICE_APP_CONFIG_DIR, "opencode.json"), "utf8")).plugins };
+  };
+
+  const { f, pkg, output, link, panel, plugins } = await deliver("convention-link", office);
+  expect(output).not.toContain("FAILED");
+  expect(link).toBe("../../packages/common/plugin");
+  expect(panel).toBe("// built elsewhere in the office");
+  expect(plugins).toHaveLength(1);
+
+  if (groundwork) {
+    // The release before authored registration delivered the same link and panel.
+    const old = await deliver("convention-link-old", groundwork);
+    expect([old.link, old.panel, old.plugins.length]).toEqual([link, panel, plugins.length]);
+  }
+
+  rmSync(join(pkg, "package.yaml"));
+  write(join(pkg, "office.ts"), `export default {name:"common",description:"fixture",opencode(ctx){ctx.serverPlugin("plugin"); ctx.desktopPanel("gui/dist/gui-experimental.cjs")}};`);
+  expect(await f.run(["sync", "--packages"], 1)).toContain("without redirected paths");
+  expect(readlinkSync(join(f.dir, ".opencode/plugins/common"))).toBe(link);
+  expect(readFileSync(join(f.env.OFFICE_APP_PANELS_DIR, "common/gui-experimental.cjs"), "utf8")).toBe(panel);
+}, 60_000);
+
+test("check and inspect report authored registrations as declared: no deletion advice while unread, skills and retained panels by claim", async () => {
+  const f = fixture("authored-health", "http://127.0.0.1:1");
+  const pkg = join(f.dir, "packages/common");
+  const skillNote = "skills helper don't load";
+  const removal = "none of its packages has that panel now";
+  write(join(pkg, "skills/helper/SKILL.md"), "---\nname: helper\ndescription: fixture\n---\nHelper.\n");
+  write(join(pkg, "desktop/built.cjs"), "// authored panel");
+  rmSync(join(pkg, "package.yaml"));
+  write(join(pkg, "office.ts"), `export default {name:"common",description:"fixture",settings:{edition:{description:"edition",default:"both"}},
+    opencode(ctx) {
+      if (ctx.settings.edition === "throw") throw Error("fixture failure");
+      if (ctx.settings.edition !== "panel") ctx.serverPlugin("plugin");
+      if (ctx.settings.edition !== "server") ctx.desktopPanel("desktop/built.cjs");
+    }};`);
+  const change = (edition: string) => f.select(`packages: [{name: common, settings: {edition: ${edition}}}]\n`);
+  await f.run(["sync", "--packages"]);
+  let check = await f.run(["check"], 1);
+  expect(check).not.toContain(skillNote);
+  expect(check).not.toContain(removal);
+
+  // Still selected, but the last collection failed: the panel is not this office's to delete.
+  change("throw");
+  await f.run(["sync", "--packages"], 1);
+  check = await f.run(["check"], 1);
+  expect(check).not.toContain(removal);
+  expect(check).not.toContain(skillNote);
+  // Settings changed since the last sync: the recorded registration is stale.
+  change("server");
+  check = await f.run(["check"], 1);
+  expect(check).not.toContain(removal);
+
+  await f.run(["sync", "--packages"]);
+  const inspect = await f.run(["opencode", "inspect"]);
+  expect(inspect).toContain("desktop: retained panel, not declared by its package (");
+  expect(inspect).not.toContain("desktop: common (");
+
+  change("panel");
+  await f.run(["sync", "--packages"]);
+  expect(await f.run(["check"], 1)).toContain(skillNote);
+  expect(await f.run(["opencode", "inspect"])).toContain("desktop: common (");
+}, 60_000);
+
 test("an authored-only pinned package repairs the bound revision and rejects an invalid staged replacement", async () => {
   const f = fixture("authored-pin", "http://127.0.0.1:1");
   const upstream = join(f.home, "upstream");
@@ -482,6 +557,22 @@ test("an authored-only pinned package repairs the bound revision and rejects an 
   expect(readFileSync(join(pulled, "office.ts"), "utf8")).toBe(definition);
   expect(readlinkSync(link)).toBe("../../.office/packages/folio/src/server");
   expect(readFileSync(join(f.env.OFFICE_APP_PANELS_DIR, "folio/gui-experimental.cjs"), "utf8")).toBe("// edition A");
+}, 60_000);
+
+test("deselecting a pulled authored package notes its retained panel at the authored bundle path", async () => {
+  const f = fixture("authored-deselect", "http://127.0.0.1:1");
+  const upstream = join(f.home, "upstream");
+  const git = (...args: string[]) => gitAt(upstream, f.env, ...args);
+  write(join(upstream, "pkg/office.ts"), `export default {name:"folio", description:"fixture", opencode(ctx){ctx.desktopPanel("dist/panel.cjs")}};`);
+  write(join(upstream, "pkg/dist/panel.cjs"), "// authored only");
+  git("init", "-q");
+  git("add", ".");
+  git("commit", "-qm", "panel");
+  f.select(`packages: [{name: folio, repo: ${upstream}, path: pkg, ref: '${git("rev-parse", "HEAD")}'}]\n`);
+  await f.run(["sync", "--packages"]);
+  expect(readFileSync(join(f.env.OFFICE_APP_PANELS_DIR, "folio/gui-experimental.cjs"), "utf8")).toBe("// authored only");
+  f.select("packages: []\n");
+  expect(await f.run(["sync", "--packages"])).toContain("panel office-folio stays installed");
 }, 60_000);
 
 test("a plugin checkout with the wrong origin is not cleaned, fetched or force-checked-out", async () => {

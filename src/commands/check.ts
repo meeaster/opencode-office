@@ -271,7 +271,8 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
     }
 
     // Skills reach OpenCode only through the package's plugin; earlier releases linked them.
-    if (item.skills.length > 0 && !item.plugin && !item.manifest.opencode) {
+    // A failed or stale authored registration keeps its prior link, so loading is unknown, not absent.
+    if (item.skills.length > 0 && !item.plugin && !loaded.unread.has(entry.name)) {
       ok = false;
       notes.push(`skills ${item.skills.join(", ")} don't load: the package has no plugin to register them${kind === "remote" ? " (move ref to a version that has one)" : ""}`);
     }
@@ -335,7 +336,8 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
  * last sync wins). Also one line for each panel this office installed whose package it no longer lists.
  */
 function panelChecks(office: Office, report: Report): void {
-  const panels = withPluginPlan(office, installedPackages(office)).installed.flatMap((item) => (item.panel === undefined ? [] : [{ name: item.entry.name, bundle: item.panel }]));
+  const plan = withPluginPlan(office, installedPackages(office));
+  const panels = plan.installed.flatMap((item) => (item.panel === undefined ? [] : [{ name: item.entry.name, bundle: item.panel }]));
   const where = locate();
 
   if (where.kind === "container") {
@@ -388,7 +390,8 @@ function panelChecks(office: Office, report: Report): void {
   for (const name of installedPanelNames(machine)) {
     const record = readPanelRecord(machine, name);
 
-    if (panels.some((panel) => panel.name === name) || record?.dir !== office.dir || record.office !== office.name) continue;
+    // An unread package is still selected; its registration is unknown, so give no removal advice.
+    if (panels.some((panel) => panel.name === name) || plan.unread.has(name) || record?.dir !== office.dir || record.office !== office.name) continue;
 
     report("warn", `panel ${panelId(name)}`, `this office installed it, but none of its packages has that panel now. ${removalNote(machine, name)}`);
   }

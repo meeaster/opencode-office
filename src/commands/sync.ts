@@ -22,6 +22,7 @@ import { cloneOrFetchStreamed, clonePluginStreamed, existingPluginDestination, g
 import { type Clone, clones, installedPackages, skillSelections } from "../layout.ts";
 import { legacyPlugin, linkPlugins, requirePluginDestination, withPluginPlan } from "../../standard/opencode/delivery.ts";
 import { validateAssets } from "../../standard/opencode/assets.ts";
+import { type Declaration, readDeclarations } from "../../standard/opencode/receipts.ts";
 import { migrate } from "../migrate.ts";
 import { definitionFiles } from "../package-definition.ts";
 import { packageComposeFile } from "../package-services.ts";
@@ -451,11 +452,16 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   // .office/packages/ holds only what sync pulled in, so a folder no package wants goes. Its panel
   // stays on the app's machine, where other offices may use it.
   const removedPanels: string[] = [];
+  let declarations: Map<string, Declaration> | undefined;
 
   for (const name of pulledFolders(office)) {
     if (installed.unread.has(name) || packages.some((item) => item.kind !== "local" && item.entry.name === name)) continue;
 
-    if (existsSync(join(pulledDir(office, name), panelBundle))) removedPanels.push(name);
+    // The last synced authored registration names the bundle; without one, the convention does.
+    const claim = (declarations ??= readDeclarations(office)).get(name);
+    const bundle = claim?.state === "declared" ? claim.paths.panel : panelBundle;
+
+    if (bundle !== undefined && existsSync(join(pulledDir(office, name), bundle))) removedPanels.push(name);
 
     changes.push(...removePackage(office, name));
   }
@@ -486,7 +492,8 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
 function installPanels(office: Office, installed: InstalledPackage[], removed: string[]): string[] {
   const panels = installed.flatMap((item) => {
     if (!item.panel) return [];
-    validateAssets(office.dir, item.dir, { panel: relative(item.dir, item.panel) });
+
+    if (item.manifest.opencode) validateAssets(office.dir, item.dir, { panel: relative(item.dir, item.panel) });
 
     return [{ name: item.entry.name, bundle: item.panel }];
   });

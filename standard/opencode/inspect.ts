@@ -10,8 +10,11 @@ import { declarationBinding, ownsLink, packageLink, pluginClones, pluginFolder }
 import { configSources, conventionSources, projectDirectories, type Source } from "./native.ts";
 import { readDeclarations, readReceipts } from "./receipts.ts";
 
-/** Desktop registration is machine-wide and can outlive deselection. Show only this office's records. */
-function desktopSources(office: Office, selected: Set<string>): string[] {
+/**
+ * Desktop registration is machine-wide and can outlive deselection or a withdrawn claim. Show only
+ * this office's records, naming the package only while it still declares that panel.
+ */
+function desktopSources(office: Office, selected: Set<string>, withheld: Set<string>): string[] {
   const location = locate(undefined, false);
 
   if (location.kind !== "app") return ["desktop: app machine not inspected"];
@@ -29,7 +32,8 @@ function desktopSources(office: Office, selected: Set<string>): string[] {
     const registration = registered === undefined ? "registration unknown" : registered ? "listed" : "not listed";
 
     const present = lstatSync(join(dir, "gui-experimental.cjs"), { throwIfNoEntry: false })?.isFile();
-    found.push(`desktop: ${selected.has(name) ? name : "previously delivered panel"} (${present ? "bundle present" : "bundle missing or not a regular file"}; ${registration} in app-machine ${basename(configFile(machine))})`);
+    const label = !selected.has(name) ? "previously delivered panel" : withheld.has(name) ? "retained panel, not declared by its package" : name;
+    found.push(`desktop: ${label} (${present ? "bundle present" : "bundle missing or not a regular file"}; ${registration} in app-machine ${basename(configFile(machine))})`);
   }
 
   return found.length ? found : ["desktop: no panel installation recorded here for this office"];
@@ -56,6 +60,7 @@ function inventory(office: Office, folder: string) {
   const declarations = readDeclarations(office);
   const { packages, problems } = resolvePackages(office);
   const kinds = new Map(packages.map(item => [item.entry.name, item.kind === "remote" ? "pinned Git" : item.kind]));
+  const withheld = new Set<string>();
 
   const lines = [
     `OpenCode sources for ${scopePath(office, dirs[dirs.length - 1]) || "."} (office-relative; runtime not checked)`,
@@ -119,6 +124,8 @@ function inventory(office: Office, folder: string) {
       else if (declared.binding !== declarationBinding(item)) describe(office.dir, { origin, description: "OpenCode declaration inputs changed; sync required" });
       else {
         const { server, panel } = declared.paths;
+
+        if (!panel) withheld.add(entry.name);
         describe(office.dir, { origin, description: `last synced registration: server ${server ? "declared" : "withheld"}, desktop ${panel ? "declared" : "withheld"}` });
         const link = join(managed, entry.name);
 
@@ -146,7 +153,7 @@ function inventory(office: Office, folder: string) {
     if (sources.length > 1) lines.push(`possible duplicate source (${identity.startsWith("npm:") ? "same package name or ID; versions not resolved" : "same filesystem target"}; activation not checked):`, ...sources.map(line => `  ${line}`));
   }
 
-  return [...lines, ...desktopSources(office, selected)];
+  return [...lines, ...desktopSources(office, selected, withheld)];
 }
 
 function requireFreeRoute(dir: string) {

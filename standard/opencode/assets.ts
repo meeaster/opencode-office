@@ -52,13 +52,14 @@ export function collectAssets(root: string, item: InstalledPackage): AssetPaths 
     }
 
     if (invalid) throw new Error("expected at most one package-relative server directory and one .cjs desktop bundle");
+
+    // Only authored claims are strict; convention discovery keeps its earlier behavior, symlinks included.
+    validateAssets(root, item.dir, paths);
   } else {
     if (item.plugin) paths.server = "plugin";
 
     if (item.panel) paths.panel = relative(item.dir, item.panel);
   }
-
-  validateAssets(root, item.dir, paths);
 
   return { ...paths };
 }

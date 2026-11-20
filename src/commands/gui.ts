@@ -7,7 +7,7 @@ import { basename, dirname, join, relative } from "node:path";
 import { installPanel, locate, panelBundle, sha256 } from "../desktop.ts";
 import { readPackage, resolvePackages } from "../packages.ts";
 import { loadOffice, type Office, OfficeError } from "../office.ts";
-import { collectAssets, validateAssets } from "../../standard/opencode/assets.ts";
+import { collectAssets } from "../../standard/opencode/assets.ts";
 import { declarationBinding } from "../../standard/opencode/delivery.ts";
 import { readDeclarations } from "../../standard/opencode/receipts.ts";
 
@@ -31,11 +31,7 @@ function panelSource(office: Office, name: string) {
     asset = fresh;
   }
 
-  const path = join(resolved.dir, asset);
-
-  if (existsSync(path)) validateAssets(office.dir, resolved.dir, { panel: asset });
-
-  return path;
+  return join(resolved.dir, asset);
 }
 
 export async function guiDev(office: Office, name: string): Promise<void> {
