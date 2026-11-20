@@ -2,11 +2,11 @@
 // each desk's), its machine-wide mise files (machine.toml, and machine.packages.toml, whose package
 // comments stay as they are), and the runtimes' versions in office.yaml, to the newest release at
 // least the office's minimum release age old (`tools.minimum_release_age`, or a runtime's own), and
-// commits the changed files alone under the office's git identity (office.yaml's `git`), else
+// with --commit commits the changed files alone under the office's git identity (office.yaml's `git`), else
 // "office cron". mise.toml pins are looked up and installed through mise, at the age the office's
 // environment gives package managers too, so an install never asks for a release they refuse; the
 // runtimes' versions on GitHub (and Executor's image on its registry), and only
-// recorded: `office up --upgrade` applies them. Files with uncommitted changes are left for the
+// recorded: `office up --upgrade` applies them. With --commit, dirty files are left for the
 // user. A failed install or lookup keeps the old pin. Never pushes.
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -194,7 +194,7 @@ export function setVersions(text: string, moves: { tool: PinnedTool; to: string 
  * old, rewriting office.yaml (keeping its comments and layout) and office.lock. A lookup that
  * fails (GitHub's rate limit, no network) skips that tool and is reported.
  */
-async function upgradeVersions(office: Office): Promise<{ moves: Move[]; failures: string[]; changed: string[] }> {
+async function upgradeVersions(office: Office, commit: boolean): Promise<{ moves: Move[]; failures: string[]; changed: string[] }> {
   const none = { moves: [], failures: [], changed: [] };
 
   if (!office.tools.pinsVersions) {
@@ -203,7 +203,7 @@ async function upgradeVersions(office: Office): Promise<{ moves: Move[]; failure
     return none;
   }
 
-  if (git(["status", "--porcelain", "--", "office.yaml", lockFile], office.dir) !== "") {
+  if (commit && git(["status", "--porcelain", "--", "office.yaml", lockFile], office.dir) !== "") {
     console.log(`skipped office.yaml's versions: office.yaml or ${lockFile} has uncommitted changes`);
 
     return none;
@@ -251,7 +251,7 @@ async function upgradeVersions(office: Office): Promise<{ moves: Move[]; failure
   return { moves, failures, changed: ["office.yaml", lockFile] };
 }
 
-export async function upgradeTools(office: Office): Promise<boolean> {
+export async function upgradeTools(office: Office, commit: boolean): Promise<boolean> {
   // The office's own files only: never one inside a desk's repos or under references/. The
   // versions of the packages' tools are the office's too, with the same ages.
   const projects = ["mise.toml", ...office.desks.map((desk) => join(desk.name, "mise.toml"))]
@@ -269,41 +269,49 @@ export async function upgradeTools(office: Office): Promise<boolean> {
   for (const path of files) {
     const name = relative(office.dir, path);
 
-    if (git(["status", "--porcelain", "--", name], office.dir) !== "") {
-      console.log(`skipped ${name}: it has uncommitted changes`);
+    const project = dirname(path);
+    const lock = join(project, "mise.lock");
+    const paths = projects.includes(path) ? [name, relative(office.dir, lock)] : [name];
+
+    if (commit && git(["status", "--porcelain", "--", ...paths], office.dir) !== "") {
+      console.log(`skipped ${paths.join(" and ")}: uncommitted changes`);
       continue;
     }
 
+    const before = projects.includes(path) && existsSync(lock) ? { pins: readFileSync(path), lock: readFileSync(lock) } : undefined;
     const result = upgradeFile(office, path);
 
     for (const failure of result.failures) failures.push(`${name}: ${failure}`);
 
     if (result.moves.length === 0) continue;
 
-    changed.push(name);
-
     // The lock file, when the office uses one, follows the pins of the mise.toml beside it. The
     // machine-wide files apply through the global conf.d, which no lock in the office covers.
-    const project = dirname(path);
-    const lock = join(project, "mise.lock");
+    if (before) {
+      const locked = mise(["lock"], project);
 
-    if (projects.includes(path) && existsSync(lock)) {
-      mise(["lock"], project);
+      if (!locked.ok) {
+        writeFileSync(path, before.pins);
+        writeFileSync(lock, before.lock);
+        failures.push(`${name}: mise lock failed: ${locked.error}`);
+        continue;
+      }
 
-      if (!changed.includes(relative(office.dir, lock))) changed.push(relative(office.dir, lock));
+      changed.push(relative(office.dir, lock));
     }
 
+    changed.push(name);
     report.push(...result.moves.map((move) => ({ ...move, file: name })));
   }
 
-  const versions = await upgradeVersions(office);
+  const versions = await upgradeVersions(office, commit);
 
   for (const failure of versions.failures) failures.push(failure);
 
   changed.push(...versions.changed);
   report.push(...versions.moves.map((move) => ({ ...move, file: "office.yaml" })));
 
-  if (report.length > 0) {
+  if (commit && report.length > 0) {
     const where = (move: { file: string }) => (move.file === "mise.toml" || move.file === "office.yaml" ? "" : ` in ${move.file.endsWith("/mise.toml") ? dirname(move.file) : move.file}`);
     const subject = `chore: bump ${report.map((move) => `${move.tool} ${move.from} → ${move.to}${where(move)}`).join(", ")}`;
     const body = report.map((move) => `- ${move.file}: ${move.tool} ${move.from} → ${move.to}`).join("\n");
@@ -326,7 +334,7 @@ export async function upgradeTools(office: Office): Promise<boolean> {
 
   await notify(office, {
     title: failures.length === 0 ? "Tools upgraded" : "Tool upgrade needs attention",
-    body: `${lines.join("\n")}${report.length > 0 ? `\nCommitted locally as ${committer(office).name}; revert the commit to undo.` : ""}${versions.moves.length > 0 ? "\n`office up --upgrade` applies the new versions in office.yaml." : ""}`,
+    body: `${lines.join("\n")}${commit && report.length > 0 ? `\nCommitted locally as ${committer(office).name}; revert the commit to undo.` : ""}${versions.moves.length > 0 ? "\n`office up --upgrade` applies the new versions in office.yaml." : ""}`,
   });
 
   return failures.length === 0;

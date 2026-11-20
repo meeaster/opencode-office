@@ -94,10 +94,11 @@ const usage = `usage: office <command> [--office <dir>]
   apps adopt <catalog-id>      copy an installed Executor app's source into executor-apps/<catalog-id>
   gui dev <package>            install a local package's panel on the desktop app's machine each
                                time its build writes the bundle
-  upgrade-tools [--apply]      bump exact pins in mise.toml files, machine.toml,
+  upgrade-tools [--commit] [--apply]
+                               bump exact pins in mise.toml files, machine.toml,
                                machine.packages.toml and office.yaml's tools to releases at
-                               least tools.minimum_release_age old (or a runtime's own), and
-                               commit them; --apply then runs up --upgrade, even when the pins
+                               least tools.minimum_release_age old (or a runtime's own).
+                               --commit commits the changes; --apply runs up --upgrade, even when the pins
                                were already current
   update [--check] [--minimum-release-age <age> | --version <release>]
                                replace this office executable with the newest eligible release
@@ -180,6 +181,7 @@ async function main(): Promise<void> {
       packages: { type: "boolean" },
       upgrade: { type: "boolean" },
       apply: { type: "boolean" },
+      commit: { type: "boolean" },
       refresh: { type: "boolean" },
       container: { type: "boolean" },
       origin: { type: "string" },
@@ -208,6 +210,8 @@ async function main(): Promise<void> {
   if (flags.packages && command !== "sync") throw new OfficeError("--packages is an option for office sync");
 
   if (flags.apply && command !== "upgrade-tools") throw new OfficeError("--apply is an option for office upgrade-tools");
+
+  if (flags.commit && command !== "upgrade-tools") throw new OfficeError("--commit is an option for office upgrade-tools");
 
   if (flags.model !== undefined && command !== "context") throw new OfficeError("--model is an option for office context");
 
@@ -302,7 +306,7 @@ async function main(): Promise<void> {
     } else if (!(await check(office))) process.exitCode = 1;
   } else if (command === "up" || command === "upgrade-tools") {
     if (command === "upgrade-tools") {
-      if (!(await upgradeTools(currentOffice(flags)))) {
+      if (!(await upgradeTools(currentOffice(flags), flags.commit === true))) {
         process.exitCode = 1;
 
         return;
