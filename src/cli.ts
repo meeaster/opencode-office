@@ -1,6 +1,6 @@
 // The `office` command: initialize, sync, check and run an office. See README.md.
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import * as v from "valibot";
@@ -27,7 +27,7 @@ import { upgradeTools } from "./commands/upgrade.ts";
 import { catchUp, runContainerJob, supercronicInput } from "./cron/container.ts";
 import { executeJob, requireJobs } from "./cron/jobs.ts";
 import { migrateHome } from "./home-migration.ts";
-import { releaseMachine } from "./machine.ts";
+import { releaseMachine, serviceEnvironment } from "./machine.ts";
 import { currentOffice, type Office, OfficeError } from "./office.ts";
 import { packageSecret } from "./package-services.ts";
 import { decrypt } from "./secrets.ts";
@@ -111,7 +111,10 @@ const usage = `usage: office <command> [--office <dir>]
   migrate-home                 the container's start: move sessions and logins stored under
                                /home/assistant, the old home, to this home
   env --container              print the opencode container's environment file: the Socket
-                               Firewall wrappers on PATH and package managers' and mise's release ages
+                                Firewall wrappers on PATH and package managers' and mise's release ages
+  env host-service <name> --office <absolute-dir>
+                               unit startup: print the recorded installer's verified environment,
+                               or nothing if it does not own the machine
   sfw-wrappers                 the image's build: write the Socket Firewall wrappers into
                                /usr/local/lib/office/sfw
 
@@ -379,6 +382,14 @@ async function main(): Promise<void> {
     }
   } else if (command === "env" && flags.container === true) {
     process.stdout.write(containerEnvText(containerOffice(flags)));
+  } else if (command === "env" && rest[0] === "host-service") {
+    const name = rest[1];
+
+    if (rest.length !== 2 || !name || !flags.office || !isAbsolute(flags.office)) {
+      throw new OfficeError("host service startup requires its installed name and absolute office directory; run office up --upgrade to replace an older unit");
+    }
+
+    process.stdout.write(serviceEnvironment({ name, dir: flags.office }));
   } else if (command === "sfw-wrappers") {
     for (const path of writeContainerWrappers()) console.log(`office: wrote ${path}`);
   } else if (command === "migrate-home") {

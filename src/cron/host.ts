@@ -60,7 +60,7 @@ function onCalendar({ minute, hour, day, month, weekday }: ScheduleFields): stri
 }
 
 // systemd splits these lines on spaces and expands % specifiers, and ExecStart also $ variables.
-function quoted(text: string): string {
+export function quoted(text: string): string {
   return `"${text.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\r", "\\r").replaceAll("\n", "\\n").replaceAll("%", "%%")}"`;
 }
 

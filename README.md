@@ -782,7 +782,11 @@ host:
       # setting: enable_bridge  # optional boolean package setting
 ```
 
-`office up` creates declared secrets, then enables and starts the unit. The script runs from the package directory with the host office environment; ship any dependencies it needs. `office check` reports its state. A changed unit definition waits for `office up --upgrade`; disabling or removing it takes effect on `office up`. `office down` disables and removes the office's generated units. Updating code at the same script path takes effect on the next service restart.
+`office up` creates declared secrets, then enables and starts the unit. Its script runs from the package directory with the service user's `HOME`. Office puts the launcher directory, `~/.local/bin`, the mise shims and Bun's bin directory ahead of the user manager's PATH. It carries configured XDG, mise and Codex profile paths, not the invoking shell's environment. Ship dependencies or document which commands must already be installed. Launching a unit does not opt into machine management or mise auto-install.
+
+The unit carries the installing office's name and absolute directory. Startup compares both directly with the machine record, without searching for `office.yaml`. Only a matching owner gets the recorded environment, verified against its digest. An unclaimed host needs no `env.sh`; unsafe or changed owned files are errors. When `CODEX_HOME` wasn't set at render time, the manager's profile remains in effect unless the verified machine environment sets it. If neither sets it, Codex uses its normal home.
+
+`office check` reports the unit's state. A changed unit definition waits for `office up --upgrade`; a unit from the earlier name-less `env host-service` launcher must be upgraded before it can start with this executable. Disabling or removing a unit takes effect on `office up`. `office down` disables and removes the office's generated units. Updating code at the same script path takes effect on the next service restart.
 
 ### Executor apps
 

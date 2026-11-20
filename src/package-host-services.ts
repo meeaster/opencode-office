@@ -1,15 +1,47 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { argument, requireLocalUnit, unitDir } from "./cron/host.ts";
-import { envFilePath } from "./host-env.ts";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { argument, quoted, requireLocalUnit, unitDir } from "./cron/host.ts";
+import { machineDir, miseShims } from "./host-env.ts";
 import { userSystemd } from "./host-server.ts";
 import { installedPackages } from "./layout.ts";
+import { machineRecordPath } from "./machine.ts";
 import { type Office, OfficeError } from "./office.ts";
 import { hostApplies } from "./package-tools.ts";
 import { say } from "./report/index.ts";
+import { officeCommand } from "./tool.ts";
 
 // Different marker from the office's cron services: each reconciler owns only its units.
 const marker = (office: Office) => `# office package services: ${office.dir}\n`;
+
+// Capture profile directories, not the caller's shell environment. Leave the user manager's
+// PATH as the fallback for system utilities; a caller's cwd, aliases and login shell aren't needed.
+function launch(office: Office, dir: string, script: string) {
+  const command = officeCommand();
+  const home = homedir();
+  const path = [...new Set([dirname(command), join(home, ".local/bin"), resolve(miseShims()), resolve(process.env.BUN_INSTALL || join(home, ".bun"), "bin")])].join(":");
+  const profile = [`HOME=${home}`, `OFFICE_MACHINE_RECORD=${resolve(machineRecordPath())}`, `OFFICE_MACHINE_DIR=${resolve(machineDir())}`, "MISE_AUTO_INSTALL=0", "MISE_NOT_FOUND_AUTO_INSTALL=0"];
+
+  for (const key of ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "MISE_CONFIG_DIR", "MISE_DATA_DIR", "MISE_STATE_DIR", "MISE_CACHE_DIR", "CODEX_HOME"]) {
+    const value = process.env[key];
+
+    if (value) profile.push(`${key}=${resolve(value)}`);
+  }
+
+  const setup = [
+    'export PATH="$1:$PATH"',
+    '[[ -x "$2" ]] || { echo "Office launcher missing: $2; restore it or run office up --upgrade from its new location" >&2; exit 127; }',
+    'env_script=$("$2" --office "$3" env host-service "$4") || { echo "Cannot load host service environment; check the machine record and run office up --upgrade with a compatible launcher" >&2; exit 1; }',
+    'source /dev/stdin <<< "$env_script"',
+    'export MISE_AUTO_INSTALL=0 MISE_NOT_FOUND_AUTO_INSTALL=0',
+    'cd -- "$5"',
+    'exec /bin/bash "$6"',
+  ].join("; ");
+
+  const args = ["/bin/bash", "-ec", setup, "office", path, command, office.dir, office.name, dir, script];
+
+  return [...profile.map(value => `Environment=${quoted(value)}`), `ExecStart=${args.map(argument).join(" ")}`].join("\n");
+}
 
 function units(office: Office, packages: ReturnType<typeof installedPackages>) {
   const wanted = new Map<string, string>();
@@ -20,9 +52,7 @@ function units(office: Office, packages: ReturnType<typeof installedPackages>) {
     for (const [id, service] of Object.entries(item.manifest.host?.services ?? {})) {
       if (service.setting !== undefined && !item.settings[service.setting]) continue;
       const name = `office-${office.name}-pkg-${item.entry.name}.${id}.service`;
-      const args = ["/bin/bash", "-ec", 'export PATH="$HOME/.local/bin:$PATH"; source "$1"; cd -- "$2"; exec /bin/bash "$3"', "office", envFilePath(), item.dir, service.script];
-
-      wanted.set(name, `${marker(office)}[Unit]\nDescription=${service.description.replaceAll("%", "%%")}\n\n[Service]\nType=exec\nExecStart=${args.map(argument).join(" ")}\nUMask=0077\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n`);
+      wanted.set(name, `${marker(office)}[Unit]\nDescription=${service.description.replaceAll("%", "%%")}\n\n[Service]\nType=exec\n${launch(office, item.dir, service.script)}\nUMask=0077\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n`);
     }
   }
 

@@ -27,7 +27,7 @@
 // MISE_CONFIG_DIR to the same folder, so mise reads the links.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 
@@ -97,12 +97,16 @@ export function readMachine(): MachineRecord | undefined {
 
   if (!existsSync(path)) return undefined;
 
+  return parseRecord(readFileSync(path, "utf8"), path);
+}
+
+function parseRecord(text: string, path: string): MachineRecord {
   let data;
 
   try {
-    data = JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    throw new OfficeError(`${path} is not JSON (${error instanceof Error ? error.message : String(error)}); fix or delete it`);
+    data = JSON.parse(text);
+  } catch {
+    throw new OfficeError(`${path} is not JSON; fix or delete it`);
   }
 
   const result = check(v.safeParse(recordSchema, data));
@@ -112,13 +116,57 @@ export function readMachine(): MachineRecord | undefined {
   return result.value;
 }
 
-/** Writes the record whole, renamed into place so a reader never sees half of it. */
-function writeMachine(record: MachineRecord): void {
-  const path = machineRecordPath();
+// These bytes authorize a shell at unit startup. Check the open file, not a prior stat
+// of its pathname. O_NONBLOCK lets us refuse a FIFO without hanging the unit.
+function readLaunchFile(path: string): Buffer | undefined {
+  let fd: number;
 
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(`${path}.new`, `${JSON.stringify(record, null, 2)}\n`);
-  renameSync(`${path}.new`, path);
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+
+    throw new OfficeError(`cannot open ${path} as a regular host service file (symlinks are not followed); check ownership and permissions`);
+  }
+
+  try {
+    const stat = fstatSync(fd);
+
+    if (!stat.isFile() || stat.uid !== process.geteuid?.() || !(stat.mode & 0o400) || (stat.mode & 0o022)) {
+      throw new OfficeError(`unsafe host service file ${path}: expected a user-owned readable regular file without group or other write permission`);
+    }
+
+    return readFileSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Compare the installed identity, even after a rename or release. Never discover an office here. */
+export function serviceEnvironment(office: MachineRecord["office"]): string {
+  const recordPath = machineRecordPath();
+  const text = readLaunchFile(recordPath);
+
+  if (!text) return "";
+  const record = parseRecord(text.toString("utf8"), recordPath);
+
+  if (record.office.dir !== office.dir || record.office.name !== office.name) return "";
+  const path = envFilePath();
+  const matches = record.files.filter(entry => entry.path === path);
+  const [file] = matches;
+
+  if (matches.length === 1 && file?.kind === "file" && file.package === null && file.service === undefined) {
+    const bytes = readLaunchFile(path);
+
+    if (bytes && sha256(bytes) === file.sha256) return bytes.toString("utf8");
+  }
+
+  throw new OfficeError(`the claimed host environment ${path} is missing, changed or unrecorded; check machine ownership and run office sync`);
+}
+
+/** This record authorizes host launches; don't make it group-writable even under umask 002. */
+function writeMachine(record: MachineRecord): void {
+  atomicWrite(machineRecordPath(), `${JSON.stringify(record, null, 2)}\n`);
 }
 
 /**
