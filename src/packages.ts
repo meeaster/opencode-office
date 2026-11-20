@@ -135,10 +135,12 @@ export function legacyBuiltin(entry: PackageEntry): boolean {
     && entry.source !== undefined && isToolRepository(entry.source.repo) && entry.source.path === `packages/${entry.name}` && entry.source.track === undefined;
 }
 
-function ownershipProblems(office: Office, builtins: string[]): PackageProblem[] {
+function ownershipProblems(office: Office, builtins: string[], only?: string): PackageProblem[] {
   const problems: PackageProblem[] = [];
 
   for (const name of new Set([...requiredPackages, ...office.packages.map(entry => entry.name)])) {
+    if (only !== undefined && name !== only) continue;
+
     if (!builtins.includes(name)) continue;
 
     const entry = office.packages.find(item => item.name === name);
@@ -166,22 +168,22 @@ export function requirePackageOwnership(office: Office): void {
  * kind. An entry without `repo` is built-in when the tool ships a package of its name, so those
  * names are reserved. A required built-in's entry configures it without installing it twice.
  */
-export function resolvePackages(office: Office): ResolvedPackages {
+export function resolvePackages(office: Office, only?: string): ResolvedPackages {
   const builtins = builtinPackages();
-  const problems = ownershipProblems(office, builtins);
+  const problems = ownershipProblems(office, builtins, only);
 
   if (problems.length) return { packages: [], problems };
 
-  const packages: ResolvedPackage[] = requiredPackages.map((name) => ({
+  const packages: ResolvedPackage[] = requiredPackages.flatMap((name) => only !== undefined && name !== only ? [] : [{
     entry: office.packages.find((entry) => entry.name === name) ?? { name, settings: {}, cron: {}, source: undefined },
     kind: "built-in",
     dir: pulledDir(office, name),
-  }));
+  }]);
 
   for (const entry of office.packages) {
     const problem = (message: string) => problems.push({ packages: [entry.name], message });
 
-    if (requiredPackages.includes(entry.name)) continue;
+    if ((only !== undefined && entry.name !== only) || requiredPackages.includes(entry.name)) continue;
 
     if (!builtins.includes(entry.name)) {
       packages.push({ entry, kind: entry.source === undefined ? "local" : "remote", dir: entry.source === undefined ? localDir(office, entry.name) : pulledDir(office, entry.name) });
@@ -360,7 +362,7 @@ function verifiedCommit(ref: string, commit: string): boolean {
  * ref, and restores one whose files were edited. Returns one line per change; a failure starts
  * with FAILED.
  */
-export function fetchPackage(office: Office, entry: PackageEntry, source: NonNullable<PackageEntry["source"]>): string[] {
+export function fetchPackage(office: Office, entry: PackageEntry, source: NonNullable<PackageEntry["source"]>, boundCommit?: string): string[] {
   const { name } = entry;
   const dir = pulledDir(office, name);
   const where = relative(office.dir, dir);
@@ -368,24 +370,26 @@ export function fetchPackage(office: Office, entry: PackageEntry, source: NonNul
   const current = record !== undefined && "repo" in record && record.repo === source.repo && record.path === source.path && record.ref === source.ref;
   const edits = record === undefined ? [] : localEdits(dir, record);
 
-  const known = current && verifiedCommit(source.ref, record.commit);
+  const known = current && verifiedCommit(source.ref, record.commit) && (!boundCommit || record.commit === boundCommit);
+  const revision = boundCommit ?? (known ? record.commit : source.ref);
 
   try {
+    if (boundCommit && !verifiedCommit(source.ref, boundCommit)) throw new Error(`invalid reference generation binding ${boundCommit} for ${source.ref}`);
+
     if (known && edits.length === 0) {
       if (entry.source?.ref !== source.ref) validateReplacement(office, { entry: { ...entry, source }, dir, kind: "remote" });
 
       return [];
     }
 
-    if ((record === undefined || (current && !known)) && existsSync(dir) && readdirSync(dir).length > 0 && !fullCommit.test(source.ref)) {
+    if (!boundCommit && (record === undefined || (current && !known)) && existsSync(dir) && readdirSync(dir).length > 0 && !fullCommit.test(source.ref)) {
       throw new Error(`cannot repair from ${source.ref} without the recorded commit; restore ${where}/${sourceFile} from office history or pin a full commit SHA`);
     }
 
     const commit = replaceFolder(dir, (staging) => {
-      const ref = known ? record.commit : source.ref;
-      const copied = copyFromRepository({ ...source, ref }, staging);
+      const copied = copyFromRepository({ ...source, ref: revision }, staging);
 
-      if (!verifiedCommit(ref, copied)) throw new Error(`expected ${ref}, got ${copied}`);
+      if (!verifiedCommit(revision, copied)) throw new Error(`expected ${revision}, got ${copied}`);
 
       // A package shared from another office's packages/ carries that office's records; its
       // .template.json would make this office skip template files it never received.
@@ -399,13 +403,13 @@ export function fetchPackage(office: Office, entry: PackageEntry, source: NonNul
 
     if (record === undefined) return [`installed ${where} from ${source.repo} at ${commit}`];
 
-    if (current && !known) return [`restored ${where} from the exact pin ${source.ref}; its record named commit ${record.commit}`];
+    if (current && !known) return [`restored ${where} to ${commit} for ${source.ref}; its record named commit ${record.commit}`];
 
     if (current) return [`restored ${where} to its copy of ${source.ref}${commit === source.ref ? "" : ` (${commit})`}, undoing edits to ${edits.join(", ")}; ${readOnlyNote}`];
 
     return [`updated ${where} from ${describeRecord(record)} to ${source.ref} (${commit})`];
   } catch (error) {
-    return [`FAILED ${where}: ${error instanceof Error ? error.message.trim() : String(error)}`];
+    return [`FAILED ${where} from ${source.repo}:${source.path} @ ${source.ref} (revision ${revision}): ${error instanceof Error ? error.message.trim() : String(error)}`];
   }
 }
 

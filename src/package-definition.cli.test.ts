@@ -1,14 +1,19 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { compile } from "./build.ts";
 import { git } from "./git.ts";
+import { sources } from "./github.ts";
 import { loadOffice } from "./office.ts";
 import { preparePackageServices } from "./package-services.ts";
 import type officePlugin from "../packages/office/plugin/index.ts";
 
 const root = mkdtempSync(join(tmpdir(), "office-definition-"));
+const fixtureMarker = join(root, ".compiled-office-test");
+
+writeFileSync(fixtureMarker, import.meta.url);
+
 const bin = join(root, "bin");
 const exe = join(bin, "office");
 const variant = join(root, "distribution/target/office");
@@ -48,6 +53,8 @@ beforeAll(async () => {
 
   for (const path of ["src", "packages", "template", "image", "compose.yaml", "LICENSE", "package.json"]) cpSync(join(checkout, path), join(dist, path), { recursive: true });
   write(join(dist, "packages/arrival/office.ts"), `${marker} export default { name: "arrival", description: "Newly shipped" }`);
+  const aws = join(dist, "packages/aws-emulator/office.ts");
+  write(aws, read(aws).replace("if (settings.source_reference === false) return;", 'throw Error("changed built-in collector");'));
   const changed = join(dist, "packages/artifact-share");
   rmSync(join(changed, "package.yaml"));
   write(join(changed, "office.ts"), 'import title from "./missing.ts"; export default {name:"artifact-share", description:title}');
@@ -60,7 +67,10 @@ beforeAll(async () => {
   expect(built.exitCode, built.stderr.toString()).toBe(0);
 }, 60_000);
 
-afterAll(() => rmSync(root, { recursive: true, force: true }));
+afterAll(() => {
+  if (read(fixtureMarker) !== import.meta.url) throw new Error(`refusing cleanup of unmarked fixture ${root}`);
+  rmSync(root, { recursive: true, force: true });
+});
 
 // Exercise the installed bundle through the same prompt hook that writes the session entry.
 async function prompt(dir: string, folder: string) {
@@ -124,7 +134,7 @@ function fixture(name: string) {
   const cli = (status: number, ...args: string[]) => run(exe, status, "--office", dir, ...args);
   const newer = (status: number, ...args: string[]) => run(variant, status, "--office", dir, ...args);
 
-  return { dir, home, probe, cli, newer, select: (entries: string) => write(config, initial + entries) };
+  return { dir, home, env, probe, cli, newer, select: (entries: string) => write(config, initial + entries) };
 }
 
 test("a compiled office collects independent references and scopes the last published generation to every reader", async () => {
@@ -198,8 +208,13 @@ packages: [${packages.join(", ")}]
   expect(existsSync(join(moved.dir, "packages/manual"))).toBe(false);
 
   configure([aws, manual], "floci");
+  const workRepo = join(dir, "sibling/repos/other-desk");
+  rmSync(workRepo, { recursive: true });
+  write(yaml, read(yaml) + `plugins: [{name: fixture, repo: ${upstream}}]\n`);
   write(join(checkout, "document"), "keep through rejection");
   expect(cli(1, "sync")).toContain("floci claimed by both office.yaml and package aws-emulator");
+  expect(head(workRepo)).toBe(first);
+  expect(head(join(dir, ".opencode/plugins/fixture"))).toBe(first);
   expect(read(snapshot)).toBe(generation);
   expect(read(join(checkout, "document"))).toBe("keep through rejection");
   expect(list()).toContain("reference inputs changed");
@@ -244,7 +259,7 @@ packages: [${packages.join(", ")}]
   cli(0, "sync", "--packages");
   broken();
   cli(1, "sync", "--packages");
-  expect(cli(1, "sync", "--references")).toContain("stale contribution cannot apply a different or unrecorded ref");
+  expect(cli(1, "sync", "--references")).toContain(`desired ${wanted} @ ${first}, last applied ${wanted} @ HEAD`);
   expect(head(checkout)).toBe(second);
 
   // A new desired origin is not permission to replace, fetch or clean the old checkout.
@@ -272,11 +287,11 @@ packages: [${packages.join(", ")}]
   expect(read(join(checkout, "document"))).toBe("preserved");
   expect(head(join(dir, "references/floci"))).toBe(second);
 
-  write(snapshot, read(snapshot).replace('"version": 1', '"version": 9'));
+  write(snapshot, read(snapshot).replace('"version": 2', '"version": 9'));
   expect(cli(1, "references", "list")).toContain("unsupported references snapshot version");
   expect(cli(1, "sync", "--references")).toContain("unsupported references snapshot version");
   expect(await verifyPrompt(nested)).toContain("unsupported references snapshot version");
-  expect(cli(1, "sync", "--packages")).toContain("move the unreadable snapshot aside");
+  expect(cli(1, "sync", "--packages")).toContain("restore a readable generation");
   rmSync(snapshot);
   cli(0, "sync", "--packages");
 }, 60_000);
@@ -305,6 +320,229 @@ test("a different pin of a Git contributor cannot inherit the old pin's claims",
   publish('add({registry:"references.repository",value:{name:"../outside",url:"../../local"}});');
   expect(cli(1, "sync", "--packages")).toContain("value.name:");
   expect(cli(0, "references", "list")).not.toContain("../outside");
+}, 60_000);
+
+function collector(url: string, ref = "main", after = "") {
+  const value = JSON.stringify({ name: "docs", url, ref });
+
+  return `export default {name:"docs",description:"Docs",async setup({add}) {add({registry:"references.repository",value:${value}});${after}}}`;
+}
+
+test("stale refresh needs the actual and last-applied origin/ref; cron runs only its named owner", () => {
+  const { dir, home, cli, probe, select } = fixture("cron-refs");
+  const a = join(root, "repo-a");
+  const b = join(root, "repo-b");
+
+  for (const repo of [a, b]) {
+    git(["init", "-qb", "main", repo]);
+    write(join(repo, "document"), repo);
+    commit(repo);
+  }
+
+  const module = join(dir, "packages/docs/office.ts");
+  const checkout = join(dir, "references/docs");
+  const job = "package.office.update-references";
+  const stamp = join(home, `.local/state/office/cron/cron-refs/${job}.stamp`);
+  const observed = () => [git(["rev-parse", "HEAD"], checkout), read(join(checkout, "document")), read(join(checkout, ".git/FETCH_HEAD"))];
+  select("  - name: docs\n");
+  write(module, collector(a));
+  cli(0, "sync");
+  cli(0, "check");
+  write(join(checkout, "document"), "dirty A");
+  const before = observed();
+
+  write(module, collector(b));
+  cli(0, "sync", "--packages");
+  write(module, `${marker} throw Error("broken definition");`);
+  cli(1, "sync", "--packages");
+  rmSync(probe);
+  git(["remote", "set-url", "origin", b], checkout);
+  expect(cli(1, "sync", "--references")).toContain(`desired ${b} @ main, last applied ${a} @ main`);
+  expect(observed()).toEqual(before);
+  expect(cli(1, "cron", "run", job)).toContain("exited 1");
+  expect(observed()).toEqual(before);
+  expect(existsSync(stamp)).toBe(false);
+  expect(existsSync(probe)).toBe(false);
+
+  git(["remote", "set-url", "origin", a], checkout);
+  git(["switch", "-qc", "release"], a);
+  write(join(a, "document"), "pending release");
+  commit(a);
+  git(["switch", "-q", "main"], a);
+  write(module, collector(a, "release"));
+  cli(0, "sync", "--packages");
+  expect(cli(1, "check", "--verbose")).toContain(`desired ${a} @ release, last applied ${a} @ main`);
+  expect(observed()).toEqual(before);
+
+  // A legacy ref alone cannot grant stale authority. A healthy refresh establishes the pair.
+  write(module, collector(a));
+  cli(0, "sync", "--packages");
+  git(["config", "--unset", "office.appliedReference"], checkout);
+  git(["config", "office.referenceRef", "main"], checkout);
+  write(module, collector(a, "main", 'throw Error("failed");'));
+  cli(1, "sync", "--packages");
+  expect(cli(1, "sync", "--references")).toContain("no unambiguous applied origin and ref");
+  expect(observed()).toEqual(before);
+  write(module, collector(a));
+  cli(0, "sync");
+  write(module, `${marker} throw Error("must not import from cron");`);
+  cli(1, "sync", "--packages");
+  rmSync(probe);
+  write(join(a, "document"), "advanced A");
+  const advanced = commit(a);
+  expect(cli(0, "cron", "run", job)).toContain("exited 0");
+  expect(git(["rev-parse", "HEAD"], checkout)).toBe(advanced);
+  expect(read(join(checkout, "document"))).toBe("advanced A");
+  const success = read(stamp);
+  select("  - name: docs\n  - name: office\n    cron: {update-references: {enabled: false}}\n");
+  expect(cli(1, "cron", "run", job)).toContain("not enabled");
+  expect(read(stamp)).toBe(success);
+  expect(existsSync(probe)).toBe(false);
+}, 60_000);
+
+test("a built-in's bytes and a Git contributor's resolved commit survive separate executable processes", () => {
+  const { dir, env, cli, newer, probe, select } = fixture("reference-repair");
+  select("  - name: aws-emulator\n");
+  cli(0, "sync", "--packages");
+
+  // Exercise setup's real planner with Git restricted to file transport. The only HTTPS
+  // source is contributed, so it must be reported as requiring access, never push access.
+  const planning = Bun.spawnSync([process.execPath, "--no-install", "-e", `
+    import {planGithub} from ${JSON.stringify(join(import.meta.dir, "github.ts"))};
+    import {loadOffice} from ${JSON.stringify(join(import.meta.dir, "office.ts"))};
+    console.log(JSON.stringify(await planGithub(loadOffice(process.cwd()))));
+  `], { cwd: dir, env });
+
+  expect(planning.exitCode, planning.stderr.toString()).toBe(0);
+  expect(JSON.parse(planning.stdout.toString())).toEqual({
+    hosts: ["github.com"], private: [{ what: "reference floci", url: "https://github.com/floci-io/floci.git", pushes: false }], pushes: [], needed: true,
+  });
+  expect(newer(1, "sync", "--packages")).toMatch(/built-in:[a-f0-9]{64}.*changed built-in collector/);
+  expect(newer(0, "references", "list")).not.toContain("floci\t");
+  const repo = join(root, "tags");
+  const installed = join(dir, ".office/packages/docs");
+  git(["init", "-qb", "main", repo]);
+  write(join(repo, "pkg/office.ts"), collector("approved:A"));
+  const first = commit(repo);
+  git(["tag", "v1"], repo);
+  const pin = (ref: string) => select(`  - {name: docs, repo: ${repo}, path: pkg, ref: ${ref}}\n`);
+  pin("v1");
+  cli(0, "sync", "--packages");
+  write(join(repo, "pkg/office.ts"), `${marker} ${collector("unapproved:B")}`);
+  git(["tag", "-f", "v1", commit(repo)], repo);
+  rmSync(installed, { recursive: true });
+  cli(0, "sync", "--packages");
+  expect(JSON.parse(read(join(installed, ".source.json")))).toMatchObject({ commit: first, ref: "v1" });
+  expect(cli(0, "references", "list")).toContain("approved:A");
+  expect(existsSync(probe)).toBe(false);
+  pin(first);
+  cli(0, "sync", "--packages");
+  rmSync(installed, { recursive: true });
+  renameSync(repo, repo + "-offline");
+  expect(cli(1, "sync", "--packages")).toContain(`${repo}:pkg @ ${first} (revision ${first})`);
+  expect(cli(0, "references", "list")).toContain("approved:A @ main\tpackage docs (stale)");
+  expect(existsSync(installed)).toBe(false);
+}, 60_000);
+
+test("an overlapping or interrupted collector cannot republish an explicitly withdrawn reference", async () => {
+  const { dir, cli, env, select } = fixture("overlap");
+  const repo = join(root, "overlap-origin");
+  git(["init", "-qb", "main", repo]);
+  write(join(repo, "document"), "original");
+  commit(repo);
+  const checkout = join(dir, "references/docs/document");
+  const module = join(dir, "packages/docs/office.ts");
+  select("  - name: docs\n");
+  write(module, collector(repo));
+  cli(0, "sync");
+  write(checkout, "keep after withdrawal");
+  write(module, collector(repo, "main", 'console.log("collection-paused"); await Bun.stdin.text();'));
+
+  const pause = async () => {
+    const child = Bun.spawn([exe, "--office", dir, "sync", "--packages"], { env, cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    const reader = child.stdout.getReader();
+    let output = "";
+
+    while (!output.includes("collection-paused")) {
+      const chunk = await reader.read();
+
+      if (chunk.done) throw new Error(`collector exited before barrier: ${output}`);
+      output += Buffer.from(chunk.value).toString();
+    }
+
+    reader.releaseLock();
+
+    return child;
+  };
+
+  const killed = await pause();
+  killed.kill("SIGKILL");
+  await killed.exited;
+  const old = await pause();
+
+  try {
+    select("");
+    cli(0, "sync", "--packages");
+    old.stdin.end();
+    expect(await old.exited).toBe(1);
+    expect(cli(0, "references", "list")).not.toContain("docs\t");
+    cli(0, "sync", "--references");
+    expect(read(checkout)).toBe("keep after withdrawal");
+  } finally {
+    old.kill();
+  }
+
+  // Even identical YAML can produce a newer explicit empty result after editing office.ts.
+  select("  - name: docs\n");
+  const empty = 'export default {name:"docs",description:"withdrawn",setup(){}}';
+  const paused = read(module);
+  write(module, empty);
+  cli(0, "sync", "--packages");
+  const unchanged = read(join(dir, ".office/resolved/references.json"));
+  write(module, paused);
+  const superseded = await pause();
+
+  try {
+    write(module, empty);
+    cli(0, "sync", "--packages");
+    expect(read(join(dir, ".office/resolved/references.json"))).toBe(unchanged);
+    superseded.stdin.end();
+    expect(await superseded.exited).toBe(1);
+    expect(cli(0, "references", "list")).not.toContain("docs\t");
+    cli(0, "sync", "--references");
+    expect(read(checkout)).toBe("keep after withdrawal");
+  } finally {
+    superseded.kill();
+  }
+}, 60_000);
+
+test.skipIf(process.getuid?.() === 0)("inaccessible generation fails closed; genuine absence reads legacy YAML", () => {
+  const { dir, cli } = fixture("read-errors");
+  const folder = join(dir, ".office/resolved");
+  const repo = join(root, "legacy-origin");
+  git(["init", "-qb", "main", repo]);
+  write(join(repo, "document"), "legacy");
+  commit(repo);
+  write(join(dir, "office.yaml"), `name: legacy\nreferences: [{name: legacy, url: ${repo}}]\n`);
+  chmodSync(folder, 0);
+
+  try {
+    expect(cli(1, "references", "list")).toContain("EACCES");
+    expect(cli(1, "sync", "--references")).toContain("EACCES");
+    expect(existsSync(join(dir, "references/legacy"))).toBe(false);
+    expect(() => sources(loadOffice(dir))).toThrow("EACCES");
+  } finally {
+    chmodSync(folder, 0o700);
+  }
+
+  write(join(folder, "references.json"), "{");
+  expect(cli(1, "references", "list")).toContain(".office/resolved/references.json");
+  cli(1, "sync", "--references");
+  expect(existsSync(join(dir, "references/legacy"))).toBe(false);
+  rmSync(join(folder, "references.json"));
+  expect(cli(0, "references", "list")).toContain("listing office.yaml only");
+  cli(0, "sync", "--references");
+  expect(read(join(dir, "references/legacy/document"))).toBe("legacy");
 }, 60_000);
 
 test("the executable syncs mixed definitions and keeps applied state when a selected definition cannot be read", () => {

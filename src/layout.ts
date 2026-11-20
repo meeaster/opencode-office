@@ -11,7 +11,7 @@ import { type InstalledPackage, type PackageProblem, readPackage, requiredPackag
 export type Clone = { name: string; url: string; ref?: string; kind: string; dir: string; stale?: boolean };
 
 /** Every clone office.yaml declares, with the folder it belongs in. */
-export function clones(office: Office, references: readonly (Repository & { stale?: boolean })[] = office.references): Clone[] {
+export function clones(office: Office, references: readonly (Repository & { stale?: boolean })[]): Clone[] {
   return [
     ...references.map((reference) => ({ ...reference, kind: "reference", dir: join(office.dir, "references", reference.name) })),
     ...office.desks.flatMap((desk) =>

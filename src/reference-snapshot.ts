@@ -1,19 +1,21 @@
 // Shared by the CLI and the installed office plugin. Reading desired data never loads package code.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { lstatSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import * as v from "valibot";
 import { check, type OfficeConfig, type Parsed, repository } from "./schema.ts";
 
 export const referenceFile = ".office/resolved/references.json";
 
-const contributor = v.strictObject({
-  name: v.string(), source: v.string(), stale: v.boolean(), references: v.array(repository),
-});
+const contributor = v.pipe(v.strictObject({
+  name: v.string(), source: v.pipe(v.string(), v.regex(/^(?:local|unverified built-in|(?:git|built-in):[0-9a-f]{64})$/)),
+  commit: v.optional(v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/))), stale: v.boolean(), references: v.array(repository),
+}), v.check(group => !group.source.startsWith("git:") || group.commit !== undefined || (group.stale && !group.references.length), "a Git contribution needs its resolved commit"));
 
 const schema = v.strictObject({
-  version: v.literal(1, "unsupported references snapshot version (expected 1)"),
-  inputs: v.string(), owner: v.array(repository), contributors: v.array(contributor),
+  version: v.literal(2, "unsupported references snapshot version (expected 2)"),
+  inputs: v.string(), owner: v.array(repository),
+  contributors: v.pipe(v.array(contributor), v.check(groups => new Set(groups.map(group => group.name)).size === groups.length, "ambiguous contributor identity")),
 });
 
 export type ReferenceSnapshot = v.InferOutput<typeof schema>;
@@ -29,8 +31,6 @@ export function inputHash(config: Inputs): string {
 export function readSnapshot(dir: string): Parsed<ReferenceSnapshot | undefined> {
   const path = join(dir, referenceFile);
 
-  if (!existsSync(path)) return { ok: true, value: undefined };
-
   try {
     const result = check(v.safeParse(schema, JSON.parse(readFileSync(path, "utf8"))));
 
@@ -38,6 +38,16 @@ export function readSnapshot(dir: string): Parsed<ReferenceSnapshot | undefined>
 
     return { ok: false, errors: result.errors.map(message => `${referenceFile}: ${message}`) };
   } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      for (const part of [path, dirname(path), join(dir, ".office")]) {
+        if (lstatSync(part, { throwIfNoEntry: false })?.isSymbolicLink() && !statSync(part, { throwIfNoEntry: false })) {
+          return { ok: false, errors: [`${referenceFile}: dangling link at ${part}`] };
+        }
+      }
+
+      return { ok: true, value: undefined };
+    }
+
     return { ok: false, errors: [`${referenceFile}: ${error instanceof Error ? error.message : String(error)}`] };
   }
 }
@@ -66,7 +76,7 @@ export function claims(snapshot: Pick<ReferenceSnapshot, "owner" | "contributors
   return errors.length ? { ok: false, errors } : { ok: true, value: entries };
 }
 
-export function resolvedReferences(dir: string, config: Inputs): Parsed<{ entries: ClaimedReference[]; notes: string[] }> {
+export function resolvedReferences(dir: string, config: Inputs): Parsed<{ entries: ClaimedReference[]; notes: string[]; legacy: boolean }> {
   const read = readSnapshot(dir);
 
   if (!read.ok) return read;
@@ -84,5 +94,5 @@ export function resolvedReferences(dir: string, config: Inputs): Parsed<{ entrie
     if (snapshot.inputs !== inputHash(config)) notes.push("reference inputs changed since collection; run office sync --packages");
   }
 
-  return { ok: true, value: { entries: entries.value, notes } };
+  return { ok: true, value: { entries: entries.value, notes, legacy: !snapshot } };
 }

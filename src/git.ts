@@ -1,14 +1,20 @@
 // The git operations sync needs: shallow clones of a ref, kept current by fetching that ref, and
 // copies of one folder of a repository.
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, rmSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
+import * as v from "valibot";
 
 import { streamChecked } from "./report/index.ts";
+import { check } from "./schema.ts";
+
+function gitOutput(args: string[], cwd?: string): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
 
 export function git(args: string[], cwd?: string): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return gitOutput(args, cwd).trim();
 }
 
 function head(dir: string): string {
@@ -24,25 +30,53 @@ export function referenceOriginProblem(dir: string, wanted: string): string | un
   let actual;
 
   try {
-    actual = git(["config", "--get-all", "remote.origin.url"], dir);
+    const urls = gitOutput(["config", "--null", "--get-all", "remote.origin.url"], dir).split("\0").slice(0, -1);
+
+    if (urls.length !== 1) return `expected one origin ${wanted}, found ${urls.join(", ")}; checkout left unchanged`;
+    [actual] = urls;
   } catch {
     return `expected origin ${wanted}, but ${dir} has no readable origin; checkout left unchanged`;
   }
 
-  const identity = (url: string) => /^[^/]+:/.test(url) ? url : resolve(dir, url);
+  if (actual === wanted) return;
 
-  if (identity(actual) !== identity(wanted)) return `expected origin ${wanted}, found ${actual}; checkout left unchanged`;
+  // Git may store an absolute local origin for a relative clone argument. Require the
+  // same existing path; lexical normalization alone doesn't establish that through links.
+  if (![actual, wanted].some(url => /^[^/]+:/.test(url))) {
+    const local = (url: string) => realpathSync.native(isAbsolute(url) ? url : `${dir}/${url}`);
+
+    try {
+      if (local(actual) === local(wanted)) return;
+    } catch {
+      // An unavailable path cannot establish equivalence.
+    }
+  }
+
+  return `expected origin ${wanted}, found ${actual}; checkout left unchanged`;
 }
 
 // Stored with the checkout, only after a successful fetch and checkout. A package-only
 // sync can publish a new desired ref without ever applying it to an existing clone.
-export const appliedReferenceRef = "office.referenceRef";
+const appliedReference = "office.appliedReference";
+const appliedPair = v.strictObject({ origin: v.string(), ref: v.string() });
 
-export function previouslyAppliedRef(dir: string): string | undefined {
+export function recordReference(dir: string, origin: string, ref = "HEAD"): void {
+  git(["config", "--local", "--replace-all", appliedReference, JSON.stringify({ origin, ref })], dir);
+}
+
+/** One Git config write records the pair atomically; an older ref-only record proves no origin. */
+export function appliedReferenceProblem(dir: string, origin: string, ref = "HEAD"): string | undefined {
+  const missing = `desired ${origin} @ ${ref}, no unambiguous applied origin and ref; run a healthy reference sync`;
+
   try {
-    return git(["config", "--local", "--get", appliedReferenceRef], dir);
+    const read = check(v.safeParse(appliedPair, JSON.parse(git(["config", "--local", "--get-all", appliedReference], dir))));
+
+    if (!read.ok) return missing;
+    const pair = read.value;
+
+    if (pair.origin !== origin || pair.ref !== ref) return `desired ${origin} @ ${ref}, last applied ${pair.origin} @ ${pair.ref}; run a healthy reference sync`;
   } catch {
-    return undefined;
+    return missing;
   }
 }
 
@@ -250,10 +284,12 @@ export async function cloneShallowStreamed(url: string, ref: string | undefined,
 }
 
 /** `refreshClone`, without blocking. */
-export async function refreshCloneStreamed(ref: string | undefined, dir: string, options: GitOptions = {}): Promise<"updated" | "current"> {
+export async function refreshCloneStreamed(ref: string | undefined, dir: string, options: GitOptions = {}, verify?: () => void): Promise<"updated" | "current"> {
   const before = head(dir);
 
+  verify?.();
   await gitStreamed(["fetch", "--depth", "1", "origin", ref ?? "HEAD"], dir, options);
+  verify?.();
   git(["checkout", "--quiet", "--force", "--detach", "FETCH_HEAD"], dir);
 
   return head(dir) === before ? "current" : "updated";
