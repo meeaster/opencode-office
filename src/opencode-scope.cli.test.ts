@@ -281,6 +281,17 @@ test("ownership by target: Office's links are recognized and withdrawn by their 
   select("", "", "alpha");
   expect(await f.run(["sync"], 1)).toContain("refusing to follow or replace it");
   expect(existsSync(join(f.home, "alpha"))).toBe(false);
+
+  // So is a desk folder that is itself a link: its skills would be written and withdrawn outside the office.
+  rmSync(deskSkills);
+  const outside = join(f.home, "real-builder");
+  renameSync(path("builder"), outside);
+  symlinkSync(outside, path("builder"));
+  write(join(outside, ".opencode/skills/.keep"), "");
+  symlinkSync("../../../skills/beta", join(outside, ".opencode/skills/beta"));
+  expect(await f.run(["sync"], 1)).toContain("its desk is not an office directory (refusing to follow or replace it)");
+  expect(readdirSync(join(outside, ".opencode/skills")).sort()).toEqual([".keep", "beta"]);
+  expect(readlinkSync(join(outside, ".opencode/skills/beta"))).toBe("../../../skills/beta");
 }, 60_000);
 
 function gitAt(dir: string, env: ReturnType<typeof fixture>["env"], ...args: string[]) {
@@ -855,6 +866,96 @@ test("a Git-cloned plugin lives in .office/plugins, is linked after publication,
   expect(snapshot(link)).toEqual(unproven);
 }, 60_000);
 
+test("an existing clone is linked before it is fetched, so an unreachable remote leaves a moved or unlinked checkout linked; withdrawn clones are listed, never deleted", async () => {
+  const f = fixture("clone-offline", "http://127.0.0.1:1");
+  const remote = pluginRemote(f, { "index.js": command("cloned-v1") });
+  const checkout = join(f.dir, ".office/plugins/imported");
+  const link = join(f.dir, ".opencode/plugins/imported");
+
+  // An earlier release's checkout, migrated while the remote can't be reached.
+  gitAt(f.home, f.env, "clone", "-q", remote, link);
+  const legacy = statSync(link).ino;
+  renameSync(remote, `${remote}.away`);
+  const migrated = await f.run(["sync"], 1);
+  expect(migrated).toContain("moved the checkout .opencode/plugins/imported to .office/plugins/imported");
+  expect(migrated).toContain("linked .opencode/plugins/imported");
+  expect(migrated).toContain("plugin Git operation failed");
+  expect(readlinkSync(link)).toBe("../../.office/plugins/imported");
+  expect(statSync(checkout).ino).toBe(legacy);
+
+  // A verified checkout whose link was deleted is linked again, still offline, and then left alone.
+  rmSync(link);
+  expect(await f.run(["sync"], 1)).toContain("linked .opencode/plugins/imported");
+  expect(readlinkSync(link)).toBe("../../.office/plugins/imported");
+  const linked = lstatSync(link).ino;
+  expect(await f.run(["sync"], 1)).not.toContain("linked .opencode/plugins/imported");
+  expect(lstatSync(link).ino).toBe(linked);
+  renameSync(`${remote}.away`, remote);
+  expect(await f.run(["sync"])).not.toMatch(/linked \.opencode\/plugins\/imported|FAILED/);
+
+  // A checkout that isn't provably this plugin's isn't linked before the fetch either.
+  rmSync(link);
+  gitAt(checkout, f.env, "remote", "set-url", "origin", join(f.home, "elsewhere"));
+  expect(await f.run(["sync"], 1)).toContain("cannot verify plugin checkout origin");
+  expect(existsSync(link)).toBe(false);
+  gitAt(checkout, f.env, "remote", "set-url", "origin", remote);
+  await f.run(["sync"]);
+
+  // Withdrawn: check lists the checkout with the path to remove; sync keeps it.
+  f.select("");
+  await f.run(["sync"]);
+  const health = await f.run(["check"], 1);
+  expect(health).toContain(".office/plugins/imported is a checkout no plugins: entry declares");
+  expect(health).toContain("remove .office/plugins/imported");
+  expect(existsSync(join(checkout, ".git"))).toBe(true);
+
+  // The name selected again with another repository: refused, naming the folder to move aside.
+  const other = join(f.home, "other");
+  gitAt(f.home, f.env, "clone", "-q", "--bare", remote, other);
+  f.select(`plugins: [{name: imported, repo: ${other}}]\n`);
+  expect(await f.run(["sync"], 1)).toContain("If .office/plugins/imported is an earlier checkout of another repository, move it aside");
+  expect(existsSync(link)).toBe(false);
+}, 60_000);
+
+test("info/exclude: a malformed block is left alone and reported, CRLF endings are kept, and only declared clones' legacy lines go", async () => {
+  const f = fixture("exclude-edges", "http://127.0.0.1:1");
+  const exclude = join(f.dir, ".git/info/exclude");
+  pluginRemote(f, { "index.js": command("imported") });
+  f.select(`packages: [{name: common}]\nplugins: [{name: imported, repo: ${join(f.home, "remote")}}]\n`);
+  gitAt(f.dir, f.env, "init", "-q");
+  await f.run(["sync"]);
+  const lines = ["/.office/", "/.opencode/plugins/common", "/.opencode/plugins/imported", "/.opencode/plugins/office"];
+  const block = (eol: string) => [excludeStart, ...lines, excludeEnd].map(line => line + eol).join("");
+
+  // A start without an end (an end without a start, duplicates): nothing is guessed or rewritten.
+  for (const text of [
+    `# mine\n${excludeStart}\n/.office/\n/owner-after\n`,
+    `# mine\n/owner-before\n${excludeEnd}\n`,
+    `${block("\n")}/owner-between\n${block("\n")}`,
+    `/owner\n${excludeEnd}\n${excludeStart}\n`,
+  ]) {
+    write(exclude, text);
+    const report = await f.run(["sync"], 1);
+    expect(report).toContain("not one block; left unchanged");
+    expect(readFileSync(exclude, "utf8")).toBe(text);
+  }
+
+  // CRLF: the block is recognized and kept CRLF, with the owner's lines as they were.
+  write(exclude, `# mine\r\n/owner\r\n${block("\r\n")}/after\r\n`);
+  expect(await f.run(["sync"])).not.toContain("info/exclude");
+  write(exclude, `# mine\r\n/owner\r\n${block("\r\n").replace("/.opencode/plugins/common\r\n", "")}`);
+  expect(await f.run(["sync"])).toContain("excluded /.opencode/plugins/common from commits (info/exclude)");
+  expect(readFileSync(exclude, "utf8")).toBe(`# mine\r\n/owner\r\n${block("\r\n")}`);
+
+  // Legacy per-clone lines go only for names plugins: declares; the owner's line of that shape stays.
+  write(exclude, "/.opencode/plugins/private-wip/\n/.opencode/plugins/imported/\n/.office-plugin-*/\n");
+  expect(await f.run(["sync"])).toContain("replaced 2 plugin exclude lines earlier releases wrote");
+  expect(readFileSync(exclude, "utf8")).toBe(`/.opencode/plugins/private-wip/\n${block("\n")}`);
+  // Replaced whole by rename, as 0644 under the umask, leaving no temporary file.
+  expect(statSync(exclude).mode & 0o777).toBe(0o644 & ~process.umask());
+  expect(readdirSync(dirname(exclude))).toEqual(["exclude"]);
+}, 60_000);
+
 test("a package plugin that changes location is relinked with a restart notice, which check reports before sync", async () => {
   const f = fixture("retarget", "http://127.0.0.1:1");
   const upstream = join(f.home, "upstream");
@@ -917,11 +1018,11 @@ test("sync keeps Office's plumbing out of Git in one info/exclude block, leaving
   expect(staged).toContain(".opencode/plugins/owner-plugin/index.js");
   expect(staged).toContain(".opencode/skills/owner-skill/SKILL.md");
 
-  // Withdrawn entries leave the block; a line the owner adds after it stays.
+  // Withdrawn entries leave the block, which stays in place; a line the owner adds after it stays.
   write(exclude, `${readFileSync(exclude, "utf8")}/scratch-notes/\n`);
   select("", "");
   expect(await f.run(["sync"])).toContain("stopped excluding /.opencode/plugins/common from commits (info/exclude)");
-  expect(readFileSync(exclude, "utf8")).toBe(`# the owner's\n*.log\n/scratch-notes/\n${block(["/.opencode/plugins/imported", "/.opencode/plugins/office"])}\n`);
+  expect(readFileSync(exclude, "utf8")).toBe(`# the owner's\n*.log\n${block(["/.opencode/plugins/imported", "/.opencode/plugins/office"])}\n/scratch-notes/\n`);
 
   // Plumbing committed by an earlier release stays tracked until the owner untracks it.
   git("add", "-f", ".office/packages/office", ".opencode/plugins/office");
@@ -1016,6 +1117,13 @@ test.skipIf(!launcher)("OpenCode sees the shared command in both desks, the buil
   await f.run(["sync"]);
   expect(readlinkSync(join(f.dir, ".opencode/plugins/cloned"))).toBe("../../.office/plugins/cloned");
   await f.run(["sync", "--packages"]);
+  // Where an earlier release cloned a plugin: a real checkout in .opencode/plugins/, loaded as it is.
+  const legacyRemote = join(f.home, "legacy-remote");
+  write(join(legacyRemote, "index.js"), command("legacy-command"));
+  gitAt(legacyRemote, f.env, "init", "-q");
+  gitAt(legacyRemote, f.env, "add", ".");
+  gitAt(legacyRemote, f.env, "commit", "-qm", "legacy");
+  gitAt(f.home, f.env, "clone", "-q", legacyRemote, join(f.dir, ".opencode/plugins/legacy"));
   const password = crypto.randomUUID();
 
   const server = Bun.spawn([launcher, "serve", "--hostname", "127.0.0.1", "--port", "0"], {
@@ -1074,6 +1182,36 @@ test.skipIf(!launcher)("OpenCode sees the shared command in both desks, the buil
     await verify(join(f.dir, "builder"), true, true);
     await verify(f.repo, true, true);
     await verify(join(f.dir, "sibling"), false, true);
+
+    const loads = async (folder: string, names: string[]) => {
+      const headers = { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`, "x-opencode-directory": encodeURIComponent(folder) };
+      const deadline = Date.now() + 8_000;
+
+      for (;;) {
+        const listed = v.parse(v.object({ data: v.array(v.object({ name: v.string() })) }), await (await fetch(`${url}/api/command`, { headers, signal: AbortSignal.timeout(10_000) })).json()).data.map(item => item.name);
+
+        if (names.every(name => listed.includes(name)) || Date.now() > deadline) return names.filter(name => listed.includes(name));
+        await Bun.sleep(200);
+      }
+    };
+
+    // With both remotes unreachable, sync moves the legacy checkout and links it, and links the
+    // clone whose link was deleted, before the fetches fail; both stay loaded in the running server.
+    expect(await loads(f.dir, ["legacy-command"])).toEqual(["legacy-command"]);
+    rmSync(join(f.dir, ".opencode/plugins/cloned"));
+    renameSync(remote, `${remote}.away`);
+    renameSync(legacyRemote, `${legacyRemote}.away`);
+    f.select(`packages: [{name: common}]\nplugins: [{name: cloned, repo: ${remote}}, {name: legacy, repo: ${legacyRemote}}]\n`);
+    const offline = await f.run(["sync"], 1);
+    expect(offline).toContain("moved the checkout .opencode/plugins/legacy to .office/plugins/legacy");
+    expect(readlinkSync(join(f.dir, ".opencode/plugins/legacy"))).toBe("../../.office/plugins/legacy");
+    expect(readlinkSync(join(f.dir, ".opencode/plugins/cloned"))).toBe("../../.office/plugins/cloned");
+    const fresh = join(f.dir, "sibling/after-offline-sync");
+    mkdirSync(fresh);
+
+    for (const folder of [f.dir, join(f.dir, "builder"), fresh]) expect(await loads(folder, ["cloned-command", "legacy-command"])).toEqual(["cloned-command", "legacy-command"]);
+    renameSync(`${remote}.away`, remote);
+    renameSync(`${legacyRemote}.away`, legacyRemote);
     f.select("");
     await f.run(["sync", "--packages"]);
     const after = join(f.repo, "after-withdrawal");

@@ -15,7 +15,9 @@ packages:
       url: https://<owner>.github.io/<repository>
 ```
 
-Then run `office sync` and commit what it wrote: the package in `.office/packages/artifact-share/`, which updates with `office` and is read-only there, and the template files below. Set the repository's Pages source to "GitHub Actions" once (Settings → Pages).
+Then run `office sync` and commit the template files below. The package itself is in `.office/packages/artifact-share/`, which updates with `office`, is read-only there and, like the rest of `.office/`, is kept out of Git by sync. Set the repository's Pages source to "GitHub Actions" once (Settings → Pages).
+
+**The publishing workflow and `.office/`.** The workflow the template copies runs `bun .office/packages/artifact-share/scripts/build-site.ts`, so for now it needs that folder committed: `git add -f .office/packages/artifact-share`. `office check` then lists it as tracked plumbing, and its untrack command (`git rm -r --cached -- .office …`) would untrack it too, so leave it out until the workflow changes. The intended workflow commits nothing of `.office/`: before building, it installs the `office` version the office pins and runs `office sync --packages`, which restores the package from that executable. Changing the template workflow that way is a follow-up; an office's existing copy is its own and changes only when its owner edits it.
 
 | Setting | |
 |---|---|

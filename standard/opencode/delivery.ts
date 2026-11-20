@@ -154,11 +154,14 @@ export function placeLink(office: Office, path: string, target: string, previous
   mkdirSync(staging, { recursive: true });
   const staged = join(staging, `link-${randomUUID()}`);
   symlinkSync(target, staged);
+  // What a failure leaves: either nothing changed, or Office's previous link is already gone.
+  let outcome = "nothing there was replaced";
 
   try {
     if (previous !== undefined) {
       if (readlinkSync(path) !== previous) throw new OfficeError(`kept changed ${at}; retry sync after the edit`);
       unlinkSync(path);
+      outcome = `Office's previous link (to ${previous}) was removed, and no entry of anyone else's was replaced; office sync links it again`;
     }
 
     mkdirSync(dirname(path), { recursive: true });
@@ -166,8 +169,13 @@ export function placeLink(office: Office, path: string, target: string, previous
     try {
       renameNoReplace(staged, path);
     } catch (error) {
-      if (!(error instanceof RenameError) || !["EINVAL", "ENOSYS"].includes(error.code)) throw new OfficeError(`could not place ${at}${error instanceof RenameError ? ` (${error.code})` : ""}; nothing there was replaced`);
-      symlinkSync(target, path); // exclusive creation
+      if (!(error instanceof RenameError) || !["EINVAL", "ENOSYS"].includes(error.code)) throw new OfficeError(`could not place ${at}${error instanceof RenameError ? ` (${error.code})` : ""}; ${outcome}`);
+
+      try {
+        symlinkSync(target, path); // exclusive creation
+      } catch {
+        throw new OfficeError(`could not place ${at}${lstatSync(path, { throwIfNoEntry: false }) ? " (something else appeared there)" : ""}; ${outcome}`);
+      }
     }
   } finally {
     rmSync(staged, { force: true });

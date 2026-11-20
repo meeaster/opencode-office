@@ -201,6 +201,21 @@ function trackedPlumbing(office: Office, report: Report): void {
 }
 
 /**
+ * Clones in `.office/plugins/` that no `plugins:` entry declares, such as a withdrawn one. Sync
+ * never deletes them, since a checkout may hold local work, so check says where they are.
+ */
+function withdrawnClones(office: Office, report: Report): void {
+  const folder = join(office.dir, cloneFolder);
+
+  if (!existsSync(folder)) return;
+  const declared = new Set(office.plugins.map((plugin) => plugin.name));
+
+  for (const name of readdirSync(folder).filter((item) => !item.startsWith(".") && !declared.has(item)).sort()) {
+    report("warn", `plugin clone ${name}`, `${cloneFolder}/${name} is a checkout no plugins: entry declares, so nothing loads it; office sync keeps it, as it may hold local work. If you don't want it, remove ${cloneFolder}/${name}`);
+  }
+}
+
+/**
  * Whether a pulled-in package's files are the copy office sync put there, and for a built-in one,
  * this executable's copy. Each note is added to `notes`; returns whether the copy is as it should be.
  */
@@ -706,7 +721,14 @@ async function runtime(office: Office, report: Report, stage?: Stage): Promise<R
 
       // The root's plugins, which every desk loads: each package's, the office package's
       // included. A folder still loading lists none of them yet.
-      const plugins = [...withPluginPlan(office, installedPackages(office)).plugins.keys()];
+      // Declared clones count once they are linked; a running server only loads a link it saw appear.
+      const linkedClones = office.plugins.filter((plugin) => {
+        const link = entryAt(pluginScope(office), plugin.name);
+
+        return link?.office === true && link.target === cloneTarget(plugin.name) && existsSync(join(office.dir, cloneFolder, plugin.name, ".git"));
+      });
+
+      const plugins = [...withPluginPlan(office, installedPackages(office)).plugins.keys(), ...linkedClones.map((plugin) => plugin.name)];
       const folder = `${base}/.opencode/plugins/`;
 
       // Each plugin OpenCode loaded from the root's .opencode/plugins/, by folder name.
@@ -725,7 +747,10 @@ async function runtime(office: Office, report: Report, stage?: Stage): Promise<R
         return state === undefined ? [`${name} not loaded`] : state.status === "active" ? [] : [`${name} failed: ${state.error ?? "no error given"}`];
       });
 
-      report(pluginProblems.length === 0, `${where}: plugins`, pluginProblems.length === 0 ? `${plugins.join(", ")} active` : pluginProblems.join("; "));
+      const unloaded = plugins.filter((name) => !states.has(name));
+      const hint = unloaded.length === 0 ? "" : `; if office sync just linked or moved ${unloaded.join(", ")}, restart OpenCode: a running server keeps loading a plugin from where it first found it`;
+
+      report(pluginProblems.length === 0, `${where}: plugins`, pluginProblems.length === 0 ? `${plugins.join(", ")} active` : pluginProblems.join("; ") + hint);
 
       const mcp = await settle(
         () => getJson<Listing<McpServer>>(`${opencode}/api/mcp`, headers),
@@ -1111,6 +1136,7 @@ export async function check(office: Office, stage?: Stage, verbose = false): Pro
 
   await packageChecks(office, report);
   trackedPlumbing(office, report);
+  withdrawnClones(office, report);
   spawnChecks(office, report);
 
   stage?.detail("host tools and machine settings");

@@ -3,6 +3,13 @@
 // text is one Office writes for that folder. Real folders, files and links to anything else are
 // the owner's, and Office never changes or removes them. A link the owner made by hand with
 // Office's exact text counts as Office's.
+//
+// The rule is deliberately broad: any `<up>packages/<name>/<path>` or `<up>.office/packages/<name>/<path>`
+// plugin link whose entry name equals the package name is Office's, whatever the asset path, and so
+// are the package-skill link forms earlier releases made, whether or not that package is selected.
+// It can't be narrowed without a ledger: once a package is deselected (or its registration changes
+// its server path), nothing on disk says which path Office linked, so recognizing and withdrawing
+// that link needs the whole shape. Office recreates such a link if the package is selected again.
 import { existsSync, lstatSync, readdirSync, readlinkSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import * as v from "valibot";
@@ -70,12 +77,17 @@ export function scopes(office: Office): Scope[] {
   return [scope(office, undefined, "plugins"), scope(office, undefined, "skills"), ...office.desks.map(desk => scope(office, desk.name, "skills"))];
 }
 
-/** Office manages entries in these folders, never the targets of a redirected `.opencode` or folder. */
+/**
+ * Office manages entries in these folders, never the targets of a redirected desk, `.opencode` or
+ * folder: a desk that is a symlink leads outside the office.
+ */
 export function requireFolder(where: Scope) {
-  for (const path of [dirname(where.folder), where.folder]) {
+  const opencode = dirname(where.folder);
+
+  for (const path of [...(where.desk === undefined ? [] : [dirname(opencode)]), opencode, where.folder]) {
     const info = lstatSync(path, { throwIfNoEntry: false });
 
-    if (info && !info.isDirectory()) throw new OfficeError(`cannot deliver ${where.kind}: ${where.label} or its .opencode is not an office directory (refusing to follow or replace it)`);
+    if (info && !info.isDirectory()) throw new OfficeError(`cannot deliver ${where.kind}: ${where.label}, its .opencode or its desk is not an office directory (refusing to follow or replace it)`);
   }
 }
 
