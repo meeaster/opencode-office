@@ -13,12 +13,11 @@ import { join, relative } from "node:path";
 
 import { claudeFiles } from "../claude.ts";
 import { boundRevision, collectReferences } from "../collect-references.ts";
-import { resolvedReferences } from "../reference-snapshot.ts";
-import { beginReferencePublication } from "../reference-publication.ts";
+import { beginReferencePublication, planReferenceApply } from "../reference-publication.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { collectJobs } from "../cron/jobs.ts";
 import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
-import { appliedReferenceProblem, cloneOrFetchStreamed, cloneShallowStreamed, discardFailedClone, isClone, recordReference, referenceOriginProblem, refreshCloneStreamed } from "../git.ts";
+import { cloneOrFetchStreamed, cloneShallowStreamed, discardFailedClone, isClone, refreshCloneStreamed, syncReference } from "../git.ts";
 import { clones, installedPackages, type InstalledPackages, oldKnowledgePlugin, packageLink, pluginLinks, skillSelections } from "../layout.ts";
 import { migrate } from "../migrate.ts";
 import { definitionFiles } from "../package-definition.ts";
@@ -191,7 +190,7 @@ const cloneSlots = 4;
  * order, with a FAILED line for each that failed.
  */
 async function syncClones(office: Office, scope: "references" | "others" | "all", stage: Stage, verbose: boolean): Promise<string[]> {
-  const references = scope === "others" ? undefined : resolvedReferences(office.dir, office);
+  const references = scope === "others" ? undefined : planReferenceApply(office);
 
   if (references && !references.ok) {
     const errors = references.errors.map(error => `FAILED ${error}`);
@@ -215,7 +214,6 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
 
   for (const [index, clone] of work.entries()) {
     const where = relative(office.dir, clone.dir);
-    const shallow = clone.kind === "reference" || clone.kind === "plugin";
 
     const failed = (message: string) => {
       lines[index].push(`FAILED ${clone.kind} ${where}: ${message}`);
@@ -228,13 +226,7 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
       if (clone.kind === "plugin" && packageLink(clone.dir) !== undefined) unlinkSync(clone.dir);
 
       // A shallow clone that failed under an earlier release left a .git with no commit; clone again.
-      if (clone.kind === "reference") {
-        const problem = referenceOriginProblem(clone.dir, clone.url);
-
-        if (problem) throw new Error(problem);
-      }
-
-      if (shallow && !clone.stale) discardFailedClone(clone.dir);
+      if (clone.kind === "plugin") discardFailedClone(clone.dir);
       const present = isClone(clone.dir);
 
       if (clone.stale && !present) throw new Error("stale contribution cannot authorize a new clone; repair the contributor and run office sync --packages");
@@ -244,18 +236,14 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
         const options = { line: part.output, verbose };
 
         try {
-          const verify = () => {
-            if (!isClone(clone.dir)) throw new Error("reference checkout disappeared before refresh");
-            const problem = referenceOriginProblem(clone.dir, clone.url) ?? (clone.stale ? appliedReferenceProblem(clone.dir, clone.url, clone.ref) : undefined);
+          let result;
 
-            if (problem) throw new Error(problem);
-          };
-
-          const result = shallow
-            ? present ? await refreshCloneStreamed(clone.ref, clone.dir, options, clone.kind === "reference" ? verify : undefined) : await cloneShallowStreamed(clone.url, clone.ref, clone.dir, options)
-            : await cloneOrFetchStreamed(clone.url, clone.ref, clone.dir, options);
-
-          if (clone.kind === "reference") recordReference(clone.dir, clone.url, clone.ref);
+          if (clone.kind === "reference") {
+            if (!references) throw new Error("reference apply requires a current claim");
+            result = await syncReference(clone, present, options, apply => references.value.guard(clone.name, apply));
+          } else if (clone.kind === "plugin") {
+            result = present ? await refreshCloneStreamed(clone.ref, clone.dir, options) : await cloneShallowStreamed(clone.url, clone.ref, clone.dir, options);
+          } else result = await cloneOrFetchStreamed(clone.url, clone.ref, clone.dir, options);
           part.done(result);
 
           if (result !== "current" && result !== "fetched") lines[index].push(`${result} ${clone.kind} ${where}`);
@@ -377,6 +365,7 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
 
   const { packages } = resolvePackages(office);
   const rejected = new Set<string>();
+  const embedded = new Map<string, string>();
 
   for (const item of packages) {
     const services = join(item.dir, packageComposeFile);
@@ -386,8 +375,15 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
       changes.push(`${relative(office.dir, item.dir)} has both office.ts and package.yaml; restoring from the selected ${item.kind} source`);
     }
 
-    const copied = item.kind === "built-in" ? await installBuiltin(office, item.entry)
-      : item.kind === "remote" && item.entry.source !== undefined ? fetchPackage(office, item.entry, item.entry.source, boundRevision(publication.value.previous, item.entry)) : [];
+    let copied: string[] = [];
+
+    if (item.kind === "built-in") {
+      const result = await installBuiltin(office, item.entry);
+      embedded.set(item.entry.name, result.source);
+      copied = result.changes;
+    } else if (item.entry.source) {
+      copied = fetchPackage(office, item.entry, item.entry.source, boundRevision(publication.value.previous, item.entry));
+    }
 
     changes.push(...copied);
 
@@ -409,7 +405,7 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   }
 
   changes.push(...installed.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
-  const published = await collectReferences(office, packages, installed, changes, publication.value, rejected);
+  const published = await collectReferences(office, packages, installed, changes, publication.value, rejected, embedded);
 
   if (needsEnvironmentOwners(office, installed)) {
     changes.push("FAILED the existing machine environment predates package ownership records; repair the unread packages and sync again before withdrawing packages or rewriting their machine setup");

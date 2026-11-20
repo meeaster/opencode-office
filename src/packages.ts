@@ -311,12 +311,21 @@ function thisCopy(): string {
  * one that differs (written by another `office`, copied from a repository, or edited), and records
  * an unchanged copy that lacks a built-in record. Returns one line per change.
  */
-export async function installBuiltin(office: Office, entry: PackageEntry): Promise<string[]> {
-  const { name } = entry;
-  const dir = pulledDir(office, name);
-  const where = relative(office.dir, dir);
-  const wanted = await builtinFiles(name);
+export async function installBuiltin(office: Office, entry: PackageEntry) {
+  const dir = pulledDir(office, entry.name);
+  const wanted = await builtinFiles(entry.name);
   const hashes = Object.fromEntries([...wanted].map(([file, content]) => [file, sha256(content)]));
+  const source = `built-in:${sha256(JSON.stringify(Object.keys(hashes).sort().map(path => [path, hashes[path]])))}`;
+
+  try {
+    return { source, changes: installBuiltinFiles(office, entry, dir, wanted, hashes) };
+  } catch (error) {
+    return { source, changes: [`FAILED ${relative(office.dir, dir)} (${source}): ${error instanceof Error ? error.message : String(error)}`] };
+  }
+}
+
+function installBuiltinFiles(office: Office, entry: PackageEntry, dir: string, wanted: Map<string, string>, hashes: PackageRecord["files"]): string[] {
+  const where = relative(office.dir, dir);
   const record = readRecord(dir);
 
   if (existsSync(dir) && Bun.deepEquals(fileHashes(dir), hashes)) {
@@ -329,21 +338,17 @@ export async function installBuiltin(office: Office, entry: PackageEntry): Promi
 
   const edits = record === undefined ? [] : localEdits(dir, record);
 
-  try {
-    replaceFolder(dir, (staging) => {
-      for (const [file, content] of wanted) {
-        mkdirSync(dirname(join(staging, file)), { recursive: true });
-        writeFileSync(join(staging, file), content);
-      }
+  replaceFolder(dir, (staging) => {
+    for (const [file, content] of wanted) {
+      mkdirSync(dirname(join(staging, file)), { recursive: true });
+      writeFileSync(join(staging, file), content);
+    }
 
-      writeJson(join(staging, sourceFile), builtinRecordFor(hashes));
-      validateReplacement(office, { entry, dir: staging, kind: "built-in" });
-    });
-  } catch (error) {
-    return [`FAILED ${where}: ${error instanceof Error ? error.message : String(error)}`];
-  }
+    writeJson(join(staging, sourceFile), builtinRecordFor(hashes));
+    validateReplacement(office, { entry, dir: staging, kind: "built-in" });
+  });
 
-  if (record === undefined) return [`installed ${where}, the built-in ${name} package`];
+  if (record === undefined) return [`installed ${where}, the built-in ${entry.name} package`];
 
   if (edits.length > 0) return [`restored ${where}, undoing edits to ${edits.join(", ")}; ${readOnlyNote}`];
 

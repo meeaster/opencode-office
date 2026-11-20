@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { compile } from "./build.ts";
@@ -328,8 +328,165 @@ function collector(url: string, ref = "main", after = "") {
   return `export default {name:"docs",description:"Docs",async setup({add}) {add({registry:"references.repository",value:${value}});${after}}}`;
 }
 
-test("stale refresh needs the actual and last-applied origin/ref; cron runs only its named owner", () => {
-  const { dir, home, cli, probe, select } = fixture("cron-refs");
+/** Pause this invocation after real Git finished each network fetch, before Office can apply. */
+async function pausedRefresh(f: ReturnType<typeof fixture>, count = 1) {
+  const gate = mkdtempSync(join(root, "fetch-gate-"));
+  write(join(f.home, "bin/git"), `#!/bin/sh
+set -eu
+if [ "$1" != fetch ] || [ -z "\${FETCH_GATE:-}" ]; then exec "${bin}/git" "$@"; fi
+"${bin}/git" "$@"
+: > "$FETCH_GATE/\${PWD##*/}"
+while [ ! -f "$FETCH_GATE/go" ]; do /bin/sleep 0.02; done
+`, 0o755);
+
+  const process = Bun.spawn([exe, "--office", f.dir, "sync", "--references"], {
+    cwd: f.dir, env: { ...f.env, FETCH_GATE: gate }, stdout: "pipe", stderr: "pipe",
+  });
+
+  const output = Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text()]);
+
+  for (let i = 0; i < 500 && readdirSync(gate).length < count && process.exitCode === null; i++) await Bun.sleep(20);
+
+  if (readdirSync(gate).length !== count) {
+    write(join(gate, "go"), "");
+    process.kill();
+    throw new Error(`fetch barrier not reached: ${(await output).join("")}`);
+  }
+
+  return {
+    async resume(expected: number) {
+      write(join(gate, "go"), "");
+      const status = await process.exited;
+      const text = (await output).join("");
+      expect(status, text).toBe(expected);
+
+      return text;
+    },
+    interrupt() { process.kill("SIGINT"); },
+  };
+}
+
+test("only a current refresh may apply its fetched commit; withdrawal protects later edits", async () => {
+  const f = fixture("refresh-races");
+  const repo = join(root, "apply-upstream");
+  git(["init", "-qb", "main", repo]);
+  write(join(repo, "document"), "main");
+  const main = commit(repo);
+  git(["switch", "-qc", "release"], repo);
+  write(join(repo, "document"), "release");
+  const release = commit(repo);
+  git(["switch", "-q", "main"], repo);
+  const yaml = join(f.dir, "office.yaml");
+  const initial = read(yaml);
+
+  const select = (ref?: string) => {
+    write(yaml, initial.replace("references: []", ref ? `references: [{name: docs, url: ${repo}, ref: ${ref}}]` : "references: []"));
+    f.cli(0, "sync", "--packages");
+  };
+
+  const dir = join(f.dir, "references/docs");
+  const head = () => git(["rev-parse", "HEAD"], dir);
+  const record = () => JSON.parse(git(["config", "--get", "office.appliedReference"], dir));
+  select("main");
+  f.cli(0, "sync", "--references");
+  const older = await pausedRefresh(f);
+  select("release");
+  f.cli(0, "sync", "--references");
+  expect(await older.resume(1)).toContain("superseded");
+  expect(head()).toBe(release);
+  expect(read(join(dir, "document"))).toBe("release");
+  expect(record()).toEqual({ origin: repo, ref: "release", commit: release });
+  git(["checkout", "--detach", main], dir);
+  expect(f.cli(1, "check")).toContain(`expected applied commit ${release}, found HEAD ${main}`);
+  select("main");
+  expect(f.cli(1, "check")).toContain(`last applied ${repo} @ release`);
+  f.cli(0, "sync", "--references");
+
+  const previousMain = await pausedRefresh(f);
+  write(join(repo, "document"), "advanced main");
+  const advanced = commit(repo);
+  f.cli(0, "sync", "--references");
+  expect(await previousMain.resume(1)).toContain("superseded");
+  expect(head()).toBe(advanced);
+  expect(record().commit).toBe(advanced);
+
+  const withdrawn = await pausedRefresh(f);
+  select();
+  write(join(dir, "document"), "mine after withdrawal");
+  expect(await withdrawn.resume(1)).toContain("superseded");
+  expect(read(join(dir, "document"))).toBe("mine after withdrawal");
+  expect(head()).toBe(advanced);
+  expect(record()).toEqual({ origin: repo, ref: "main", commit: advanced });
+}, 60_000);
+
+test("overlapping fresh clones publish only their own staging directories", async () => {
+  const f = fixture("clone-overlap");
+  const repo = join(root, "queued-upstream");
+  git(["init", "-qb", "main", repo]);
+  write(join(repo, "document"), "upstream");
+  const sha = commit(repo);
+
+  const select = (names: string[]) => {
+    write(join(f.dir, "office.yaml"), JSON.stringify({ name: "overlap", references: names.map(name => ({ name, url: repo })) }));
+    f.cli(0, "sync", "--packages");
+  };
+
+  select(["a", "b", "c", "d", "queued"]);
+  const old = await pausedRefresh(f, 4);
+  select(["queued"]);
+  const queued = join(f.dir, "references/queued");
+  f.cli(0, "sync", "--references");
+  write(join(queued, "document"), "winner");
+  expect(await old.resume(1)).toContain("superseded");
+  expect(git(["rev-parse", "HEAD"], queued)).toBe(sha);
+  expect(read(join(queued, "document"))).toBe("winner");
+  expect(readdirSync(join(f.dir, "references"))).toEqual(["queued"]);
+
+  select(["fresh"]);
+  const fresh = join(f.dir, "references/fresh");
+  const loser = await pausedRefresh(f);
+  expect(existsSync(fresh)).toBe(false);
+  f.cli(0, "sync", "--references");
+  write(join(fresh, "document"), "keep the winner's checkout");
+  await loser.resume(1);
+  expect(git(["rev-parse", "HEAD"], fresh)).toBe(sha);
+  expect(read(join(fresh, "document"))).toBe("keep the winner's checkout");
+
+  select(["interrupted"]);
+  const interrupted = await pausedRefresh(f);
+  interrupted.interrupt();
+  await interrupted.resume(130);
+  expect(existsSync(join(f.dir, "references/interrupted"))).toBe(false);
+  f.cli(0, "sync", "--references");
+  expect(read(join(f.dir, "references/interrupted/document"))).toBe("upstream");
+}, 60_000);
+
+test.skipIf(process.getuid?.() === 0)("a failed materialization matches only the wanted embedded bytes", () => {
+  const f = fixture("embedded-identity");
+  f.select("  - name: aws-emulator\n");
+  f.cli(0, "sync", "--packages");
+  const folder = join(f.dir, ".office/packages");
+  rmSync(join(folder, "aws-emulator"), { recursive: true });
+  chmodSync(folder, 0o555);
+
+  try {
+    expect(f.cli(1, "sync", "--packages")).toContain("EACCES");
+    expect(f.cli(0, "references", "list")).toContain("main\tpackage aws-emulator (stale)");
+    expect(f.cli(1, "sync", "--references")).toContain("stale contribution cannot authorize a new clone");
+    expect(existsSync(join(f.dir, "references/floci"))).toBe(false);
+    expect(f.newer(1, "sync", "--packages")).toContain("EACCES");
+    expect(f.newer(0, "references", "list")).not.toContain("floci\t");
+  } finally {
+    chmodSync(folder, 0o755);
+  }
+
+  f.cli(0, "sync", "--packages");
+  expect(f.cli(0, "references", "list")).toContain("main\tpackage aws-emulator\n");
+}, 60_000);
+
+test("stale refresh needs the actual and last-applied origin/ref; cron runs only its named owner", async () => {
+  const f = fixture("cron-refs");
+  const { dir, home, cli, probe, select } = f;
   const a = join(root, "repo-a");
   const b = join(root, "repo-b");
 
@@ -394,6 +551,14 @@ test("stale refresh needs the actual and last-applied origin/ref; cron runs only
   expect(git(["rev-parse", "HEAD"], checkout)).toBe(advanced);
   expect(read(join(checkout, "document"))).toBe("advanced A");
   const success = read(stamp);
+  write(join(a, "document"), "fetched but no longer authorized");
+  commit(a);
+  write(join(checkout, "document"), "keep through stale apply refusal");
+  const lastGood = observed();
+  const paused = await pausedRefresh(f);
+  git(["config", "--unset", "office.appliedReference"], checkout);
+  expect(await paused.resume(1)).toContain("no unambiguous applied");
+  expect(observed()).toEqual(lastGood);
   select("  - name: docs\n  - name: office\n    cron: {update-references: {enabled: false}}\n");
   expect(cli(1, "cron", "run", job)).toContain("not enabled");
   expect(read(stamp)).toBe(success);

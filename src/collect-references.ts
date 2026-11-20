@@ -20,8 +20,17 @@ export function boundRevision(previous: ReferenceSnapshot | undefined, entry: Pa
   return previous?.contributors.find(group => group.name === entry.name && group.source === source)?.commit;
 }
 
-function provenance(item: ResolvedPackage, previous: ReferenceSnapshot | undefined, rejected: boolean) {
+function provenance(item: ResolvedPackage, previous: ReferenceSnapshot | undefined, rejected: boolean, embedded: ReadonlyMap<string, string>) {
   if (item.kind === "local") return { source: "local" };
+
+  if (item.kind === "built-in") {
+    const source = embedded.get(item.entry.name);
+
+    if (!source) throw new Error(`missing embedded source identity for ${item.entry.name}`);
+
+    return { source };
+  }
+
   const record = rejected ? undefined : readRecord(item.dir);
   const selection = item.entry.source;
 
@@ -31,14 +40,11 @@ function provenance(item: ResolvedPackage, previous: ReferenceSnapshot | undefin
     return { source: gitSelection(selection), commit: /^[0-9a-f]{40}$/i.test(selection.ref) ? selection.ref.toLowerCase() : commit };
   }
 
-  if (!record || "repo" in record) return { source: "unverified built-in" };
-  const digest = createHash("sha256").update(JSON.stringify(Object.keys(record.files).sort().map(path => [path, record.files[path]]))).digest("hex");
-
-  return { source: `built-in:${digest}` };
+  throw new Error(`missing selected Git source for ${item.entry.name}`);
 }
 
 /** A throwing collector can publish a degraded generation. Conflicting claims cannot publish at all. */
-export async function collectReferences(office: Office, selected: ResolvedPackage[], installed: InstalledPackages, changes: { push(...lines: string[]): void }, { previous, publish }: ReferencePublication, rejected: ReadonlySet<string>): Promise<boolean> {
+export async function collectReferences(office: Office, selected: ResolvedPackage[], installed: InstalledPackages, changes: { push(...lines: string[]): void }, { previous, publish }: ReferencePublication, rejected: ReadonlySet<string>, embedded: ReadonlyMap<string, string>): Promise<boolean> {
   const candidate: ReferenceSnapshot = { version: 2, inputs: inputHash(office), owner: office.references, contributors: [] };
   const available = new Map(installed.installed.map(item => [item.entry.name, item]));
 
@@ -48,7 +54,7 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
 
     if (pkg && !pkg.manifest.setup) continue;
 
-    const source = provenance(item, previous, rejected.has(name));
+    const source = provenance(item, previous, rejected.has(name), embedded);
     const values: Repository[] = [];
 
     if (pkg?.manifest.setup) {

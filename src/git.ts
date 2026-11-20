@@ -1,9 +1,10 @@
 // The git operations sync needs: shallow clones of a ref, kept current by fetching that ref, and
 // copies of one folder of a repository.
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import * as v from "valibot";
 
 import { streamChecked } from "./report/index.ts";
@@ -58,15 +59,16 @@ export function referenceOriginProblem(dir: string, wanted: string): string | un
 // Stored with the checkout, only after a successful fetch and checkout. A package-only
 // sync can publish a new desired ref without ever applying it to an existing clone.
 const appliedReference = "office.appliedReference";
-const appliedPair = v.strictObject({ origin: v.string(), ref: v.string() });
+const appliedPair = v.strictObject({ origin: v.string(), ref: v.string(), commit: v.string() });
 
-export function recordReference(dir: string, origin: string, ref = "HEAD"): void {
-  git(["config", "--local", "--replace-all", appliedReference, JSON.stringify({ origin, ref })], dir);
+function recordReference(dir: string, origin: string, ref: string, commit: string): void {
+  if (head(dir) !== commit) throw new Error(`reference ${dir}: HEAD is not the fetched commit ${commit}; not recording success`);
+  git(["config", "--local", "--replace-all", appliedReference, JSON.stringify({ origin, ref, commit })], dir);
 }
 
-/** One Git config write records the pair atomically; an older ref-only record proves no origin. */
+/** Older ref-only or pair-only records cannot prove the commit in this worktree. */
 export function appliedReferenceProblem(dir: string, origin: string, ref = "HEAD"): string | undefined {
-  const missing = `desired ${origin} @ ${ref}, no unambiguous applied origin and ref; run a healthy reference sync`;
+  const missing = `desired ${origin} @ ${ref}, no unambiguous applied origin and ref with a verified commit; run a healthy reference sync`;
 
   try {
     const read = check(v.safeParse(appliedPair, JSON.parse(git(["config", "--local", "--get-all", appliedReference], dir))));
@@ -75,6 +77,9 @@ export function appliedReferenceProblem(dir: string, origin: string, ref = "HEAD
     const pair = read.value;
 
     if (pair.origin !== origin || pair.ref !== ref) return `desired ${origin} @ ${ref}, last applied ${pair.origin} @ ${pair.ref}; run a healthy reference sync`;
+    const actual = head(dir);
+
+    if (actual !== pair.commit) return `expected applied commit ${pair.commit}, found HEAD ${actual}; run a healthy reference sync`;
   } catch {
     return missing;
   }
@@ -284,15 +289,77 @@ export async function cloneShallowStreamed(url: string, ref: string | undefined,
 }
 
 /** `refreshClone`, without blocking. */
-export async function refreshCloneStreamed(ref: string | undefined, dir: string, options: GitOptions = {}, verify?: () => void): Promise<"updated" | "current"> {
+export async function refreshCloneStreamed(ref: string | undefined, dir: string, options: GitOptions = {}): Promise<"updated" | "current"> {
   const before = head(dir);
 
-  verify?.();
   await gitStreamed(["fetch", "--depth", "1", "origin", ref ?? "HEAD"], dir, options);
-  verify?.();
   git(["checkout", "--quiet", "--force", "--detach", "FETCH_HEAD"], dir);
 
   return head(dir) === before ? "current" : "updated";
+}
+
+/** Fetch independently; only the ticket holder may publish a clone or force its worktree.
+ * guard rechecks the claim under the same lock that publishes generations and other applies. */
+export async function syncReference(
+  { dir, url, ref = "HEAD", stale }: { dir: string; url: string; ref?: string; stale?: boolean },
+  present: boolean, options: GitOptions, guard: <T extends string | void>(apply: () => T) => T,
+): Promise<"updated" | "current" | "cloned"> {
+  function verify() {
+    const problem = referenceOriginProblem(dir, url);
+
+    if (problem) throw new Error(problem);
+
+    if (isClone(dir) !== present) throw new Error(`reference checkout ${present ? "disappeared" : "already exists"}; retry sync`);
+
+    if (!stale) return;
+
+    if (!present) throw new Error("stale contribution cannot authorize a new clone; repair the contributor and run office sync --packages");
+    const drift = appliedReferenceProblem(dir, url, ref);
+
+    if (drift) throw new Error(drift);
+  }
+
+  guard(verify);
+
+  if (!present) {
+    mkdirSync(dirname(dir), { recursive: true });
+    const staging = mkdtempSync(join(dirname(dir), `.office-${basename(dir)}-`));
+    let moved = false;
+
+    try {
+      await cloneShallowStreamed(url, ref, staging, options);
+      recordReference(staging, url, ref, head(staging));
+      guard(() => {
+        verify();
+        renameSync(staging, dir);
+        moved = true;
+      });
+
+      return "cloned";
+    } finally {
+      if (!moved) rmSync(staging, { recursive: true, force: true });
+    }
+  }
+
+  const pending = `refs/office-fetch/${randomUUID()}`;
+
+  try {
+    await gitStreamed(["fetch", "--depth", "1", "--no-write-fetch-head", "--no-tags", "--refmap=", "--", "origin", `${ref}:${pending}`], dir, options);
+
+    return guard(() => {
+      verify();
+      const commit = git(["rev-parse", "--verify", `${pending}^{commit}`], dir);
+      const before = unbornClone(dir) ? undefined : head(dir);
+      // A failed/interrupted local checkout cannot leave a previous success as authority.
+      git(["config", "--local", "--replace-all", appliedReference, "null"], dir);
+      git(["checkout", "--quiet", "--force", "--detach", commit], dir);
+      recordReference(dir, url, ref, commit);
+
+      return before === commit ? "current" : "updated";
+    });
+  } finally {
+    if (existsSync(join(dir, ".git"))) git(["update-ref", "-d", pending], dir);
+  }
 }
 
 /** `cloneOrFetch`, without blocking. */
