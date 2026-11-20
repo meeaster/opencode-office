@@ -2,7 +2,7 @@
 // copies of one folder of a repository.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, type BigIntStats } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import * as v from "valibot";
@@ -129,34 +129,6 @@ function unbornClone(dir: string): boolean {
 }
 
 /**
- * Removes what a failed shallow clone left in `dir`, so the next sync clones again and reports
- * the real error. Returns whether there was one.
- */
-export function discardFailedClone(dir: string): boolean {
-  if (!unbornClone(dir)) return false;
-
-  rmSync(join(dir, ".git"), { recursive: true, force: true });
-
-  return true;
-}
-
-/**
- * Runs a shallow clone's steps in `dir`, which isClone found missing or empty; when one fails it
- * removes what the clone made, so no half-initialised `.git` is left for the next sync.
- */
-async function shallowInto<T>(dir: string, steps: () => T | Promise<T>): Promise<T> {
-  const existed = existsSync(dir);
-
-  try {
-    return await steps();
-  } catch (error) {
-    rmSync(existed ? join(dir, ".git") : dir, { recursive: true, force: true });
-
-    throw error;
-  }
-}
-
-/**
  * Clones `url` at `ref` (a branch, tag or commit; the default branch when undefined) into `dir`,
  * shallowly. Returns "cloned"; a failed clone leaves nothing behind.
  */
@@ -277,27 +249,72 @@ async function gitStreamed(args: string[], cwd: string | undefined, { line = () 
   await streamChecked("git", [command, ...flags, ...rest], { cwd, line, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
 }
 
-/** `cloneShallow`, without blocking. */
-export async function cloneShallowStreamed(url: string, ref: string | undefined, dir: string, options: GitOptions = {}): Promise<"cloned"> {
+async function fetchNewShallow(url: string, ref: string | undefined, dir: string, options: GitOptions, verifyCheckout?: () => void) {
+  git(["init", "--quiet", dir]);
+  git(["remote", "add", "origin", url], dir);
+  verifyCheckout?.();
+  await gitStreamed(["fetch", "--depth", "1", "origin", ref ?? "HEAD"], dir, options);
+}
+
+function sameEntry(path: string, original: BigIntStats) {
+  const entry = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+
+  return entry?.dev === original.dev && entry.ino === original.ino;
+}
+
+/** Fetch with the final gitdir (including its path-specific Git config), but publish only
+ * a completed worktree. A failed checkout must not leave discoverable plugin sources. */
+export async function clonePluginStreamed(url: string, ref: string | undefined, dir: string, officeDir: string, verifyCheckout: () => void): Promise<"cloned"> {
   mkdirSync(dirname(dir), { recursive: true });
+  const created = mkdirSync(dir, { recursive: true }) !== undefined;
+  const folder = lstatSync(dir, { bigint: true });
+  const metadata = join(dir, ".git");
+  // Reserve metadata exclusively: init must never adopt a .git that arrived since planning.
+  mkdirSync(metadata);
+  const owned = lstatSync(metadata, { bigint: true });
 
-  return shallowInto(dir, async () => {
-    git(["init", "--quiet", dir]);
-    git(["remote", "add", "origin", url], dir);
-    await gitStreamed(["fetch", "--depth", "1", "origin", ref ?? "HEAD"], dir, options);
-    git(["checkout", "--quiet", "--detach", "FETCH_HEAD"], dir);
+  const verify = () => {
+    verifyCheckout();
 
-    return "cloned" as const;
-  });
+    if (!sameEntry(dir, folder) || !sameEntry(metadata, owned)) throw new Error("plugin checkout was replaced; retry sync");
+  };
+
+  try {
+    await fetchNewShallow(url, ref, dir, {}, verify);
+    verify();
+    const staging = mkdtempSync(join(officeDir, ".office-plugin-"));
+    let moved = false;
+
+    try {
+      git(["--work-tree", staging, "checkout", "--quiet", "--detach", "FETCH_HEAD"], dir);
+      verify();
+      renameSync(metadata, join(staging, ".git"));
+      renameSync(staging, dir); // Fails if any owner entry appeared in the destination.
+      moved = true;
+    } finally {
+      if (!moved) rmSync(staging, { recursive: true, force: true });
+    }
+
+    return "cloned";
+  } catch (error) {
+    if (sameEntry(dir, folder)) {
+      if (sameEntry(metadata, owned)) rmSync(metadata, { recursive: true });
+
+      if (created && readdirSync(dir).length === 0) rmdirSync(dir);
+    }
+
+    throw error;
+  }
 }
 
 /** `refreshClone`, without blocking. */
 export async function refreshCloneStreamed(ref: string | undefined, dir: string, options: GitOptions, verifyCheckout: () => void): Promise<"updated" | "current"> {
-  const before = head(dir);
+  // Keep a verified unborn checkout's metadata (including owner config) across retries.
+  const before = unbornClone(dir) ? undefined : head(dir);
 
   await gitStreamed(["fetch", "--depth", "1", "origin", ref ?? "HEAD"], dir, options);
   verifyCheckout(); // The fetch may have waited while another process redirected the checkout.
-  git(["checkout", "--quiet", "--force", "--detach", "FETCH_HEAD"], dir);
+  git(["checkout", "--quiet", ...(before ? ["--force"] : []), "--detach", "FETCH_HEAD"], dir);
 
   return head(dir) === before ? "current" : "updated";
 }
@@ -321,7 +338,8 @@ export function referenceGit(
     let moved = false;
 
     try {
-      await cloneShallowStreamed(url, ref, staging, options);
+      await fetchNewShallow(url, ref, staging, options);
+      git(["checkout", "--quiet", "--detach", "FETCH_HEAD"], staging);
       recordReference(staging, url, ref, head(staging));
       guard(() => {
         verify();

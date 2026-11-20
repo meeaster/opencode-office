@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import * as v from "valibot";
@@ -256,6 +256,81 @@ function gitAt(dir: string, env: ReturnType<typeof fixture>["env"], ...args: str
   return res.stdout.toString().trim();
 }
 
+test("a first plugin clone verifies the effective origin before fetching and before checkout", async () => {
+  const f = fixture("first-origin", "http://127.0.0.1:1");
+  const remote = join(f.home, "declared");
+  const mirror = join(f.home, "unexpected");
+  const plugin = join(f.dir, ".opencode/plugins/imported");
+  const trace = join(f.home, "git.trace");
+  const shim = join(f.home, "bin/git");
+  const native = Bun.which("git", { PATH: f.env.PATH });
+
+  if (!native) throw new Error("git required for plugin checkout test");
+
+  write(join(remote, "note"), "declared\n");
+  gitAt(remote, f.env, "init", "-q");
+  gitAt(remote, f.env, "add", "note");
+  gitAt(remote, f.env, "commit", "-qm", "declared");
+  write(join(mirror, "note"), "mirror\n");
+  gitAt(mirror, f.env, "init", "-q");
+  gitAt(mirror, f.env, "add", "note");
+  gitAt(mirror, f.env, "commit", "-qm", "mirror");
+  expect(gitAt(mirror, f.env, "rev-parse", "HEAD")).not.toBe(gitAt(remote, f.env, "rev-parse", "HEAD"));
+  f.select(`plugins: [{name: imported, repo: ${remote}}]\n`);
+
+  // Record the transport boundary. Even a build missing the guard cannot import anything.
+  write(shim, `#!/bin/sh\necho "$1" >> "${trace}"\ncase "$1" in fetch|checkout) exit 91;; esac\nexec "${native}" "$@"\n`);
+  chmodSync(shim, 0o755);
+  f.env.PATH = `${dirname(shim)}:${f.env.PATH}`;
+  const rewrite = `url.${mirror}.insteadOf`;
+  const policy = join(f.home, "plugin.gitconfig");
+  gitAt(f.home, f.env, "config", "--file", policy, rewrite, remote);
+  gitAt(f.home, f.env, "config", "--global", `includeIf.gitdir:${plugin}/.git.path`, policy);
+
+  for (const preexisting of [false, true]) {
+    if (preexisting) mkdirSync(plugin);
+    const inode = preexisting ? statSync(plugin).ino : undefined;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      write(trace, "");
+      const report = await f.run(["sync"], 1);
+      expect(readFileSync(trace, "utf8").split("\n")).not.toContain("fetch");
+      expect(report).toContain("cannot verify plugin checkout origin");
+      expect(report).not.toContain(remote);
+      expect(report).not.toContain("unexpected");
+
+      if (inode !== undefined) {
+        expect(statSync(plugin).ino).toBe(inode);
+        expect(readdirSync(plugin)).toEqual([]);
+      } else expect(existsSync(plugin)).toBe(false);
+    }
+  }
+
+  gitAt(f.home, f.env, "config", "--file", policy, "--unset", rewrite);
+  // Change the configured origin only after a successful, ordinary local fetch.
+  write(shim, `#!/bin/sh\ncase " $* " in *" checkout "*) echo checkout;; *) echo "$1";; esac >> "${trace}"\n"${native}" "$@" || exit $?\nif [ "$1" = fetch ]; then "${native}" remote set-url origin ../changed; fi\n`);
+  write(trace, "");
+  expect(await f.run(["sync"], 1)).toContain("cannot verify plugin checkout origin");
+  const commands = readFileSync(trace, "utf8").split("\n");
+  expect(commands).toContain("fetch");
+  expect(commands).not.toContain("checkout");
+  expect(readdirSync(plugin)).toEqual([]);
+
+  // A checkout can write files and still exit nonzero. Nothing partial becomes a plugin.
+  write(shim, `#!/bin/sh\n"${native}" "$@" || exit $?\ncase " $* " in *" checkout "*) echo 'https://hidden-user:hidden-pass@example.invalid' >&2; exit 92;; esac\n`);
+  const failed = await f.run(["sync"], 1);
+  expect(failed).toContain("plugin Git operation failed");
+  expect(failed).not.toContain("hidden-");
+  expect(readdirSync(plugin)).toEqual([]);
+  expect(readdirSync(f.dir).some(name => name.startsWith(".office-plugin-"))).toBe(false);
+
+  rmSync(shim);
+  await f.run(["sync"]);
+  await f.run(["sync"]);
+  expect(gitAt(plugin, f.env, "rev-parse", "HEAD")).toBe(gitAt(remote, f.env, "rev-parse", "HEAD"));
+  expect(readFileSync(join(plugin, "note"), "utf8")).toBe("declared\n");
+}, 60_000);
+
 test("a plugin checkout with the wrong origin is not cleaned, fetched or force-checked-out", async () => {
   const f = fixture("clone-origin", "http://127.0.0.1:1");
   const remote = join(f.home, "original");
@@ -271,6 +346,7 @@ test("a plugin checkout with the wrong origin is not cleaned, fetched or force-c
   git("commit", "-qam", "advance");
   write(join(plugin, "index.js"), "// owner edits");
   const head = gitAt(plugin, f.env, "rev-parse", "HEAD");
+  const fetched = readFileSync(join(plugin, ".git/FETCH_HEAD"));
   f.select(`plugins: [{name: imported, repo: ${f.home}/different}]\n`);
   expect(await f.run(["sync"], 1)).toContain("cannot verify plugin checkout origin");
   expect(gitAt(plugin, f.env, "rev-parse", "HEAD")).toBe(head);
@@ -279,6 +355,8 @@ test("a plugin checkout with the wrong origin is not cleaned, fetched or force-c
   gitAt(plugin, f.env, "config", `url.${f.home}/different.insteadOf`, remote);
   expect(await f.run(["sync"], 1)).toContain("cannot verify plugin checkout origin");
   expect(readFileSync(join(plugin, "index.js"), "utf8")).toBe("// owner edits");
+  expect(readFileSync(join(plugin, ".git/FETCH_HEAD"))).toEqual(fetched);
+  expect(gitAt(plugin, f.env, "rev-parse", "HEAD")).toBe(head);
   gitAt(plugin, f.env, "config", "--unset", `url.${f.home}/different.insteadOf`);
   // A real fetch can wait. Change only the fixture's origin after fetching, before --force.
   const gitPath = Bun.which("git", { PATH: f.env.PATH });
@@ -302,6 +380,11 @@ test("a plugin checkout with the wrong origin is not cleaned, fetched or force-c
   const config = readFileSync(join(plugin, ".git/config"));
   expect(await f.run(["sync"], 1)).toContain("cannot verify plugin checkout origin");
   expect(readFileSync(join(plugin, ".git/config"))).toEqual(config);
+  gitAt(plugin, f.env, "remote", "set-url", "origin", remote);
+  write(join(plugin, ".git/owner-note"), "keep\n");
+  f.select(`plugins: [{name: imported, repo: ${remote}, ref: missing}]\n`);
+  expect(await f.run(["sync"], 1)).toContain("plugin Git operation failed");
+  expect(readFileSync(join(plugin, ".git/owner-note"), "utf8")).toBe("keep\n");
 }, 60_000);
 
 // A real previous release is the control: no synthetic generation and no rewriting a digest.

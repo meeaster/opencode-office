@@ -18,8 +18,8 @@ import { beginReferencePublication, planReferenceApply } from "../reference-publ
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { collectJobs } from "../cron/jobs.ts";
 import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
-import { cloneOrFetchStreamed, cloneShallowStreamed, discardFailedClone, git, isClone, referenceGit, referenceOriginProblem, refreshCloneStreamed } from "../git.ts";
-import { clones, installedPackages, skillSelections } from "../layout.ts";
+import { cloneOrFetchStreamed, clonePluginStreamed, git, isClone, referenceGit, referenceOriginProblem, refreshCloneStreamed } from "../git.ts";
+import { type Clone, clones, installedPackages, skillSelections } from "../layout.ts";
 import { legacyPlugin, linkPlugins, requirePluginDestination, withPluginPlan } from "../../standard/opencode/delivery.ts";
 import { migrate } from "../migrate.ts";
 import { definitionFiles } from "../package-definition.ts";
@@ -163,23 +163,42 @@ function removeOldKnowledgePlugin(office: Office): string[] {
 const fetchSlots = 8;
 const cloneSlots = 4;
 
-/** Check both the working tree being updated and the effective fetch URL. Don't fetch (or
- * clean an unborn clone) through a linked worktree, a different origin or a Git URL rewrite. */
+class PluginCheckoutProblem extends Error {}
+
+/** Check both the working tree being updated and the effective fetch URL. */
 function requirePluginCheckout(office: Office, dir: string, url: string) {
   requirePluginDestination(office);
   const metadata = join(dir, ".git");
   const info = lstatSync(metadata, { throwIfNoEntry: false });
 
   try {
-    if (!referenceOriginProblem(dir, url) && (!info || (
-      info.isDirectory() &&
+    if (info?.isDirectory() && !referenceOriginProblem(dir, url) &&
       realpathSync(git(["rev-parse", "--show-toplevel"], dir)) === realpathSync(dir) &&
       realpathSync(git(["rev-parse", "--absolute-git-dir"], dir)) === realpathSync(metadata) &&
       git(["remote", "get-url", "--all", "origin"], dir) === git(["config", "--local", "--get", "remote.origin.url"], dir)
-    ))) return;
+    ) return;
   } catch { /* Refuse without quoting raw Git URLs or credentials. */ }
 
-  throw new Error("cannot verify plugin checkout origin and directory; left unchanged");
+  throw new PluginCheckoutProblem("cannot verify plugin checkout origin and directory; left unchanged");
+}
+
+async function syncPlugin(office: Office, clone: Clone, present: boolean) {
+  requirePluginDestination(office);
+
+  if (isClone(clone.dir) !== present) throw new Error("plugin checkout changed; retry sync");
+  const verify = () => requirePluginCheckout(office, clone.dir, clone.url);
+
+  try {
+    if (!present) return await clonePluginStreamed(clone.url, clone.ref, clone.dir, office.dir, verify);
+    verify();
+
+    return await refreshCloneStreamed(clone.ref, clone.dir, {}, verify);
+  } catch (error) {
+    // Raw Git output (including verbose progress) can contain credentialed URLs.
+    if (error instanceof PluginCheckoutProblem) throw error;
+
+    throw new Error("plugin Git operation failed; check the checkout, configured repository and ref");
+  }
 }
 
 /**
@@ -240,13 +259,8 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
           let result;
 
           if (refresh) result = await refresh(options);
-          else if (clone.kind === "plugin") {
-            const verify = () => requirePluginCheckout(office, clone.dir, clone.url);
-            verify();
-            // Even an unborn checkout can belong to another owner.
-            discardFailedClone(clone.dir);
-            result = isClone(clone.dir) ? await refreshCloneStreamed(clone.ref, clone.dir, options, verify) : await cloneShallowStreamed(clone.url, clone.ref, clone.dir, options);
-          } else result = await cloneOrFetchStreamed(clone.url, clone.ref, clone.dir, options);
+          else if (clone.kind === "plugin") result = await syncPlugin(office, clone, present);
+          else result = await cloneOrFetchStreamed(clone.url, clone.ref, clone.dir, options);
           part.done(result);
 
           if (result !== "current" && result !== "fetched") lines[index].push(`${result} ${clone.kind} ${where}`);
