@@ -419,6 +419,115 @@ test("only a current refresh may apply its fetched commit; withdrawal protects l
   expect(record()).toEqual({ origin: repo, ref: "main", commit: advanced });
 }, 60_000);
 
+for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+  test(`publication waits for real Git's authority after parent-only ${signal}`, async () => {
+    const f = fixture(`orphan-${signal.toLowerCase()}`);
+    const upstream = join(f.home, "source");
+    const other = join(f.home, "other-source");
+
+    for (const repo of [upstream, other]) {
+      git(["init", "-qb", "main", repo]);
+      write(join(repo, "a"), "original");
+      write(join(repo, "z"), "original");
+      write(join(repo, ".gitattributes"), "a filter=barrier\n");
+      commit(repo);
+    }
+
+    const yaml = join(f.dir, "office.yaml");
+    const original = read(yaml);
+    const selected = original.replace("references: []", `references: [{name: docs, url: ${upstream}}, {name: other, url: ${other}}]`);
+    write(yaml, selected);
+    f.cli(0, "sync");
+    const docs = join(f.dir, "references/docs");
+    const gate = mkdtempSync(join(root, "smudge-"));
+    const go = join(gate, "go");
+    const entered = join(gate, "entered");
+    const exited = join(gate, "git-exited");
+    const pid = join(gate, "git-pid");
+    // The witness waits for the actual Git child to exit. Neither the witness nor
+    // the paused filter keeps fd 3: after Office dies it is Git's lease alone.
+    write(join(f.home, "bin/git"), `#!/bin/sh
+if [ -z "\${SMUDGE_GATE:-}" ] || [ "$PWD" != "$GATED_DIR" ] || [ "$1" != checkout ]; then exec "${bin}/git" "$@"; fi
+"${bin}/git" "$@" &
+gitpid=$!
+exec 3>&-
+echo "$gitpid" > "$SMUDGE_GATE/git-pid"
+wait "$gitpid"
+status=$?
+echo "$status" > "$SMUDGE_GATE/git-exited"
+exit "$status"
+`, 0o755);
+    write(join(f.home, "bin/office-test-smudge"), `#!/bin/sh
+exec 3>&-
+if [ -n "\${SMUDGE_GATE:-}" ]; then
+  : > "$SMUDGE_GATE/entered"
+  while [ ! -f "$SMUDGE_GATE/go" ]; do /bin/sleep 0.02; done
+fi
+exec /bin/cat
+`, 0o755);
+    git(["config", "filter.barrier.smudge", "office-test-smudge"], docs);
+    write(join(upstream, "a"), "update");
+    write(join(upstream, "z"), "update");
+    const expected = commit(upstream);
+    const generation = join(f.dir, ".office/resolved/references.json");
+    const before = read(generation);
+
+    const parent = Bun.spawn([exe, "--office", f.dir, "sync", "--references"], {
+      env: { ...f.env, SMUDGE_GATE: gate, GATED_DIR: docs }, stdin: "ignore", stdout: "ignore", stderr: "ignore",
+    });
+
+    async function waitForFile(path: string) {
+      for (let i = 0; i < 500 && !existsSync(path); i++) await Bun.sleep(20);
+      expect(existsSync(path), path).toBe(true);
+    }
+
+    try {
+      await waitForFile(entered);
+      await waitForFile(pid);
+      expect(git(["config", "office.appliedReference"], docs)).toBe("null");
+      // The second process finishes an independent checkout while the first is in
+      // a real smudge filter; admission isn't blocked on a global SQLite writer.
+      write(join(other, "z"), "independent update");
+      const independent = commit(other);
+      expect(f.cli(1, "sync", "--references")).toContain("reference docs: checkout lease unavailable");
+      expect(git(["rev-parse", "HEAD"], join(f.dir, "references/other"))).toBe(independent);
+
+      parent.kill(signal);
+      await parent.exited;
+      expect(parent.signalCode).toBe(signal);
+      expect(existsSync(exited)).toBe(false);
+
+      if (process.platform === "linux") {
+        const proc = `/proc/${read(pid).trim()}`;
+        expect(readlinkSync(`${proc}/fd/3`)).toBe(join(f.dir, ".office/resolved/checkout-leases/docs.lock"));
+        expect(read(`${proc}/fdinfo/3`)).toMatch(/^lock:\s+\d+: FLOCK\s+ADVISORY\s+WRITE\b/m);
+      }
+
+      write(yaml, original);
+      expect(f.cli(1, "sync", "--packages")).toContain("retry after the active Git checkout finishes");
+      expect(read(generation)).toBe(before);
+      expect(f.cli(0, "references", "list")).toContain("docs\t");
+    } finally {
+      write(go, "");
+
+      if (parent.exitCode === null && !parent.signalCode) parent.kill();
+      await parent.exited;
+    }
+
+    await waitForFile(exited);
+    expect(read(exited).trim()).toBe("0");
+    expect(git(["rev-parse", "HEAD"], docs)).toBe(expected);
+    expect(git(["config", "office.appliedReference"], docs)).toBe("null");
+    f.cli(0, "sync", "--packages");
+    write(join(docs, "z"), "mine after successful withdrawal");
+    f.cli(0, "sync", "--references");
+    expect(read(join(docs, "z"))).toBe("mine after successful withdrawal");
+    write(yaml, selected);
+    f.cli(0, "sync");
+    expect(JSON.parse(git(["config", "office.appliedReference"], docs)).commit).toBe(expected);
+  }, 60_000);
+}
+
 test("overlapping fresh clones publish only their own staging directories", async () => {
   const f = fixture("clone-overlap");
   const repo = join(root, "queued-upstream");

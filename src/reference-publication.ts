@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { openCheckoutLease } from "./checkout-lease.ts";
 import { type Office, OfficeError, readConfig } from "./office.ts";
 import { inputHash, readSnapshot, referenceFile, type ReferenceSnapshot, resolvedReferences } from "./reference-snapshot.ts";
 import type { Parsed } from "./schema.ts";
@@ -12,7 +13,7 @@ export type ReferencePublication = {
   publish(candidate: ReferenceSnapshot): boolean;
 };
 
-/** Publication and final checkout application share this lock; no remote fetch runs inside it. */
+/** Publication and admission to a checkout lease share this lock. Git runs outside it. */
 function locked<T>(dir: string, action: (db: Database) => T): T {
   const folder = dirname(join(dir, referenceFile));
   mkdirSync(folder, { recursive: true });
@@ -41,8 +42,9 @@ export function planReferenceApply(office: Office) {
 
       for (const entry of entries) reserve.run(entry.name, ticket);
 
-      function guard<T extends string | void>(name: string, apply: () => T): T {
-        return locked(office.dir, current => {
+      function guard<T extends string | void>(name: string, apply: (fd: number) => T): T {
+        using lease = openCheckoutLease(office.dir, name);
+        locked(office.dir, current => {
           if (!current.query("SELECT 1 FROM checkout WHERE name=? AND ticket=?").get(name, ticket)) throw new OfficeError(`reference ${name}: refresh superseded; checkout left unchanged`);
           const latest = resolvedReferences(office.dir, legacy ? readConfig(office.dir) : office);
 
@@ -50,8 +52,10 @@ export function planReferenceApply(office: Office) {
 
           if (latest.value.legacy !== legacy || !Bun.deepEquals(planned.get(name), latest.value.entries.find(entry => entry.name === name))) throw new OfficeError(`reference ${name}: claim changed; checkout left unchanged`);
 
-          return apply();
+          lease.acquire();
         });
+
+        return apply(lease.fd);
       }
 
       return { ok: true as const, value: { ...read.value, guard } };
@@ -95,6 +99,15 @@ export function beginReferencePublication(office: Office): Parsed<ReferencePubli
     if (!db.query("SELECT 1 FROM publisher WHERE id = 1 AND ticket = ?").get(ticket)) throw new OfficeError("reference publication superseded by a newer sync; candidate discarded");
 
     if (Bun.deepEquals(previous, candidate)) return false;
+
+    // Every admitted mutator has a committed checkout row. No new lease can
+    // start while this SQLite writer owns admission. Probe before replacing
+    // the generation or deleting ANY tickets, including after a parent crash.
+    for (const { name } of db.query<{ name: string }, []>("SELECT name FROM checkout").all()) {
+      using lease = openCheckoutLease(office.dir, name);
+      lease.acquire();
+    }
+
     const staging = `${path}.${ticket}.tmp`;
 
     try {

@@ -10,8 +10,10 @@ import * as v from "valibot";
 import { streamChecked } from "./report/index.ts";
 import { check } from "./schema.ts";
 
-function gitOutput(args: string[], cwd?: string): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+function gitOutput(args: string[], cwd?: string, checkoutFd?: number): string {
+  // Explicit POSIX stdio mapping: child fd 3 duplicates the ALREADY locked
+  // description. Even SIGKILL of this process cannot drop Git's duplicate.
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: checkoutFd === undefined ? ["ignore", "pipe", "pipe"] : ["ignore", "pipe", "pipe", checkoutFd] });
 }
 
 export function git(args: string[], cwd?: string): string {
@@ -61,9 +63,9 @@ export function referenceOriginProblem(dir: string, wanted: string): string | un
 const appliedReference = "office.appliedReference";
 const appliedPair = v.strictObject({ origin: v.string(), ref: v.string(), commit: v.string() });
 
-function recordReference(dir: string, origin: string, ref: string, commit: string): void {
+function recordReference(dir: string, origin: string, ref: string, commit: string, checkoutFd?: number): void {
   if (head(dir) !== commit) throw new Error(`reference ${dir}: HEAD is not the fetched commit ${commit}; not recording success`);
-  git(["config", "--local", "--replace-all", appliedReference, JSON.stringify({ origin, ref, commit })], dir);
+  gitOutput(["config", "--local", "--replace-all", appliedReference, JSON.stringify({ origin, ref, commit })], dir, checkoutFd);
 }
 
 /** Older ref-only or pair-only records cannot prove the commit in this worktree. */
@@ -299,10 +301,10 @@ export async function refreshCloneStreamed(ref: string | undefined, dir: string,
 }
 
 /** Fetch independently; only the ticket holder may publish a clone or force its worktree.
- * guard rechecks the claim under the same lock that publishes generations and other applies. */
+ * guard obtains the worktree lease under the same lock used to publish generations. */
 export async function syncReference(
   { dir, url, ref = "HEAD", stale }: { dir: string; url: string; ref?: string; stale?: boolean },
-  present: boolean, options: GitOptions, guard: <T extends string | void>(apply: () => T) => T,
+  present: boolean, options: GitOptions, guard: <T extends string | void>(apply: (fd: number) => T) => T,
 ): Promise<"updated" | "current" | "cloned"> {
   function verify() {
     const problem = referenceOriginProblem(dir, url);
@@ -346,14 +348,14 @@ export async function syncReference(
   try {
     await gitStreamed(["fetch", "--depth", "1", "--no-write-fetch-head", "--no-tags", "--refmap=", "--", "origin", `${ref}:${pending}`], dir, options);
 
-    return guard(() => {
+    return guard(fd => {
       verify();
       const commit = git(["rev-parse", "--verify", `${pending}^{commit}`], dir);
       const before = unbornClone(dir) ? undefined : head(dir);
       // A failed/interrupted local checkout cannot leave a previous success as authority.
-      git(["config", "--local", "--replace-all", appliedReference, "null"], dir);
-      git(["checkout", "--quiet", "--force", "--detach", commit], dir);
-      recordReference(dir, url, ref, commit);
+      gitOutput(["config", "--local", "--replace-all", appliedReference, "null"], dir, fd);
+      gitOutput(["checkout", "--quiet", "--force", "--detach", commit], dir, fd);
+      recordReference(dir, url, ref, commit, fd);
 
       return before === commit ? "current" : "updated";
     });
