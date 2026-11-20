@@ -483,6 +483,8 @@ Select `notes`, run `office sync --packages`, then `office --help` and `office n
 
 Help reads only metadata. Direct dispatch verifies the current selection and installed owner, reruns **only its** `setup` with the last validated nonsecret settings, ignores data additions, and invokes the registered function. Keep actions inside the handler. A local handler edit takes effect next invocation. Sync to publish changed settings, names or aliases. If an indexed owner disappears, its pin or installed revision changes, or it no longer provides that route, dispatch refuses and suggests repair. A failed collector publishes no routes; a duplicate name/alias or a reserved route rejects the whole candidate, references included.
 
+Indexed commands need readable YAML and an identifiable owner selection, not a valid configuration for every other package or service. If current reference or package inputs cannot be compared with the generation, dispatch reports that and uses the synced data. Sync still validates the complete configuration. A Git command owner missing its file digest makes the generation unreadable, including for scoped reference refresh.
+
 To contribute a reference from `packages/notes/office.ts`:
 
 ```ts

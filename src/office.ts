@@ -114,8 +114,8 @@ function expandHome(path: string): string {
   return path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;
 }
 
-/** office.yaml checked against the schema; its errors name each field. */
-export function readConfig(dir: string): OfficeConfig {
+/** Parse office.yaml once, validating the fields needed by this reader. */
+export function readOfficeFields<S extends v.GenericSchema>(dir: string, schema: S): v.InferOutput<S> {
   let document;
 
   try {
@@ -124,11 +124,15 @@ export function readConfig(dir: string): OfficeConfig {
     throw new OfficeError(`office.yaml: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  const result = check(v.safeParse(officeSchema, document));
+  const result = check(v.safeParse(schema, document));
 
   if (!result.ok) throw new OfficeError(`office.yaml is not valid:\n${result.errors.map((line) => `  ${line}`).join("\n")}`);
 
   return result.value;
+}
+
+export function readConfig(dir: string): OfficeConfig {
+  return readOfficeFields(dir, officeSchema);
 }
 
 /**
@@ -169,6 +173,7 @@ export function toolsBlock(tools: ResolvedTools): string {
 
   for (const tool of pinnedTools) {
     const { version, minimumReleaseAge } = tools.runtimes[tool];
+
     const fields = [
       ...(version === undefined ? [] : [`version: ${version}`]),
       ...(minimumReleaseAge === tools.minimumReleaseAge ? [] : [`minimum_release_age: ${minimumReleaseAge}`]),

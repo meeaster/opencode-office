@@ -1,10 +1,14 @@
 import { listing } from "../packages/references/commands/list.ts";
+import * as v from "valibot";
 import { commandRegistration, type RegisteredCommand } from "./command-table.ts";
-import { findOffice, loadOffice, type Office, OfficeError } from "./office.ts";
+import { findOffice, loadOffice, type Office, OfficeError, readOfficeFields } from "./office.ts";
 import { builtinSource, embeddedPackage, filesDigest, gitSelection, installedDefinition, type PackageRecord, resolvePackages, type ResolvedPackage } from "./packages.ts";
-import { readSnapshot, referenceInputs, type ReferenceSnapshot } from "./reference-snapshot.ts";
+import { publishedInputs, readSnapshot, referenceInputs, type ReferenceSnapshot } from "./reference-snapshot.ts";
+import { check, commandBootstrapSchema, packageEntry, referenceInputSchema } from "./schema.ts";
 
 type Owner = ReferenceSnapshot["contributors"][number];
+
+type Selections = Pick<Office, "dir" | "packages">;
 
 function named(route: { name: string; aliases: string[] }, requested: string) {
   return route.name === requested || route.aliases.includes(requested);
@@ -49,7 +53,7 @@ export function commandHelp(start: string): string[] {
   return lines;
 }
 
-function selectedOwner(office: Office, name: string) {
+function selectedOwner(office: Selections, name: string) {
   const { packages: [item], problems } = resolvePackages(office, name);
 
   if (problems.length) throw new OfficeError(problems.map(p => p.message).join("; "));
@@ -70,7 +74,7 @@ function verifyBinding(item: ResolvedPackage, owner: Owner, record: PackageRecor
 }
 
 /** Resolve functions anew, but never collect new data or validate unsynced package settings here. */
-async function handler(office: Office, owner: Owner, canonical: string, requested: string) {
+async function handler(office: Selections, owner: Owner, canonical: string, requested: string) {
   const matches: RegisteredCommand[] = [];
 
   try {
@@ -104,6 +108,37 @@ async function handler(office: Office, owner: Owner, canonical: string, requeste
   }
 }
 
+function indexedInputs(dir: string, snapshot: ReferenceSnapshot, name: string) {
+  try {
+    const document = readOfficeFields(dir, commandBootstrapSchema);
+    const matches = document.packages.filter(entry => entry.name === name);
+
+    if (matches.length > 1) throw new OfficeError("ambiguous owner selection");
+    const packages: Office["packages"] = [];
+
+    if (matches.length) {
+      // Validate the exact source with the sync-time schema, independent of unsynced
+      // settings and job overrides. A partial Git selection must never look local.
+      const entry = check(v.safeParse(packageEntry, { ...matches[0], settings: {}, cron: {} }));
+
+      if (!entry.ok) throw new OfficeError(entry.errors.join("; "));
+      packages.push(entry.value);
+    }
+
+    const current = v.safeParse(referenceInputSchema, document);
+
+    return { office: { dir, packages }, inputs: publishedInputs(snapshot, current.success ? current.output : undefined) };
+  } catch (error) {
+    throw new OfficeError(`package ${name}: ${error instanceof Error ? error.message : String(error)}; repair office.yaml and run office sync --packages`);
+  }
+}
+
+function bootstrapInputs(dir: string, snapshot: ReferenceSnapshot | undefined) {
+  const office = loadOffice(dir);
+
+  return { office, inputs: referenceInputs(snapshot, office) };
+}
+
 export async function dispatchCommand(start: string, words: string[]): Promise<boolean> {
   const dir = directory(start);
 
@@ -117,8 +152,7 @@ export async function dispatchCommand(start: string, words: string[]): Promise<b
   const bootstrap = snapshot?.version !== 3 && requested === listing.name;
 
   if (!bootstrap && !indexed) return false;
-  const office = loadOffice(dir);
-  const inputs = referenceInputs(snapshot, office);
+  const { office, inputs } = indexed && snapshot ? indexedInputs(dir, snapshot, indexed.owner.name) : bootstrapInputs(dir, snapshot);
 
   if (!inputs.ok) throw new OfficeError(inputs.errors.join("; "));
   const { entries, notes } = inputs.value;

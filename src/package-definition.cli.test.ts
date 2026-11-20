@@ -201,6 +201,98 @@ test("independent command authors share one publication; failed collection canno
   expect(cli(0, "folio", "read")).toContain("edited:new");
 }, 60_000);
 
+test("indexed dispatch validates the selected source without requiring unrelated live config", () => {
+  const { dir, cli, probe } = fixture("dispatch-selection");
+  const yaml = join(dir, "office.yaml");
+  const ink = { name: "ink", settings: { label: "saved" } };
+  const atlas = { name: "atlas" };
+  const config = { name: "paper", packages: [ink, atlas], references: [{ name: "old", url: "old-url" }] };
+  write(yaml, JSON.stringify(config));
+  write(join(dir, "packages/ink/office.ts"), `${marker} export default {name:"ink",description:"Ink",
+    settings:{label:{description:"Label",required:true}},setup(ctx){ctx.command({name:"folio show",summary:"Show",run:()=>console.log("label="+ctx.settings.label)})}}`);
+  const other = join(dir, "packages/atlas/office.ts");
+  write(other, `export default {name:"atlas",description:"Atlas"}`);
+  cli(0, "sync", "--packages");
+  write(other, `${marker} throw Error("unrelated author imported")`);
+  rmSync(probe);
+
+  for (const edit of [
+    { executor: { catalog_apps: false } }, { tools: { mise: { version: [] } } },
+    { packages: [ink, { name: "atlas", path: "no-repo" }] },
+    { packages: [{ name: "ink", settings: false }, atlas] }, { references: 42 },
+  ]) {
+    write(yaml, JSON.stringify({ ...config, references: [{ name: "changed", url: "unsynced" }], ...edit }));
+    expect(cli(1, "sync", "--packages")).toContain("office.yaml is not valid");
+    expect(cli(0, "--help")).toContain("folio show");
+    const listing = cli(0, "references", "list");
+    expect(listing).toContain("old\told-url\toffice.yaml");
+    expect(listing).not.toContain("unsynced");
+    expect(listing).toMatch(/cannot be compared|changed since collection/);
+    expect(existsSync(probe)).toBe(false);
+    expect(cli(0, "folio", "show")).toContain("label=saved");
+    expect(read(probe)).toBe("imported\n");
+    rmSync(probe);
+  }
+
+  for (const packages of [[atlas], [ink, ink], [atlas, { name: "ink", path: "partial" }],
+    [atlas, { name: "ink", repo: "elsewhere", ref: "other", path: "pkg" }], {}, [ink, {}]]) {
+    write(yaml, JSON.stringify({ ...config, packages }));
+    expect(cli(1, "folio", "show")).toContain("office sync --packages");
+    expect(existsSync(probe)).toBe(false);
+  }
+}, 60_000);
+
+test("all readers reject a Git command owner missing its files binding before fetching or importing", () => {
+  const { dir, home, cli, probe } = fixture("command-digest");
+  const repo = join(root, "digest-origin");
+  git(["init", "-qb", "main", repo]);
+
+  const module = `export default {name:"press",description:"Press", setup(ctx){
+    ctx.add({registry:"references.repository",value:{name:"manual",url:${JSON.stringify(repo)}}});
+    ctx.command({name:"press show",summary:"Show",run:()=>console.log("edition A")})}}`;
+
+  write(join(repo, "pkg/office.ts"), `${marker} ${module}`);
+  write(join(dir, "office.yaml"), JSON.stringify({ name: "paper", packages: [{ name: "press", repo, ref: commit(repo), path: "pkg" }] }));
+  cli(0, "sync", "--packages");
+  const path = join(dir, ".office/resolved/references.json");
+  const generation = JSON.parse(read(path));
+  const checkout = join(dir, "references/manual");
+  const transfers = join(home, "git-transfers");
+  write(join(home, "bin/git"), `#!/bin/sh\ncase "$1" in clone|fetch|ls-remote) echo "$1" >> "$HOME/git-transfers";; esac\nexec "${bin}/git" "$@"\n`, 0o755);
+  const bad = JSON.stringify(generation, (key, value) => key === "files" ? undefined : value);
+  write(path, bad);
+  rmSync(probe);
+  const error = "Git command owner press is missing its commands.files digest";
+  const help = cli(0, "--help");
+  expect(help).toContain(error);
+  expect(help).not.toContain("press show");
+
+  for (const args of [["press", "show"], ["references", "list"], ["sync", "--references"], ["sync", "--packages"]]) {
+    expect(cli(1, ...args)).toContain(error);
+  }
+
+  expect(read(path)).toBe(bad);
+  expect(existsSync(probe)).toBe(false);
+  expect(existsSync(checkout)).toBe(false);
+  expect(existsSync(transfers)).toBe(false);
+
+  // Only Git owners of commands need this binding. Both data-only formats remain usable.
+  for (const version of [2, 3]) {
+    write(path, JSON.stringify({ ...generation, version }, (key, value) =>
+      key === "commands" && (version === 2 || value.files) ? undefined : value));
+    expect(cli(0, "references", "list")).toContain(`manual\t${repo}\tpackage press`);
+  }
+
+  cli(0, "sync", "--references");
+  expect(read(transfers)).toMatch(/fetch|clone/);
+  expect(existsSync(join(checkout, ".git"))).toBe(true);
+  write(path, JSON.stringify(generation));
+  write(join(dir, ".office/packages/press/office.ts"), `${marker} throw Error("changed copy imported");`);
+  expect(cli(0, "--help")).toContain("press show");
+  expect(cli(1, "press", "show")).toContain("package files edited");
+  expect(existsSync(probe)).toBe(false);
+}, 60_000);
+
 test("a compiled office collects independent references and scopes the last published generation to every reader", async () => {
   const { dir, home, probe, cli } = fixture("references");
   const yaml = join(dir, "office.yaml");

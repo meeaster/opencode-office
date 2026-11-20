@@ -98,12 +98,12 @@ export type InstalledPackage = ResolvedPackage & {
 };
 
 /** The folder of a built-in or remote package. */
-export function pulledDir(office: Office, name: string): string {
+export function pulledDir(office: Pick<Office, "dir">, name: string): string {
   return join(office.dir, pulledFolder, name);
 }
 
 /** The folder of a package written in the office. */
-export function localDir(office: Office, name: string): string {
+export function localDir(office: Pick<Office, "dir">, name: string): string {
   return join(office.dir, "packages", name);
 }
 
@@ -140,7 +140,7 @@ export function legacyBuiltin(entry: PackageEntry): boolean {
   return entry.source !== undefined && entry.source.track === undefined && historicalSource(entry.name, entry.source);
 }
 
-function ownershipProblems(office: Office, builtins: string[], only?: string): PackageProblem[] {
+function ownershipProblems(office: Pick<Office, "dir" | "packages">, builtins: string[], only?: string): PackageProblem[] {
   const problems: PackageProblem[] = [];
 
   for (const name of new Set([...requiredPackages, ...office.packages.map(entry => entry.name)])) {
@@ -186,7 +186,7 @@ export function requirePackageOwnership(office: Office): void {
  * kind. An entry without `repo` is built-in when the tool ships a package of its name, so those
  * names are reserved. A required built-in's entry configures it without installing it twice.
  */
-export function resolvePackages(office: Office, only?: string): ResolvedPackages {
+export function resolvePackages(office: Pick<Office, "dir" | "packages">, only?: string): ResolvedPackages {
   const builtins = builtinPackages();
   const problems = ownershipProblems(office, builtins, only);
 
@@ -493,7 +493,7 @@ export function removePackage(office: Office, name: string): string[] {
 }
 
 /** Check the installed source (plus its command binding when dispatching) before importing any code. */
-export function installedDefinition(office: Office, resolved: ResolvedPackage, verifyBinding?: (record?: PackageRecord) => void) {
+export function installedDefinition(office: Pick<Office, "dir">, resolved: ResolvedPackage, verifyBinding?: (record?: PackageRecord) => void) {
   const { entry, dir } = resolved;
   const where = relative(office.dir, dir);
 

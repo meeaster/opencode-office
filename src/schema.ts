@@ -308,7 +308,7 @@ export const reservedPackageNames = ["machine", "config", "mise"];
 
 // A package copied from a folder of another repository at a ref, or, without `repo`, one of the
 // tool's built-in packages or a package authored in the office under packages/<name>/.
-const packageEntry = v.pipe(
+export const packageEntry = v.pipe(
   v.strictObject(
     {
       // A package's mise setup goes in .office/mise/<name>.toml. mise loads mise/config.toml and mise.toml
@@ -356,6 +356,16 @@ const git = v.optional(
   ),
 );
 
+const packageEntries = v.pipe(v.nullish(v.array(packageEntry, "must be a list"), []), v.check(uniqueNames, "lists a name twice"));
+
+export const referenceInputSchema = v.object({ references: repositories, packages: packageEntries });
+
+// Names establish whether an indexed owner is selected exactly once. Other entries'
+// sources and settings may be invalid; keep them only for a best-effort fingerprint.
+export const commandBootstrapSchema = v.object({
+  name, references: v.optional(v.unknown()), packages: v.nullish(v.array(v.looseObject({ name: v.string() })), []),
+});
+
 export const officeSchema = v.pipe(v.strictObject(
   {
     name,
@@ -378,7 +388,7 @@ export const officeSchema = v.pipe(v.strictObject(
     desks: v.nullish(v.record(v.pipe(name, v.check(key => key !== "executor-apps", "executor-apps is reserved for shared Executor app sources")), desk, "must map desk names to desks"), {}),
     skills,
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
-    packages: v.pipe(v.nullish(v.array(packageEntry, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
+    packages: packageEntries,
   },
   "must be a mapping of name, state, opencode, executor, git, secrets, tools, cron, references, desks, skills, plugins and packages",
 ), v.forward(v.check((config) => config.tools === undefined || config.tools === null || legacyKeys(config).length === 0, (issue) => `replaces versions, upgrades and socket_firewall, so office.yaml can't have both: remove ${legacyKeys(issue.input).join(" and ")}`), ["tools"]), v.forward(v.check(({ secrets, opencode }) => secrets?.server === undefined || (opencode !== "container" && opencode.mode === "host" && opencode.managed), "requires opencode.managed: true in host mode"), ["secrets", "server"]));
