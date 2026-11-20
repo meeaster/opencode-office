@@ -6,7 +6,9 @@ import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { type Office, type Repository } from "./office.ts";
-import { type InstalledPackage, type PackageProblem, readPackage, requiredPackages, resolvePackages } from "./packages.ts";
+import { builtinSource, gitSelection, readRecord, type InstalledPackage, type PackageProblem, readPackage, requiredPackages, resolvePackages } from "./packages.ts";
+import { readSnapshot } from "./reference-snapshot.ts";
+import { machineCollection, project } from "../standard/mise-integration/projection.ts";
 import { pluginClones } from "../standard/opencode/delivery.ts";
 import { entries, scope, type Scope } from "../standard/opencode/ownership.ts";
 
@@ -36,18 +38,36 @@ export function library(office: Office): string[] {
 
 /** Packages installed with valid settings. Filesystem conflicts in plugin delivery are not
  * package-load failures and must not disable independent consumers such as cron. */
-export function installedPackages(office: Office, rejected: ReadonlySet<string> = new Set()): InstalledPackages {
+export function installedPackages(office: Office, rejected: ReadonlySet<string> = new Set(), publishedMachine = true): InstalledPackages {
   const installed: InstalledPackage[] = [];
   const resolved = resolvePackages(office);
   const problems = [...resolved.problems];
   const selected = new Set([...requiredPackages, ...office.packages.map((entry) => entry.name)]);
   const unread = new Set(selected);
 
+  const snapshot = publishedMachine ? readSnapshot(office.dir) : undefined;
+
   for (const item of resolved.packages) {
     if (rejected.has(item.entry.name)) continue;
     const read = readPackage(office, item);
 
     if (read.ok) {
+      try {
+        if (snapshot && !snapshot.ok) throw new Error(snapshot.errors.join("; "));
+        const group = snapshot?.value?.contributors.find(owner => owner.name === item.entry.name);
+
+        if (group?.entries.some(row => machineCollection(row.id))) {
+          const record = item.kind === "local" ? undefined : readRecord(item.dir);
+          const source = item.kind === "local" ? "local" : item.entry.source ? gitSelection(item.entry.source) : record && builtinSource(record.files);
+
+          if (source !== group.source || (record && "repo" in record && record.commit !== group.commit)) throw new Error(`machine claims of ${item.entry.name} belong to a different source; sync to collect them`);
+          project(read.value, group.entries);
+        }
+      } catch (error) {
+        problems.push({ packages: [item.entry.name], message: String(error) });
+        continue;
+      }
+
       installed.push(read.value);
       unread.delete(item.entry.name);
     } else problems.push(...read.errors.map((message) => ({ packages: [item.entry.name], message })));

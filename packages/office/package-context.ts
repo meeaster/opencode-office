@@ -13,6 +13,8 @@ export type CollectionEntry = { name: string; [field: string]: SettingValue };
 
 export type Collection<T extends CollectionEntry> = {
   readonly id: string;
+  /** Package-local names permit independent contributors to register the same name. */
+  readonly identity?: "package";
   /** Validate and normalize each incoming addition during sync. Reads copy the published result. */
   parse(input: CollectionEntry): T;
 };
@@ -28,7 +30,14 @@ export type PackageCommand = {
   run(inputs: CommandInputs): void | Promise<void>;
 };
 
+type Contracts = {
+  "tooling/requirements": typeof import("../tooling/requirements.ts");
+  "mise-integration/claims": typeof import("../mise-integration/claims.ts");
+};
+
 export type PackageContext = {
+  /** Import a required standard package from this office, independent of this author's location. */
+  importStandard<K extends keyof Contracts>(module: K): Promise<Contracts[K]>;
   settings: Readonly<Record<string, SettingValue>>;
   command(command: PackageCommand): void;
   booleanSetting(name: string, definition: { description: string; default: boolean }): boolean;

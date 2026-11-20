@@ -278,8 +278,8 @@ test("all readers reject a Git command owner missing its files binding before fe
 
   // Only Git owners of commands need this binding. Both data-only formats remain usable.
   for (const version of [2, 3]) {
-    const contributors = generation.contributors.map(({ entries, ...group }: { entries: { value: { name: string; url: string } }[] }) =>
-      ({ ...group, references: entries.map(entry => entry.value) }));
+    const contributors = generation.contributors.map(({ entries, ...group }: { entries: { id: string; value: { name: string; url: string } }[] }) =>
+      ({ ...group, references: entries.flatMap(entry => entry.id === "references.repository" ? [entry.value] : []) }));
 
     write(path, JSON.stringify({ ...generation, contributors, version }, (key, value) =>
       key === "commands" && (version === 2 || value.files) ? undefined : value));

@@ -297,6 +297,8 @@ test("an entry without repo is built-in when shipped and local otherwise; the re
   const { packages, problems } = resolvePackages(loadOffice(office));
 
   expect(packages.map((item) => [item.entry.name, item.kind, item.dir.slice(office.length + 1)])).toEqual([
+    ["tooling", "built-in", ".office/packages/tooling"],
+    ["mise-integration", "built-in", ".office/packages/mise-integration"],
     ["office", "built-in", ".office/packages/office"],
     ["references", "built-in", ".office/packages/references"],
     ["knowledge", "built-in", ".office/packages/knowledge"],

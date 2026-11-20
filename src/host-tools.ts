@@ -26,11 +26,10 @@ import * as v from "valibot";
 import { fetchBytes } from "./download.ts";
 import { toolPins } from "./mise-toml.ts";
 import { type Office, OfficeError } from "./office.ts";
-import { readDefinition } from "./package-definition.ts";
+import { floors } from "../packages/office/floors.ts";
 import { cliToolsPackage, fragmentPath, packagesFile, packagesPath } from "./package-tools.ts";
 import { newestRelease, type Candidate } from "./releases.ts";
 import { check } from "./schema.ts";
-import { toolPath } from "./tool.ts";
 import { compareVersions } from "./versions.ts";
 import { currentReporter, progress, say, stream, warn } from "./report/index.ts";
 import { displayLines } from "./report/reporter.ts";
@@ -173,19 +172,9 @@ export function officePins(office: Office): Record<string, string> {
   return path === undefined ? {} : Object.fromEntries(toolPins(readFileSync(path, "utf8")).filter((pin) => tools.includes(pin.tool)).map((pin) => [pin.tool, pin.version]));
 }
 
-// Bootstrap before sync, without executing an installed or virtual-filesystem package.
-declare const OFFICE_STARTING_TOOLS: Record<string, string>;
-
-/** The versions this executable's office package starts its tools at. */
-export function startingVersions(): Record<string, string> {
-  if (Bun.isStandaloneExecutable) return OFFICE_STARTING_TOOLS;
-
-  const folder = `packages/${cliToolsPackage}`;
-  const result = readDefinition(toolPath(folder), folder);
-
-  if (!result.ok) throw new OfficeError(result.errors.join("; "));
-
-  return result.value.manifest.tools;
+/** Embedded floors work even when installed packages cannot load. */
+export function startingVersions() {
+  return { ...floors };
 }
 
 /** What the office wants installed: its versions in machine.packages.toml, and the package's starting ones until sync writes them. */

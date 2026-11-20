@@ -3,9 +3,22 @@ import { join } from "node:path";
 import * as v from "valibot";
 import { parse } from "yaml";
 import type { PackageContext, SettingValue } from "../packages/office/package-context.ts";
+import { toolPath } from "./tool.ts";
 import { check, type PackageManifest, packageManifestSchema, type Parsed, scalarSetting, settingVariable } from "./schema.ts";
 
 const names = ["office.ts", "package.yaml"] as const;
+
+export function standardImports(packages: string): Pick<PackageContext, "importStandard"> {
+  return { importStandard(module) {
+    if (module !== "tooling/requirements" && module !== "mise-integration/claims") throw new Error(`unknown standard contract ${module}`);
+
+    const path = join(packages, `${module}.ts`);
+
+    if (!readFileSync(path).equals(readFileSync(toolPath(`packages/${module}.ts`)))) throw new Error(`standard contract ${module} differs from this executable; sync to repair it`);
+
+    return import(path);
+  } };
+}
 
 type Registrations = Omit<PackageContext, "booleanSetting" | "scalarSetting">;
 

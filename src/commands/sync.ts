@@ -31,7 +31,8 @@ import { migrate } from "../migrate.ts";
 import { atomicWrite } from "../secrets.ts";
 import { definitionFiles } from "../package-definition.ts";
 import { packageComposeFile } from "../package-services.ts";
-import { syncTools } from "../package-tools.ts";
+import { machineCollection } from "../../standard/mise-integration/projection.ts";
+import { changesSetup, fragmentPath, syncTools } from "../package-tools.ts";
 import { type Desk, type Office, skillGroups } from "../office.ts";
 import { silentStage, type Stage } from "../report/index.ts";
 import { fetchPackage, installBuiltin, type InstalledPackage, installPackage, pulledDir, pulledFolders, removePackage, requirePackageOwnership, resolvePackages } from "../packages.ts";
@@ -560,17 +561,17 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
     }
   }
 
-  let installed = installedPackages(office, rejected);
+  let installed = installedPackages(office, rejected, false);
 
   if (!installed.unread.has("knowledge") && legacyPlugin(office, "knowledge")) {
     changes.push(...removeOldKnowledgePlugin(office));
-    installed = installedPackages(office, rejected);
+    installed = installedPackages(office, rejected, false);
   }
 
   changes.push(...installed.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
   const published = await collectReferences(office, packages, installed, changes, publication.value, rejected, embedded);
 
-  if (!published && migration) return false;
+  if (!published) return false;
   migration?.commit();
 
   if (needsEnvironmentOwners(office, installed)) {
@@ -604,9 +605,14 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   for (const item of installed.installed) changes.push(...installPackage(office, item));
 
   stage.detail("writing the packages' tools and linking skills and plugins");
-  changes.push(...syncTools(office, installed.installed, [...installed.selected]));
+  const unknown = [...installed.unread].find(name => (existsSync(fragmentPath(office, name)) && installed.installed.some(item => item.machine?.install || changesSetup(office, item))) || publication.value.previous?.contributors.find(group => group.name === name)?.entries.some(row => machineCollection(row.id)));
 
-  changes.push(...syncMachine(office, installed));
+  if (unknown) changes.push(`FAILED package ${unknown}: machine claims unresolved; keeping last-good tools, fragments and links`);
+  else {
+    changes.push(...syncTools(office, installed.installed, [...installed.selected]));
+    changes.push(...syncMachine(office, installed));
+  }
+
   const plan = withPluginPlan(office, { ...installed, problems: [] }, "collect");
   changes.push(...plan.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
   changes.push(...linkPlugins(office, plan));

@@ -199,7 +199,7 @@ test("the bootstrap file holds only [bootstrap.…] tables without hooks, and th
   mode("host", on);
   write(join(office, "packages/demo/system/bootstrap.toml"), '[tools]\njq = "1"\n[bootstrap.hooks]\npre-packages = "rm -rf /"\n');
 
-  expect(await sync(loadOffice(office))).toContain(
+  expect((await sync(loadOffice(office))).join("\n")).toContain(
     "FAILED package demo: system/bootstrap.toml: [tools] isn't a [bootstrap.…] table; system/bootstrap.toml: [bootstrap.hooks]: hooks are sync's, from the system block's prepare script; .office/mise/demo.toml is left as it was",
   );
 

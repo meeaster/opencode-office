@@ -1,4 +1,5 @@
-import type { CronContext } from "./package-context.ts";
+import { floors } from "./floors.ts";
+import type { CronContext, PackageContext } from "./package-context.ts";
 
 export default {
   name: "office",
@@ -21,8 +22,11 @@ export default {
       },
     },
   },
-  // CLI build-time floors, also used by sync to maintain machine.packages.toml.
-  tools: { sops: "3.13.3", age: "1.3.2", gh: "2.104.0", "pre-commit": "4.7.0" },
+  async setup(ctx: PackageContext) {
+    const { requirements } = await ctx.importStandard("tooling/requirements");
+
+    for (const [name, minimumVersion] of Object.entries(floors)) ctx.add(requirements, { name, minimumVersion });
+  },
   registerCron(ctx: CronContext): undefined {
     ctx.cron.job("update-references", { schedule: "0 6 * * *", script: "scripts/update-references.sh" });
     ctx.cron.job("upgrade-tools", { schedule: "30 6 * * *", script: "scripts/upgrade-tools.sh" });

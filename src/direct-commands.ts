@@ -1,5 +1,6 @@
+import { join } from "node:path";
 import { listing } from "../packages/references/commands/list.ts";
-import { setupContext } from "./package-definition.ts";
+import { setupContext, standardImports } from "./package-definition.ts";
 import * as v from "valibot";
 import { claimsInspect, commandRegistration, type RegisteredCommand } from "./command-table.ts";
 import { findOffice, loadOffice, type Office, OfficeError, readOfficeFields } from "./office.ts";
@@ -97,6 +98,7 @@ async function handler(office: Selections, owner: Owner, canonical: string, requ
     const delivered = owner.commands.settings;
     const staticSettings = manifest.settings_schema ? delivered : Object.fromEntries(Object.entries(delivered).filter(([key]) => Object.hasOwn(manifest.settings, key)));
     await manifest.setup?.(setupContext({
+      ...standardImports(join(office.dir, ".office/packages")),
       settings: structuredClone(staticSettings), add() {}, collection() {},
       command(input) {
         const read = commandRegistration(input);

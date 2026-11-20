@@ -671,7 +671,7 @@ One case is left alone: a skill in an ignored folder with the ID of a skill one 
 
 mise loads none of `machine.toml`, `machine.packages.toml` or `.office/mise/` where they are (it reads `mise.toml`, `mise.<env>.toml` and a few other names in a folder, not these), so the machine-wide files apply only through links in mise's global conf.d: in a host-mode office `office sync` makes them, once you agreed in `office setup` (see "Machine"), and the container makes them inside itself at start. Without the links the files apply nowhere, so `office check` fails in a host-mode office without consent. Through the links they are global config, in every folder alike, the office's included: `machine.toml` wins over `machine.packages.toml` everywhere, and a `mise.toml` (the office's, a desk's, a project's) wins over both in its folder, as project config wins over global. mise does load `mise/config.toml` and `mise.toml` in place below `.office/`, so `config` and `mise`, like `machine`, are reserved package names.
 
-A package that needs a CLI declares it as a mise tool in `package.yaml`'s `tools`, by the name a `mise.toml` gives it, at the exact version it was tested with (never a range or `latest`). That version is where an office starts and a floor it shouldn't go below; newer versions are the office's choice. `office sync` writes every package's tools into one file, `machine.packages.toml` at the office root, which the office commits: a `[tools]` table with one line per tool, each with a comment naming the packages that declare it:
+A package that needs a CLI registers it in `setup(ctx)` with `const { requirements } = await ctx.importStandard("tooling/requirements")` and `ctx.add(requirements, { name, minimumVersion })`, by the name a `mise.toml` gives it, at the exact version it was tested with (never a range or `latest`). That version is where an office starts and a floor it shouldn't go below; newer versions are the office's choice. `office sync` writes every package's tools into one file, `machine.packages.toml` at the office root, which the office commits: a `[tools]` table with one line per tool, each with a comment naming the packages that declare it:
 
 ```toml
 [tools]
@@ -691,7 +691,9 @@ To hold a tool back below a package's version, pin it in `machine.toml`, which w
 
 A package's mise setup, when it has one, goes in its own fragment, `.office/mise/<name>.toml`, which stays out of Git and which the office never edits: sync writes it whole and rewrites it on every sync, and deletes it when the package has no setup in this office or leaves `office.yaml`. The file's first line names the package; sync never touches a file in that folder whose first line doesn't name one of its packages, refuses to write a package's setup over such a file, and links only its own (`office check` reports any other file there: move its tools to `machine.toml`).
 
-A package can also give a host-mode office something more, in `package.yaml`'s `host` block, optionally behind one of its true/false settings:
+The required `mise-integration` package exports tasks, install-once hooks and native bootstrap recipes. In `setup`, import the typed handles with `await ctx.importStandard("mise-integration/claims")`. The import resolves from the office, including for local and pinned Git packages. See `packages/browser/office.ts` for a settings-gated install and independent Chrome recipe. A task-only package can register `ctx.add(tasks, {name: "audit", description: "Run audit", script: "scripts/audit.sh"})` without a tool requirement. Each task runs as `<package>:<name>`. Installs claim the `destination` they manage, independently of their readiness marker. Native `bootstrap.files` entries also claim their paths. Conflicting destinations stop publication; Office does not infer what a shell script writes.
+
+External packages using the earlier YAML or TypeScript manifest fields still participate in the same policy. For example, the legacy host form is:
 
 ```yaml
 host:
@@ -715,7 +717,7 @@ When the office is in host mode and the setting is on, sync adds `host.tools` to
 
 `office check` reports, on the package's line, a declared tool missing from `machine.packages.toml` or below the package's version, and a fragment that differs from what sync writes; and once for the office, a tool no package declares any more. A version the office raised is not a problem.
 
-A package can also offer a one-time setup of the machine with its operating system's package manager, in `package.yaml`'s `system` block, behind one of its settings whose default is false, so an office opts in:
+The corresponding legacy system setup form is:
 
 ```yaml
 system:

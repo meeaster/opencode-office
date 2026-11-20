@@ -35,6 +35,7 @@ import { envFilePath } from "./host-env.ts";
 import { claim } from "./machine.ts";
 import { type Office, OfficeError } from "./office.ts";
 import { systemApplies } from "./package-system.ts";
+import { destinationProblems } from "../standard/mise-integration/projection.ts";
 import { machineFiles } from "./package-tools.ts";
 import type { InstalledPackage } from "./packages.ts";
 import { check } from "./schema.ts";
@@ -125,7 +126,9 @@ export function systemStatus(office: Office, installed: InstalledPackage[], mise
   if (reason !== undefined) return { kind: "skipped", reason };
 
   const pending: string[] = [];
-  const problems: string[] = [];
+  const problems = destinationProblems(office, installed);
+
+  if (problems.length) return { kind: "failed", problems };
   const missing: string[] = [];
 
   for (const item of applying(office, installed)) {

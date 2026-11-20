@@ -35,6 +35,7 @@ import { envFilePath, hostWrappers, sourceLine, sourcedBy } from "../host-env.ts
 import { claim, machineReport, matchesServerUnit, requireServerConsent } from "../machine.ts";
 import { wrappedCommands } from "../sfw.ts";
 import { toolPins } from "../mise-toml.ts";
+import { destinationProblems } from "../../standard/mise-integration/projection.ts";
 import { fragmentNotes, machineBelowFloors, machineFile, oldToolFragments, orphanFragments, packagesFile, packagesFileProblems, strayFragments } from "../package-tools.ts";
 import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile, validateSetupOverrides } from "../packages.ts";
 import { describeIgnoredSkills, ignoredSkills, readIgnoredFolders } from "../../packages/office/plugin/ignored-skills.ts";
@@ -383,6 +384,8 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
   }
 
   // machine.toml is the office's to hold a tool back, so a pin below a package's version only warns.
+  for (const error of destinationProblems(office, installed)) report(false, "machine destinations", error);
+
   for (const line of machineBelowFloors(office, installed)) report("warn", machineFile, line);
 }
 

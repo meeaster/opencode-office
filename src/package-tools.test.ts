@@ -517,3 +517,47 @@ test("host: setting must name a true/false setting", async () => {
 
   expect(await sync(loadOffice(office))).toContain("FAILED package demo: packages/demo/package.yaml: host.setting: must name one of the package's settings whose default is true or false");
 });
+
+test("setup requirements share a floor with external manifests; failed collection retains machine outputs", async () => {
+  pkg("external", 'tools: {bun: "1.5.0"}');
+  const author = join(office, "packages/author/office.ts");
+
+  const code = `export default { name: "author", description: "Uses Bun", settings:{ floor:{ description:"Tool floor",default:"1.4.4" } }, async setup(ctx) {
+    const { requirements } = await ctx.importStandard("tooling/requirements");
+    ctx.add(requirements, {name:"bun", minimumVersion:ctx.settings.floor});
+  }};`;
+
+  write(author, code);
+  write(join(office, "office.yaml"), "name: t\npackages: [{name: external}, {name: author}]\n");
+  const run = () => sync(loadOffice(office), { scope: "packages" });
+  expect((await run()).join("\n")).not.toContain("FAILED");
+  expect(lines()).toEqual(['"bun" = "1.5.0" # author, external']);
+  const good = packages();
+  write(join(office, "office.yaml"), "name: t\npackages: [{name: external}, {name: author, settings: {floor: not-a-floor}}]\n");
+  expect((await run()).join("\n")).toContain("invalid exact tool requirement");
+  expect(packages()).toBe(good);
+});
+
+test("exclusive install roots are independent of task and readiness names", async () => {
+  const config = join(office, "office.yaml");
+
+  for (const name of ["first", "second"]) {
+    write(join(office, `packages/${name}/office.ts`), `export default {name:"${name}", description:"Install", async setup(ctx){
+      const { installs } = await ctx.importStandard("mise-integration/claims");
+      ctx.add(installs,{name:"${name}", description:"Install", script:"run.ts", destination:"~/.local/share/release", ready:"~/.local/share/${name}.json", executable:false});
+    }}`);
+    write(join(office, `packages/${name}/run.ts`), 'throw Error("setup must not execute me")');
+  }
+
+  const host = "name: t\nopencode: {mode: host, url: 'http://127.0.0.1:49999'}\n";
+  write(config, `${host}packages: [{name: first}]\n`);
+  const run = () => sync(loadOffice(office), { scope: "packages" });
+  expect((await run()).join("\n")).not.toContain("FAILED");
+  const first = join(office, ".office/mise/first.toml");
+  const before = readFileSync(first, "utf8");
+  expect(before).toContain('[tasks."first:first"]');
+  write(config, `${host}packages: [{name: first}, {name: second}]\n`);
+  expect((await run()).join("\n")).toContain("~/.local/share/release claimed by both package first and package second");
+  expect(readFileSync(first, "utf8")).toBe(before);
+  expect(existsSync(join(office, ".office/mise/second.toml"))).toBe(false);
+});

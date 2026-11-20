@@ -582,14 +582,16 @@ const systemPlatform = v.pipe(v.string(), v.regex(/^[a-z0-9]+-[0-9.]+-[a-z0-9]+(
  * absolute paths whose presence shows it was applied, for `office check`, and `verify`, a bash
  * script setup runs once the tools are installed, proves it works from the environment file.
  */
-const systemBlock = v.strictObject(
+export const bootstrapFile = packageFile("toml", "system/bootstrap.toml");
+
+export const systemBlock = v.strictObject(
   {
     setting: v.string(),
     description: text,
     platforms: v.pipe(v.array(systemPlatform, "must be a list of platforms"), v.minLength(1, "must name at least one platform")),
     prepare: v.optional(packageFile("sh", "scripts/prepare.sh")),
     verify: v.optional(packageFile("sh", "scripts/verify.sh")),
-    bootstrap: packageFile("toml", "system/bootstrap.toml"),
+    bootstrap: bootstrapFile,
     ready: v.pipe(v.array(v.pipe(v.string(), v.regex(/^\/[A-Za-z0-9._@+/-]+$/, "must be an absolute path")), "must be a list of absolute paths"), v.minLength(1, "must name at least one path")),
     env: v.nullish(v.record(hostVariable, hostValue, "must map variable names to values"), {}),
   },

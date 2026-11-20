@@ -1,8 +1,10 @@
 import * as v from "valibot";
 import type { Collection, CollectionEntry } from "../packages/office/package-context.ts";
+import { project, destinationProblems, machineCollection } from "../standard/mise-integration/projection.ts";
 import { repositories } from "../packages/references/repositories.ts";
 import { collectJobs } from "../standard/cron/jobs.ts";
-import { runPackageSetup } from "./package-definition.ts";
+import { join } from "node:path";
+import { runPackageSetup, standardImports } from "./package-definition.ts";
 import { commandConflicts, commandRegistration, type CommandMetadata } from "./command-table.ts";
 import type { InstalledPackages } from "./layout.ts";
 import type { Office, PackageEntry } from "./office.ts";
@@ -87,6 +89,7 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
         const settings = item.entry.settings ?? {};
 
         const { booleans, scalars } = await runPackageSetup(pkg.manifest, settings, {
+          ...standardImports(join(office.dir, ".office/packages")),
           settings: structuredClone(pkg.settings),
           collection(handle) {
             if (!handle.id.startsWith(`${name}.`) || !/^[a-z0-9-]+\.[a-z0-9-]+$/.test(handle.id) || !v.is(v.function(), handle.parse) || provided.has(handle.id)) throw new Error(`invalid or duplicate collection ${handle.id}`);
@@ -208,13 +211,39 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
     });
 
     for (const { id, value } of group.entries) {
-      const key = JSON.stringify([id, value.name]);
+      const scoped = definitions.get(id)?.handle.identity === "package";
+      const key = JSON.stringify([id, scoped ? group.name : null, value.name]);
       const first = keys.get(key);
 
       if (first) errors.push(`${id} ${value.name} claimed by both package ${first} and package ${group.name}`);
       keys.set(key, group.name);
     }
   }
+
+  for (const group of candidate.contributors) {
+    const item = available.get(group.name);
+
+    if (!item) continue;
+
+    if (group.stale) {
+      const old = previous?.contributors.find(owner => owner.name === group.name);
+
+      if (old?.entries.some(row => machineCollection(row.id)) || pending.get(group.name)?.some(row => machineCollection(row.id))) {
+        installed.installed = installed.installed.filter(pkg => pkg !== item);
+        installed.unread.add(group.name);
+      }
+
+      continue;
+    }
+
+    try {
+      project(item, group.entries, true);
+    } catch (error) {
+      errors.push(`package ${group.name}: ${String(error)}`);
+    }
+  }
+
+  errors.push(...destinationProblems(office, installed.installed));
 
   const combined = claims(candidate);
 

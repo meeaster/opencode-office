@@ -63,6 +63,7 @@ function fixture(): void {
 
   mkdirSync(join(pkg, "scripts"), { recursive: true });
   copyFileSync(join(import.meta.dir, "../../packages/office/office.ts"), join(pkg, "office.ts"));
+  copyFileSync(join(import.meta.dir, "../../packages/office/floors.ts"), join(pkg, "floors.ts"));
   cpSync(join(import.meta.dir, "../../packages/office/scripts"), join(pkg, "scripts"), { recursive: true });
   recordRequiredFixtures(pkg);
 

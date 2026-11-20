@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { sync } from "../../../src/commands/sync.ts";
@@ -11,7 +12,7 @@ const scratch: string[] = [];
 const checker = resolve(import.meta.dir, "../skills/knowledge-base/scripts/kb.mjs");
 
 function temporary() {
-  const dir = mkdtempSync("/tmp/opencode/knowledge-");
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-"));
 
   scratch.push(dir);
 

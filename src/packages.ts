@@ -18,11 +18,13 @@ import { Worker } from "node:worker_threads";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import * as v from "valibot";
 
+import { project, destinationProblems, type MachineClaims } from "../standard/mise-integration/projection.ts";
+import type { CollectionEntry } from "../packages/office/package-context.ts";
 import { panelBundle } from "./desktop.ts";
 import { collectAssets } from "../standard/opencode/assets.ts";
 import { copyFromRepository } from "./git.ts";
 import { type Office, OfficeError, type PackageEntry } from "./office.ts";
-import { readDefinition, runPackageSetup } from "./package-definition.ts";
+import { readDefinition, runPackageSetup, standardImports } from "./package-definition.ts";
 import { readSnapshot } from "./reference-snapshot.ts";
 import { collectJobs } from "../standard/cron/jobs.ts";
 import { composeProblems, packageComposeFile, settingsEnv } from "./package-services.ts";
@@ -59,7 +61,7 @@ export const officeFile = ".office.json";
 const records = [sourceFile, settingsFile, templateFile, officeFile];
 
 /** The built-in packages every office has, without an entry in office.yaml. */
-export const requiredPackages = ["office", "references"];
+export const requiredPackages = ["tooling", "mise-integration", "office", "references"];
 
 /** Where packages pulled into the office live: hidden, so searches and a plain `ls` skip them. */
 export const pulledFolder = ".office/packages";
@@ -89,6 +91,7 @@ export type ResolvedPackages = { packages: ResolvedPackage[]; problems: PackageP
 
 export type InstalledPackage = ResolvedPackage & {
   manifest: PackageManifest;
+  machine?: MachineClaims;
   /** The settings with defaults applied, as the plugin and scripts read them from `.settings.json`. */
   settings: Record<string, SettingValue>;
   /** Skill IDs under `skills/`, each a folder with a SKILL.md, which the package's plugin registers. */
@@ -164,7 +167,7 @@ function ownershipProblems(office: Pick<Office, "dir" | "packages">, builtins: s
 
       if (installed && "repo" in installed && !historicalSource(name, installed)) problems.push({ packages: [name], message: `built-in package ${name} conflicts with installed ${installed.repo}@${installed.ref}:${installed.path}; move the existing copy before syncing` });
 
-      if (name === "references" && !installed && existsSync(pulledDir(office, name))) {
+      if (requiredPackages.includes(name) && name !== "office" && !installed && existsSync(pulledDir(office, name))) {
         const snapshot = readSnapshot(office.dir);
 
         if (!snapshot.ok || !snapshot.value?.contributors.some(group => group.name === name && group.source.startsWith("built-in:"))) {
@@ -673,7 +676,17 @@ export async function validateReplacement(office: Office, resolved: ResolvedPack
 
   const item = read.value;
 
-  if (resolveSetup) await resolveSetupSettings(item);
+  if (resolveSetup) {
+    await resolveSetupSettings(office, item, true);
+
+    if (item.kind === "remote" && (item.manifest.system || item.manifest.host?.install || item.machine?.install)) {
+      const { installedPackages } = await import("./layout.ts");
+      const peers = installedPackages(office, new Set([item.entry.name]));
+      const conflicts = destinationProblems(office, [...peers.installed, item]);
+
+      if (conflicts.length) throw new Error(conflicts.join("; "));
+    }
+  }
 
   if (item.manifest.opencode) collectAssets(office.dir, item);
   const { host, system } = item.manifest;
@@ -728,11 +741,17 @@ export function applyScalarSettings(item: InstalledPackage, scalars: Record<stri
   item.settings = settings;
 }
 
-async function resolveSetupSettings(item: InstalledPackage) {
+async function resolveSetupSettings(office: Office, item: InstalledPackage, validateMachine = false) {
   const overrides = item.entry.settings ?? {};
 
   if (!item.manifest.setup) return;
-  const { scalars } = await runPackageSetup(item.manifest, overrides, { settings: structuredClone(item.settings), command() {}, collection() {}, add() {} });
+  const rows: { id: string; value: CollectionEntry }[] = [];
+
+  const { scalars } = await runPackageSetup(item.manifest, overrides, { ...standardImports(join(office.dir, pulledFolder)), settings: structuredClone(item.settings), command() {}, collection() {}, add(handle, value) {
+    if (validateMachine) rows.push({ id: handle.id, value });
+  } });
+
+  if (validateMachine) project(item, rows, true);
   applyScalarSettings(item, scalars);
 }
 
@@ -743,7 +762,7 @@ function scalarReceipt(office: Office, name: string) {
 }
 
 export async function validateSetupOverrides(office: Office, item: InstalledPackage) {
-  if (!item.manifest.settings_schema && (existsSync(scalarReceipt(office, item.entry.name)) || Object.keys(item.entry.settings ?? {}).some(key => !Object.hasOwn(item.manifest.settings, key)))) await resolveSetupSettings(item);
+  if (!item.manifest.settings_schema && (existsSync(scalarReceipt(office, item.entry.name)) || Object.keys(item.entry.settings ?? {}).some(key => !Object.hasOwn(item.manifest.settings, key)))) await resolveSetupSettings(office, item);
 }
 
 /** `.office.json`'s content: what the office declares to its packages. */
