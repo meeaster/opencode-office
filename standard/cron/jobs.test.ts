@@ -6,12 +6,14 @@ import { dirname, join } from "node:path";
 import * as v from "valibot";
 import { parse } from "yaml";
 
-import { loadOffice } from "../office.ts";
-import { recordRequiredFixtures } from "../test-builtin-record.ts";
-import { check, officeSchema } from "../schema.ts";
+import { loadOffice } from "../../src/office.ts";
+import { recordRequiredFixtures } from "../../src/test-builtin-record.ts";
+import { check, officeSchema } from "../../src/schema.ts";
+import { unitDirVariable } from "../../src/systemd.ts";
 import { catchUp, supercronicInput } from "./container.ts";
-import { cronTimers, installTimers, removeTimers, staleTimerUnits, unitDirVariable } from "./host.ts";
-import { executeJob, namedJob, requireJobs } from "./jobs.ts";
+import { namedJob, requireJobs } from "./discovery.ts";
+import { cronTimers, installTimers, removeTimers, staleTimerUnits } from "./host.ts";
+import { executeJob } from "./jobs.ts";
 
 let root: string;
 

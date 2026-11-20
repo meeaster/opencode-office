@@ -1,4 +1,4 @@
-// The schedule grammar and UTC matching shared by both cron runners and the YAML schemas.
+// The schedule grammar and UTC matching shared by both cron runners and the declaration schemas.
 const macros = new Map(Object.entries({
   "@yearly": "0 0 1 1 *",
   "@annually": "0 0 1 1 *",

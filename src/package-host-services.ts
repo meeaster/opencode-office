@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { argument, quoted, requireLocalUnit, unitDir } from "./cron/host.ts";
+import { argument, quoted, requireLocalUnit, unitDir } from "./systemd.ts";
 import { machineDir, miseShims } from "./host-env.ts";
 import { userSystemd } from "./host-server.ts";
 import { installedPackages } from "./layout.ts";

@@ -16,7 +16,7 @@ import { claudeFiles } from "../claude.ts";
 import { boundRevision, collectReferences } from "../collect-references.ts";
 import { beginReferencePublication, planReferenceApply } from "../reference-publication.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
-import { collectJobs } from "../cron/jobs.ts";
+import { collectJobs } from "../../standard/cron/jobs.ts";
 import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
 import { cloneOrFetchStreamed, cloneShallowStreamed, discardFailedClone, isClone, referenceGit, refreshCloneStreamed } from "../git.ts";
 import { clones, installedPackages, type InstalledPackages, oldKnowledgePlugin, packageLink, pluginLinks, skillSelections } from "../layout.ts";

@@ -4,7 +4,7 @@
 import * as v from "valibot";
 
 import type { PackageContext, SettingValue } from "../packages/office/package-context.ts";
-import { validSchedule } from "./cron/schedule.ts";
+import { validSchedule } from "../standard/cron/schedule.ts";
 
 export type { SettingValue } from "../packages/office/package-context.ts";
 
