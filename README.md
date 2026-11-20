@@ -174,7 +174,8 @@ A failure stops the command with exit code 1; Ctrl+C stops it with 130 and stops
 
 | Path | What it is |
 |---|---|
-| `src/` | The CLI in TypeScript on Bun: `cli.ts` (arguments), `schema.ts` (the shape of `office.yaml`, `office.lock` and a package's `package.yaml`, shared with the `office` package's plugin), `office.ts` (reads `office.yaml`), `versions.ts` (pins, the lock, what was applied), `sfw.ts` (Socket Firewall: what is wrapped, the wrappers and the environment file), `host-env.ts` (a host-mode office's environment file and sfw folder), `host-tools.ts` (the programs the CLI runs on the host: its own mise, and the office package's tools), `hook.ts` (git's pre-commit hook in an office), `releases.ts` (release lookups on GitHub and the registry), `layout.ts` (what the folders should hold), `packages.ts` (the three kinds of package; installs, updates, restores and reads them), `package-services.ts` (the discovery and generated-secret adapter for the [standard Compose planner](standard/compose/README.md)), `package-system.ts` (a package's one-time machine setup: where it applies, its fragment part, its check), `migrate.ts` (moves an office from an earlier release's layout), `desktop.ts` (installs package panels on the desktop app's machine), `tool.ts` (the tool's own files, the built-in packages as offices get them, its version, the image's build folder), `report/` (how setup, sync and up show progress: one reporter, a Clack renderer for a terminal and plain lines otherwise), `build.ts` (compiles the executable), `vendor-artifact-share.ts` (regenerates the libraries the artifact-share package carries, from pinned devDependencies), `commands/` and `cron/` (`container.ts` for supercronic, `host.ts` for systemd timers). Runtime dependencies: `yaml`, `valibot` and `@clack/prompts` |
+| `src/` | The CLI in TypeScript on Bun: `cli.ts` (arguments), `schema.ts` (the shape of `office.yaml`, `office.lock` and a package's `package.yaml`, shared with the `office` package's plugin), `office.ts` (reads `office.yaml`), `versions.ts` (pins, the lock, what was applied), `sfw.ts` (Socket Firewall: what is wrapped, the wrappers and the environment file), `host-env.ts` (a host-mode office's environment file and sfw folder), `host-tools.ts` (the programs the CLI runs on the host: its own mise, and the office package's tools), `hook.ts` (git's pre-commit hook in an office), `releases.ts` (release lookups on GitHub and the registry), `layout.ts` (what the folders should hold), `packages.ts` (the three kinds of package; installs, updates, restores and reads them), `package-services.ts` (the discovery and generated-secret adapter for the [standard Compose planner](standard/compose/README.md)), `package-system.ts` (a package's one-time machine setup: where it applies, its fragment part, its check), `migrate.ts` (moves an office from an earlier release's layout), `desktop.ts` (installs package panels on the desktop app's machine), `tool.ts` (the tool's own files, the built-in packages as offices get them, its version, the image's build folder), `report/` (how setup, sync and up show progress: one reporter, a Clack renderer for a terminal and plain lines otherwise), `build.ts` (compiles the executable), `vendor-artifact-share.ts` (regenerates the libraries the artifact-share package carries, from pinned devDependencies), and `commands/` (office workflows). Runtime dependencies: `yaml`, `valibot` and `@clack/prompts` |
+| `standard/cron/` | The compiled-in `office cron` handler, job resolution, host timers and container scheduler. Jobs still belong to the declaring office or package. |
 | `bin/office` | Runs the CLI from the checkout with Bun |
 | `template/office/` | What `office init` copies once: `AGENTS.md`, `README.md`, `office.yaml`, `.opencode/opencode.jsonc`, `executor-apps/opencode/`, `mise.toml` (node), `machine.toml` (empty, the office's own; `office sync` writes `machine.packages.toml` beside it), `.pre-commit-config.yaml` (gitleaks), `.gitignore` |
 | `template/desk/` | What `office sync` scaffolds for a new desk, including its starter Executor app, which a desk with `app: false` in `office.yaml` goes without |
@@ -361,7 +362,31 @@ cron:
 
 Schedules are five-field UTC cron expressions or time macros such as `@daily`. The script must be a regular `.sh` file relative to its declaring office or package, with no symlinks. All jobs run under `/bin/sh` from the office root. `office cron list` shows IDs such as `office.daily-report` and `package.office.update-references`; use `office cron run <job-id>` to run one directly in the execution environment you intend. Keep the job name when renaming its script: the ID tracks the job across renames.
 
-A package definition uses the same `cron` mapping. A package job may also set `when: host`, `when: managed-host`, or `when: container`; omitting `when` makes it applicable in both modes. An office may change a package's schedule or disable a job under that package entry's `cron:` (alongside `settings`), for example:
+An `office.ts` author can register a shell script in ordinary TypeScript. For example, put this in `packages/reports/office.ts`, put `printf 'report from %s\n' "$PWD"` in `packages/reports/scripts/report.sh`, and select `reports` in `office.yaml`:
+
+```ts
+import type { CronContext } from "../../.office/packages/office/package-context.ts";
+
+export default {
+  name: "reports",
+  description: "Run this office's scheduled report",
+  settings: { enabled: { description: "Schedule the report", default: true } },
+  registerCron(ctx: CronContext): undefined {
+    const active = ctx.settings.enabled === true && ctx.cron.mode !== "container";
+    ctx.cron.job("report", active ? { schedule: "15 9 * * *", script: "scripts/report.sh" } : false);
+  },
+};
+```
+
+Run `office sync --packages`, then `office cron list`. On a host, `office cron run package.reports.report` reads the named owner's `registerCron` and runs the script. Register commands and references separately in `setup(ctx)`; named cron execution never calls it. `registerCron` must return synchronously, without a return value. It runs as trusted package code, including during validation. Put work in the script: rejecting a registration cannot undo external effects its author started.
+
+`ctx.cron.mode` is `"host"`, `"managed-host"` or `"container"`. `ctx.settings` is validated against the **current** package entry. An unsynced settings edit may therefore select a different script even while the package's `.settings.json` and indexed commands still use the last synced settings. Run `office sync --packages` to bring these inputs together; `office up` applies the resulting schedules.
+
+Omit a job to withdraw its name when there is no override. Use `job(name, false)` to keep a portable override valid while a job is inapplicable; an unregistered override name is an error. A failed registration, a repeated name (including `false`), or a name also claimed by the static `cron` mapping rejects the entire owner's batch. No callback, job table or mode is saved in the command index.
+
+When updating from a CLI that shipped `packages/office/package.yaml`, installed timers can use the new executable immediately. `office sync --packages` replaces that copy with the TS author; the scripts, timer arguments and success-history paths keep the same IDs. Every runner sharing the adopted copy must understand `registerCron`, including the CLI inside a container image. For a downgrade, restore compatible package copies (for built-ins, sync with the older executable) before resuming scheduled work.
+
+The static `cron` mapping remains supported in both `package.yaml` and `office.ts`. A static job may also set `when: host`, `when: managed-host`, or `when: container`; omitting `when` makes it applicable in both modes. Static and registered jobs share validation and cannot claim the same qualified ID. The scheduler is compiled into `office`, not a package to select. `office cron run` reads only the named owner. An office may change a package's schedule or disable a job under its package entry's `cron:` (alongside `settings`), for example:
 
 ```yaml
 packages:
@@ -374,7 +399,7 @@ Only `schedule` and `enabled` can be overridden; `enabled: true` cannot override
 
 In host mode, `office up` installs systemd user timers named `office-<name>-cron-<job-id>.timer` with UTC `OnCalendar` and `Persistent=true`. An existing timer catches up once after a missed interval; a timer enabled for the first time waits for its first scheduled time. A host schedule cannot restrict both the day of the month and weekday. `office down` removes the generated units and stops their running cron services. The next `office up` reinstalls enabled jobs; it also removes obsolete units written by earlier releases.
 
-In container mode, the entrypoint generates the supercronic input in UTC. It first runs each due job once, including jobs with no successful run. Successful executions leave a stamp per qualified job ID under `$XDG_STATE_HOME/office/cron/<office>` (by default `~/.local/state/office/cron/<office>` in the home volume). `office up` recreates the container when its generated schedule changes.
+In container mode, the entrypoint generates the supercronic input in UTC. Catch-up traverses the initial job IDs once. Before each run it rereads that owner, schedule and success stamp: a preceding script can disable or reschedule a later job. Successful executions leave a stamp per qualified job ID under `$XDG_STATE_HOME/office/cron/<office>` (by default `~/.local/state/office/cron/<office>` in the home volume). `office up` recreates the container when its generated schedule changes.
 
 The required `office` package supplies these daily jobs in both modes (plus `package.office.update-agent-clis` on managed hosts):
 

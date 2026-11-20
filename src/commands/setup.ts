@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { requireJobs } from "../cron/jobs.ts";
+import { requireJobs } from "../../standard/cron/discovery.ts";
 import { git } from "../git.ts";
 import { githubStep, planGithub, unreachableSources } from "../github.ts";
 import { installHook } from "../hook.ts";

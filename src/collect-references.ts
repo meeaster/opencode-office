@@ -1,4 +1,6 @@
 import * as v from "valibot";
+import { collectJobs } from "../standard/cron/jobs.ts";
+import { setupContext } from "./package-definition.ts";
 import { commandConflicts, commandRegistration, type CommandMetadata } from "./command-table.ts";
 import type { InstalledPackages } from "./layout.ts";
 import type { Office, PackageEntry, Repository } from "./office.ts";
@@ -49,22 +51,28 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
     const name = item.entry.name;
     const pkg = available.get(name);
 
-    if (pkg && !pkg.manifest.setup && !pkg.manifest.opencode) continue;
+    if (pkg && !pkg.manifest.setup && !pkg.manifest.registerCron && !pkg.manifest.opencode) continue;
 
     const source = provenance(item, previous, rejected.has(name), embedded);
     const values: Repository[] = [];
 
-    if (pkg && !pkg.manifest.setup) {
+    if (pkg && !pkg.manifest.setup && !pkg.manifest.registerCron) {
       // Bind an OpenCode-only Git contributor's immutable revision for repair too.
       candidate.contributors.push({ name, ...source, stale: false, references: [] });
       continue;
     }
 
-    if (pkg?.manifest.setup) {
+    if (pkg) {
       try {
+        if (pkg.manifest.registerCron) {
+          const cron = collectJobs({ ...office, cron: {} }, { installed: [pkg], problems: [] });
+
+          if (!cron.ok) throw new Error(cron.errors.join("; "));
+        }
+
         const routes: CommandMetadata[] = [];
         const invalid: string[] = [];
-        await pkg.manifest.setup({
+        await pkg.manifest.setup?.(setupContext({
           settings: structuredClone(pkg.settings),
           command(input) {
             const read = commandRegistration(input);
@@ -81,7 +89,7 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
             if (!read.ok) throw new Error(read.errors.join("; "));
             values.push(read.value.value);
           },
-        });
+        }));
 
         const commands = routes.length ? {
           routes: [...routes], settings: pkg.settings,

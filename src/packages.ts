@@ -23,7 +23,7 @@ import { copyFromRepository } from "./git.ts";
 import { type Office, OfficeError, type PackageEntry } from "./office.ts";
 import { readDefinition } from "./package-definition.ts";
 import { readSnapshot } from "./reference-snapshot.ts";
-import { collectJobs } from "./cron/jobs.ts";
+import { collectJobs } from "../standard/cron/jobs.ts";
 import { composeProblems, packageComposeFile, settingsEnv } from "./package-services.ts";
 import { systemSection } from "./package-system.ts";
 import { check, type PackageManifest, type Parsed, scalarSetting, type SettingValue, settingVariable } from "./schema.ts";
@@ -537,7 +537,7 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
   const settings = structuredClone(entry.settings ?? {});
 
   for (const key of Object.keys(entry.cron)) {
-    if (!Object.hasOwn(manifest.cron, key)) errors.push(`packages.${entry.name}.cron.${key}: no such job in ${file}`);
+    if (!manifest.registerCron && !Object.hasOwn(manifest.cron, key)) errors.push(`packages.${entry.name}.cron.${key}: no such job in ${file}`);
   }
 
   if (manifest.settings_schema !== undefined) {

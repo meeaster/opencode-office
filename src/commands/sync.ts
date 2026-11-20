@@ -17,7 +17,7 @@ import { claudeFiles } from "../claude.ts";
 import { boundRevision, collectReferences } from "../collect-references.ts";
 import { beginReferencePublication, planReferenceApply } from "../reference-publication.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
-import { collectJobs } from "../cron/jobs.ts";
+import { collectJobs } from "../../standard/cron/jobs.ts";
 import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
 import { cloneOrFetchStreamed, clonePluginStreamed, existingPluginDestination, git, isClone, PluginCheckoutProblem, referenceGit, referenceOriginProblem, refreshCloneStreamed, verifiedHead } from "../git.ts";
 import { type Clone, clones, installedPackages, skillSelections } from "../layout.ts";
@@ -591,7 +591,8 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
     changes.push(...removePackage(office, name));
   }
 
-  const cron = collectJobs(office, { ...installed, problems: [] });
+  // Executable cron owners were validated with their other contributions before publication.
+  const cron = collectJobs(office, { installed: installed.installed.filter(pkg => !pkg.manifest.registerCron), problems: [] });
 
   if (!cron.ok) changes.push(...cron.errors.map((error) => `FAILED ${error}`));
 

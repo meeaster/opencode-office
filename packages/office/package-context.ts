@@ -27,3 +27,14 @@ export type PackageContext = {
     value: { name: string; url: string; ref?: string; description?: string };
   }): void;
 };
+
+export type CronContext = {
+  settings: Readonly<Record<string, SettingValue>>;
+  cron: {
+    readonly mode: "managed-host" | "host" | "container";
+    /** false reserves an inapplicable job's override name without scheduling it. */
+    job(localName: string, definition: { schedule: string; script: string } | false): void;
+  };
+};
+
+export type RegisterCron = (ctx: CronContext) => undefined;

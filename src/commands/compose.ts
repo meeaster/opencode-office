@@ -14,9 +14,10 @@ import { randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { cronRevision } from "../cron/container.ts";
-import { cronTimers, hasSystemd, installTimers, refreshTimer, removeTimers } from "../cron/host.ts";
-import { requireJobs } from "../cron/jobs.ts";
+import { cronRevision } from "../../standard/cron/container.ts";
+import { requireJobs } from "../../standard/cron/discovery.ts";
+import { cronTimers, installTimers, refreshTimer, removeTimers } from "../../standard/cron/host.ts";
+import { hasSystemd } from "../systemd.ts";
 import { ghConfigDir, ghHosts } from "../github.ts";
 import { hostTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";

@@ -2,9 +2,10 @@
 // an office needs no packages). Parsing returns the checked config, or one error per problem,
 // each naming the field and what it expected.
 import * as v from "valibot";
+import { isAsyncFunction } from "node:util/types";
 
-import type { OpenCodeContext, PackageContext, SettingValue } from "../packages/office/package-context.ts";
-import { validSchedule } from "./cron/schedule.ts";
+import type { OpenCodeContext, PackageContext, RegisterCron, SettingValue } from "../packages/office/package-context.ts";
+import { validSchedule } from "../standard/cron/schedule.ts";
 
 export type { SettingValue } from "../packages/office/package-context.ts";
 
@@ -34,6 +35,9 @@ const cronScript = v.pipe(
 );
 
 const cronFields = { schedule: cronSchedule, script: cronScript };
+
+export const registeredJobName = v.pipe(jobName, v.check(key => !["constructor", "prototype", "__proto__"].includes(key), "reserved job name"));
+export const registeredJob = v.strictObject(cronFields, mapping);
 
 // Valibot's record parser skips prototype keys; refuse them instead of losing a job or override.
 const noPrototypeKeys = v.rawCheck(({ dataset, addIssue }) => {
@@ -643,11 +647,15 @@ export const packageManifestSchema = v.pipe(
       host: v.optional(hostBlock),
       system: v.optional(systemBlock),
       cron: packageCron,
+      registerCron: v.optional(v.pipe(
+        v.custom<RegisterCron>(value => v.is(v.function(), value), "must be a function in office.ts"),
+        v.check(hook => !isAsyncFunction(hook), "must register jobs synchronously"),
+      )),
       executor_app: v.optional(executorAppBlock),
       // The label on Docker resources its services create themselves, which `office down` removes.
       spawns: v.optional(spawnsBlock),
     },
-    "must be a mapping of name, namespace, description, settings or settings_schema, secrets, tools, host, system, cron, executor_app and spawns",
+    "must be a mapping of name, namespace, description, settings or settings_schema, secrets, tools, host, system, cron, registerCron, executor_app and spawns",
   ),
   v.check((manifest) => manifest.settings === undefined || manifest.settings_schema === undefined, "choose settings or settings_schema, not both"),
   v.transform((manifest) => ({ ...manifest, settings: manifest.settings ?? {}, namespace: manifest.namespace ?? manifest.name })),

@@ -6,12 +6,14 @@ import { dirname, join } from "node:path";
 import * as v from "valibot";
 import { parse } from "yaml";
 
-import { loadOffice } from "../office.ts";
-import { recordRequiredFixtures } from "../test-builtin-record.ts";
-import { check, officeSchema } from "../schema.ts";
-import { catchUp, supercronicInput } from "./container.ts";
-import { cronTimers, installTimers, removeTimers, staleTimerUnits, unitDirVariable } from "./host.ts";
-import { executeJob, namedJob, requireJobs } from "./jobs.ts";
+import { loadOffice } from "../../src/office.ts";
+import { recordRequiredFixtures } from "../../src/test-builtin-record.ts";
+import { check, officeSchema } from "../../src/schema.ts";
+import { unitDirVariable } from "../../src/systemd.ts";
+import { catchUpJob, supercronicInput } from "./container.ts";
+import { namedJob, requireJobs } from "./discovery.ts";
+import { cronTimers, installTimers, removeTimers, staleTimerUnits } from "./host.ts";
+import { executeJob } from "./jobs.ts";
 
 let root: string;
 
@@ -142,7 +144,8 @@ test("catch-up is UTC, stamps qualified IDs on success and keeps a stamp through
     let office = loadOffice(root);
     const now = new Date("2026-11-17T06:10:00Z");
 
-    await catchUp(office, requireJobs(office), now);
+    await catchUpJob(office, "office.digest", now);
+    await catchUpJob(office, "package.demo.digest", now);
     expect(readFileSync(join(root, "xdg-state/office/cron/test/office.digest.stamp"), "utf8")).toBe("2026-11-17T06:10:00.000Z\n");
     expect(existsSync(join(root, "xdg-state/office/cron/test/package.demo.digest.stamp"))).toBe(false);
     expect(readFileSync(join(root, "office-runs"), "utf8")).toBe(`${root}\n`);
@@ -150,9 +153,9 @@ test("catch-up is UTC, stamps qualified IDs on success and keeps a stamp through
     write("office.yaml", `name: test\n${cron.replace("office.sh", "new.sh")}`);
     write("cron/new.sh", "printf '%s\\n' ran >> renamed-runs");
     office = loadOffice(root);
-    await catchUp(office, requireJobs(office), new Date("2026-11-17T06:20:00Z"));
+    await catchUpJob(office, "office.digest", new Date("2026-11-17T06:20:00Z"));
     expect(existsSync(join(root, "renamed-runs"))).toBe(false);
-    await catchUp(office, requireJobs(office), new Date("2026-11-18T06:00:00Z"));
+    await catchUpJob(office, "office.digest", new Date("2026-11-18T06:00:00Z"));
     expect(readFileSync(join(root, "renamed-runs"), "utf8")).toBe("ran\n");
   } finally {
     if (oldState === undefined) delete process.env.XDG_STATE_HOME;

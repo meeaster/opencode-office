@@ -1,4 +1,5 @@
 import { listing } from "../packages/references/commands/list.ts";
+import { setupContext } from "./package-definition.ts";
 import * as v from "valibot";
 import { claimsInspect, commandRegistration, type RegisteredCommand } from "./command-table.ts";
 import { findOffice, loadOffice, type Office, OfficeError, readOfficeFields } from "./office.ts";
@@ -90,7 +91,7 @@ async function handler(office: Selections, owner: Owner, canonical: string, requ
 
     if (manifest.name !== owner.name || !owner.commands) throw new OfficeError("command owner changed");
 
-    await manifest.setup?.({
+    await manifest.setup?.(setupContext({
       settings: structuredClone(owner.commands.settings), add() {},
       command(input) {
         const read = commandRegistration(input);
@@ -100,7 +101,7 @@ async function handler(office: Selections, owner: Owner, canonical: string, requ
 
         if (command.name === canonical || named(command, requested)) matches.push(command);
       },
-    });
+    }));
 
     if (matches.length !== 1 || matches[0].name !== canonical || !named(matches[0], requested)) throw new OfficeError("owner no longer provides this registration unambiguously");
 
