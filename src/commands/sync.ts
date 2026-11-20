@@ -9,7 +9,7 @@
 // It never rewrites AGENTS.md, other hand-written content, an existing app or a file a package's
 // template created; it deletes such a file only with its package, and only while unchanged.
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 
 import { prepareReferenceRefresh } from "../../packages/references/tasks/refresh.ts";
 import { claudeFiles } from "../claude.ts";
@@ -502,9 +502,16 @@ function installPanels(office: Office, installed: InstalledPackage[], removed: s
  * of a plugin no longer declared.
  */
 function excludePluginClones(office: Office): string[] {
-  const exclude = join(office.dir, ".git/info/exclude");
-
   if (!existsSync(join(office.dir, ".git"))) return [];
+
+  let exclude: string;
+
+  try {
+    // In a worktree office .git is a file; Git names the exclude file the worktrees share.
+    exclude = resolve(office.dir, git(["rev-parse", "--git-path", "info/exclude"], office.dir));
+  } catch {
+    return ["could not locate the office repository's info/exclude; plugin clones are not excluded from commits"];
+  }
 
   const lines = existsSync(exclude) ? readFileSync(exclude, "utf8").replace(/\n$/, "").split("\n") : [];
   // An interrupted or refused first plugin delivery can leave its staging folder in the root.

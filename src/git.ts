@@ -2,7 +2,7 @@
 // copies of one folder of a repository.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, type BigIntStats } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, writeFileSync, type BigIntStats } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import * as v from "valibot";
@@ -262,6 +262,11 @@ function sameEntry(path: string, original: BigIntStats) {
   return entry?.dev === original.dev && entry.ino === original.ino;
 }
 
+// A file in the claim's .git holding a random token. A freed inode number is reused by the next
+// entry created (ext4 does so at once), so an owner who deletes the claim and recreates the
+// destination can match its device and inode. Only Office's own .git holds the token.
+const claimToken = "office-claim";
+
 /** A plugin refusal whose message is safe to show: it never quotes Git output or URLs. */
 export class PluginCheckoutProblem extends Error {}
 
@@ -317,14 +322,17 @@ export async function clonePluginStreamed(
   const heldGit = join(work, "git");
   const released = join(work, "released");
   const metadata = join(dir, ".git");
+  const token = randomUUID();
   const kept: string[] = [];
   let published = false;
+  let holdingClaim = false;
   let folder: BigIntStats, owned: BigIntStats;
 
   try {
     // Git writes the claim's .git while it is still in staging: never into an owner's folder.
     git(["init", "--quiet", claim]);
     git(["remote", "add", "origin", url], claim);
+    writeFileSync(join(claim, ".git", claimToken), token, { flag: "wx" });
     folder = lstatSync(claim, { bigint: true });
     owned = lstatSync(join(claim, ".git"), { bigint: true });
   } catch (error) {
@@ -332,19 +340,29 @@ export async function clonePluginStreamed(
     throw error;
   }
 
+  /** Whether `path` is Office's .git: the same inode, still holding the token. */
+  const ownGit = (path: string) => sameEntry(path, owned) && lstatSync(join(path, claimToken)).isFile() && readFileSync(join(path, claimToken), "utf8") === token;
+  /** Whether `path` is the claim: the same folder, holding nothing but Office's .git. */
+  const ownClaim = (path: string) => sameEntry(path, folder) && readdirSync(path).join("/") === ".git" && ownGit(join(path, ".git"));
+
   const verify = () => {
     verifyCheckout();
+    let same = false;
 
-    if (!sameEntry(dir, folder) || !sameEntry(metadata, owned)) throw new PluginCheckoutProblem("plugin destination changed during delivery; nothing was published");
+    try {
+      same = sameEntry(dir, folder) && ownGit(metadata);
+    } catch { /* Missing or unreadable: changed. */ }
+
+    if (!same) throw new PluginCheckoutProblem("plugin destination changed during delivery; nothing was published");
   };
 
   /**
-   * Moves `path` into `holding` and keeps it there only while it is still `original` (and, with
-   * `empty`, holds nothing). Anything else, which someone substituted, goes straight back without
-   * replacing anything; if it cannot, it stays in `holding`, which is then never removed. Returns
-   * whether `path` was ours; a missing path, or one whose parent is no longer a folder, was not.
+   * Moves `path` into `holding` and keeps it there only while `ours` says so. Anything else, which
+   * someone substituted, goes straight back without replacing anything; if it cannot, it stays in
+   * `holding`, which is then never removed, less Office's own .git if it is in there. Returns whether
+   * `path` was ours; a missing path, or one whose parent is no longer a folder, was not.
    */
-  const withdraw = (path: string, original: BigIntStats, holding: string, empty: boolean) => {
+  const withdraw = (path: string, ours: (held: string) => boolean, holding: string) => {
     try {
       rename(path, holding);
     } catch (error) {
@@ -352,7 +370,9 @@ export async function clonePluginStreamed(
       throw error;
     }
 
-    if (sameEntry(holding, original) && (!empty || readdirSync(holding).length === 0)) return true;
+    try {
+      if (ours(holding)) return true;
+    } catch { /* An entry that cannot be checked, such as a file, is not ours. */ }
 
     try {
       rename(holding, path);
@@ -360,18 +380,26 @@ export async function clonePluginStreamed(
       const where = `an entry that appeared at ${path} during delivery is kept at ${holding}`;
 
       kept.push(where);
+
+      try {
+        if (ownGit(join(holding, ".git"))) rmSync(join(holding, ".git"), { recursive: true });
+      } catch { /* Not Office's .git, or not a folder: left as it is. */ }
+
       throw new PluginCheckoutProblem(where);
     }
 
     return false;
   };
 
-  /** Takes back Office's `.git` and empty claim folder, if they are still at the destination. */
+  /** Takes back Office's claim, or else just its `.git`, if still at the destination. */
   const withdrawClaim = () => {
-    if (!withdraw(metadata, owned, heldGit, false)) return;
-    rmSync(heldGit, { recursive: true, force: true });
+    if (withdraw(dir, ownClaim, released)) {
+      rmSync(released, { recursive: true });
 
-    if (withdraw(dir, folder, released, true)) rmdirSync(released);
+      return;
+    }
+
+    if (withdraw(metadata, ownGit, heldGit)) rmSync(heldGit, { recursive: true });
   };
 
   try {
@@ -384,11 +412,13 @@ export async function clonePluginStreamed(
     git(["--work-tree", tree, "checkout", "--quiet", "--detach", "FETCH_HEAD"], dir);
     verify();
 
-    if (!withdraw(metadata, owned, heldGit, false)) throw new PluginCheckoutProblem("plugin destination changed during delivery; kept what appeared there and published nothing");
-    renameSync(heldGit, join(tree, ".git"));
-
-    if (!withdraw(dir, folder, released, true)) throw new PluginCheckoutProblem("plugin destination changed during delivery; kept what appeared there and published nothing");
+    // One withdrawal of the whole claim, so nothing can be swapped in between two of them.
+    if (!withdraw(dir, ownClaim, released)) throw new PluginCheckoutProblem("plugin destination changed during delivery; kept what appeared there and published nothing");
+    holdingClaim = true;
+    rmSync(join(released, ".git", claimToken));
+    renameSync(join(released, ".git"), join(tree, ".git"));
     rmdirSync(released);
+    holdingClaim = false;
     publish(rename, tree, dir);
 
     return "cloned";
@@ -405,6 +435,9 @@ export async function clonePluginStreamed(
   } finally {
     rmSync(tree, { recursive: true, force: true });
     rmSync(claim, { recursive: true, force: true });
+
+    // Office's claim, withdrawn and verified, if publication stopped before taking its .git.
+    if (holdingClaim) rmSync(released, { recursive: true, force: true });
 
     try {
       rmdirSync(work); // Fails, keeping the staging folder, only while a kept entry is in it.
