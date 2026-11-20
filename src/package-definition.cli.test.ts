@@ -53,12 +53,12 @@ beforeAll(async () => {
 
   for (const path of ["src", "standard", "packages", "template", "image", "compose.yaml", "LICENSE", "package.json"]) cpSync(join(checkout, path), join(dist, path), { recursive: true });
   write(join(dist, "packages/arrival/office.ts"), `${marker} export default { name: "arrival", description: "Newly shipped" }`);
+  write(join(dist, "packages/legacy/package.yaml"), "name: legacy\ndescription: Legacy YAML fixture\n");
   const aws = join(dist, "packages/aws-emulator/office.ts");
   write(aws, read(aws).replace("if (settings.source_reference === false) return;", 'throw Error("changed built-in collector");'));
   const commands = join(dist, "packages/references/office.ts");
   write(commands, read(commands).replace("ctx.command(listing)", 'ctx.command({ ...listing, run(inputs) { console.log("variant package handler"); listing.run(inputs) } })'));
   const changed = join(dist, "packages/artifact-share");
-  rmSync(join(changed, "package.yaml"));
   write(join(changed, "office.ts"), 'import title from "./missing.ts"; export default {name:"artifact-share", description:title}');
   write(join(changed, "plugin/index.ts"), "// replacement");
   const template = join(dist, "template/office/office.yaml");
@@ -1144,7 +1144,7 @@ test("a broken embedded replacement leaves the installed package usable and fail
   select("  - name: artifact-share\n    settings: {url: https://example.org}\n");
   cli(0, "sync", "--packages");
   const pkg = join(dir, ".office/packages/artifact-share");
-  const paths = [join(dir, ".opencode/plugins/artifact-share/index.ts"), join(dir, "artifacts/README.md"), ...[".source.json", ".settings.json", ".template.json", "package.yaml", "scripts/build-site.ts"].map(file => join(pkg, file))];
+  const paths = [join(dir, ".opencode/plugins/artifact-share/index.ts"), join(dir, "artifacts/README.md"), ...[".source.json", ".settings.json", ".template.json", "office.ts", "scripts/build-site.ts"].map(file => join(pkg, file))];
   const before = paths.map(read);
   expect(newer(1, "sync", "--packages")).toContain("missing.ts");
   expect(paths.map(read)).toEqual(before);
@@ -1157,10 +1157,10 @@ test("a broken embedded replacement leaves the installed package usable and fail
 
 test("built-in YAML and TS enforce the same record and bootstrap repair rules", () => {
   const { dir, newer, select } = fixture("integrity");
-  select("  - name: arrival\n");
+  select("  - name: arrival\n  - name: legacy\n");
   newer(0, "sync", "--packages");
 
-  for (const [name, file] of [["arrival", "office.ts"], ["knowledge", "package.yaml"]]) {
+  for (const [name, file] of [["arrival", "office.ts"], ["legacy", "package.yaml"]]) {
     const pkg = join(dir, ".office/packages", name);
     const path = join(pkg, file);
     const original = read(path);
