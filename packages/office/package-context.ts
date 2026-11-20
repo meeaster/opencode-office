@@ -32,6 +32,8 @@ export type PackageContext = {
   settings: Readonly<Record<string, SettingValue>>;
   command(command: PackageCommand): void;
   booleanSetting(name: string, definition: { description: string; default: boolean }): boolean;
+  /** A scalar delivered to the package's settings file and native Compose environment. */
+  scalarSetting(name: string, definition: { description: string; default: string | number | boolean }): string | number | boolean;
   collection<T extends CollectionEntry>(collection: Collection<T>): void;
   add<T extends CollectionEntry>(collection: Collection<T>, value: NoInfer<T>): void;
 };

@@ -6,7 +6,7 @@ import { runPackageSetup } from "./package-definition.ts";
 import { commandConflicts, commandRegistration, type CommandMetadata } from "./command-table.ts";
 import type { InstalledPackages } from "./layout.ts";
 import type { Office, PackageEntry } from "./office.ts";
-import { collectionContract, gitSelection, providerFiles, readRecord, type ResolvedPackage } from "./packages.ts";
+import { applyScalarSettings, collectionContract, gitSelection, providerFiles, readRecord, type ResolvedPackage } from "./packages.ts";
 import { claims, inputHash, namedEntry, referenceFile, type ReferenceSnapshot } from "./reference-snapshot.ts";
 import type { ReferencePublication } from "./reference-publication.ts";
 
@@ -86,7 +86,7 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
         const provided = new Map<string, Collection<CollectionEntry>>();
         const settings = item.entry.settings ?? {};
 
-        const booleans = await runPackageSetup(pkg.manifest, settings, {
+        const { booleans, scalars } = await runPackageSetup(pkg.manifest, settings, {
           settings: structuredClone(pkg.settings),
           collection(handle) {
             if (!handle.id.startsWith(`${name}.`) || !/^[a-z0-9-]+\.[a-z0-9-]+$/.test(handle.id) || !v.is(v.function(), handle.parse) || provided.has(handle.id)) throw new Error(`invalid or duplicate collection ${handle.id}`);
@@ -117,8 +117,11 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
 
         const commands = routes.length ? {
           routes: [...routes], settings: pkg.settings, booleans: Object.keys(booleans).length ? booleans : undefined,
+          scalars: Object.keys(scalars).length ? scalars : undefined,
           files: item.kind !== "built-in" ? files : undefined,
         } : undefined;
+
+        applyScalarSettings(pkg, scalars);
 
         if (provided.size) {
           // A local provider has no immutable revision: bind its package bytes too. Setup
@@ -134,6 +137,9 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
         continue;
       } catch (error) {
         changes.push(`FAILED package ${name}: collecting references (${source.source}${source.commit ? ` @ ${source.commit}` : ""}): ${error instanceof Error ? error.message : String(error)}`);
+        // Setup did not resolve a complete settings file. Keep last-good package deliveries.
+        installed.installed = installed.installed.filter(current => current !== pkg);
+        installed.unread.add(name);
       }
     }
 

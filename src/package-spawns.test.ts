@@ -77,7 +77,7 @@ test("a sweep removes only what carries a declared label: containers before Comp
   expect(planSweep([], found)).toEqual({ containers: [], networks: [], kept: [] });
 });
 
-test("office up keeps a package's spawns label beside its applied copy and hands it over once the package leaves", () => {
+test("office up keeps a package's spawns label beside its applied copy and hands it over once the package leaves", async () => {
   const office = join(dir, "office");
   const label = join(office, "state/packages/tool/spawns.label");
 
@@ -87,21 +87,21 @@ test("office up keeps a package's spawns label beside its applied copy and hands
   write(join(office, "packages/plain/package.yaml"), "name: plain\ndescription: d\n");
   write(join(office, "packages/plain/compose.yaml"), "services:\n  plain:\n    image: busybox\n");
 
-  expect(preparePackageServices(loadOffice(office), false).apply()).toEqual([]);
+  expect((await preparePackageServices(loadOffice(office), false)).apply()).toEqual([]);
   expect(readFileSync(label, "utf8")).toBe("tool_ns=office-t-tool\n");
   expect(appliedSpawns(loadOffice(office))).toEqual(new Map([["tool", "tool_ns=office-t-tool"]]));
 
   // A changed label waits with its compose file for --upgrade: it describes what the applied copy runs.
   write(join(office, "packages/tool/package.yaml"), 'name: tool\ndescription: d\nspawns:\n  label: "tool_ns=${OFFICE_NAME}.tool"\n');
   write(join(office, "packages/tool/compose.yaml"), "services:\n  tool:\n    image: busybox:1\n");
-  preparePackageServices(loadOffice(office), false).apply();
+  (await preparePackageServices(loadOffice(office), false)).apply();
   expect(readFileSync(label, "utf8")).toBe("tool_ns=office-t-tool\n");
-  preparePackageServices(loadOffice(office), true).apply();
+  (await preparePackageServices(loadOffice(office), true)).apply();
   expect(readFileSync(label, "utf8")).toBe("tool_ns=t.tool\n");
 
   // Once the package leaves office.yaml, its label comes back for the sweep and its state goes.
   write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: plain\n");
-  expect(preparePackageServices(loadOffice(office), false).apply()).toEqual(["tool_ns=t.tool"]);
+  expect((await preparePackageServices(loadOffice(office), false)).apply()).toEqual(["tool_ns=t.tool"]);
   expect(existsSync(label)).toBe(false);
   expect(appliedSpawns(loadOffice(office))).toEqual(new Map());
 });

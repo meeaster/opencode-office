@@ -1,6 +1,6 @@
 import * as v from "valibot";
 import type { PackageCommand } from "../packages/office/package-context.ts";
-import { check, settingValue } from "./schema.ts";
+import { check, scalarSetting, settingValue } from "./schema.ts";
 
 // The core CLI still owns these command families, including its non-public entrypoints.
 const reserved = new Set("help version init setup executor secrets sync skills packages check refresh instructions context up down shell exec pin pair apps gui upgrade-tools update cron migrate-home env sfw-wrappers host-agent-cli-update".split(" "));
@@ -22,6 +22,7 @@ export const commandTable = v.strictObject({
   routes: v.pipe(v.array(v.strictObject(metadata)), v.nonEmpty()),
   settings: v.record(v.string(), settingValue),
   booleans: v.optional(v.record(v.string(), v.boolean())),
+  scalars: v.optional(v.record(v.string(), scalarSetting)),
   files: v.optional(v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/))),
 });
 

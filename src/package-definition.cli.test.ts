@@ -1423,7 +1423,7 @@ for (const order of [["alpha", "catalog"], ["catalog", "alpha"]]) {
   }, 60_000);
 }
 
-test("tracked updates validate the consuming settings and staged assets before publishing", () => {
+test("tracked updates validate the consuming settings and staged assets before publishing", async () => {
   const { dir, cli, select } = fixture("tracked");
   const repo = join(root, "tracked-source");
   const source = join(repo, "shared");
@@ -1439,7 +1439,7 @@ test("tracked updates validate the consuming settings and staged assets before p
   const first = commit(repo);
   select(`  - {name: shared, repo: ${repo}, ref: ${first}, path: shared, track: main, settings: {title: Mine}}\nstate: ./state\n`);
   cli(0, "sync", "--packages");
-  preparePackageServices(loadOffice(dir), false).apply();
+  (await preparePackageServices(loadOffice(dir), false)).apply();
   const paths = ["office.yaml", ".office/resolved/references.json", "shared.md", ".opencode/plugins/shared/index.ts", "state/packages/shared/compose.yaml", "state/packages/shared/settings.env", "state/packages/shared/include.yaml"].map(path => join(dir, path));
   paths.push(...[".source.json", ".settings.json", ".template.json", "base.env", "compose.yaml", "office.ts"].map(file => join(installed, file)));
   const before = paths.map(read);
@@ -1451,6 +1451,7 @@ test("tracked updates validate the consuming settings and staged assets before p
     ['export default {name:"shared",description:"New"}', "settings.title"],
     ['export default {name:"shared",description:"New",setup(c){c.booleanSetting("active",{default:true,description:"Active"})}}', "settings.title"],
     ['export default {name:"shared",description:"New",setup(c){c.booleanSetting("title",{default:true,description:"Title"})}}', "settings.title: must be true or false"],
+    ['export default {name:"shared",description:"New",setup(c){c.scalarSetting("title",{default:"ok",description:"Title"});c.scalarSetting("new_key",{default:"can\'t",description:"Not an env literal"})}}', "setting new_key holds a quote"],
     [definition.replace("settings:", 'cron:{job:{script:"missing.sh",schedule:"@daily"}},settings:'), "missing.sh"],
     [definition.replace("settings:", 'registerCron(ctx){ctx.cron.job("job",{script:"missing.sh",schedule:"@daily"})},settings:'), "missing.sh"],
     [definition.replace("settings:", 'registerCron(ctx){ctx.cron.job("job",false);throw Error("interrupted replacement")},settings:'), "interrupted replacement"],
@@ -1478,6 +1479,19 @@ test("tracked updates validate the consuming settings and staged assets before p
   expect(read(paths[0])).toContain(next);
   expect(cli(0, "references", "list")).toContain("enabled\tnew-revision\tpackage shared");
 }, 60_000);
+
+test("a broken Floci setup replacement preserves the installed native definition and delivered settings", () => {
+  const f = fixture("floci-stage");
+  f.select("  - {name: aws-emulator, settings: {port: '14566', storage: hybrid}}\n");
+  f.cli(0, "sync", "--packages");
+  const pkg = join(f.dir, ".office/packages/aws-emulator");
+  const files = ["office.ts", ".settings.json", ".source.json", "compose.yaml"].map(path => join(pkg, path));
+  const before = files.map(read);
+  expect(f.newer(1, "sync", "--packages")).toContain("changed built-in collector");
+  expect(files.map(read)).toEqual(before);
+  f.cli(0, "sync", "--packages");
+  expect(f.cli(0, "references", "list")).toContain("main\tpackage aws-emulator\n");
+});
 
 test("a broken embedded replacement leaves the installed package usable and fails a new init", () => {
   const { dir, cli, newer, select } = fixture("embedded");
@@ -1516,14 +1530,14 @@ test("built-in YAML and TS enforce the same record and bootstrap repair rules", 
   }
 }, 60_000);
 
-test("down uses the applied Compose inputs and marked unit without importing the selected owner", () => {
+test("down uses the applied Compose inputs and marked unit without importing the selected owner", async () => {
   const { dir, home, probe, cli, select } = fixture("teardown");
   select("  - name: notes\nstate: ./state\n");
   const pkg = join(dir, "packages/notes");
   write(join(pkg, "office.ts"), 'export default { name:"notes",description:"Notes",spawns:{label:"test=notes-${OFFICE_NAME}"}}');
   write(join(pkg, "compose.yaml"), "services: {notes: {image: example/notes}}\n");
   cli(0, "sync", "--packages");
-  preparePackageServices(loadOffice(dir), false).apply();
+  (await preparePackageServices(loadOffice(dir), false)).apply();
   write(join(pkg, "office.ts"), `${marker} throw Error("unread")`);
   const unit = "office-teardown-pkg-notes.bridge.service";
   write(join(home, "units", unit), `# office package services: ${dir}\n`);

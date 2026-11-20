@@ -414,15 +414,15 @@ async function installBuiltinFiles(office: Office, entry: PackageEntry, dir: str
 
   const edits = record === undefined ? [] : localEdits(dir, record);
 
-  await replaceFolder(dir, (staging) => {
+  await replaceFolder(dir, async (staging) => {
     for (const [file, content] of wanted) {
       mkdirSync(dirname(join(staging, file)), { recursive: true });
       writeFileSync(join(staging, file), content);
     }
 
     writeJson(join(staging, sourceFile), builtinRecordFor(hashes));
-    validateReplacement(office, { entry, dir: staging, kind: "built-in" });
-  });
+    await validateStaged(office, { entry, dir: staging, kind: "built-in" }, existsSync(dir));
+  }, true);
 
   if (record === undefined) return [`installed ${where}, the built-in ${entry.name} package`];
 
@@ -458,20 +458,7 @@ export async function fetchPackage(office: Office, entry: PackageEntry, source: 
   async function validate(dir: string) {
     const resolved = { entry: { ...entry, source }, dir, kind: "remote" } satisfies ResolvedPackage;
 
-    if (!movingPin) {
-      validateReplacement(office, resolved);
-
-      return;
-    }
-
-    // The candidate can import siblings whose installed paths another pin will replace.
-    // Keep its entire module graph out of the process that collects the final installation.
-    const worker = new Worker(join(import.meta.dir, Bun.isStandaloneExecutable ? "validate-replacement.js" : "validate-replacement.ts"), { workerData: { office, resolved } });
-    await new Promise<void>((resolve, reject) => {
-      worker.once("error", reject);
-      worker.once("message", resolve);
-      worker.once("exit", code => reject(new Error(`candidate validator exited (${code}) before completing`)));
-    }).finally(() => worker.terminate());
+    await validateStaged(office, resolved, existsSync(dir), movingPin);
   }
 
   try {
@@ -500,7 +487,7 @@ export async function fetchPackage(office: Office, entry: PackageEntry, source: 
       await validate(staging);
 
       return copied;
-    }, movingPin);
+    }, true);
 
     if (record === undefined) return [`installed ${where} from ${source.repo} at ${commit}`];
 
@@ -714,11 +701,36 @@ export function validateReplacement(office: Office, resolved: ResolvedPackage) {
   return item;
 }
 
-export async function validateSetupOverrides(item: InstalledPackage) {
+async function validateStaged(office: Office, resolved: ResolvedPackage, replacing: boolean, movingPin = false) {
+  if (!movingPin && !(replacing && existsSync(join(resolved.dir, packageComposeFile)))) {
+    validateReplacement(office, resolved);
+
+    return;
+  }
+
+  // A candidate can import siblings that the same sync is about to replace. Never warm
+  // the collector's module cache with the staged graph.
+  const worker = new Worker(join(import.meta.dir, Bun.isStandaloneExecutable ? "validate-replacement.js" : "validate-replacement.ts"), { workerData: { office, resolved } });
+  await new Promise<void>((resolve, reject) => {
+    worker.once("error", reject);
+    worker.once("message", resolve);
+    worker.once("exit", code => reject(new Error(`candidate validator exited (${code}) before completing`)));
+  }).finally(() => worker.terminate());
+}
+
+export function applyScalarSettings(item: InstalledPackage, scalars: Record<string, string | number | boolean>) {
+  const settings = { ...item.settings, ...scalars };
+
+  if (existsSync(join(item.dir, packageComposeFile))) settingsEnv({ ...item, settings });
+  item.settings = settings;
+}
+
+export async function validateSetupOverrides(item: InstalledPackage, all = false) {
   const overrides = item.entry.settings ?? {};
 
-  if (!item.manifest.setup || !Object.keys(overrides).some(key => !Object.hasOwn(item.manifest.settings, key))) return;
-  await runPackageSetup(item.manifest, overrides, { settings: structuredClone(item.settings), command() {}, collection() {}, add() {} });
+  if (!item.manifest.setup || !(all || existsSync(join(item.dir, packageComposeFile)) || Object.keys(overrides).some(key => !Object.hasOwn(item.manifest.settings, key)))) return;
+  const { scalars } = await runPackageSetup(item.manifest, overrides, { settings: structuredClone(item.settings), command() {}, collection() {}, add() {} });
+  applyScalarSettings(item, scalars);
 }
 
 /** `.office.json`'s content: what the office declares to its packages. */

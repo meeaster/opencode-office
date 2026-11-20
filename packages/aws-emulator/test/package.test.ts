@@ -7,6 +7,7 @@ import * as v from "valibot";
 import { parse } from "yaml";
 
 import { composeProblems } from "../../../src/package-services.ts";
+import { runPackageSetup } from "../../../src/package-definition.ts";
 import { spawnsLabel } from "../../../src/package-spawns.ts";
 import { check, packageManifestSchema, settingVariable } from "../../../src/schema.ts";
 import definition from "../office.ts";
@@ -38,10 +39,10 @@ test("the spawns label is the namespace Floci labels what it starts with, so off
   expect(spawnsLabel(manifest.value.spawns?.label ?? "", "personal")).toBe("floci_namespace=office-personal-floci");
 });
 
-test("the compose file uses only the package's settings and the office's name", () => {
+test("the compose file uses only the package's settings and the office's name", async () => {
   if (!manifest.ok) throw new Error(manifest.errors.join("\n"));
 
-  const serviceSettings = manifest.value.settings;
+  const { scalars: serviceSettings } = await runPackageSetup(manifest.value, {}, { settings: {}, add() {}, collection() {}, command() {} });
   const used = new Set([...composeText.matchAll(/\$\{([A-Z0-9_]+)/g)].map((match) => match[1]));
 
   expect([...used].sort()).toEqual([...Object.keys(serviceSettings).map(key => settingVariable(manifest.value.namespace, key)), "OFFICE_NAME"].sort());

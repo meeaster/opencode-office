@@ -89,37 +89,37 @@ test("a package's secrets carry its namespace, its name by default, and don't ta
   expect(manifest("name: design\nnamespace: doop\n", "  DOOP_URL:\n    generate: hex\n    bytes: 32\n")).toEqual({ ok: false, errors: ["secrets: a name is also the variable of one of the package's settings"] });
 });
 
-test("a namespaced package's services and settings follow its namespace, and two packages can't claim one", () => {
+test("a namespaced package's services and settings follow its namespace, and two packages can't claim one", async () => {
   const office = join(dir, "office");
 
   write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: canvas\n    settings:\n      url: https://example.com\n");
   write(join(office, "packages/canvas/package.yaml"), "name: canvas\nnamespace: doop\ndescription: d\nsettings:\n  url:\n    description: u\n    required: true\n");
   write(join(office, "packages/canvas/compose.yaml"), "services:\n  design:\n    image: busybox\n");
-  expect(() => preparePackageServices(loadOffice(office), false)).toThrow("package canvas: compose.yaml: services.design: must be named doop or doop-*");
+  await expect(preparePackageServices(loadOffice(office), false)).rejects.toThrow("package canvas: compose.yaml: services.design: must be named doop or doop-*");
 
   write(join(office, "packages/canvas/compose.yaml"), "services:\n  doop:\n    image: busybox\n  doop-db:\n    image: postgres\n");
-  preparePackageServices(loadOffice(office), false).apply();
+  (await preparePackageServices(loadOffice(office), false)).apply();
   expect(readFileSync(join(office, "state/packages/canvas/settings.env"), "utf8")).toBe("DOOP_URL='https://example.com'\n");
 
   write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: canvas\n    settings:\n      url: https://example.com\n  - name: doop\n");
   write(join(office, "packages/doop/package.yaml"), "name: doop\ndescription: d\n");
-  expect(() => preparePackageServices(loadOffice(office), false)).toThrow("packages canvas and doop claim the same namespace, doop");
+  await expect(preparePackageServices(loadOffice(office), false)).rejects.toThrow("packages canvas and doop claim the same namespace, doop");
 });
 
-test("a package without services gets declared secrets on up, and get reveals only current declarations", () => {
+test("a package without services gets declared secrets on up, and get reveals only current declarations", async () => {
   write(join(dir, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: notes\n  - name: plain\n");
   write(join(dir, "packages/notes/package.yaml"), "name: notes\ndescription: test\nsecrets:\n  NOTES_KEY:\n    generate: hex\n    bytes: 32\n");
   write(join(dir, "packages/plain/package.yaml"), "name: plain\ndescription: test\n");
   const office = loadOffice(dir);
 
   expect(() => packageSecret(office, "notes", "NOTES_KEY")).toThrow("run office up");
-  preparePackageServices(office, false).apply();
+  (await preparePackageServices(office, false)).apply();
   const key = packageSecret(office, "notes", "NOTES_KEY");
 
   expect(key).toMatch(/^[0-9a-f]{64}$/);
   expect(existsSync(secretsPath(office, "plain"))).toBe(false);
   expect(existsSync(join(office.state, "packages/notes/include.yaml"))).toBe(false);
-  preparePackageServices(office, false).apply();
+  (await preparePackageServices(office, false)).apply();
   expect(packageSecret(office, "notes", "NOTES_KEY")).toBe(key);
   write(join(dir, "packages/notes/package.yaml"), "name: notes\ndescription: test\n");
   expect(() => packageSecret(office, "notes", "NOTES_KEY")).toThrow("declares");
@@ -144,7 +144,7 @@ test("secrets are generated once: a later run adds only new ones and keeps every
   expect(ensureSecrets(path, { DOOP_AUTH: { generate: "hex", bytes: 32 } })).toEqual([]);
 });
 
-test.skipIf(Bun.which("docker") === null)("Compose uses applied package settings despite conflicting shell and project env values", () => {
+test.skipIf(Bun.which("docker") === null)("Compose uses applied package settings despite conflicting shell and project env values", async () => {
   const office = join(dir, "office");
   const before = process.env.CANVAS_PORT;
 
@@ -156,7 +156,7 @@ test.skipIf(Bun.which("docker") === null)("Compose uses applied package settings
 
   const loaded = loadOffice(office);
 
-  preparePackageServices(loaded, false).apply();
+  (await preparePackageServices(loaded, false)).apply();
   process.env.CANVAS_PORT = "22222";
 
   try {
@@ -200,7 +200,7 @@ test("a new package applies at once, a changed file waits for --upgrade, and a r
   expect(planServices(current, applied, listed, true).apply.map((change) => change.name)).toEqual(["changed", "dropped-file", "gone", "new"]);
 });
 
-test("office up runs the applied copy through an include in the package's folder, between the tool's files and the office's", () => {
+test("office up runs the applied copy through an include in the package's folder, between the tool's files and the office's", async () => {
   const office = join(dir, "office");
   const services = "services:\n  demo:\n    image: busybox\nvolumes:\n  demo-data:\n";
 
@@ -213,7 +213,7 @@ test("office up runs the applied copy through an include in the package's folder
   write(join(office, "packages/zeta/package.yaml"), "name: zeta\ndescription: z\n");
 
   const loaded = loadOffice(office);
-  const first = preparePackageServices(loaded, false);
+  const first = await preparePackageServices(loaded, false);
 
   expect(first.upgraded).toEqual([]);
   first.apply();
@@ -231,10 +231,10 @@ test("office up runs the applied copy through an include in the package's folder
 
   // A change waits: the applied copy stays until --upgrade, which names what to back up.
   write(join(office, "packages/demo/compose.yaml"), `${services}# changed\n`);
-  preparePackageServices(loaded, false).apply();
+  (await preparePackageServices(loaded, false)).apply();
   expect(readFileSync(join(state, "demo/compose.yaml"), "utf8")).toBe(services);
 
-  const upgrade = preparePackageServices(loaded, true);
+  const upgrade = await preparePackageServices(loaded, true);
 
   expect(upgrade.upgraded).toEqual([{ name: "demo", services: ["demo"], volumes: ["office-t_demo-data"] }]);
   upgrade.apply();
@@ -244,18 +244,18 @@ test("office up runs the applied copy through an include in the package's folder
   rmSync(join(office, "packages/demo/package.yaml"));
   write(join(office, "packages/demo/office.ts"), 'throw new Error("cannot load demo");');
   rmSync(join(office, "packages/demo/compose.yaml"));
-  preparePackageServices(loaded, true).apply();
+  (await preparePackageServices(loaded, true)).apply();
   expect(readFileSync(join(state, "demo/compose.yaml"), "utf8")).toBe(`${services}# changed\n`);
   expect(readFileSync(join(state, "demo/settings.env"), "utf8")).toBe("DEMO_URL='https://example.com'\n");
 
   // An invalid file is refused rather than applied.
   write(join(office, "packages/zeta/compose.yaml"), "services:\n  web:\n    ports: ['80:80']\n");
-  expect(() => preparePackageServices(loaded, true)).toThrow("package zeta: compose.yaml: services.web: must be named zeta or zeta-*");
+  await expect(preparePackageServices(loaded, true)).rejects.toThrow("package zeta: compose.yaml: services.web: must be named zeta or zeta-*");
 
   // A removed package stops contributing; its secrets stay.
   write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: zeta\n");
   write(join(office, "packages/zeta/compose.yaml"), services.replaceAll("demo", "zeta"));
-  preparePackageServices(loadOffice(office), false).apply();
+  (await preparePackageServices(loadOffice(office), false)).apply();
   expect(composeArguments(loadOffice(office), []).filter((arg) => arg.includes("include.yaml"))).toEqual([join(state, "zeta/include.yaml")]);
   expect(readFileSync(secretsPath(loaded, "demo"), "utf8")).toMatch(/^DEMO_KEY=[0-9a-f]{32}\n$/);
 });

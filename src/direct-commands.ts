@@ -104,7 +104,7 @@ async function handler(office: Selections, owner: Owner, canonical: string, requ
 
         if (command.name === canonical || named(command, requested)) matches.push(command);
       },
-    }, owner.commands.booleans ?? {}, new Set(Object.keys(manifest.settings))));
+    }, { ...owner.commands.scalars, ...owner.commands.booleans }, new Set(Object.keys(manifest.settings))));
 
     if (matches.length !== 1 || matches[0].name !== canonical || !named(matches[0], requested)) throw new OfficeError("owner no longer provides this registration unambiguously");
 

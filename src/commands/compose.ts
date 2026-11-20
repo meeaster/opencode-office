@@ -499,7 +499,7 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
 
   guardDowngrade(office, pins);
 
-  const services = preparePackageServices(office, upgrade);
+  const services = await preparePackageServices(office, upgrade);
 
   if (upgrade) {
     const what = [...moved.map((move) => `${move.tool} ${move.from} → ${move.to}`), ...services.upgraded.map((item) => `package ${item.name}'s ${packageComposeFile}`)];

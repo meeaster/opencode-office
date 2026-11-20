@@ -7,7 +7,7 @@ import { join } from "node:path";
 import * as compose from "../standard/compose/services.ts";
 import { installedPackages } from "./layout.ts";
 import { type Office, OfficeError, readEnvFile } from "./office.ts";
-import type { InstalledPackage } from "./packages.ts";
+import { type InstalledPackage, validateSetupOverrides } from "./packages.ts";
 import { say } from "./report/index.ts";
 import type { PackageManifest } from "./schema.ts";
 
@@ -65,8 +65,13 @@ export function serviceStatus(office: Office, item: InstalledPackage) {
   return compose.serviceStatus(office, source(item));
 }
 
-export function preparePackageServices(office: Office, upgrade: boolean) {
+export async function preparePackageServices(office: Office, upgrade: boolean) {
   const { installed, selected } = installedPackages(office);
+
+  for (const item of installed) {
+    if (existsSync(join(item.dir, compose.packageComposeFile))) await validateSetupOverrides(item);
+  }
+
   const plan = compose.prepareServices(office, installed.map(source), selected, upgrade);
   const envFile = (name: string) => secretsPath(office, name);
 
