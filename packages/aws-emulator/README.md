@@ -18,6 +18,12 @@ Then run `office sync` and commit what it wrote: the package in `.office/package
 | `port` | The loopback port the AWS endpoint is published on; `4566` by default. Floci listens on the same port inside its container. The endpoint is `http://localhost.floci.io:<port>`; `http://localhost:<port>` also works |
 | `ui_port` | The loopback port of the console; `4500` by default. The browser opens it at `http://floci.localhost:<ui_port>` (or `http://localhost:<ui_port>`) |
 | `storage` | Floci's [storage mode](https://floci.io/floci/configuration/storage/): `memory` (the default: a restart starts empty), `persistent`, `hybrid` or `wal`, which keep state in the `floci-data` volume |
+| `source_reference` | Include Floci's `main` branch under `references/floci/` (default `true`). |
+
+If `references:` in `office.yaml` already declares `floci`, either keep that declaration and set
+`settings: { source_reference: false }` on `aws-emulator`, or remove the owner declaration to adopt
+the package's URL, ref and description. Then run `office sync`. Duplicate claims reject the new
+reference list, even if their URLs match. Turning off the reference leaves any checkout on disk.
 
 A change reaches sessions (the addresses the skill gives them) when `office sync` writes the resolved settings, without restarting OpenCode; run `office up` to apply it to Floci.
 
@@ -37,7 +43,7 @@ Floci needs no real credentials: sessions pass `AWS_ENDPOINT_URL` and `test` key
 | Path | |
 |---|---|
 | `compose.yaml` | The `floci` service (`floci/floci:2.5.0`) and the `floci-ui` console (`floci/floci-ui:0.7.0`), both pinned by digest, and the `floci-data` volume. Floci gets the host's Docker socket, its own console launcher off (the console is `floci-ui`), every loopback bind-address setting it documents, and the resource namespace `office-<office name>-floci`, which prefixes and labels (`floci_namespace`) everything it starts, so it never collides with another Floci on the same Docker daemon. EC2's port-forwarding sidecar, which Floci would pull as `alpine/socat:latest`, is pinned by digest. Service images Floci chooses per resource (RDS's Postgres, EKS's k3s, MSK's Redpanda and the like) are left at Floci's defaults |
-| `package.yaml` | The settings above, `aws-cli` as a package tool at the version it was tested with, and the `spawns` label Floci puts on what it starts (see "Cleaning up") |
+| `office.ts` | The settings above, the source reference, `aws-cli` as a package tool at the version it was tested with, and the `spawns` label Floci puts on what it starts (see "Cleaning up") |
 | `plugin/index.ts` | The OpenCode plugin, which `office sync` links as `.opencode/plugins/aws-emulator`. It registers the skill below with this office's endpoint, console address (from the office's container, `http://floci-ui:4500`) and storage mode, and reloads it when the settings change |
 | `skills/floci/` | The skill every session gets: pointing the CLI and SDKs at Floci without touching real AWS, health and reset, EC2 instances, and where Floci's docs are |
 

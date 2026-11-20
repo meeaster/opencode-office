@@ -2,6 +2,7 @@
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { resolvedReferences } from "./reference-snapshot.ts";
 
 import * as v from "valibot";
 
@@ -25,7 +26,7 @@ import { summarize, sync } from "./commands/sync.ts";
 import { update } from "./commands/update.ts";
 import { upgradeTools } from "./commands/upgrade.ts";
 import { catchUp, runContainerJob, supercronicInput } from "./cron/container.ts";
-import { executeJob, requireJobs } from "./cron/jobs.ts";
+import { executeJob, namedJob, requireJobs } from "./cron/jobs.ts";
 import { migrateHome } from "./home-migration.ts";
 import { releaseMachine, serviceEnvironment } from "./machine.ts";
 import { currentOffice, type Office, OfficeError } from "./office.ts";
@@ -61,6 +62,8 @@ const usage = `usage: office <command> [--office <dir>]
                                --packages applies packages at their declared pins without refreshing
                                 desk repos, references or separately declared plugin clones.
                                 Each package has one definition: office.ts or package.yaml
+  references list              show desired references and their claimants without fetching.
+                               sync --references refreshes those checkouts without collecting.
   skills update                move each skills.copied group with a track to the newest commit of
                                its branch, or of its highest stable SemVer tag matching a pattern
                                such as v2.*; recopy the whole group and record the commit as its ref.
@@ -235,6 +238,18 @@ async function main(): Promise<void> {
       : await sessionInstructions(currentOffice(flags), flags.session);
 
     if (text !== "") console.log(text);
+  } else if (command === "references") {
+    if (rest.length !== 1 || rest[0] !== "list") throw new OfficeError("usage: office references list");
+    const office = currentOffice(flags);
+    const read = resolvedReferences(office.dir, office);
+
+    if (!read.ok) throw new OfficeError(read.errors.join("\n"));
+
+    if (read.value.legacy) console.error("No reference generation yet; listing office.yaml only. Run office sync --packages to collect contributors.");
+
+    for (const note of read.value.notes) console.error(note);
+
+    for (const entry of read.value.entries) console.log(`${entry.name}\t${entry.url}${entry.ref ? ` @ ${entry.ref}` : ""}\t${entry.owner}${entry.stale ? " (stale)" : ""}`);
   } else if (command === "context") {
     if (rest.length !== 0 || flags.model === undefined) throw new OfficeError("usage: office context --model <provider/model#variant>");
 
@@ -357,26 +372,25 @@ async function main(): Promise<void> {
   } else if (command === "host-agent-cli-update" && rest.length === 0) {
     const office = currentOffice(flags);
 
-    if (!requireJobs(office).some((job) => job.id === agentUpdateJob)) throw new OfficeError(`cron ${agentUpdateJob}: not enabled for this office`);
+    namedJob(office, agentUpdateJob);
 
     process.exitCode = await updateAgentClis(office);
   } else if (command === "cron") {
     const office = currentOffice(flags);
-    const jobs = requireJobs(office);
     const [action, id] = rest;
 
     if (action === "run" && id !== undefined && rest.length === 2) {
-      const job = jobs.find((candidate) => candidate.id === id);
-
-      if (job === undefined) throw new OfficeError(`cron ${id}: not enabled for this office; see office cron list`);
+      const job = namedJob(office, id);
 
       process.exitCode = office.opencode.mode === "container" ? await runContainerJob(office, job) : await executeJob(office, job);
     } else if (action === "list" && rest.length === 1) {
-      for (const job of jobs) console.log(job.id);
+      for (const job of requireJobs(office)) console.log(job.id);
     } else if (office.opencode.mode === "container" && rest.length === 1 && action === "supercronic") {
+      const jobs = requireJobs(office);
+
       if (jobs.length > 0) console.log(supercronicInput(jobs));
     } else if (office.opencode.mode === "container" && rest.length === 1 && action === "catch-up") {
-      await catchUp(office, jobs);
+      await catchUp(office, requireJobs(office));
     } else {
       throw new OfficeError("usage: office cron list | run <job-id>");
     }

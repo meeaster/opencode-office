@@ -115,7 +115,7 @@ test("a full sync reports its change lines as notes and FAILED lines as errors w
   expect(seen.every((entry) => (entry.kind === "error") === entry.text.startsWith("FAILED"))).toBe(true);
 });
 
-test("a shallow clone that fails leaves nothing behind, and one an earlier release left half-initialised is cloned again with the real error", async () => {
+test("a failed new reference leaves nothing behind; an existing unborn clone is repaired in place", async () => {
   const office = join(dir, "office");
   const upstream = join(dir, "upstream");
 
@@ -139,12 +139,11 @@ test("a shallow clone that fails leaves nothing behind, and one an earlier relea
   mkdirSync(join(office, "references/up"), { recursive: true });
   git(["init", "--quiet", join(office, "references/up")]);
   git(["remote", "add", "origin", upstream], join(office, "references/up"));
-  expect(await sync(loadOffice(office), { scope: "references" })).toEqual([realError]);
-  // The folder was there before this clone, so only what the clone made goes.
-  expect(existsSync(join(office, "references/up/.git"))).toBe(false);
+  expect((await sync(loadOffice(office), { scope: "references" }))[0]).toContain("couldn't find remote ref missing-branch");
+  expect(git(["config", "--get", "remote.origin.url"], join(office, "references/up"))).toBe(upstream);
 
   writeFileSync(join(office, "office.yaml"), `name: t\nreferences:\n  - { name: up, url: ${upstream} }\n`);
-  expect(await sync(loadOffice(office), { scope: "references" })).toEqual(["cloned reference references/up"]);
+  expect(await sync(loadOffice(office), { scope: "references" })).toEqual(["updated reference references/up"]);
   expect(() => cloneShallow(upstream, "missing-branch", join(dir, "blocking"))).toThrow("missing-branch");
   expect(existsSync(join(dir, "blocking"))).toBe(false);
 });

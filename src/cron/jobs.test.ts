@@ -11,7 +11,7 @@ import { recordBuiltinFixture } from "../test-builtin-record.ts";
 import { check, officeSchema } from "../schema.ts";
 import { catchUp, supercronicInput } from "./container.ts";
 import { cronTimers, installTimers, removeTimers, staleTimerUnits, unitDirVariable } from "./host.ts";
-import { executeJob, requireJobs } from "./jobs.ts";
+import { executeJob, namedJob, requireJobs } from "./jobs.ts";
 
 let root: string;
 
@@ -122,6 +122,7 @@ test("validates files inside their declaring root and rejects schedules systemd 
   rmSync(join(root, "packages/demo/digest.sh"));
   symlinkSync(join(root, "cron/office.sh"), join(root, "packages/demo/digest.sh"));
   expect(() => requireJobs(loadOffice(root))).toThrow("package.demo.digest: digest.sh must be an existing regular script");
+  expect(() => namedJob(loadOffice(root), "package.demo.digest")).toThrow("package.demo.digest: digest.sh must be an existing regular script");
 
   write("office.yaml", `name: test\n${host}cron: {digest: {schedule: '0 1 1 * MON', script: cron/office.sh}}\n`);
   expect(() => requireJobs(loadOffice(root))).toThrow("restricts both the day of the month and the weekday");

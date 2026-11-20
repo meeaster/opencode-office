@@ -9,6 +9,7 @@ import { parse } from "yaml";
 import { composeProblems } from "../../../src/package-services.ts";
 import { spawnsLabel } from "../../../src/package-spawns.ts";
 import { check, packageManifestSchema, settingVariable } from "../../../src/schema.ts";
+import definition from "../office.ts";
 
 const packageDir = join(import.meta.dir, "..");
 const scratch = mkdtempSync(join(tmpdir(), "aws-emulator-"));
@@ -21,7 +22,7 @@ type Compose = { services: { floci: { environment: Record<string, string>; netwo
 
 const compose: Compose = parse(composeText);
 
-const manifest = check(v.safeParse(packageManifestSchema, parse(readFileSync(join(packageDir, "package.yaml"), "utf8"))));
+const manifest = check(v.safeParse(packageManifestSchema, definition));
 
 test("office accepts the manifest and the compose file", () => {
   if (!manifest.ok) throw new Error(manifest.errors.join("\n"));
@@ -40,10 +41,11 @@ test("the spawns label is the namespace Floci labels what it starts with, so off
 test("the compose file uses only the package's settings and the office's name", () => {
   if (!manifest.ok) throw new Error(manifest.errors.join("\n"));
 
-  const { namespace, settings } = manifest.value;
+  const { source_reference, ...serviceSettings } = manifest.value.settings;
   const used = new Set([...composeText.matchAll(/\$\{([A-Z0-9_]+)/g)].map((match) => match[1]));
 
-  expect([...used].sort()).toEqual([...Object.keys(settings).map((key) => settingVariable(namespace, key)), "OFFICE_NAME"].sort());
+  expect(source_reference.default).toBe(true);
+  expect([...used].sort()).toEqual([...Object.keys(serviceSettings).map(key => settingVariable(manifest.value.namespace, key)), "OFFICE_NAME"].sort());
 });
 
 type Settings = { port: number | string; ui_port: number | string; storage: string };

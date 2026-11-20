@@ -9,12 +9,13 @@ import { dirname, join, relative, sep } from "node:path";
 import * as v from "valibot";
 
 import { check, type OfficeConfig, officeSchema, type Parsed, resolveTools } from "../../../src/schema.ts";
+import { type ClaimedReference, resolvedReferences } from "../../../src/reference-snapshot.ts";
 import sessionScope from "../claude/session-scope.txt" with { type: "text" };
 
 // What the text uses from office.yaml, read through the schema the CLI uses.
 type DeskInfo = { name: string } & OfficeConfig["desks"][string];
 
-type OfficeInfo = { name: string; desks: DeskInfo[]; references: OfficeConfig["references"]; catalogApps: string[]; socketFirewall: boolean; minimumReleaseAge: string };
+type OfficeInfo = { name: string; desks: DeskInfo[]; references: ClaimedReference[]; referenceNotes: string[]; catalogApps: string[]; socketFirewall: boolean; minimumReleaseAge: string };
 
 function readOffice(office: string): Parsed<OfficeInfo> {
   // The plugin and the compiled `office` both run on Bun, which parses YAML itself.
@@ -24,13 +25,15 @@ function readOffice(office: string): Parsed<OfficeInfo> {
 
   const config = result.value;
   const tools = resolveTools(config);
+  const references = resolvedReferences(office, config);
 
   return {
     ok: true,
     value: {
       name: config.name,
       desks: Object.entries(config.desks).map(([name, desk]) => ({ name, ...desk })),
-      references: config.references,
+      references: references.ok ? references.value.entries : [],
+      referenceNotes: references.ok ? references.value.notes : references.errors,
       catalogApps: config.executor?.catalog_apps ?? [],
       socketFirewall: tools.socketFirewall,
       minimumReleaseAge: tools.minimumReleaseAge,
@@ -100,9 +103,14 @@ function executorAppLines(root: string, scope: string, catalog: string[] = []): 
 // What every scope shares from the root, listed in full so a desk session can use it directly.
 function sharedSections(office: OfficeInfo, apps: string[]): string[] {
   return [
-    "## References (read-only clones; `office sync` updates them)",
+    "## References (desired read-only checkouts; `office sync` updates them, `office check` verifies origins)",
     "",
-    ...(office.references.length === 0 ? ["None."] : office.references.map((reference) => entry(`references/${reference.name}/`, reference.description))),
+    ...office.referenceNotes,
+    ...(office.references.length === 0 ? ["None listed."] : office.references.map(reference => {
+      const line = entry(`references/${reference.name}/`, reference.description);
+
+      return reference.owner === "office.yaml" ? line : `${line} (${reference.owner}${reference.stale ? ", stale" : ""})`;
+    })),
     "",
     "## Shared Executor apps",
     "",

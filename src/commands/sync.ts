@@ -12,10 +12,12 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlin
 import { join, relative } from "node:path";
 
 import { claudeFiles } from "../claude.ts";
+import { boundRevision, collectReferences } from "../collect-references.ts";
+import { beginReferencePublication, planReferenceApply } from "../reference-publication.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { collectJobs } from "../cron/jobs.ts";
 import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
-import { cloneOrFetchStreamed, cloneShallowStreamed, discardFailedClone, isClone, refreshCloneStreamed } from "../git.ts";
+import { cloneOrFetchStreamed, cloneShallowStreamed, discardFailedClone, isClone, refreshCloneStreamed, syncReference } from "../git.ts";
 import { clones, installedPackages, type InstalledPackages, oldKnowledgePlugin, packageLink, pluginLinks, skillSelections } from "../layout.ts";
 import { migrate } from "../migrate.ts";
 import { definitionFiles } from "../package-definition.ts";
@@ -187,8 +189,19 @@ const cloneSlots = 4;
  * as a part of `stage` as it runs. Returns one line per change, in office.yaml's
  * order, with a FAILED line for each that failed.
  */
-async function syncClones(office: Office, referencesOnly: boolean, stage: Stage, verbose: boolean): Promise<string[]> {
-  const work = clones(office).filter((clone) => !referencesOnly || clone.kind === "reference");
+async function syncClones(office: Office, scope: "references" | "others" | "all", stage: Stage, verbose: boolean): Promise<string[]> {
+  const references = scope === "others" ? undefined : planReferenceApply(office);
+
+  if (references && !references.ok) {
+    const errors = references.errors.map(error => `FAILED ${error}`);
+
+    for (const error of errors) stage.error(error);
+
+    return errors;
+  }
+
+  for (const note of references?.value.notes ?? []) stage.warn(note);
+  const work = clones(office, references?.value.entries ?? []).filter((clone) => scope !== "references" || clone.kind === "reference");
   const lines: string[][] = work.map(() => []);
 
   if (work.length === 0) return [];
@@ -201,7 +214,6 @@ async function syncClones(office: Office, referencesOnly: boolean, stage: Stage,
 
   for (const [index, clone] of work.entries()) {
     const where = relative(office.dir, clone.dir);
-    const shallow = clone.kind === "reference" || clone.kind === "plugin";
 
     const failed = (message: string) => {
       lines[index].push(`FAILED ${clone.kind} ${where}: ${message}`);
@@ -214,18 +226,24 @@ async function syncClones(office: Office, referencesOnly: boolean, stage: Stage,
       if (clone.kind === "plugin" && packageLink(clone.dir) !== undefined) unlinkSync(clone.dir);
 
       // A shallow clone that failed under an earlier release left a .git with no commit; clone again.
-      if (shallow) discardFailedClone(clone.dir);
+      if (clone.kind === "plugin") discardFailedClone(clone.dir);
       const present = isClone(clone.dir);
+
+      if (clone.stale && !present) throw new Error("stale contribution cannot authorize a new clone; repair the contributor and run office sync --packages");
 
       (present ? updates : missing).push(async () => {
         const part = stage.part(where, present ? "updating" : "cloning");
         const options = { line: part.output, verbose };
 
         try {
-          const result = shallow
-            ? present ? await refreshCloneStreamed(clone.ref, clone.dir, options) : await cloneShallowStreamed(clone.url, clone.ref, clone.dir, options)
-            : await cloneOrFetchStreamed(clone.url, clone.ref, clone.dir, options);
+          let result;
 
+          if (clone.kind === "reference") {
+            if (!references) throw new Error("reference apply requires a current claim");
+            result = await syncReference(clone, present, options, apply => references.value.guard(clone.name, apply));
+          } else if (clone.kind === "plugin") {
+            result = present ? await refreshCloneStreamed(clone.ref, clone.dir, options) : await cloneShallowStreamed(clone.url, clone.ref, clone.dir, options);
+          } else result = await cloneOrFetchStreamed(clone.url, clone.ref, clone.dir, options);
           part.done(result);
 
           if (result !== "current" && result !== "fetched") lines[index].push(`${result} ${clone.kind} ${where}`);
@@ -306,9 +324,7 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
     return reported;
   }
 
-  reported.push(...(await syncClones(office, scope === "references", stage, verbose)));
-
-  if (scope === "references") return reported;
+  if (scope === "references") return syncClones(office, "references", stage, verbose);
 
   stage.detail("migrating, scaffolding desks, copying skills and installing packages");
 
@@ -322,7 +338,9 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
   }
 
   changes.push(...copySkills(office));
-  await syncPackages(office, changes, stage);
+
+  const published = await syncPackages(office, changes, stage);
+  reported.push(...await syncClones(office, published ? "all" : "others", stage, verbose));
   changes.push(...claudeFiles(office.dir, true));
   changes.push(...linkSkills(office));
   changes.push(...excludePluginClones(office));
@@ -336,9 +354,18 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
  * office manages the machine), plugin links and desktop panels. `office sync` and `office packages
  * update` both apply packages this way. Each change goes to `changes`.
  */
-export async function syncPackages(office: Office, changes: { push: (...lines: string[]) => void }, stage: Stage = silentStage): Promise<void> {
+export async function syncPackages(office: Office, changes: { push: (...lines: string[]) => void }, stage: Stage = silentStage): Promise<boolean> {
+  const publication = beginReferencePublication(office);
+
+  if (!publication.ok) {
+    changes.push(...publication.errors.map(error => `FAILED ${error}; restore a readable generation, or verify installed Git pins before moving it aside and running office sync --packages`));
+
+    return false;
+  }
+
   const { packages } = resolvePackages(office);
   const rejected = new Set<string>();
+  const embedded = new Map<string, string>();
 
   for (const item of packages) {
     const services = join(item.dir, packageComposeFile);
@@ -348,8 +375,15 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
       changes.push(`${relative(office.dir, item.dir)} has both office.ts and package.yaml; restoring from the selected ${item.kind} source`);
     }
 
-    const copied = item.kind === "built-in" ? await installBuiltin(office, item.entry)
-      : item.kind === "remote" && item.entry.source !== undefined ? fetchPackage(office, item.entry, item.entry.source) : [];
+    let copied: string[] = [];
+
+    if (item.kind === "built-in") {
+      const result = await installBuiltin(office, item.entry);
+      embedded.set(item.entry.name, result.source);
+      copied = result.changes;
+    } else if (item.entry.source) {
+      copied = fetchPackage(office, item.entry, item.entry.source, boundRevision(publication.value.previous, item.entry));
+    }
 
     changes.push(...copied);
 
@@ -371,11 +405,12 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   }
 
   changes.push(...installed.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
+  const published = await collectReferences(office, packages, installed, changes, publication.value, rejected, embedded);
 
   if (needsEnvironmentOwners(office, installed)) {
     changes.push("FAILED the existing machine environment predates package ownership records; repair the unread packages and sync again before withdrawing packages or rewriting their machine setup");
 
-    return;
+    return published;
   }
 
   // .office/packages/ holds only what sync pulled in, so a folder no package wants goes. Its panel
@@ -402,6 +437,8 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   changes.push(...syncMachine(office, installed));
   changes.push(...linkPlugins(office, installed));
   changes.push(...installPanels(office, installed.installed, removedPanels));
+
+  return published;
 }
 
 /**

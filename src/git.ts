@@ -1,18 +1,90 @@
 // The git operations sync needs: shallow clones of a ref, kept current by fetching that ref, and
 // copies of one folder of a repository.
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
+import * as v from "valibot";
 
 import { streamChecked } from "./report/index.ts";
+import { check } from "./schema.ts";
+
+function gitOutput(args: string[], cwd?: string, checkoutFd?: number): string {
+  // Explicit POSIX stdio mapping: child fd 3 duplicates the ALREADY locked
+  // description. Even SIGKILL of this process cannot drop Git's duplicate.
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: checkoutFd === undefined ? ["ignore", "pipe", "pipe"] : ["ignore", "pipe", "pipe", checkoutFd] });
+}
 
 export function git(args: string[], cwd?: string): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return gitOutput(args, cwd).trim();
 }
 
 function head(dir: string): string {
   return git(["rev-parse", "HEAD"], dir);
+}
+
+/** Compare the configured fetch origin before even cleaning up an unborn reference clone.
+ * Git resolves a relative file remote from the checkout, independent of the CLI's cwd. */
+export function referenceOriginProblem(dir: string, wanted: string): string | undefined {
+  if ([dir, dirname(dir)].some(path => lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink())) return `${dir} is reached through a link; refusing to update it`;
+
+  if (!existsSync(join(dir, ".git"))) return undefined;
+  let actual;
+
+  try {
+    const urls = gitOutput(["config", "--null", "--get-all", "remote.origin.url"], dir).split("\0").slice(0, -1);
+
+    if (urls.length !== 1) return `expected one origin ${wanted}, found ${urls.join(", ")}; checkout left unchanged`;
+    [actual] = urls;
+  } catch {
+    return `expected origin ${wanted}, but ${dir} has no readable origin; checkout left unchanged`;
+  }
+
+  if (actual === wanted) return;
+
+  // Git may store an absolute local origin for a relative clone argument. Require the
+  // same existing path; lexical normalization alone doesn't establish that through links.
+  if (![actual, wanted].some(url => /^[^/]+:/.test(url))) {
+    const local = (url: string) => realpathSync.native(isAbsolute(url) ? url : `${dir}/${url}`);
+
+    try {
+      if (local(actual) === local(wanted)) return;
+    } catch {
+      // An unavailable path cannot establish equivalence.
+    }
+  }
+
+  return `expected origin ${wanted}, found ${actual}; checkout left unchanged`;
+}
+
+// Stored with the checkout, only after a successful fetch and checkout. A package-only
+// sync can publish a new desired ref without ever applying it to an existing clone.
+const appliedReference = "office.appliedReference";
+const appliedPair = v.strictObject({ origin: v.string(), ref: v.string(), commit: v.string() });
+
+function recordReference(dir: string, origin: string, ref: string, commit: string, checkoutFd?: number): void {
+  if (head(dir) !== commit) throw new Error(`reference ${dir}: HEAD is not the fetched commit ${commit}; not recording success`);
+  gitOutput(["config", "--local", "--replace-all", appliedReference, JSON.stringify({ origin, ref, commit })], dir, checkoutFd);
+}
+
+/** Older ref-only or pair-only records cannot prove the commit in this worktree. */
+export function appliedReferenceProblem(dir: string, origin: string, ref = "HEAD"): string | undefined {
+  const missing = `desired ${origin} @ ${ref}, no unambiguous applied origin and ref with a verified commit; run a healthy reference sync`;
+
+  try {
+    const read = check(v.safeParse(appliedPair, JSON.parse(git(["config", "--local", "--get-all", appliedReference], dir))));
+
+    if (!read.ok) return missing;
+    const pair = read.value;
+
+    if (pair.origin !== origin || pair.ref !== ref) return `desired ${origin} @ ${ref}, last applied ${pair.origin} @ ${pair.ref}; run a healthy reference sync`;
+    const actual = head(dir);
+
+    if (actual !== pair.commit) return `expected applied commit ${pair.commit}, found HEAD ${actual}; run a healthy reference sync`;
+  } catch {
+    return missing;
+  }
 }
 
 /**
@@ -226,6 +298,70 @@ export async function refreshCloneStreamed(ref: string | undefined, dir: string,
   git(["checkout", "--quiet", "--force", "--detach", "FETCH_HEAD"], dir);
 
   return head(dir) === before ? "current" : "updated";
+}
+
+/** Fetch independently; only the ticket holder may publish a clone or force its worktree.
+ * guard obtains the worktree lease under the same lock used to publish generations. */
+export async function syncReference(
+  { dir, url, ref = "HEAD", stale }: { dir: string; url: string; ref?: string; stale?: boolean },
+  present: boolean, options: GitOptions, guard: <T extends string | void>(apply: (fd: number) => T) => T,
+): Promise<"updated" | "current" | "cloned"> {
+  function verify() {
+    const problem = referenceOriginProblem(dir, url);
+
+    if (problem) throw new Error(problem);
+
+    if (isClone(dir) !== present) throw new Error(`reference checkout ${present ? "disappeared" : "already exists"}; retry sync`);
+
+    if (!stale) return;
+
+    if (!present) throw new Error("stale contribution cannot authorize a new clone; repair the contributor and run office sync --packages");
+    const drift = appliedReferenceProblem(dir, url, ref);
+
+    if (drift) throw new Error(drift);
+  }
+
+  guard(verify);
+
+  if (!present) {
+    mkdirSync(dirname(dir), { recursive: true });
+    const staging = mkdtempSync(join(dirname(dir), `.office-${basename(dir)}-`));
+    let moved = false;
+
+    try {
+      await cloneShallowStreamed(url, ref, staging, options);
+      recordReference(staging, url, ref, head(staging));
+      guard(() => {
+        verify();
+        renameSync(staging, dir);
+        moved = true;
+      });
+
+      return "cloned";
+    } finally {
+      if (!moved) rmSync(staging, { recursive: true, force: true });
+    }
+  }
+
+  const pending = `refs/office-fetch/${randomUUID()}`;
+
+  try {
+    await gitStreamed(["fetch", "--depth", "1", "--no-write-fetch-head", "--no-tags", "--refmap=", "--", "origin", `${ref}:${pending}`], dir, options);
+
+    return guard(fd => {
+      verify();
+      const commit = git(["rev-parse", "--verify", `${pending}^{commit}`], dir);
+      const before = unbornClone(dir) ? undefined : head(dir);
+      // A failed/interrupted local checkout cannot leave a previous success as authority.
+      gitOutput(["config", "--local", "--replace-all", appliedReference, "null"], dir, fd);
+      gitOutput(["checkout", "--quiet", "--force", "--detach", commit], dir, fd);
+      recordReference(dir, url, ref, commit, fd);
+
+      return before === commit ? "current" : "updated";
+    });
+  } finally {
+    if (existsSync(join(dir, ".git"))) git(["update-ref", "-d", pending], dir);
+  }
 }
 
 /** `cloneOrFetch`, without blocking. */
