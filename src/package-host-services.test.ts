@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { loadOffice } from "./office.ts";
 import { grantConsent, serviceEnvironment, syncMachine } from "./machine.ts";
 import { envFilePath } from "./host-env.ts";
-import { recordBuiltinFixture } from "./test-builtin-record.ts";
+import { recordRequiredFixtures } from "./test-builtin-record.ts";
 import { reconcileHostServices } from "./package-host-services.ts";
 
 test("host services only load the recorded environment of the same office", () => {
@@ -68,7 +68,7 @@ test("package units are applied once, upgraded explicitly, and removed when dese
     mkdirSync(dir, { recursive: true });
     mkdirSync(join(root, ".office/packages/office"), { recursive: true });
     writeFileSync(join(root, ".office/packages/office/package.yaml"), "name: office\ndescription: fixture\n");
-    recordBuiltinFixture(join(root, ".office/packages/office"));
+    recordRequiredFixtures(join(root, ".office/packages/office"));
     writeFileSync(join(root, "office.yaml"), "name: test\nopencode: { mode: host, url: http://localhost:4096 }\npackages: [{ name: demo }]\n");
     writeFileSync(join(dir, "package.yaml"), manifest);
     writeFileSync(join(dir, "start.sh"), "exec sleep 3600");

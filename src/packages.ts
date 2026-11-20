@@ -21,6 +21,7 @@ import { panelBundle } from "./desktop.ts";
 import { copyFromRepository } from "./git.ts";
 import { type Office, OfficeError, type PackageEntry } from "./office.ts";
 import { readDefinition } from "./package-definition.ts";
+import { readSnapshot } from "./reference-snapshot.ts";
 import { collectJobs } from "./cron/jobs.ts";
 import { composeProblems, packageComposeFile, settingsEnv } from "./package-services.ts";
 import { systemSection } from "./package-system.ts";
@@ -56,7 +57,7 @@ export const officeFile = ".office.json";
 const records = [sourceFile, settingsFile, templateFile, officeFile];
 
 /** The built-in packages every office has, without an entry in office.yaml. */
-export const requiredPackages = ["office"];
+export const requiredPackages = ["office", "references"];
 
 /** Where packages pulled into the office live: hidden, so searches and a plain `ls` skip them. */
 export const pulledFolder = ".office/packages";
@@ -97,12 +98,12 @@ export type InstalledPackage = ResolvedPackage & {
 };
 
 /** The folder of a built-in or remote package. */
-export function pulledDir(office: Office, name: string): string {
+export function pulledDir(office: Pick<Office, "dir">, name: string): string {
   return join(office.dir, pulledFolder, name);
 }
 
 /** The folder of a package written in the office. */
-export function localDir(office: Office, name: string): string {
+export function localDir(office: Pick<Office, "dir">, name: string): string {
   return join(office.dir, "packages", name);
 }
 
@@ -130,12 +131,16 @@ function isToolRepository(repo: string): boolean {
 }
 
 /** The historical first-party migration is not a claim on names shipped by future executables. */
-export function legacyBuiltin(entry: PackageEntry): boolean {
-  return ["office", "browser", "knowledge", "design", "aws-emulator", "artifact-share"].includes(entry.name)
-    && entry.source !== undefined && isToolRepository(entry.source.repo) && entry.source.path === `packages/${entry.name}` && entry.source.track === undefined;
+function historicalSource(name: string, source: { repo: string; path: string }) {
+  return ["office", "browser", "knowledge", "design", "aws-emulator", "artifact-share"].includes(name)
+    && isToolRepository(source.repo) && source.path === `packages/${name}`;
 }
 
-function ownershipProblems(office: Office, builtins: string[], only?: string): PackageProblem[] {
+export function legacyBuiltin(entry: PackageEntry): boolean {
+  return entry.source !== undefined && entry.source.track === undefined && historicalSource(entry.name, entry.source);
+}
+
+function ownershipProblems(office: Pick<Office, "dir" | "packages">, builtins: string[], only?: string): PackageProblem[] {
   const problems: PackageProblem[] = [];
 
   for (const name of new Set([...requiredPackages, ...office.packages.map(entry => entry.name)])) {
@@ -152,6 +157,19 @@ function ownershipProblems(office: Office, builtins: string[], only?: string): P
     if (existsSync(local) && !migratedCopy) problems.push({ packages: [name], message: `built-in package ${name} conflicts with local ${relative(office.dir, local)}; rename one before syncing` });
 
     if (entry?.source && !legacy) problems.push({ packages: [name], message: `built-in package ${name} conflicts with ${entry.source.repo}@${entry.source.ref}:${entry.source.path}; rename one before syncing` });
+    else if (!legacy) {
+      const installed = readRecord(pulledDir(office, name));
+
+      if (installed && "repo" in installed && !historicalSource(name, installed)) problems.push({ packages: [name], message: `built-in package ${name} conflicts with installed ${installed.repo}@${installed.ref}:${installed.path}; move the existing copy before syncing` });
+
+      if (name === "references" && !installed && existsSync(pulledDir(office, name))) {
+        const snapshot = readSnapshot(office.dir);
+
+        if (!snapshot.ok || !snapshot.value?.contributors.some(group => group.name === name && group.source.startsWith("built-in:"))) {
+          problems.push({ packages: [name], message: `cannot establish ownership of ${pulledFolder}/${name}; restore its source record or move the existing copy before syncing` });
+        }
+      }
+    }
   }
 
   return problems;
@@ -168,7 +186,7 @@ export function requirePackageOwnership(office: Office): void {
  * kind. An entry without `repo` is built-in when the tool ships a package of its name, so those
  * names are reserved. A required built-in's entry configures it without installing it twice.
  */
-export function resolvePackages(office: Office, only?: string): ResolvedPackages {
+export function resolvePackages(office: Pick<Office, "dir" | "packages">, only?: string): ResolvedPackages {
   const builtins = builtinPackages();
   const problems = ownershipProblems(office, builtins, only);
 
@@ -313,15 +331,32 @@ function thisCopy(): string {
  */
 export async function installBuiltin(office: Office, entry: PackageEntry) {
   const dir = pulledDir(office, entry.name);
-  const wanted = await builtinFiles(entry.name);
-  const hashes = Object.fromEntries([...wanted].map(([file, content]) => [file, sha256(content)]));
-  const source = `built-in:${sha256(JSON.stringify(Object.keys(hashes).sort().map(path => [path, hashes[path]])))}`;
+  const { wanted, hashes, source } = await embeddedPackage(entry.name);
 
   try {
     return { source, changes: installBuiltinFiles(office, entry, dir, wanted, hashes) };
   } catch (error) {
     return { source, changes: [`FAILED ${relative(office.dir, dir)} (${source}): ${error instanceof Error ? error.message : String(error)}`] };
   }
+}
+
+export function builtinSource(hashes: PackageRecord["files"]): string {
+  return `built-in:${filesDigest(hashes)}`;
+}
+
+export function filesDigest(hashes: PackageRecord["files"]): string {
+  return sha256(JSON.stringify(Object.keys(hashes).sort().map(path => [path, hashes[path]])));
+}
+
+export function gitSelection(source: NonNullable<PackageEntry["source"]>): string {
+  return `git:${sha256(JSON.stringify([source.repo, source.path, source.ref]))}`;
+}
+
+export async function embeddedPackage(name: string) {
+  const wanted = await builtinFiles(name);
+  const hashes = Object.fromEntries([...wanted].map(([file, content]) => [file, sha256(content)]));
+
+  return { wanted, hashes, source: builtinSource(hashes) };
 }
 
 function installBuiltinFiles(office: Office, entry: PackageEntry, dir: string, wanted: Map<string, string>, hashes: PackageRecord["files"]): string[] {
@@ -457,16 +492,17 @@ export function removePackage(office: Office, name: string): string[] {
   return [...changes, `removed ${where}/, which office.yaml no longer lists`];
 }
 
-/**
- * Reads an installed package and resolves its entry's settings against its definition: an unknown
- * setting, or a missing required one, is an error naming the field.
- */
-export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<InstalledPackage> {
+/** Check the installed source (plus its command binding when dispatching) before importing any code. */
+export function installedDefinition(office: Pick<Office, "dir">, resolved: ResolvedPackage, verifyBinding?: (record?: PackageRecord) => void) {
   const { entry, dir } = resolved;
   const where = relative(office.dir, dir);
 
-  const read = readDefinition(dir, where, () => {
-    if (resolved.kind === "local") return;
+  return readDefinition(dir, where, () => {
+    if (resolved.kind === "local") {
+      verifyBinding?.();
+
+      return;
+    }
 
     const record = readRecord(dir);
 
@@ -480,10 +516,17 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
 
     if ("repo" in record && !verifiedCommit(record.ref, record.commit)) throw new Error(`invalid recorded commit ${record.commit} for ${record.ref}; run office sync`);
 
+    verifyBinding?.(record);
     const edits = localEdits(dir, record);
 
     if (edits.length > 0) throw new Error(`package files edited: ${edits.join(", ")}; office sync restores them`);
   });
+}
+
+/** Validate this office's current entry settings against the installed definition. */
+export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<InstalledPackage> {
+  const { entry, dir } = resolved;
+  const read = installedDefinition(office, resolved);
 
   if (!read.ok) return read;
 

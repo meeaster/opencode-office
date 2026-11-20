@@ -4,19 +4,23 @@ import { lstatSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as v from "valibot";
 import { check, type OfficeConfig, type Parsed, repository } from "./schema.ts";
+import { commandConflicts, commandTable } from "./command-table.ts";
 
 export const referenceFile = ".office/resolved/references.json";
 
 const contributor = v.pipe(v.strictObject({
   name: v.string(), source: v.pipe(v.string(), v.regex(/^(?:local|unverified built-in|(?:git|built-in):[0-9a-f]{64})$/)),
   commit: v.optional(v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/))), stale: v.boolean(), references: v.array(repository),
-}), v.check(group => !group.source.startsWith("git:") || group.commit !== undefined || (group.stale && !group.references.length), "a Git contribution needs its resolved commit"));
+  commands: v.optional(commandTable),
+}), v.check(group => !group.source.startsWith("git:") || group.commit !== undefined || (group.stale && !group.references.length), "a Git contribution needs its resolved commit"),
+v.check(group => !group.commands || !group.source.startsWith("git:") || group.commands.files !== undefined, issue => `Git command owner ${issue.input.name} is missing its commands.files digest`),
+v.check(group => !group.commands || !group.stale, "a failed collector cannot own commands"));
 
-const schema = v.strictObject({
-  version: v.literal(2, "unsupported references snapshot version (expected 2)"),
+const schema = v.pipe(v.strictObject({
+  version: v.union([v.literal(2), v.literal(3)], "unsupported references snapshot version (expected 2 or 3)"),
   inputs: v.string(), owner: v.array(repository),
   contributors: v.pipe(v.array(contributor), v.check(groups => new Set(groups.map(group => group.name)).size === groups.length, "ambiguous contributor identity")),
-});
+}), v.check(s => s.version === 3 || !s.contributors.some(group => group.commands), "legacy references snapshot cannot contain commands"));
 
 export type ReferenceSnapshot = v.InferOutput<typeof schema>;
 
@@ -34,7 +38,11 @@ export function readSnapshot(dir: string): Parsed<ReferenceSnapshot | undefined>
   try {
     const result = check(v.safeParse(schema, JSON.parse(readFileSync(path, "utf8"))));
 
-    if (result.ok) return result;
+    if (result.ok) {
+      const errors = commandConflicts(result.value.contributors);
+
+      return errors.length ? { ok: false, errors } : result;
+    }
 
     return { ok: false, errors: result.errors.map(message => `${referenceFile}: ${message}`) };
   } catch (error) {
@@ -80,19 +88,31 @@ export function resolvedReferences(dir: string, config: Inputs): Parsed<{ entrie
   const read = readSnapshot(dir);
 
   if (!read.ok) return read;
-  const snapshot = read.value;
-  const entries = claims(snapshot ?? { owner: config.references, contributors: [] });
+
+  return referenceInputs(read.value, config);
+}
+
+/** Dispatch takes both its route and its data from the same atomic read. */
+export function referenceInputs(snapshot: ReferenceSnapshot | undefined, config: Inputs): Parsed<{ entries: ClaimedReference[]; notes: string[]; legacy: boolean }> {
+  if (snapshot) return publishedInputs(snapshot, config);
+
+  const entries = claims({ owner: config.references, contributors: [] });
+
+  return entries.ok ? { ok: true, value: { entries: entries.value, notes: [], legacy: true } } : entries;
+}
+
+export function publishedInputs(snapshot: ReferenceSnapshot, current?: Inputs): Parsed<{ entries: ClaimedReference[]; notes: string[]; legacy: boolean }> {
+  const entries = claims(snapshot);
 
   if (!entries.ok) return entries;
   const notes: string[] = [];
 
-  if (snapshot) {
-    for (const item of snapshot.contributors) {
-      if (item.stale) notes.push(`package ${item.name}: reference collection failed; using last-good references, if any`);
-    }
-
-    if (snapshot.inputs !== inputHash(config)) notes.push("reference inputs changed since collection; run office sync --packages");
+  for (const item of snapshot.contributors) {
+    if (item.stale) notes.push(`package ${item.name}: reference collection failed; using last-good references, if any`);
   }
 
-  return { ok: true, value: { entries: entries.value, notes, legacy: !snapshot } };
+  if (!current) notes.push("current reference/package inputs cannot be compared; using last-synced inputs. Repair office.yaml and run office sync --packages");
+  else if (snapshot.inputs !== inputHash(current)) notes.push("reference inputs changed since collection; run office sync --packages");
+
+  return { ok: true, value: { entries: entries.value, notes, legacy: false } };
 }

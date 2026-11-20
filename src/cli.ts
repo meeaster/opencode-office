@@ -2,7 +2,7 @@
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { resolvedReferences } from "./reference-snapshot.ts";
+import { commandHelp, dispatchCommand } from "./direct-commands.ts";
 
 import * as v from "valibot";
 
@@ -62,8 +62,6 @@ const usage = `usage: office <command> [--office <dir>]
                                --packages applies packages at their declared pins without refreshing
                                 desk repos, references or separately declared plugin clones.
                                 Each package has one definition: office.ts or package.yaml
-  references list              show desired references and their claimants without fetching.
-                               sync --references refreshes those checkouts without collecting.
   skills update                move each skills.copied group with a track to the newest commit of
                                its branch, or of its highest stable SemVer tag matching a pattern
                                such as v2.*; recopy the whole group and record the commit as its ref.
@@ -207,6 +205,7 @@ async function main(): Promise<void> {
 
   if (flags.help || command === undefined) {
     console.log(usage);
+    console.log(commandHelp(flags.office ?? process.cwd()).join("\n"));
 
     return;
   }
@@ -238,18 +237,6 @@ async function main(): Promise<void> {
       : await sessionInstructions(currentOffice(flags), flags.session);
 
     if (text !== "") console.log(text);
-  } else if (command === "references") {
-    if (rest.length !== 1 || rest[0] !== "list") throw new OfficeError("usage: office references list");
-    const office = currentOffice(flags);
-    const read = resolvedReferences(office.dir, office);
-
-    if (!read.ok) throw new OfficeError(read.errors.join("\n"));
-
-    if (read.value.legacy) console.error("No reference generation yet; listing office.yaml only. Run office sync --packages to collect contributors.");
-
-    for (const note of read.value.notes) console.error(note);
-
-    for (const entry of read.value.entries) console.log(`${entry.name}\t${entry.url}${entry.ref ? ` @ ${entry.ref}` : ""}\t${entry.owner}${entry.stale ? " (stale)" : ""}`);
   } else if (command === "context") {
     if (rest.length !== 0 || flags.model === undefined) throw new OfficeError("usage: office context --model <provider/model#variant>");
 
@@ -416,8 +403,8 @@ async function main(): Promise<void> {
     if (rest[1] === undefined) throw new OfficeError("usage: office gui dev <package>");
 
     await guiDev(currentOffice(flags), rest[1]);
-  } else {
-    console.error(usage);
+  } else if (!(Object.keys(flags).every(key => key === "office") && await dispatchCommand(flags.office ?? process.cwd(), positionals))) {
+    console.error(`Unknown command or options: ${positionals.join(" ")}; see office --help or run office sync --packages to index package commands`);
     process.exitCode = 2;
   }
 }

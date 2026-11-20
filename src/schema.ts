@@ -145,18 +145,12 @@ export type PinnedTool = (typeof pinnedTools)[number];
 /** The minimum release age when office.yaml sets none: for package managers, mise, and every runtime without its own. */
 export const defaultReleaseAge = "3d";
 
-/** A plain YAML mapping, not a list or a scalar. */
-function isMapping(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Refuses a mapping key outside `allowed`, naming it; `explain` says what the key is instead. */
-function onlyKeys(allowed: readonly string[], explain: (key: string) => string) {
-  return v.rawCheck<Record<string, unknown>>(({ dataset, addIssue }) => {
-    if (!dataset.typed) return;
-
-    for (const key of Object.keys(dataset.value)) if (!allowed.includes(key)) addIssue({ message: explain(key) });
-  });
+/** Check the YAML boundary before parsing a mapping's typed fields; preserve per-key diagnostics. */
+function mappingKeys(message: string, allowed: readonly string[], explain: (key: string) => string) {
+  return v.pipe(v.unknown(), v.rawCheck(({ dataset, addIssue }) => {
+    if (!v.is(v.object({}), dataset.value) || Array.isArray(dataset.value)) addIssue({ message });
+    else for (const key of Object.keys(dataset.value)) if (!allowed.includes(key)) addIssue({ message: explain(key) });
+  }));
 }
 
 /**
@@ -168,12 +162,11 @@ function runtimeEntry(tool: PinnedTool) {
   const described = tool === "sfw" ? "version, minimum_release_age and enabled" : "version and minimum_release_age";
 
   const entry = v.pipe(
-    v.custom<Record<string, unknown>>(isMapping, `must be a version such as 2.3.0, or a mapping of ${described}`),
-    onlyKeys(keys, (key) => (key === "enabled" ? "has enabled, which only sfw (Socket Firewall) has" : `has an unknown key ${key}: an entry maps ${described}`)),
+    mappingKeys(`must be a version such as 2.3.0, or a mapping of ${described}`, keys, (key) => (key === "enabled" ? "has enabled, which only sfw (Socket Firewall) has" : `has an unknown key ${key}: an entry maps ${described}`)),
     v.object({ version: v.optional(version), minimum_release_age: v.optional(age), enabled: v.optional(v.boolean("must be true or false")) }),
   );
 
-  return v.lazy((input) => (typeof input === "string" ? v.pipe(version, v.transform((pinned): v.InferOutput<typeof entry> => ({ version: pinned }))) : entry));
+  return v.lazy((input) => (v.is(v.string(), input) ? v.pipe(version, v.transform((pinned): v.InferOutput<typeof entry> => ({ version: pinned }))) : entry));
 }
 
 const toolKeys = ["minimum_release_age", ...pinnedTools] as const;
@@ -186,8 +179,7 @@ const toolKeys = ["minimum_release_age", ...pinnedTools] as const;
  */
 const tools = v.nullish(
   v.pipe(
-    v.custom<Record<string, unknown>>(isMapping, "must be a mapping of minimum_release_age, opencode, claude, codex, executor, mise and sfw"),
-    onlyKeys(toolKeys, (key) => `has an unknown key ${key}: tools maps minimum_release_age, opencode, claude, codex, executor, mise and sfw`),
+    mappingKeys("must be a mapping of minimum_release_age, opencode, claude, codex, executor, mise and sfw", toolKeys, (key) => `has an unknown key ${key}: tools maps minimum_release_age, opencode, claude, codex, executor, mise and sfw`),
     v.object({
       minimum_release_age: v.optional(age),
       opencode: v.optional(runtimeEntry("opencode")),
@@ -309,14 +301,14 @@ function jsonValue(value: unknown, ancestors = new Set<object>()): value is Sett
   return valid;
 }
 
-const settingValue = v.custom<SettingValue>((value) => jsonValue(value), "must be JSON-compatible YAML");
+export const settingValue = v.custom<SettingValue>((value) => jsonValue(value), "must be JSON-compatible YAML");
 
 /** Names no package may have, for the mise fragment sync writes as `.office/mise/<name>.toml`. */
 export const reservedPackageNames = ["machine", "config", "mise"];
 
 // A package copied from a folder of another repository at a ref, or, without `repo`, one of the
 // tool's built-in packages or a package authored in the office under packages/<name>/.
-const packageEntry = v.pipe(
+export const packageEntry = v.pipe(
   v.strictObject(
     {
       // A package's mise setup goes in .office/mise/<name>.toml. mise loads mise/config.toml and mise.toml
@@ -364,6 +356,16 @@ const git = v.optional(
   ),
 );
 
+const packageEntries = v.pipe(v.nullish(v.array(packageEntry, "must be a list"), []), v.check(uniqueNames, "lists a name twice"));
+
+export const referenceInputSchema = v.object({ references: repositories, packages: packageEntries });
+
+// Names establish whether an indexed owner is selected exactly once. Other entries'
+// sources and settings may be invalid; keep them only for a best-effort fingerprint.
+export const commandBootstrapSchema = v.object({
+  name, references: v.optional(v.unknown()), packages: v.nullish(v.array(v.looseObject({ name: v.string() })), []),
+});
+
 export const officeSchema = v.pipe(v.strictObject(
   {
     name,
@@ -386,7 +388,7 @@ export const officeSchema = v.pipe(v.strictObject(
     desks: v.nullish(v.record(v.pipe(name, v.check(key => key !== "executor-apps", "executor-apps is reserved for shared Executor app sources")), desk, "must map desk names to desks"), {}),
     skills,
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
-    packages: v.pipe(v.nullish(v.array(packageEntry, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
+    packages: packageEntries,
   },
   "must be a mapping of name, state, opencode, executor, git, secrets, tools, cron, references, desks, skills, plugins and packages",
 ), v.forward(v.check((config) => config.tools === undefined || config.tools === null || legacyKeys(config).length === 0, (issue) => `replaces versions, upgrades and socket_firewall, so office.yaml can't have both: remove ${legacyKeys(issue.input).join(" and ")}`), ["tools"]), v.forward(v.check(({ secrets, opencode }) => secrets?.server === undefined || (opencode !== "container" && opencode.mode === "host" && opencode.managed), "requires opencode.managed: true in host mode"), ["secrets", "server"]));
@@ -427,6 +429,7 @@ export function resolveTools(config: Pick<OfficeConfig, "tools" | "versions" | "
   if ((config.tools !== undefined && config.tools !== null) || legacy.length === 0) {
     const entries = config.tools ?? {};
     const general = entries.minimum_release_age ?? defaultReleaseAge;
+    // SAFETY: each PinnedTool appears exactly once in pinnedTools, the source of this record's keys.
     const runtimes = Object.fromEntries(pinnedTools.map((tool) => [tool, { version: entries[tool]?.version, minimumReleaseAge: entries[tool]?.minimum_release_age ?? general }])) as Record<PinnedTool, Runtime>;
 
     return { minimumReleaseAge: general, runtimes, pinsVersions: pinnedTools.some((tool) => entries[tool]?.version !== undefined), socketFirewall: entries.sfw?.enabled ?? true, legacy: [], ignoredAges: [] };
@@ -434,8 +437,9 @@ export function resolveTools(config: Pick<OfficeConfig, "tools" | "versions" | "
 
   const upgradeAges = config.upgrades ?? {};
   const runtimeAge = upgradeAges.minimum_release_age ?? defaultReleaseAge;
+  // SAFETY: the same exhaustive tuple supplies every key for legacy pins.
   const runtimes = Object.fromEntries(pinnedTools.map((tool) => [tool, { version: config.versions?.[tool], minimumReleaseAge: upgradeAges[tool] ?? runtimeAge }])) as Record<PinnedTool, Runtime>;
-  const ignoredAges = Object.keys(upgradeAges).filter((key) => key !== "minimum_release_age" && !(pinnedTools as readonly string[]).includes(key));
+  const ignoredAges = Object.keys(upgradeAges).filter((key) => key !== "minimum_release_age" && !pinnedTools.some(tool => tool === key));
 
   return { minimumReleaseAge: defaultReleaseAge, runtimes, pinsVersions: config.versions !== undefined, socketFirewall: config.socket_firewall ?? true, legacy, ignoredAges };
 }

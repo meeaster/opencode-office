@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import * as v from "valibot";
 
+import type { ReferenceGit } from "../packages/references/tasks/refresh.ts";
 import { streamChecked } from "./report/index.ts";
 import { check } from "./schema.ts";
 
@@ -300,30 +301,20 @@ export async function refreshCloneStreamed(ref: string | undefined, dir: string,
   return head(dir) === before ? "current" : "updated";
 }
 
-/** Fetch independently; only the ticket holder may publish a clone or force its worktree.
- * guard obtains the worktree lease under the same lock used to publish generations. */
-export async function syncReference(
-  { dir, url, ref = "HEAD", stale }: { dir: string; url: string; ref?: string; stale?: boolean },
-  present: boolean, options: GitOptions, guard: <T extends string | void>(apply: (fd: number) => T) => T,
-): Promise<"updated" | "current" | "cloned"> {
-  function verify() {
+/** Fetch independently; only the ticket holder may publish a clone or force its worktree. */
+export function referenceGit(
+  { dir, url, ref = "HEAD" }: { dir: string; url: string; ref?: string },
+  guard: <T extends string | void>(apply: (fd: number) => T) => T,
+): ReferenceGit {
+  function targetProblem(present: boolean) {
     const problem = referenceOriginProblem(dir, url);
 
-    if (problem) throw new Error(problem);
+    if (problem) return problem;
 
-    if (isClone(dir) !== present) throw new Error(`reference checkout ${present ? "disappeared" : "already exists"}; retry sync`);
-
-    if (!stale) return;
-
-    if (!present) throw new Error("stale contribution cannot authorize a new clone; repair the contributor and run office sync --packages");
-    const drift = appliedReferenceProblem(dir, url, ref);
-
-    if (drift) throw new Error(drift);
+    if (isClone(dir) !== present) return `reference checkout ${present ? "disappeared" : "already exists"}; retry sync`;
   }
 
-  guard(verify);
-
-  if (!present) {
+  const stageClone: ReferenceGit["stageClone"] = async (options, verify) => {
     mkdirSync(dirname(dir), { recursive: true });
     const staging = mkdtempSync(join(dirname(dir), `.office-${basename(dir)}-`));
     let moved = false;
@@ -341,27 +332,34 @@ export async function syncReference(
     } finally {
       if (!moved) rmSync(staging, { recursive: true, force: true });
     }
-  }
+  };
 
-  const pending = `refs/office-fetch/${randomUUID()}`;
+  const fetchExisting: ReferenceGit["fetchExisting"] = async (options, verify) => {
+    const pending = `refs/office-fetch/${randomUUID()}`;
 
-  try {
-    await gitStreamed(["fetch", "--depth", "1", "--no-write-fetch-head", "--no-tags", "--refmap=", "--", "origin", `${ref}:${pending}`], dir, options);
+    try {
+      await gitStreamed(["fetch", "--depth", "1", "--no-write-fetch-head", "--no-tags", "--refmap=", "--", "origin", `${ref}:${pending}`], dir, options);
 
-    return guard(fd => {
-      verify();
-      const commit = git(["rev-parse", "--verify", `${pending}^{commit}`], dir);
-      const before = unbornClone(dir) ? undefined : head(dir);
-      // A failed/interrupted local checkout cannot leave a previous success as authority.
-      gitOutput(["config", "--local", "--replace-all", appliedReference, "null"], dir, fd);
-      gitOutput(["checkout", "--quiet", "--force", "--detach", commit], dir, fd);
-      recordReference(dir, url, ref, commit, fd);
+      return guard(fd => {
+        verify();
+        const commit = git(["rev-parse", "--verify", `${pending}^{commit}`], dir);
+        const before = unbornClone(dir) ? undefined : head(dir);
+        // A failed/interrupted local checkout cannot leave a previous success as authority.
+        gitOutput(["config", "--local", "--replace-all", appliedReference, "null"], dir, fd);
+        gitOutput(["checkout", "--quiet", "--force", "--detach", commit], dir, fd);
+        recordReference(dir, url, ref, commit, fd);
 
-      return before === commit ? "current" : "updated";
-    });
-  } finally {
-    if (existsSync(join(dir, ".git"))) git(["update-ref", "-d", pending], dir);
-  }
+        return before === commit ? "current" : "updated";
+      });
+    } finally {
+      if (existsSync(join(dir, ".git"))) git(["update-ref", "-d", pending], dir);
+    }
+  };
+
+  return {
+    targetProblem, appliedProblem: () => appliedReferenceProblem(dir, url, ref),
+    checkBeforeFetch: verify => guard(() => verify()), stageClone, fetchExisting,
+  };
 }
 
 /** `cloneOrFetch`, without blocking. */
