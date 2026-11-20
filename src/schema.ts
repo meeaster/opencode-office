@@ -2,8 +2,9 @@
 // an office needs no packages). Parsing returns the checked config, or one error per problem,
 // each naming the field and what it expected.
 import * as v from "valibot";
+import { isAsyncFunction } from "node:util/types";
 
-import type { PackageContext, SettingValue } from "../packages/office/package-context.ts";
+import type { PackageContext, RegisterCron, SettingValue } from "../packages/office/package-context.ts";
 import { validSchedule } from "../standard/cron/schedule.ts";
 
 export type { SettingValue } from "../packages/office/package-context.ts";
@@ -645,16 +646,17 @@ export const packageManifestSchema = v.pipe(
       host: v.optional(hostBlock),
       system: v.optional(systemBlock),
       cron: packageCron,
-      // Timers must not run another package's async reference/command collector to find jobs.
-      cron_setup: v.optional(v.literal(true)),
+      registerCron: v.optional(v.pipe(
+        v.custom<RegisterCron>(value => v.is(v.function(), value), "must be a function in office.ts"),
+        v.check(hook => !isAsyncFunction(hook), "must register jobs synchronously"),
+      )),
       executor_app: v.optional(executorAppBlock),
       // The label on Docker resources its services create themselves, which `office down` removes.
       spawns: v.optional(spawnsBlock),
     },
-    "must be a mapping of name, namespace, description, settings or settings_schema, secrets, tools, host, system, cron, cron_setup, executor_app and spawns",
+    "must be a mapping of name, namespace, description, settings or settings_schema, secrets, tools, host, system, cron, registerCron, executor_app and spawns",
   ),
   v.check((manifest) => manifest.settings === undefined || manifest.settings_schema === undefined, "choose settings or settings_schema, not both"),
-  v.check(manifest => !manifest.cron_setup || manifest.setup !== undefined, "cron_setup requires a setup function in office.ts"),
   v.transform((manifest) => ({ ...manifest, settings: manifest.settings ?? {}, namespace: manifest.namespace ?? manifest.name })),
   v.forward(
     v.check((manifest) => manifest.settings_schema !== undefined || manifest.host?.setting === undefined || isTrueOrFalse(manifest.settings[manifest.host.setting]?.default), "must name one of the package's settings whose default is true or false"),

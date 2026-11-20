@@ -2,9 +2,17 @@ import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";
 import { parse } from "yaml";
+import type { PackageContext } from "../packages/office/package-context.ts";
 import { check, type PackageManifest, packageManifestSchema, type Parsed } from "./schema.ts";
 
 const names = ["office.ts", "package.yaml"] as const;
+
+/** Diagnose a misplaced cron registration even when untyped setup guards it with `?.`. */
+export function setupContext(context: PackageContext): PackageContext {
+  return Object.defineProperty(context, "cron", {
+    get() { throw new Error("ctx.cron belongs in registerCron(ctx), not setup(ctx)"); },
+  });
+}
 
 export function definitionFiles(dir: string) {
   return names.filter((name) => lstatSync(join(dir, name), { throwIfNoEntry: false }) !== undefined);

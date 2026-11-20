@@ -438,7 +438,7 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   }
 
   // Executable cron owners were validated with their other contributions before publication.
-  const cron = collectJobs(office, { installed: installed.installed.filter(pkg => !pkg.manifest.cron_setup), problems: [] });
+  const cron = collectJobs(office, { installed: installed.installed.filter(pkg => !pkg.manifest.registerCron), problems: [] });
 
   if (!cron.ok) changes.push(...cron.errors.map((error) => `FAILED ${error}`));
 

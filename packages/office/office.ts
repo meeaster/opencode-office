@@ -1,4 +1,4 @@
-import type { PackageContext } from "./package-context.ts";
+import type { CronContext } from "./package-context.ts";
 
 export default {
   name: "office",
@@ -23,17 +23,10 @@ export default {
   },
   // CLI build-time floors, also used by sync to maintain machine.packages.toml.
   tools: { sops: "3.13.3", age: "1.3.2", gh: "2.104.0", "pre-commit": "4.7.0" },
-  cron_setup: true,
-  setup(ctx: PackageContext) {
-    if (!ctx.cron.mode) return;
-
+  registerCron(ctx: CronContext): undefined {
     ctx.cron.job("update-references", { schedule: "0 6 * * *", script: "scripts/update-references.sh" });
     ctx.cron.job("upgrade-tools", { schedule: "30 6 * * *", script: "scripts/upgrade-tools.sh" });
 
-    if (ctx.cron.mode === "managed-host") {
-      ctx.cron.job("update-agent-clis", { schedule: "30 7 * * *", script: "scripts/update-agent-clis.sh" });
-    } else {
-      ctx.cron.job("update-agent-clis", false);
-    }
+    ctx.cron.job("update-agent-clis", ctx.cron.mode === "managed-host" ? { schedule: "30 7 * * *", script: "scripts/update-agent-clis.sh" } : false);
   },
 };

@@ -364,30 +364,26 @@ Schedules are five-field UTC cron expressions or time macros such as `@daily`. T
 An `office.ts` author can register a shell script in ordinary TypeScript. For example, put this in `packages/reports/office.ts`, put `printf 'report from %s\n' "$PWD"` in `packages/reports/scripts/report.sh`, and select `reports` in `office.yaml`:
 
 ```ts
-import type { PackageContext } from "../../.office/packages/office/package-context.ts";
+import type { CronContext } from "../../.office/packages/office/package-context.ts";
 
 export default {
   name: "reports",
   description: "Run this office's scheduled report",
   settings: { enabled: { description: "Schedule the report", default: true } },
-  cron_setup: true,
-  setup(ctx: PackageContext) {
-    if (!ctx.cron.mode) return;
-
-    if (ctx.settings.enabled === true && ctx.cron.mode !== "container") {
-      ctx.cron.job("report", { schedule: "15 9 * * *", script: "scripts/report.sh" });
-    } else {
-      ctx.cron.job("report", false);
-    }
+  registerCron(ctx: CronContext): undefined {
+    const active = ctx.settings.enabled === true && ctx.cron.mode !== "container";
+    ctx.cron.job("report", active ? { schedule: "15 9 * * *", script: "scripts/report.sh" } : false);
   },
 };
 ```
 
-Run `office sync --packages`, then `office cron list`. On a host, `office cron run package.reports.report` runs the script. `cron_setup: true` tells the scheduler which packages' `setup` functions supply jobs. Registration is synchronous and side-effect free: put work in the script, not in `setup`. The cron pass sees current validated settings and `ctx.cron.mode` (`"host"`, `"managed-host"` or `"container"`); command and reference registrations have no effect in this pass. During command/reference collection or indexed dispatch, `ctx.cron.mode` is `undefined`. A package that also contributes commands or references can register those in that branch. An async reference collector may return a promise there, but the cron branch must return synchronously.
+Run `office sync --packages`, then `office cron list`. On a host, `office cron run package.reports.report` reads the named owner's `registerCron` and runs the script. Register commands and references separately in `setup(ctx)`; named cron execution never calls it. `registerCron` must return synchronously, without a return value. It runs as trusted package code, including during validation. Put work in the script: rejecting a registration cannot undo external effects its author started.
 
-`job(name, false)` keeps the override name valid while a job is inapplicable. To withdraw a job entirely, stop registering its name and remove any override. The current owner must load and register successfully on each cron read; a failed or duplicate registration cannot authorize even a partial run. `office up` applies the resulting schedules. No callback, job table or mode is saved in the command index.
+`ctx.cron.mode` is `"host"`, `"managed-host"` or `"container"`. `ctx.settings` is validated against the **current** package entry. An unsynced settings edit may therefore select a different script even while the package's `.settings.json` and indexed commands still use the last synced settings. Run `office sync --packages` to bring these inputs together; `office up` applies the resulting schedules.
 
-When updating from a CLI that shipped `packages/office/package.yaml`, installed timers can use the new executable immediately. `office sync --packages` replaces that copy with the TS author; the scripts, timer arguments and success-history paths keep the same IDs. Every runner sharing the adopted copy must understand `cron_setup`, including the CLI inside a container image. For a downgrade, restore compatible package copies (for built-ins, sync with the older executable) before resuming scheduled work.
+Omit a job to withdraw its name when there is no override. Use `job(name, false)` to keep a portable override valid while a job is inapplicable; an unregistered override name is an error. A failed registration, a repeated name (including `false`), or a name also claimed by the static `cron` mapping rejects the entire owner's batch. No callback, job table or mode is saved in the command index.
+
+When updating from a CLI that shipped `packages/office/package.yaml`, installed timers can use the new executable immediately. `office sync --packages` replaces that copy with the TS author; the scripts, timer arguments and success-history paths keep the same IDs. Every runner sharing the adopted copy must understand `registerCron`, including the CLI inside a container image. For a downgrade, restore compatible package copies (for built-ins, sync with the older executable) before resuming scheduled work.
 
 The static `cron` mapping remains supported in both `package.yaml` and `office.ts`. A static job may also set `when: host`, `when: managed-host`, or `when: container`; omitting `when` makes it applicable in both modes. Static and registered jobs share validation and cannot claim the same qualified ID. The scheduler is compiled into `office`, not a package to select. `office cron run` reads only the named owner. An office may change a package's schedule or disable a job under its package entry's `cron:` (alongside `settings`), for example:
 
@@ -402,7 +398,7 @@ Only `schedule` and `enabled` can be overridden; `enabled: true` cannot override
 
 In host mode, `office up` installs systemd user timers named `office-<name>-cron-<job-id>.timer` with UTC `OnCalendar` and `Persistent=true`. An existing timer catches up once after a missed interval; a timer enabled for the first time waits for its first scheduled time. A host schedule cannot restrict both the day of the month and weekday. `office down` removes the generated units and stops their running cron services. The next `office up` reinstalls enabled jobs; it also removes obsolete units written by earlier releases.
 
-In container mode, the entrypoint generates the supercronic input in UTC. It first runs each due job once, including jobs with no successful run. Successful executions leave a stamp per qualified job ID under `$XDG_STATE_HOME/office/cron/<office>` (by default `~/.local/state/office/cron/<office>` in the home volume). `office up` recreates the container when its generated schedule changes.
+In container mode, the entrypoint generates the supercronic input in UTC. Catch-up traverses the initial job IDs once. Before each run it rereads that owner, schedule and success stamp: a preceding script can disable or reschedule a later job. Successful executions leave a stamp per qualified job ID under `$XDG_STATE_HOME/office/cron/<office>` (by default `~/.local/state/office/cron/<office>` in the home volume). `office up` recreates the container when its generated schedule changes.
 
 The required `office` package supplies these daily jobs in both modes (plus `package.office.update-agent-clis` on managed hosts):
 

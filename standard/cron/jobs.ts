@@ -37,7 +37,7 @@ export function collectJobs(office: Office, packages: Pick<InstalledPackages, "i
   const errors = packages.problems.map((problem) => `package ${problem.packages.join(", ")}: ${problem.message}`);
 
   function collect(id: string, dir: string, script: string, expression: string, enabled: boolean, validateOwner = false): void {
-    // A named run can filter legacy data up front. A setup batch must validate in full
+    // A named run can filter legacy data up front. A hook's batch must validate in full
     // before even its first registration can authorize a run.
     if (!validateOwner && only !== undefined && id !== only) return;
     const path = scriptPath(dir, script);
@@ -72,7 +72,7 @@ export function collectJobs(office: Office, packages: Pick<InstalledPackages, "i
 
       const override = item.entry.cron[name];
 
-      collect(`package.${item.entry.name}.${name}`, item.dir, job.script, override?.schedule ?? job.schedule, override?.enabled !== false && applies(office, job.when), item.manifest.cron_setup);
+      collect(`package.${item.entry.name}.${name}`, item.dir, job.script, override?.schedule ?? job.schedule, override?.enabled !== false && applies(office, job.when), item.manifest.registerCron !== undefined);
     }
   }
 

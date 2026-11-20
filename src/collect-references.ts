@@ -1,6 +1,6 @@
 import * as v from "valibot";
 import { collectJobs } from "../standard/cron/jobs.ts";
-import { inactiveCron } from "../standard/cron/registration.ts";
+import { setupContext } from "./package-definition.ts";
 import { commandConflicts, commandRegistration, type CommandMetadata } from "./command-table.ts";
 import type { InstalledPackages } from "./layout.ts";
 import type { Office, PackageEntry, Repository } from "./office.ts";
@@ -51,14 +51,14 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
     const name = item.entry.name;
     const pkg = available.get(name);
 
-    if (pkg && !pkg.manifest.setup) continue;
+    if (pkg && !pkg.manifest.setup && !pkg.manifest.registerCron) continue;
 
     const source = provenance(item, previous, rejected.has(name), embedded);
     const values: Repository[] = [];
 
-    if (pkg?.manifest.setup) {
+    if (pkg) {
       try {
-        if (pkg.manifest.cron_setup) {
+        if (pkg.manifest.registerCron) {
           const cron = collectJobs({ ...office, cron: {} }, { installed: [pkg], problems: [] });
 
           if (!cron.ok) throw new Error(cron.errors.join("; "));
@@ -66,9 +66,8 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
 
         const routes: CommandMetadata[] = [];
         const invalid: string[] = [];
-        await pkg.manifest.setup({
+        await pkg.manifest.setup?.(setupContext({
           settings: structuredClone(pkg.settings),
-          cron: inactiveCron(pkg.manifest),
           command(input) {
             const read = commandRegistration(input);
 
@@ -84,7 +83,7 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
             if (!read.ok) throw new Error(read.errors.join("; "));
             values.push(read.value.value);
           },
-        });
+        }));
 
         const commands = routes.length ? {
           routes: [...routes], settings: pkg.settings,
