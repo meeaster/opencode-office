@@ -817,7 +817,7 @@ function shellCheck(report: Report): void {
 }
 
 /** The versions office.yaml pins, whether office.lock matches, the tested range, and what is pending. */
-function versionChecks(office: Office, report: Report): void {
+export function versionChecks(office: Office, report: Report): void {
   const tools = toolsFor(office);
   const list = (pins: typeof defaultPins) => tools.map((tool) => `${tool} ${pins[tool].version}`).join(", ");
   let wanted;
@@ -832,10 +832,10 @@ function versionChecks(office: Office, report: Report): void {
 
   report(true, "versions", office.tools.pinsVersions ? `${list(wanted)}, matching office.lock` : `office.yaml pins no versions, so the tool's defaults apply: ${list(wanted)}`);
 
-  const untested = tools.filter((tool) => !isTested(tool, wanted[tool].version));
+  const untested = tools.flatMap((tool) => tool !== "executor" && !isTested(tool, wanted[tool].version) ? [`${tool} ${wanted[tool].version} is outside ${tested[tool].from}–${tested[tool].to}`] : []);
 
   if (untested.length > 0) {
-    report("warn", "tested versions", `${untested.map((tool) => `${tool} ${wanted[tool].version} is outside ${tested[tool].from}–${tested[tool].to}`).join("; ")}, the range this office tool was tested with`);
+    report("warn", "tested versions", `${untested.join("; ")}, the range this office tool was tested with`);
   }
 
   const applied = readApplied(office);

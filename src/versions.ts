@@ -1,7 +1,7 @@
 // The versions an office runs. office.yaml pins OpenCode, Claude Code, Executor, mise and sfw; office.lock
 // (written only by the tool) holds what makes each verifiable; the state folder's applied.json
 // records what `office up` last applied. The tool supplies the versions a new office starts at, and
-// the range it was tested with.
+// tested ranges for the runtimes other than Executor.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -33,11 +33,10 @@ export const defaultPins: Lock = {
 };
 
 /** The versions this release of the tool was tested with, lowest and highest. */
-export const tested: Record<PinnedTool, { from: string; to: string }> = {
+export const tested: Record<Exclude<PinnedTool, "executor">, { from: string; to: string }> = {
   opencode: { from: "2.2.7", to: "2.3.0" },
   claude: { from: "2.1.322", to: "2.1.322" },
   codex: { from: "0.170.0", to: "0.170.0" },
-  executor: { from: "2.0.0-beta.49", to: "2.0.0-beta.49" },
   mise: { from: "2026.11.7", to: "2026.11.7" },
   sfw: { from: "1.16.0", to: "1.16.0" },
 };
@@ -224,7 +223,7 @@ export function executorImage(pin: Pin): string {
 }
 
 /** Whether a version lies in the range this release of the tool was tested with. */
-export function isTested(tool: PinnedTool, value: string): boolean {
+export function isTested(tool: keyof typeof tested, value: string): boolean {
   return compareVersions(value, tested[tool].from) >= 0 && compareVersions(value, tested[tool].to) <= 0;
 }
 

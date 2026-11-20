@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadOffice } from "../office.ts";
-import { toolsNotes } from "./check.ts";
+import { defaultPins, writeApplied, writeLock } from "../versions.ts";
+import { toolsNotes, versionChecks } from "./check.ts";
 
 let dir: string;
 
@@ -14,6 +15,32 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
+});
+
+test.each(["2.0.0-beta.64", "2.0.0-beta.48"])("a locked and applied Executor %s passes the pin checks", (version) => {
+  writeFileSync(join(dir, "office.yaml"), `name: t\nstate: ./state\ntools:\n  executor: ${version}\n`);
+
+  const office = loadOffice(dir);
+  const pins = { ...defaultPins, executor: { ...defaultPins.executor, version } };
+  const report = mock();
+
+  writeLock(dir, pins);
+  writeApplied(office, pins, undefined);
+  versionChecks(office, report);
+  expect(report.mock.calls).toEqual([[true, "versions", expect.stringContaining(`executor ${version}`)]]);
+});
+
+test("an Executor downgrade stays pending and refused, and other tools retain their tested ranges", () => {
+  writeFileSync(join(dir, "office.yaml"), "name: t\nstate: ./state\ntools:\n  executor: 2.0.0-beta.48\n  sfw: 1.0.0\n");
+
+  const office = loadOffice(dir);
+  const report = mock();
+
+  writeLock(dir, { ...defaultPins, executor: { ...defaultPins.executor, version: "2.0.0-beta.48" }, sfw: { ...defaultPins.sfw, version: "1.0.0" } });
+  writeApplied(office, { ...defaultPins, executor: { ...defaultPins.executor, version: "2.0.0-beta.64" } }, undefined);
+  versionChecks(office, report);
+  expect(report).toHaveBeenCalledWith("warn", "pending upgrade", expect.stringContaining("executor 2.0.0-beta.64 → 2.0.0-beta.48 (refused: older than the 2.0.0-beta.64 this office has run)"));
+  expect(report).toHaveBeenCalledWith("warn", "tested versions", expect.stringMatching(/^sfw 1\.0\.0 is outside/));
 });
 
 test("an office.yaml from before tools gets a warning with the tools block to write in place of the old keys", () => {
