@@ -4,7 +4,7 @@ import { readPackage, resolvePackages } from "../../src/packages.ts";
 import { collectJobs, type CronJob } from "./jobs.ts";
 
 /** An installed timer reads only its job's owner, without consulting a command index. */
-export function namedJob(office: Office, id: string): CronJob {
+export function enabledJob(office: Office, id: string): CronJob | undefined {
   const [kind, owner] = id.split(".");
   const installed: InstalledPackages["installed"] = [];
 
@@ -27,7 +27,11 @@ export function namedJob(office: Office, id: string): CronJob {
 
   if (!jobs.ok) throw new OfficeError(jobs.errors.join("\n"));
 
-  const [job] = jobs.value;
+  return jobs.value[0];
+}
+
+export function namedJob(office: Office, id: string): CronJob {
+  const job = enabledJob(office, id);
 
   if (!job) throw new OfficeError(`cron ${id}: not enabled for this office; see office cron list`);
 

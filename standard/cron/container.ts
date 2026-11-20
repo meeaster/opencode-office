@@ -5,6 +5,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { Office } from "../../src/office.ts";
+import { officeCommand } from "../../src/tool.ts";
+import { enabledJob, requireJobs } from "./discovery.ts";
 import { type CronJob, executeJob } from "./jobs.ts";
 import { lastDue, numericSchedule, schedule } from "./schedule.ts";
 
@@ -35,16 +37,36 @@ export function cronRevision(jobs: CronJob[]): string {
   return createHash("sha256").update(supercronicInput(jobs)).digest("hex");
 }
 
-/** Runs each due job once. The caller starts supercronic afterwards. */
-export async function catchUp(office: Office, jobs: CronJob[], now = new Date()): Promise<void> {
-  for (const job of jobs) {
-    const due = lastDue(schedule(job.fields), now);
-    const path = stampPath(office, job);
-    const success = existsSync(path) ? new Date(readFileSync(path, "utf8").trim()) : undefined;
+/** The traversal remembers IDs, never paths or authority. An earlier script can sync new
+ * package bytes (including imported TS helpers), so resolve each ID in a fresh process. */
+export async function catchUp(office: Office): Promise<number> {
+  const ids = requireJobs(office).map(job => job.id);
 
-    if (due === undefined || (success !== undefined && success >= due)) continue;
+  for (const id of ids) {
+    const child = Bun.spawn([officeCommand(), "cron", "catch-up-job", office.name, id], {
+      cwd: office.dir, stdin: "inherit", stdout: "inherit", stderr: "inherit",
+    });
 
-    console.log(`office cron: catching up ${job.id} (due ${due.toISOString()})`);
-    await runContainerJob(office, job, now);
+    const code = await child.exited;
+
+    if (code !== 0) return code;
   }
+
+  return 0;
+}
+
+export async function catchUpJob(office: Office, id: string, at?: Date): Promise<void> {
+  const job = enabledJob(office, id);
+
+  if (!job) return;
+
+  const now = at ?? new Date();
+  const due = lastDue(schedule(job.fields), now);
+  const path = stampPath(office, job);
+  const success = existsSync(path) ? new Date(readFileSync(path, "utf8").trim()) : undefined;
+
+  if (due === undefined || (success !== undefined && success >= due)) return;
+
+  console.log(`office cron: catching up ${job.id} (due ${due.toISOString()})`);
+  await runContainerJob(office, job, now);
 }
