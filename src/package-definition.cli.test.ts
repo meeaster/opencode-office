@@ -1351,29 +1351,45 @@ test("published values survive repeated reads; failed registrations cannot admit
   expect(cli(0, "items")).toContain("[]");
 });
 
-test("an external reader cannot consume an old publication through a changed provider handle", () => {
-  const { dir, cli, select } = fixture("reader-contract");
+test.each(["file", "link"])("an external reader cannot consume an old publication through a changed provider %s", layout => {
+  const { dir, cli, select } = fixture(`reader-contract-${layout}`);
   const packages = join(dir, "packages");
   const contract = join(packages, "catalog/items.ts");
   const writer = join(packages, "alpha/office.ts");
   const add = 'c.add(items,{name:"x",value:12});';
   const author = (body: string) => `import {items} from "../catalog/items.ts";export default {name:"alpha",description:"author",setup(c){${body}}}`;
   select("  - name: alpha\n  - name: catalog\n  - name: beta\n");
-  write(contract, 'export const items={id:"catalog.items",parse:i=>i};export const display=i=>i.value.toFixed(0)');
+  const numeric = 'export const items={id:"catalog.items",parse:i=>i};export const display=i=>i.value.toFixed(0)';
+  const text = 'export const items={id:"catalog.items",parse:i=>({...i,value:"v"+i.value})};export const display=i=>i.value.toUpperCase()';
+
+  if (layout === "link") {
+    write(join(dirname(contract), "numeric.ts"), numeric);
+    write(join(dirname(contract), "text.ts"), text);
+    symlinkSync("numeric.ts", contract);
+  } else write(contract, numeric);
+
   write(join(packages, "catalog/office.ts"), 'import {items} from "./items.ts";export default {name:"catalog",description:"provider",setup(c){c.collection(items)}}');
   write(join(packages, "beta/office.ts"), `import {items,display} from "../catalog/items.ts";export default {name:"beta",description:"reader",
-    setup(c){c.command({name:"display",summary:"display",run(i){for(const row of i.read(items))console.log(display(row.value))}})}}`);
+    setup(c){c.command({name:"display",summary:"display",run(i){console.log(i.read(items).map(row=>display(row.value)).join(",") || "empty")}})}}`);
   write(writer, author(add));
   cli(0, "sync", "--packages");
   expect(cli(0, "display")).toContain("12");
   const snapshot = join(dir, ".office/resolved/references.json");
   const previous = read(snapshot);
-  write(contract, 'export const items={id:"catalog.items",parse:i=>({...i,value:"v"+i.value})};export const display=i=>i.value.toUpperCase()');
+
+  if (layout === "link") {
+    rmSync(contract);
+    symlinkSync("text.ts", contract);
+  } else write(contract, text);
+
   expect(cli(1, "display")).toMatch(/catalog\.items:.*published contract.*sync --packages/);
   write(writer, author(add + add));
   expect(cli(1, "sync", "--packages")).toContain("claimed by both");
   expect(read(snapshot)).toBe(previous);
   expect(cli(1, "display")).toMatch(/catalog\.items:.*published contract.*sync --packages/);
+  write(writer, 'throw Error("writer unavailable")');
+  expect(cli(1, "sync", "--packages")).toContain("omitting last-good catalog.items/x");
+  expect(cli(0, "display")).toContain("empty");
   write(writer, author(add));
   cli(0, "sync", "--packages");
   expect(cli(0, "display")).toContain("V12");

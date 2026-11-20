@@ -350,6 +350,39 @@ export function filesDigest(hashes: PackageRecord["files"]): string {
   return sha256(JSON.stringify(Object.keys(hashes).sort().map(path => [path, hashes[path]])));
 }
 
+/** Managed packages keep their recorded file identity. Local providers can also import
+ * through symlinks: bind each alias to its resolved target in the hashed package tree. */
+export function providerFiles(item: ResolvedPackage): string {
+  if (item.kind !== "local") return filesDigest(fileHashes(item.dir));
+  const hashes: PackageRecord["files"] = Object.create(null);
+  const root = realpathSync(item.dir);
+
+  // Bun's recursive readdir descends through directory links. Visit real directories
+  // only: the target's contents are hashed at their own paths, never via the alias.
+  function visit(dir: string) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      const file = relative(root, path);
+
+      if (entry.isDirectory()) visit(path);
+      else if (entry.isFile() && !records.includes(file)) hashes[file] = sha256(readFileSync(path));
+      else if (entry.isSymbolicLink()) {
+        const target = relative(root, realpathSync(path));
+
+        if (target === ".." || target.startsWith("../") || records.includes(target)) {
+          throw new OfficeError(`package ${item.entry.name}: ${file} must link to provider content inside the package`);
+        }
+
+        hashes[file] = `link:${target}`;
+      }
+    }
+  }
+
+  visit(root);
+
+  return filesDigest(hashes);
+}
+
 export function gitSelection(source: NonNullable<PackageEntry["source"]>): string {
   return `git:${sha256(JSON.stringify([source.repo, source.path, source.ref]))}`;
 }

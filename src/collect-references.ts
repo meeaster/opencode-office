@@ -6,7 +6,7 @@ import { runPackageSetup } from "./package-definition.ts";
 import { commandConflicts, commandRegistration, type CommandMetadata } from "./command-table.ts";
 import type { InstalledPackages } from "./layout.ts";
 import type { Office, PackageEntry } from "./office.ts";
-import { collectionContract, fileHashes, filesDigest, gitSelection, readRecord, type ResolvedPackage } from "./packages.ts";
+import { collectionContract, gitSelection, providerFiles, readRecord, type ResolvedPackage } from "./packages.ts";
 import { claims, inputHash, namedEntry, referenceFile, type ReferenceSnapshot } from "./reference-snapshot.ts";
 import type { ReferencePublication } from "./reference-publication.ts";
 
@@ -113,7 +113,7 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
           },
         });
 
-        const files = provided.size || (routes.length && item.kind === "remote") ? filesDigest(fileHashes(item.dir)) : undefined;
+        const files = provided.size || (routes.length && item.kind === "remote") ? providerFiles(item) : undefined;
 
         const commands = routes.length ? {
           routes: [...routes], settings: pkg.settings, booleans: Object.keys(booleans).length ? booleans : undefined,

@@ -3,7 +3,7 @@ import { setupContext } from "./package-definition.ts";
 import * as v from "valibot";
 import { claimsInspect, commandRegistration, type RegisteredCommand } from "./command-table.ts";
 import { findOffice, loadOffice, type Office, OfficeError, readOfficeFields } from "./office.ts";
-import { builtinSource, collectionContract, embeddedPackage, fileHashes, filesDigest, gitSelection, installedDefinition, type PackageRecord, resolvePackages, type ResolvedPackage, verifyInstalledCopy } from "./packages.ts";
+import { builtinSource, collectionContract, embeddedPackage, filesDigest, gitSelection, installedDefinition, type PackageRecord, providerFiles, resolvePackages, type ResolvedPackage, verifyInstalledCopy } from "./packages.ts";
 import { publishedCollection, publishedInputs, readSnapshot, referenceInputs, type ReferenceSnapshot } from "./reference-snapshot.ts";
 import type { CommandInputs } from "../packages/office/package-context.ts";
 import { check, commandBootstrapSchema, packageEntry, referenceInputSchema } from "./schema.ts";
@@ -69,7 +69,7 @@ function selectedOwner(office: Selections, name: string) {
 }
 
 function verifyBinding(item: ResolvedPackage, owner: Owner, record: PackageRecord | undefined, embedded?: string) {
-  if (item.kind === "local" && owner.source === "local" && (!owner.commands?.files || owner.commands.files === filesDigest(fileHashes(item.dir)))) return;
+  if (item.kind === "local" && owner.source === "local" && (!owner.commands?.files || owner.commands.files === providerFiles(item))) return;
 
   if (item.kind === "remote" && item.entry.source && gitSelection(item.entry.source) === owner.source && record && "repo" in record && record.commit === owner.commit && filesDigest(record.files) === owner.commands?.files) return;
 
@@ -152,7 +152,7 @@ function readerBinding(dir: string, snapshot: ReferenceSnapshot, commandOwner: s
     const { office } = selection(dir, name, true);
     const item = selectedOwner(office, name);
     const record = verifyInstalledCopy(item);
-    const files = filesDigest(record?.files ?? fileHashes(item.dir));
+    const files = record ? filesDigest(record.files) : providerFiles(item);
     const source = item.kind === "built-in" ? `built-in:${files}` : item.entry.source ? gitSelection(item.entry.source) : "local";
     const commit = record && "repo" in record ? record.commit : undefined;
 

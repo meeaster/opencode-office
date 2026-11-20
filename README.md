@@ -533,6 +533,8 @@ export default {
 
 A command in a different package can import that same handle. On `inputs.read`, the CLI checks the selected provider's installed files, revision and setting overrides against the publication without running its setup. If the contract changed, repair any failed publication and run `office sync --packages` before reading those rows. A provider's own indexed command runs with its published settings.
 
+In a local collection provider, symlinks may point to files or directories inside the package. Their resolved package-relative targets are part of the contract: switching the public handle to a different file requires a new sync even if both files were already present. Dangling links, loops, and links outside the package or to office-managed records cannot establish a provider contract. This check covers the provider tree, not arbitrary imports or other runtime inputs outside it.
+
 Use the actual **installed** module path. Local packages are under `packages/`; Git and built-in packages are under `.office/packages/`. From either managed consumer, import `../references/repositories.ts` **inside setup**: managed definitions are first checked in a staging directory without their installed neighbors. Package selection does not install npm dependencies. A local provider and local consumer can use sibling relative imports.
 
 For a setup-only boolean, call `ctx.booleanSetting("source_reference", { default: true, description: "Include the Floci source checkout in references/" })`. The return value is validated during collection; reads during indexed command registration use the published settings. Static settings still supply plugin and service configuration.
