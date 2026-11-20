@@ -11,9 +11,10 @@ import { join, relative } from "node:path";
 import { claudeFiles } from "../claude.ts";
 import { appliedReferenceProblem, referenceOriginProblem } from "../git.ts";
 import { resolvedReferences } from "../reference-snapshot.ts";
-import { cronRevision } from "../cron/container.ts";
-import { cronTimers, hasSystemd, refreshTimer, staleTimerUnits, timerStates } from "../cron/host.ts";
-import { collectJobs } from "../cron/jobs.ts";
+import { cronRevision } from "../../standard/cron/container.ts";
+import { cronTimers, refreshTimer, staleTimerUnits, timerStates } from "../../standard/cron/host.ts";
+import { collectJobs } from "../../standard/cron/jobs.ts";
+import { hasSystemd } from "../systemd.ts";
 import { configFile, installedPanelNames, locate, panelDir, panelId, panelState, readPanelRecord, removalNote } from "../desktop.ts";
 import { ghConfigDir, ghLogin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
 import { hookNote, hookState } from "../hook.ts";
@@ -444,7 +445,7 @@ function expectedSkills(office: Office, desk: string | undefined) {
 }
 
 function cron(office: Office, report: Report, running: string[]): void {
-  const jobs = collectJobs(office);
+  const jobs = collectJobs(office, installedPackages(office));
 
   if (!jobs.ok) {
     for (const error of jobs.errors) report(false, "cron", error);

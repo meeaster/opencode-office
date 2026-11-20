@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 
-import { cronTimers } from "../cron/host.ts";
-import { requireJobs } from "../cron/jobs.ts";
+import { cronTimers } from "../../standard/cron/host.ts";
+import { requireJobs } from "../../standard/cron/discovery.ts";
 import { hostEnvironment } from "../host-env.ts";
 import { loadOffice } from "../office.ts";
 import { shellQuote } from "../sfw.ts";

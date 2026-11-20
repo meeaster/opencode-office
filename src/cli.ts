@@ -25,8 +25,8 @@ import { runInContainer } from "./commands/shell.ts";
 import { summarize, sync } from "./commands/sync.ts";
 import { update } from "./commands/update.ts";
 import { upgradeTools } from "./commands/upgrade.ts";
-import { catchUp, runContainerJob, supercronicInput } from "./cron/container.ts";
-import { executeJob, namedJob, requireJobs } from "./cron/jobs.ts";
+import { cronCommand } from "../standard/cron/command.ts";
+import { namedJob } from "../standard/cron/discovery.ts";
 import { migrateHome } from "./home-migration.ts";
 import { releaseMachine, serviceEnvironment } from "./machine.ts";
 import { currentOffice, type Office, OfficeError } from "./office.ts";
@@ -363,24 +363,7 @@ async function main(): Promise<void> {
 
     process.exitCode = await updateAgentClis(office);
   } else if (command === "cron") {
-    const office = currentOffice(flags);
-    const [action, id] = rest;
-
-    if (action === "run" && id !== undefined && rest.length === 2) {
-      const job = namedJob(office, id);
-
-      process.exitCode = office.opencode.mode === "container" ? await runContainerJob(office, job) : await executeJob(office, job);
-    } else if (action === "list" && rest.length === 1) {
-      for (const job of requireJobs(office)) console.log(job.id);
-    } else if (office.opencode.mode === "container" && rest.length === 1 && action === "supercronic") {
-      const jobs = requireJobs(office);
-
-      if (jobs.length > 0) console.log(supercronicInput(jobs));
-    } else if (office.opencode.mode === "container" && rest.length === 1 && action === "catch-up") {
-      await catchUp(office, requireJobs(office));
-    } else {
-      throw new OfficeError("usage: office cron list | run <job-id>");
-    }
+    await cronCommand(currentOffice(flags), rest);
   } else if (command === "env" && flags.container === true) {
     process.stdout.write(containerEnvText(containerOffice(flags)));
   } else if (command === "env" && rest[0] === "host-service") {

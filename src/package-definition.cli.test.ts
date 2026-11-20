@@ -834,6 +834,39 @@ test("stale refresh needs the actual and last-applied origin/ref; cron runs only
   expect(existsSync(probe)).toBe(false);
 }, 60_000);
 
+test("cron routes mixed job declarations without claiming a local package named cron", () => {
+  const { dir, cli } = fixture("mixed-cron");
+  const config = join(dir, "office.yaml");
+
+  const declarations = `name: mixed-cron
+cron: {report: {script: report.sh, schedule: '@weekly'}}
+packages:
+  - name: office
+    cron: {upgrade-tools: {enabled: false}}
+  - name: cron
+`;
+
+  write(config, declarations);
+  write(join(dir, "report.sh"), "exit 0");
+  write(join(dir, "packages/cron/office.ts"), `export default {name:"cron", description:"Local jobs",
+    cron:{report:{script:"report.sh",schedule:"@daily",when:"container"}}};`);
+  write(join(dir, "packages/cron/report.sh"), `echo "local child"; exit 23`);
+  const listing = "office.report\npackage.office.update-references\n";
+  expect(cli(0, "cron", "list")).toBe(`${listing}package.cron.report\n`);
+  expect(cli(0, "cron", "supercronic")).toBe([
+    "0 0 * * 0 office cron run office.report",
+    "0 6 * * * office cron run package.office.update-references",
+    "0 0 * * * office cron run package.cron.report\n",
+  ].join("\n"));
+  expect(cli(23, "cron", "run", "package.cron.report")).toBe("local child\noffice cron: package.cron.report exited 23\n");
+  write(config, declarations + "opencode: { mode: host, url: 'http://127.0.0.1:1' }\n");
+  expect(cli(0, "cron", "list")).toBe(listing);
+
+  for (const args of [["supercronic"], ["catch-up"], ["run"], ["run", "office.report", "extra"]]) {
+    expect(cli(1, "cron", ...args)).toBe("office: usage: office cron list | run <job-id>\n");
+  }
+});
+
 test("the scheduled reference refresh catches up once at its overridden due time using the named run's stamp", () => {
   const { dir, home, cli } = fixture("ref-schedule");
   const job = "package.office.update-references";

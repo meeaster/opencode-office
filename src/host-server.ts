@@ -8,7 +8,7 @@ import { isAbsolute, join, resolve } from "node:path";
 
 import * as v from "valibot";
 
-import { hasSystemd, unitDirVariable } from "./cron/host.ts";
+import { hasSystemd, unitDirVariable } from "./systemd.ts";
 import { envFilePath, miseShims, opencodeBin } from "./host-env.ts";
 import { officeTool, requireOfficeTool } from "./host-tools.ts";
 import { type Office, OfficeError, readEnvFile } from "./office.ts";
@@ -18,7 +18,7 @@ import { shellQuote } from "./sfw.ts";
 import { compareVersions } from "./versions.ts";
 import { say } from "./report/index.ts";
 
-export { unitDirVariable } from "./cron/host.ts";
+export { unitDirVariable } from "./systemd.ts";
 
 const legacyUnit = "opencode-serve.service";
 const revisionVariable = "OFFICE_SERVER_REVISION";

@@ -2,11 +2,10 @@ import { spawn } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
-import { installedPackages, type InstalledPackages } from "../layout.ts";
-import { type Office, OfficeError } from "../office.ts";
-import { readPackage, resolvePackages } from "../packages.ts";
-import type { PackageManifest, Parsed } from "../schema.ts";
-import { officeCommand } from "../tool.ts";
+import type { InstalledPackages } from "../../src/layout.ts";
+import { type Office, OfficeError } from "../../src/office.ts";
+import type { PackageManifest, Parsed } from "../../src/schema.ts";
+import { officeCommand } from "../../src/tool.ts";
 import { type ScheduleFields, scheduleFields } from "./schedule.ts";
 
 export type CronJob = { id: string; fields: ScheduleFields; script: string };
@@ -32,7 +31,7 @@ function scriptPath(dir: string, script: string): string | undefined {
 }
 
 /** Both runners and manual execution use the same declarations, overrides and applicability. */
-export function collectJobs(office: Office, packages: Pick<InstalledPackages, "installed" | "problems"> = installedPackages(office), only?: string): Parsed<CronJob[]> {
+export function collectJobs(office: Office, packages: Pick<InstalledPackages, "installed" | "problems">, only?: string): Parsed<CronJob[]> {
   const jobs: CronJob[] = [];
   const errors = packages.problems.map((problem) => `package ${problem.packages.join(", ")}: ${problem.message}`);
 
@@ -66,43 +65,6 @@ export function collectJobs(office: Office, packages: Pick<InstalledPackages, "i
   }
 
   return errors.length === 0 ? { ok: true, value: jobs } : { ok: false, errors };
-}
-
-/** Looking up one scheduled job must not import an unrelated selected definition. */
-export function namedJob(office: Office, id: string): CronJob {
-  const [kind, owner] = id.split(".");
-  const installed: InstalledPackages["installed"] = [];
-
-  if (kind === "package" && owner) {
-    const resolved = resolvePackages(office, owner);
-    const [item] = resolved.packages;
-
-    if (resolved.problems.length) throw new OfficeError(resolved.problems.map(problem => problem.message).join("\n"));
-
-    if (item) {
-      const read = readPackage(office, item);
-
-      if (!read.ok) throw new OfficeError(read.errors.join("\n"));
-      installed.push(read.value);
-    }
-  }
-
-  const jobs = collectJobs(office, { installed, problems: [] }, id);
-
-  if (!jobs.ok) throw new OfficeError(jobs.errors.join("\n"));
-  const [job] = jobs.value;
-
-  if (!job) throw new OfficeError(`cron ${id}: not enabled for this office; see office cron list`);
-
-  return job;
-}
-
-export function requireJobs(office: Office): CronJob[] {
-  const result = collectJobs(office);
-
-  if (!result.ok) throw new OfficeError(result.errors.join("\n"));
-
-  return result.value;
 }
 
 /** Run the script as a file, never as an interpolated command. */

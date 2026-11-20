@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { Office } from "../office.ts";
+import type { Office } from "../../src/office.ts";
 import { type CronJob, executeJob } from "./jobs.ts";
 import { lastDue, numericSchedule, schedule } from "./schedule.ts";
 
