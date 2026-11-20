@@ -198,7 +198,7 @@ async function syncPlugin(office: Office, clone: Clone, present: boolean) {
 
     // A checkout with no commit (such as one a failed clone left) would be filled in place, where
     // OpenCode already looks. Refuse it before fetching rather than adopt it.
-    if (!verifiedHead(clone.dir)) throw new PluginCheckoutProblem("existing plugin checkout has no commit; left unchanged. Move it aside so office sync can clone a fresh copy, then sync again");
+    if (!verifiedHead(clone.dir)) throw new PluginCheckoutProblem("existing plugin checkout has no commit; left unchanged. Move it aside so office sync can clone a fresh copy, then sync again. If an interrupted first sync left it, see \"Recovering an interrupted first clone\" in docs/opencode-sources.md");
 
     return await refreshCloneStreamed(clone.ref, clone.dir, {}, verify);
   } catch (error) {
@@ -507,7 +507,8 @@ function excludePluginClones(office: Office): string[] {
   if (!existsSync(join(office.dir, ".git"))) return [];
 
   const lines = existsSync(exclude) ? readFileSync(exclude, "utf8").replace(/\n$/, "").split("\n") : [];
-  const wanted = office.plugins.map((plugin) => `/.opencode/plugins/${plugin.name}/`);
+  // An interrupted or refused first plugin delivery can leave its staging folder in the root.
+  const wanted = [...office.plugins.map((plugin) => `/.opencode/plugins/${plugin.name}/`), ...(office.plugins.length > 0 ? ["/.office-plugin-*/"] : [])];
   // Lines of the shape this writes, for a plugin no longer declared: left there, one would keep
   // a package plugin's link of the same name out of commits.
   const stale = lines.filter((line) => /^\/\.opencode\/plugins\/[^/]+\/$/.test(line) && !wanted.includes(line));

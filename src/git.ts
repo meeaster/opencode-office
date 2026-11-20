@@ -2,7 +2,7 @@
 // copies of one folder of a repository.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, type BigIntStats } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, type BigIntStats } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import * as v from "valibot";
@@ -250,10 +250,9 @@ async function gitStreamed(args: string[], cwd: string | undefined, { line = () 
   await streamChecked("git", [command, ...flags, ...rest], { cwd, line, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
 }
 
-async function fetchNewShallow(url: string, ref: string | undefined, dir: string, options: GitOptions, verifyCheckout?: () => void) {
+async function fetchNewShallow(url: string, ref: string | undefined, dir: string, options: GitOptions) {
   git(["init", "--quiet", dir]);
   git(["remote", "add", "origin", url], dir);
-  verifyCheckout?.();
   await gitStreamed(["fetch", "--depth", "1", "origin", ref ?? "HEAD"], dir, options);
 }
 
@@ -280,10 +279,13 @@ export function verifiedHead(dir: string): string | undefined {
   }
 }
 
+/** A no-replace rename: `renameNoReplace`, or a test's wrapper around it. */
+export type NoReplaceRename = (from: string, to: string) => void;
+
 /** Office's rename into place: atomic, and never over an entry someone else put there. */
-function publish(from: string, to: string) {
+function publish(rename: NoReplaceRename, from: string, to: string) {
   try {
-    renameNoReplace(from, to);
+    rename(from, to);
   } catch (error) {
     const code = error instanceof RenameError ? error.code : "unavailable";
 
@@ -293,48 +295,42 @@ function publish(from: string, to: string) {
 }
 
 /**
- * Moves `path` into the private `holding` path and keeps it there only while it is still
- * `original` (and, with `empty`, holds nothing). Anything else, which someone substituted, goes
- * straight back without replacing anything. Returns whether `path` was ours.
+ * First delivery of a plugin clone to `dir`, which must not exist. Git initializes the claim, a
+ * folder with `.git` and the declared origin, in a private staging folder; the claim is renamed
+ * into place without replacement, so an owner's folder (even an empty one) is never adopted or
+ * written to. Git fetches with the final gitdir, so path-specific Git config applies, then checks
+ * out into the staging folder. Publication withdraws the claim and renames the complete tree into
+ * place, again without replacement: OpenCode sees at most the claim with its `.git`, then the
+ * whole checkout. Anything that replaces or enters the claim meanwhile stays where its author put
+ * it, with the same inode and metadata. `rename` is the no-replace rename, replaceable in tests.
  */
-function withdraw(path: string, original: BigIntStats, holding: string, empty: boolean): boolean {
-  try {
-    renameNoReplace(path, holding);
-  } catch (error) {
-    if (error instanceof RenameError && error.code === "ENOENT") return false;
-    throw error;
-  }
-
-  if (sameEntry(holding, original) && (!empty || readdirSync(holding).length === 0)) return true;
-
-  try {
-    renameNoReplace(holding, path);
-  } catch {
-    throw new PluginCheckoutProblem(`an entry that appeared at ${path} during delivery is kept at ${holding}; move it back yourself`);
-  }
-
-  return false;
-}
-
-/**
- * First delivery of a plugin clone to `dir`, which must not exist. The destination is claimed
- * with a folder made in a private staging folder and renamed into place without replacement, so
- * an owner's folder (even an empty one) is never adopted. Git fetches with the final gitdir, so
- * path-specific Git config applies, then checks out into the staging folder. Publication withdraws
- * the claim and renames the complete tree into place, again without replacement: OpenCode sees at
- * most the empty claim with its `.git`, then the whole checkout. Anything that replaces or enters
- * the claim meanwhile stays where its author put it, with the same inode and metadata.
- */
-export async function clonePluginStreamed(url: string, ref: string | undefined, dir: string, officeDir: string, verifyCheckout: () => void): Promise<"cloned"> {
+export async function clonePluginStreamed(
+  url: string, ref: string | undefined, dir: string, officeDir: string, verifyCheckout: () => void, rename: NoReplaceRename = renameNoReplace,
+): Promise<"cloned"> {
   mkdirSync(dirname(dir), { recursive: true });
   const work = mkdtempSync(join(officeDir, ".office-plugin-"));
+  // Office's own folders, which never receive a withdrawn entry; only these are removed whole.
   const claim = join(work, "claim");
   const tree = join(work, "tree");
+  // Holding paths for entries withdrawn from the destination. An entry is removed from one only
+  // after it is shown to be Office's; anything else goes back or stays there.
+  const heldGit = join(work, "git");
+  const released = join(work, "released");
   const metadata = join(dir, ".git");
-  mkdirSync(join(claim, ".git"), { recursive: true });
-  const folder = lstatSync(claim, { bigint: true });
-  const owned = lstatSync(join(claim, ".git"), { bigint: true });
-  let keep = false;
+  const kept: string[] = [];
+  let published = false;
+  let folder: BigIntStats, owned: BigIntStats;
+
+  try {
+    // Git writes the claim's .git while it is still in staging: never into an owner's folder.
+    git(["init", "--quiet", claim]);
+    git(["remote", "add", "origin", url], claim);
+    folder = lstatSync(claim, { bigint: true });
+    owned = lstatSync(join(claim, ".git"), { bigint: true });
+  } catch (error) {
+    rmSync(work, { recursive: true, force: true });
+    throw error;
+  }
 
   const verify = () => {
     verifyCheckout();
@@ -342,34 +338,77 @@ export async function clonePluginStreamed(url: string, ref: string | undefined, 
     if (!sameEntry(dir, folder) || !sameEntry(metadata, owned)) throw new PluginCheckoutProblem("plugin destination changed during delivery; nothing was published");
   };
 
-  try {
-    publish(claim, dir);
-
+  /**
+   * Moves `path` into `holding` and keeps it there only while it is still `original` (and, with
+   * `empty`, holds nothing). Anything else, which someone substituted, goes straight back without
+   * replacing anything; if it cannot, it stays in `holding`, which is then never removed. Returns
+   * whether `path` was ours; a missing path, or one whose parent is no longer a folder, was not.
+   */
+  const withdraw = (path: string, original: BigIntStats, holding: string, empty: boolean) => {
     try {
-      await fetchNewShallow(url, ref, dir, {}, verify);
-      verify();
-      mkdirSync(tree);
-      git(["--work-tree", tree, "checkout", "--quiet", "--detach", "FETCH_HEAD"], dir);
-      verify();
-
-      if (!withdraw(metadata, owned, join(tree, ".git"), false) || !withdraw(dir, folder, join(work, "released"), true)) {
-        throw new PluginCheckoutProblem("plugin destination changed during delivery; kept what appeared there and published nothing");
-      }
-
-      publish(tree, dir);
-
-      return "cloned";
+      rename(path, holding);
     } catch (error) {
-      // Take back only our own claim; withdraw restores a substituted entry.
-      if (withdraw(metadata, owned, join(work, "metadata"), false)) withdraw(dir, folder, join(work, "released"), true);
+      if (error instanceof RenameError && (error.code === "ENOENT" || error.code === "ENOTDIR")) return false;
       throw error;
     }
+
+    if (sameEntry(holding, original) && (!empty || readdirSync(holding).length === 0)) return true;
+
+    try {
+      rename(holding, path);
+    } catch {
+      const where = `an entry that appeared at ${path} during delivery is kept at ${holding}`;
+
+      kept.push(where);
+      throw new PluginCheckoutProblem(where);
+    }
+
+    return false;
+  };
+
+  /** Takes back Office's `.git` and empty claim folder, if they are still at the destination. */
+  const withdrawClaim = () => {
+    if (!withdraw(metadata, owned, heldGit, false)) return;
+    rmSync(heldGit, { recursive: true, force: true });
+
+    if (withdraw(dir, folder, released, true)) rmdirSync(released);
+  };
+
+  try {
+    publish(rename, claim, dir);
+    published = true;
+    verify();
+    await gitStreamed(["fetch", "--depth", "1", "origin", ref ?? "HEAD"], dir, {});
+    verify();
+    mkdirSync(tree);
+    git(["--work-tree", tree, "checkout", "--quiet", "--detach", "FETCH_HEAD"], dir);
+    verify();
+
+    if (!withdraw(metadata, owned, heldGit, false)) throw new PluginCheckoutProblem("plugin destination changed during delivery; kept what appeared there and published nothing");
+    renameSync(heldGit, join(tree, ".git"));
+
+    if (!withdraw(dir, folder, released, true)) throw new PluginCheckoutProblem("plugin destination changed during delivery; kept what appeared there and published nothing");
+    rmdirSync(released);
+    publish(rename, tree, dir);
+
+    return "cloned";
   } catch (error) {
-    // Keep the staging folder if it now holds an entry that could not be put back.
-    if (error instanceof PluginCheckoutProblem && error.message.includes(work)) keep = true;
+    if (published) {
+      try {
+        withdrawClaim();
+      } catch { /* The original failure is the one to report; a kept entry is added below. */ }
+    }
+
+    // An entry that could not be put back outranks the original failure: it says where it is.
+    if (kept.length > 0) throw new PluginCheckoutProblem(`${kept.join("; ")}; move it back yourself`, { cause: error });
     throw error;
   } finally {
-    if (!keep) rmSync(work, { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
+    rmSync(claim, { recursive: true, force: true });
+
+    try {
+      rmdirSync(work); // Fails, keeping the staging folder, only while a kept entry is in it.
+    } catch { /* kept */ }
   }
 }
 
