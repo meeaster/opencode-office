@@ -7,6 +7,7 @@ import { type Office, OfficeError } from "../../src/office.ts";
 import type { PackageManifest, Parsed } from "../../src/schema.ts";
 import { officeCommand } from "../../src/tool.ts";
 import { type ScheduleFields, scheduleFields } from "./schedule.ts";
+import { jobDeclarations } from "./registration.ts";
 
 export type CronJob = { id: string; fields: ScheduleFields; script: string };
 
@@ -35,8 +36,10 @@ export function collectJobs(office: Office, packages: Pick<InstalledPackages, "i
   const jobs: CronJob[] = [];
   const errors = packages.problems.map((problem) => `package ${problem.packages.join(", ")}: ${problem.message}`);
 
-  function collect(id: string, dir: string, script: string, expression: string, enabled: boolean): void {
-    if (only !== undefined && id !== only) return;
+  function collect(id: string, dir: string, script: string, expression: string, enabled: boolean, validateOwner = false): void {
+    // A named run can filter legacy data up front. A setup batch must validate in full
+    // before even its first registration can authorize a run.
+    if (!validateOwner && only !== undefined && id !== only) return;
     const path = scriptPath(dir, script);
 
     if (path === undefined) errors.push(`cron ${id}: ${script} must be an existing regular script inside its declaring folder (no symlinks)`);
@@ -49,7 +52,7 @@ export function collectJobs(office: Office, packages: Pick<InstalledPackages, "i
 
     if (office.opencode.mode === "host" && fields.day !== undefined && fields.weekday !== undefined) {
       errors.push(`cron ${id}: "${expression}" restricts both the day of the month and the weekday, which a systemd timer can't express`);
-    } else if (path !== undefined) {
+    } else if (path !== undefined && (only === undefined || id === only)) {
       jobs.push({ id, fields, script: path });
     }
   }
@@ -57,10 +60,19 @@ export function collectJobs(office: Office, packages: Pick<InstalledPackages, "i
   for (const [name, job] of Object.entries(office.cron)) collect(`office.${name}`, office.dir, job.script, job.schedule, true);
 
   for (const item of packages.installed) {
-    for (const [name, job] of Object.entries(item.manifest.cron)) {
+    const declarations = jobDeclarations(office, item);
+
+    if (!declarations.ok) {
+      errors.push(...declarations.errors);
+      continue;
+    }
+
+    for (const [name, job] of declarations.value) {
+      if (job === false) continue;
+
       const override = item.entry.cron[name];
 
-      collect(`package.${item.entry.name}.${name}`, item.dir, job.script, override?.schedule ?? job.schedule, override?.enabled !== false && applies(office, job.when));
+      collect(`package.${item.entry.name}.${name}`, item.dir, job.script, override?.schedule ?? job.schedule, override?.enabled !== false && applies(office, job.when), item.manifest.cron_setup);
     }
   }
 

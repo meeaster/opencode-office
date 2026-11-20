@@ -90,6 +90,7 @@ async function handler(office: Selections, owner: Owner, canonical: string, requ
 
     await manifest.setup?.({
       settings: structuredClone(owner.commands.settings), add() {},
+      cron: { mode: undefined, job() {} },
       command(input) {
         const read = commandRegistration(input);
 

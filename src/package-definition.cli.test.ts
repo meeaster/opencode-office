@@ -867,6 +867,99 @@ packages:
   }
 });
 
+test("one author registers current-mode jobs and indexed commands without changing the command's synced inputs", () => {
+  const { dir, home, cli } = fixture("author-cron");
+  const run = "package.report.daily";
+  const stamp = join(home, `.local/state/office/cron/author-cron/${run}.stamp`);
+  const module = join(dir, "packages/report/office.ts");
+  const script = join(dir, "packages/report/daily.sh");
+  const data = join(dir, "packages/other/package.yaml");
+  write(data, "name: other\ndescription: Legacy jobs\ncron: {weekly: {schedule: '@weekly', script: weekly.sh}}\n");
+  write(join(dir, "packages/other/weekly.sh"), "true");
+  write(script, "echo ran >> runs; test ! -e fail || exit 29");
+
+  const hour = (new Date().getUTCHours() + 12) % 24;
+
+  const configure = (mode: string, label: string, enabled = true) => write(join(dir, "office.yaml"), `name: author-cron
+opencode: ${mode}
+packages:
+  - name: report
+    settings: {label: ${label}}
+    cron: {daily: {enabled: ${enabled}, schedule: '0 ${hour} * * *'}}
+  - {name: other}
+  - name: office
+    cron: {update-references: {enabled: false}, upgrade-tools: {enabled: false}}
+`);
+
+  const definition = (extra = "") => `export default {name:"report",description:"Reports",cron_setup:true,
+    settings:{label:{description:"Edition",default:"one"}},
+    setup(ctx) {
+      ctx.command({name:"report edition",summary:"Print edition",run(){console.log(ctx.settings.label)}});
+      if (!ctx.cron.mode) return;
+      ctx.cron.job("daily",ctx.cron.mode==="host" ? false : {script:"daily.sh",schedule:"@daily"});
+      ${extra}
+    }}`;
+
+  write(module, definition());
+  configure("container", "one");
+  cli(0, "sync", "--packages");
+  expect(existsSync(join(dir, "runs"))).toBe(false);
+  expect(existsSync(join(home, "units"))).toBe(false);
+  expect(cli(0, "cron", "supercronic")).toBe(`0 ${hour} * * * office cron run ${run}\n0 0 * * 0 office cron run package.other.weekly\n`);
+  write(join(dir, "fail"), "");
+  expect(cli(29, "cron", "run", run)).toContain("exited 29");
+  expect(existsSync(stamp)).toBe(false);
+  rmSync(join(dir, "fail"));
+  expect(cli(0, "cron", "catch-up")).toContain(`catching up ${run}`);
+  expect(cli(0, "cron", "catch-up")).not.toContain(`catching up ${run}`);
+  expect(read(join(dir, "runs"))).toBe("ran\nran\n");
+  const success = read(stamp);
+  configure("container", "two", false);
+  expect(cli(1, "cron", "run", run)).toContain("not enabled");
+  configure("{mode: host, url: 'http://127.0.0.1:1'}", "two");
+  expect(cli(0, "cron", "list")).toBe("package.other.weekly\n");
+  expect(cli(0, "report", "edition")).toContain("one");
+  configure("{mode: host, managed: true, url: 'http://127.0.0.1:1'}", "two");
+  expect(cli(0, "cron", "list")).toContain(`package.office.update-agent-clis\n${run}\n`);
+  expect(read(stamp)).toBe(success);
+
+  // A failed collector is not a successful empty list, even after making a valid registration.
+  write(module, definition('throw Error("incomplete cron batch")'));
+  expect(cli(1, "sync", "--packages")).toContain("incomplete cron batch");
+  expect(cli(0, "--help")).not.toContain("report edition");
+  expect(cli(1, "cron", "run", run)).toContain("incomplete cron batch");
+  expect(cli(1, "up")).toContain("incomplete cron batch");
+  expect(read(join(dir, "runs"))).toBe("ran\nran\n");
+  expect(read(stamp)).toBe(success);
+}, 60_000);
+
+test("an invalid registration rejects the owner's batch before a valid sibling can run", () => {
+  const { dir, cli, select } = fixture("bad-cron");
+  select("  - name: report\n");
+  const pkg = join(dir, "packages/report");
+  write(join(pkg, "run.sh"), "echo bad >> started");
+  write(join(dir, "outside.sh"), "echo outside >> started");
+  symlinkSync(join(dir, "outside.sh"), join(pkg, "linked.sh"));
+  const job = '{schedule:"@daily",script:"run.sh"}';
+
+  for (const [data, extra, reason] of [
+    [`cron:{first:${job}},`, "", "duplicate cron job package.report.first"],
+    ["", `ctx.cron.job("first",false)`, "duplicate cron job package.report.first"],
+    ["", `ctx.cron.job("constructor",${job})`, "reserved job name"],
+    ["", 'ctx.cron.job("bad",{schedule:"@reboot",script:"run.sh"})', "cron schedule"],
+    ["", 'ctx.cron.job("bad",{schedule:"@daily",script:"../outside.sh"})', "relative .sh path"],
+    ["", 'ctx.cron.job("bad",{schedule:"@daily",script:"linked.sh"})', "existing regular script"],
+    ["", 'ctx.cron.job("bad",{schedule:"@daily",script:"absent.sh"})', "existing regular script"],
+    ["", `ctx.cron.job("bad",{...${job},when:"host"})`, "when"],
+    ["", 'return Promise.reject(Error("async job discovery"))', "synchronously"],
+  ]) {
+    write(join(pkg, "office.ts"), `export default {name:"report",description:"Reports",${data}cron_setup:true,
+      setup(ctx){ctx.cron.job("first",${job}); ${extra}}}`);
+    expect(cli(1, "cron", "run", "package.report.first")).toContain(reason);
+    expect(existsSync(join(dir, "started"))).toBe(false);
+  }
+}, 60_000);
+
 test("the scheduled reference refresh catches up once at its overridden due time using the named run's stamp", () => {
   const { dir, home, cli } = fixture("ref-schedule");
   const job = "package.office.update-references";
@@ -1162,6 +1255,8 @@ test("tracked updates validate the consuming settings and staged assets before p
   for (const [candidate, reason] of [
     ['export default {name:"shared",description:"New"}', "settings.title"],
     [definition.replace("settings:", 'cron:{job:{script:"missing.sh",schedule:"@daily"}},settings:'), "missing.sh"],
+    [definition.replace("settings:", 'cron_setup:true,setup(ctx){ctx.cron.job("job",{script:"missing.sh",schedule:"@daily"})},settings:'), "missing.sh"],
+    [definition.replace("settings:", 'cron_setup:true,setup(ctx){ctx.cron.job("job",false);throw Error("interrupted replacement")},settings:'), "interrupted replacement"],
   ]) {
     write(join(source, "office.ts"), candidate);
     commit(repo);

@@ -1,4 +1,6 @@
 import * as v from "valibot";
+import { collectJobs } from "../standard/cron/jobs.ts";
+import { inactiveCron } from "../standard/cron/registration.ts";
 import { commandConflicts, commandRegistration, type CommandMetadata } from "./command-table.ts";
 import type { InstalledPackages } from "./layout.ts";
 import type { Office, PackageEntry, Repository } from "./office.ts";
@@ -56,10 +58,17 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
 
     if (pkg?.manifest.setup) {
       try {
+        if (pkg.manifest.cron_setup) {
+          const cron = collectJobs({ ...office, cron: {} }, { installed: [pkg], problems: [] });
+
+          if (!cron.ok) throw new Error(cron.errors.join("; "));
+        }
+
         const routes: CommandMetadata[] = [];
         const invalid: string[] = [];
         await pkg.manifest.setup({
           settings: structuredClone(pkg.settings),
+          cron: inactiveCron(pkg.manifest),
           command(input) {
             const read = commandRegistration(input);
 

@@ -35,6 +35,9 @@ const cronScript = v.pipe(
 
 const cronFields = { schedule: cronSchedule, script: cronScript };
 
+export const registeredJobName = v.pipe(jobName, v.check(key => !["constructor", "prototype", "__proto__"].includes(key), "reserved job name"));
+export const registeredJob = v.strictObject(cronFields, mapping);
+
 // Valibot's record parser skips prototype keys; refuse them instead of losing a job or override.
 const noPrototypeKeys = v.rawCheck(({ dataset, addIssue }) => {
   const input = Object(dataset.value);
@@ -642,13 +645,16 @@ export const packageManifestSchema = v.pipe(
       host: v.optional(hostBlock),
       system: v.optional(systemBlock),
       cron: packageCron,
+      // Timers must not run another package's async reference/command collector to find jobs.
+      cron_setup: v.optional(v.literal(true)),
       executor_app: v.optional(executorAppBlock),
       // The label on Docker resources its services create themselves, which `office down` removes.
       spawns: v.optional(spawnsBlock),
     },
-    "must be a mapping of name, namespace, description, settings or settings_schema, secrets, tools, host, system, cron, executor_app and spawns",
+    "must be a mapping of name, namespace, description, settings or settings_schema, secrets, tools, host, system, cron, cron_setup, executor_app and spawns",
   ),
   v.check((manifest) => manifest.settings === undefined || manifest.settings_schema === undefined, "choose settings or settings_schema, not both"),
+  v.check(manifest => !manifest.cron_setup || manifest.setup !== undefined, "cron_setup requires a setup function in office.ts"),
   v.transform((manifest) => ({ ...manifest, settings: manifest.settings ?? {}, namespace: manifest.namespace ?? manifest.name })),
   v.forward(
     v.check((manifest) => manifest.settings_schema !== undefined || manifest.host?.setting === undefined || isTrueOrFalse(manifest.settings[manifest.host.setting]?.default), "must name one of the package's settings whose default is true or false"),

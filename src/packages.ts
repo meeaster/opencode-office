@@ -536,7 +536,7 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
   const settings = structuredClone(entry.settings ?? {});
 
   for (const key of Object.keys(entry.cron)) {
-    if (!Object.hasOwn(manifest.cron, key)) errors.push(`packages.${entry.name}.cron.${key}: no such job in ${file}`);
+    if (!manifest.cron_setup && !Object.hasOwn(manifest.cron, key)) errors.push(`packages.${entry.name}.cron.${key}: no such job in ${file}`);
   }
 
   if (manifest.settings_schema !== undefined) {

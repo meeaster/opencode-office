@@ -62,7 +62,7 @@ function fixture(): void {
   const pkg = join(root, ".office/packages/office");
 
   mkdirSync(join(pkg, "scripts"), { recursive: true });
-  copyFileSync(join(import.meta.dir, "../../packages/office/package.yaml"), join(pkg, "package.yaml"));
+  copyFileSync(join(import.meta.dir, "../../packages/office/office.ts"), join(pkg, "office.ts"));
   cpSync(join(import.meta.dir, "../../packages/office/scripts"), join(pkg, "scripts"), { recursive: true });
   recordRequiredFixtures(pkg);
 

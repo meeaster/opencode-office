@@ -14,6 +14,12 @@ export type PackageCommand = {
 
 export type PackageContext = {
   settings: Readonly<Record<string, SettingValue>>;
+  cron: {
+    /** Defined only while this package's synchronous cron declarations are being read. */
+    readonly mode: "managed-host" | "host" | "container" | undefined;
+    /** false reserves an inapplicable job's override name without scheduling it. */
+    job(localName: string, definition: { schedule: string; script: string } | false): void;
+  };
   command(command: PackageCommand): void;
   add(item: {
     registry: "references.repository";

@@ -361,7 +361,35 @@ cron:
 
 Schedules are five-field UTC cron expressions or time macros such as `@daily`. The script must be a regular `.sh` file relative to its declaring office or package, with no symlinks. All jobs run under `/bin/sh` from the office root. `office cron list` shows IDs such as `office.daily-report` and `package.office.update-references`; use `office cron run <job-id>` to run one directly in the execution environment you intend. Keep the job name when renaming its script: the ID tracks the job across renames.
 
-A package definition (`office.ts` or `package.yaml`) uses the same `cron` mapping. The scheduler is compiled into `office`, not a package to select: `office cron run` reads the named job's current declaration without loading unrelated packages or looking up a package command. A package job may also set `when: host`, `when: managed-host`, or `when: container`; omitting `when` makes it applicable in both modes. An office may change a package's schedule or disable a job under that package entry's `cron:` (alongside `settings`), for example:
+An `office.ts` author can register a shell script in ordinary TypeScript. For example, put this in `packages/reports/office.ts`, put `printf 'report from %s\n' "$PWD"` in `packages/reports/scripts/report.sh`, and select `reports` in `office.yaml`:
+
+```ts
+import type { PackageContext } from "../../.office/packages/office/package-context.ts";
+
+export default {
+  name: "reports",
+  description: "Run this office's scheduled report",
+  settings: { enabled: { description: "Schedule the report", default: true } },
+  cron_setup: true,
+  setup(ctx: PackageContext) {
+    if (!ctx.cron.mode) return;
+
+    if (ctx.settings.enabled === true && ctx.cron.mode !== "container") {
+      ctx.cron.job("report", { schedule: "15 9 * * *", script: "scripts/report.sh" });
+    } else {
+      ctx.cron.job("report", false);
+    }
+  },
+};
+```
+
+Run `office sync --packages`, then `office cron list`. On a host, `office cron run package.reports.report` runs the script. `cron_setup: true` tells the scheduler which packages' `setup` functions supply jobs. Registration is synchronous and side-effect free: put work in the script, not in `setup`. The cron pass sees current validated settings and `ctx.cron.mode` (`"host"`, `"managed-host"` or `"container"`); command and reference registrations have no effect in this pass. During command/reference collection or indexed dispatch, `ctx.cron.mode` is `undefined`. A package that also contributes commands or references can register those in that branch. An async reference collector may return a promise there, but the cron branch must return synchronously.
+
+`job(name, false)` keeps the override name valid while a job is inapplicable. To withdraw a job entirely, stop registering its name and remove any override. The current owner must load and register successfully on each cron read; a failed or duplicate registration cannot authorize even a partial run. `office up` applies the resulting schedules. No callback, job table or mode is saved in the command index.
+
+When updating from a CLI that shipped `packages/office/package.yaml`, installed timers can use the new executable immediately. `office sync --packages` replaces that copy with the TS author; the scripts, timer arguments and success-history paths keep the same IDs. Every runner sharing the adopted copy must understand `cron_setup`, including the CLI inside a container image. For a downgrade, restore compatible package copies (for built-ins, sync with the older executable) before resuming scheduled work.
+
+The static `cron` mapping remains supported in both `package.yaml` and `office.ts`. A static job may also set `when: host`, `when: managed-host`, or `when: container`; omitting `when` makes it applicable in both modes. Static and registered jobs share validation and cannot claim the same qualified ID. The scheduler is compiled into `office`, not a package to select. `office cron run` reads only the named owner. An office may change a package's schedule or disable a job under its package entry's `cron:` (alongside `settings`), for example:
 
 ```yaml
 packages:
