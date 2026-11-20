@@ -284,6 +284,75 @@ test("down uses the applied Compose inputs and marked unit without importing the
   expect(calls).toMatch(/state\/packages\/notes\/include.yaml .*down/);
 }, 60_000);
 
+test("a Doop upgrade requires the exact old volume names; a partial backup cannot advance applied state", () => {
+  const { dir, home, cli, select } = fixture("backup");
+  const pg = "office-backup_doop-pg";
+  const assets = "office-backup_doop-assets";
+  const calls = join(home, "docker.calls");
+  const mode = join(home, "inspect-mode");
+  const installed = join(dir, ".office/packages/design/compose.yaml");
+  const applied = join(dir, "state/packages/design/compose.yaml");
+  const record = join(dir, "state/applied.json");
+
+  select("  - name: design\nstate: ./state\n");
+  cli(0, "sync", "--packages");
+  write(join(home, "bin/docker"), `#!/bin/sh
+echo "$*" >> "$HOME/docker.calls"
+case "$1 $2" in
+  "volume inspect")
+    [ "$3 $4" = '--format {{.Name}}' ] || exit 2
+    case "$5" in
+      ${pg}) echo "$5";;
+      ${assets})
+        IFS= read -r mode < "$HOME/inspect-mode"
+        case "$mode" in
+          denied) echo "$5"; echo PRIVATE_DIAGNOSTIC >&2; exit 1;;
+          similar) echo "$5-extra";;
+          extra) printf '%s\\nPRIVATE_DIAGNOSTIC\\n' "$5";;
+          ok) echo "$5";;
+          *) exit 2;;
+        esac;;
+      *) exit 3;;
+    esac;;
+  "run --rm"|"build -t"|"compose -p") ;;
+  *) exit 3;;
+esac\n`, 0o755);
+  cli(0, "up");
+  // Model an older applied release, retaining exactly its real volume names and mounts.
+  const old = read(applied).replace("restart: unless-stopped", "restart: always");
+  const oldRecord = `${read(record)}\n`;
+
+  write(applied, old);
+  write(record, oldRecord);
+
+  for (const answer of ["denied", "similar", "extra"]) {
+    write(mode, `${answer}\n`);
+    write(calls, "");
+    const output = cli(1, "up", "--upgrade");
+
+    expect(output).toContain(`docker volume inspect ${assets}: ${answer === "denied" ? "exit 1" : "unexpected name"}`);
+    expect(output).not.toContain("PRIVATE_DIAGNOSTIC");
+    const trace = read(calls);
+
+    expect(trace).not.toMatch(/volume ls|dial-stdio/);
+    expect(trace).toContain("stop doop doop-db");
+    expect(trace).toContain(`${pg}:/data:ro`);
+    expect(trace).not.toContain(`${assets}:/data:ro`);
+    expect(trace).not.toContain("up -d");
+    expect(read(applied)).toBe(old);
+    expect(read(record)).toBe(oldRecord);
+  }
+
+  write(mode, "ok\n");
+  write(calls, "");
+  cli(0, "up", "--upgrade");
+  expect(read(calls)).toContain(`${pg}:/data:ro`);
+  expect(read(calls)).toContain(`${assets}:/data:ro`);
+  expect(read(calls)).toContain("up -d");
+  expect(read(applied)).toBe(read(installed));
+  expect(read(record)).not.toBe(oldRecord);
+}, 60_000);
+
 test("the executable installs a TS-only Git package and repairs it from the recorded commit after its tag moves", () => {
   const { dir, cli, select } = fixture("pinned");
   const repo = join(root, "upstream");

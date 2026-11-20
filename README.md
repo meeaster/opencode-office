@@ -763,6 +763,7 @@ To decrypt a SOPS file instead, `office secrets decrypt secrets/example.enc.yaml
 
 - A package the office hasn't run before is applied on a plain `office up`.
 - When a package's file changes, `office up` says so and keeps running the applied copy; `office check` shows it as pending. `office up --upgrade` stops that package's services, backs up each named volume its applied file declares to `backups/` (printing where each went), then applies the new file.
+- If Docker cannot inspect an old backup volume by its exact name, the upgrade stops with the old definition still applied. The Docker CLI cannot distinguish a missing volume from denied access by exit code, so even a genuinely absent volume blocks this upgrade. Check the Docker context, inspect permission and storage driver. If data was lost, recover the original volume from a verified backup before retrying `office up --upgrade`. If the volume never existed, keep the upgrade pending and review the applied definition and storage history with the operator; there is no automatic skip.
 - A package that leaves `office.yaml` stops contributing on the next `office up`, which removes its applied copy; its containers go as orphans, and what they created with its `spawns` label, kept beside the applied copy as `spawns.label`, goes too. Its volumes and secrets stay, so adding it back finds its data.
 - `office down`, `office check` and every other command use the same applied files as `office up`.
 

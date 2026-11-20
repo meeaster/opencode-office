@@ -345,9 +345,25 @@ async function backUpVolume(dir: string, volume: string, file: string): Promise<
   return join(dir, file);
 }
 
+/** The Docker CLI doesn't distinguish a missing volume from denied access by exit code.
+ * Require its exact name before mounting it for backup; never turn lookup failure into a skip. */
+function requireBackupVolume(volume: string): void {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(volume)) throw new OfficeError("package volume backup requires a resolved Docker volume name");
+
+  const result = spawnSync("docker", ["volume", "inspect", "--format", "{{.Name}}", volume], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 30_000,
+  });
+
+  if (result.status === 0 && !result.error && result.stdout.replace(/\r?\n$/, "") === volume) return;
+
+  const status = result.status === 0 ? "unexpected name" : result.status === null ? "did not complete" : `exit ${result.status}`;
+
+  throw new OfficeError(`docker volume inspect ${volume}: ${status}; upgrade stopped. Verify the old volume and access in the current Docker context before retrying.`);
+}
+
 /**
  * Stops the services of each package whose compose file an upgrade replaces and backs up the named
- * volumes its applied file declares. A volume the services never created has nothing to save.
+ * volumes its applied file declares. If any cannot be verified, keep the applied definition.
  * Returns where each went.
  */
 async function backUpPackages(office: Office, upgraded: UpgradedServices[]): Promise<string[]> {
@@ -358,7 +374,7 @@ async function backUpPackages(office: Office, upgraded: UpgradedServices[]): Pro
     if (item.services.length > 0) await composeStreamed(office, ["stop", ...item.services]);
 
     for (const volume of item.volumes) {
-      if (spawnSync("docker", ["volume", "inspect", volume], { stdio: "ignore" }).status !== 0) continue;
+      requireBackupVolume(volume);
 
       mkdirSync(dir, { recursive: true });
       written.push(await backUpVolume(dir, volume, `${stamp()}-package-${item.name}-${volume}.tar.gz`));
