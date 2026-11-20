@@ -11,13 +11,14 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import { prepareReferenceRefresh } from "../../packages/references/tasks/refresh.ts";
 import { claudeFiles } from "../claude.ts";
 import { boundRevision, collectReferences } from "../collect-references.ts";
 import { beginReferencePublication, planReferenceApply } from "../reference-publication.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { collectJobs } from "../cron/jobs.ts";
 import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
-import { cloneOrFetchStreamed, cloneShallowStreamed, discardFailedClone, isClone, refreshCloneStreamed, syncReference } from "../git.ts";
+import { cloneOrFetchStreamed, cloneShallowStreamed, discardFailedClone, isClone, referenceGit, refreshCloneStreamed } from "../git.ts";
 import { clones, installedPackages, type InstalledPackages, oldKnowledgePlugin, packageLink, pluginLinks, skillSelections } from "../layout.ts";
 import { migrate } from "../migrate.ts";
 import { definitionFiles } from "../package-definition.ts";
@@ -229,7 +230,13 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
       if (clone.kind === "plugin") discardFailedClone(clone.dir);
       const present = isClone(clone.dir);
 
-      if (clone.stale && !present) throw new Error("stale contribution cannot authorize a new clone; repair the contributor and run office sync --packages");
+      let refresh: ReturnType<typeof prepareReferenceRefresh> | undefined;
+
+      if (clone.kind === "reference") {
+        if (!references) throw new Error("reference apply requires a current claim");
+        const git = referenceGit(clone, apply => references.value.guard(clone.name, apply));
+        refresh = prepareReferenceRefresh(present, clone.stale === true, git);
+      }
 
       (present ? updates : missing).push(async () => {
         const part = stage.part(where, present ? "updating" : "cloning");
@@ -238,10 +245,8 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
         try {
           let result;
 
-          if (clone.kind === "reference") {
-            if (!references) throw new Error("reference apply requires a current claim");
-            result = await syncReference(clone, present, options, apply => references.value.guard(clone.name, apply));
-          } else if (clone.kind === "plugin") {
+          if (refresh) result = await refresh(options);
+          else if (clone.kind === "plugin") {
             result = present ? await refreshCloneStreamed(clone.ref, clone.dir, options) : await cloneShallowStreamed(clone.url, clone.ref, clone.dir, options);
           } else result = await cloneOrFetchStreamed(clone.url, clone.ref, clone.dir, options);
           part.done(result);

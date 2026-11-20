@@ -834,6 +834,35 @@ test("stale refresh needs the actual and last-applied origin/ref; cron runs only
   expect(existsSync(probe)).toBe(false);
 }, 60_000);
 
+test("the scheduled reference refresh catches up once at its overridden due time using the named run's stamp", () => {
+  const { dir, home, cli } = fixture("ref-schedule");
+  const job = "package.office.update-references";
+  const stamp = join(home, `.local/state/office/cron/ref-schedule/${job}.stamp`);
+  const repo = join(dir, "upstream");
+  const checkout = join(dir, "references/docs");
+  // A past UTC minute well away from both the next run and the 06:00 default.
+  const due = new Date(Date.now() - 8 * 60 * 60_000);
+  due.setUTCMinutes(17, 0, 0);
+
+  git(["init", "-qb", "main", repo]);
+  write(join(repo, "document"), "first");
+  const first = commit(repo);
+  write(join(dir, "office.yaml"), `name: ref-schedule
+references: [{name: docs, url: ${repo}, ref: main}]
+packages: [{name: office, cron: {update-references: {schedule: '17 ${due.getUTCHours()} * * *'}, upgrade-tools: {enabled: false}}}]
+`);
+  cli(0, "sync", "--packages");
+  cli(0, "cron", "run", job);
+  write(join(repo, "document"), "next");
+  const next = commit(repo);
+  expect(cli(0, "cron", "catch-up")).not.toContain("catching up");
+  expect(git(["rev-parse", "HEAD"], checkout)).toBe(first);
+  write(stamp, `${new Date(due.getTime() - 60_000).toISOString()}\n`);
+  expect(cli(0, "cron", "catch-up")).toContain(`catching up ${job} (due ${due.toISOString()})`);
+  expect(git(["rev-parse", "HEAD"], checkout)).toBe(next);
+  expect(cli(0, "cron", "catch-up")).not.toContain("catching up");
+}, 60_000);
+
 test("a built-in's bytes and a Git contributor's resolved commit survive separate executable processes", () => {
   const { dir, env, cli, newer, probe, select } = fixture("reference-repair");
   select("  - name: aws-emulator\n");
