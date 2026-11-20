@@ -12,10 +12,12 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlin
 import { join, relative } from "node:path";
 
 import { claudeFiles } from "../claude.ts";
+import { collectReferences } from "../collect-references.ts";
+import { resolvedReferences } from "../reference-snapshot.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { collectJobs } from "../cron/jobs.ts";
 import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
-import { cloneOrFetchStreamed, cloneShallowStreamed, discardFailedClone, isClone, refreshCloneStreamed } from "../git.ts";
+import { appliedReferenceRef, cloneOrFetchStreamed, cloneShallowStreamed, discardFailedClone, git, isClone, previouslyAppliedRef, referenceOriginProblem, refreshCloneStreamed } from "../git.ts";
 import { clones, installedPackages, type InstalledPackages, oldKnowledgePlugin, packageLink, pluginLinks, skillSelections } from "../layout.ts";
 import { migrate } from "../migrate.ts";
 import { definitionFiles } from "../package-definition.ts";
@@ -188,7 +190,18 @@ const cloneSlots = 4;
  * order, with a FAILED line for each that failed.
  */
 async function syncClones(office: Office, referencesOnly: boolean, stage: Stage, verbose: boolean): Promise<string[]> {
-  const work = clones(office).filter((clone) => !referencesOnly || clone.kind === "reference");
+  const references = resolvedReferences(office.dir, office);
+
+  if (!references.ok) {
+    const errors = references.errors.map(error => `FAILED ${error}`);
+
+    for (const error of errors) stage.error(error);
+
+    return errors;
+  }
+
+  for (const note of references.value.notes) stage.warn(note);
+  const work = clones(office, references.value.entries).filter((clone) => !referencesOnly || clone.kind === "reference");
   const lines: string[][] = work.map(() => []);
 
   if (work.length === 0) return [];
@@ -214,8 +227,18 @@ async function syncClones(office: Office, referencesOnly: boolean, stage: Stage,
       if (clone.kind === "plugin" && packageLink(clone.dir) !== undefined) unlinkSync(clone.dir);
 
       // A shallow clone that failed under an earlier release left a .git with no commit; clone again.
-      if (shallow) discardFailedClone(clone.dir);
+      if (clone.kind === "reference") {
+        const problem = referenceOriginProblem(clone.dir, clone.url);
+
+        if (problem) throw new Error(problem);
+      }
+
+      if (shallow && !clone.stale) discardFailedClone(clone.dir);
       const present = isClone(clone.dir);
+
+      if (clone.stale && !present) throw new Error("stale contribution cannot authorize a new clone; repair the contributor and run office sync --packages");
+
+      if (clone.stale && previouslyAppliedRef(clone.dir) !== (clone.ref ?? "HEAD")) throw new Error("stale contribution cannot apply a different or unrecorded ref; repair the contributor and run office sync");
 
       (present ? updates : missing).push(async () => {
         const part = stage.part(where, present ? "updating" : "cloning");
@@ -226,6 +249,7 @@ async function syncClones(office: Office, referencesOnly: boolean, stage: Stage,
             ? present ? await refreshCloneStreamed(clone.ref, clone.dir, options) : await cloneShallowStreamed(clone.url, clone.ref, clone.dir, options)
             : await cloneOrFetchStreamed(clone.url, clone.ref, clone.dir, options);
 
+          if (clone.kind === "reference") git(["config", "--local", appliedReferenceRef, clone.ref ?? "HEAD"], clone.dir);
           part.done(result);
 
           if (result !== "current" && result !== "fetched") lines[index].push(`${result} ${clone.kind} ${where}`);
@@ -306,9 +330,7 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
     return reported;
   }
 
-  reported.push(...(await syncClones(office, scope === "references", stage, verbose)));
-
-  if (scope === "references") return reported;
+  if (scope === "references") return syncClones(office, true, stage, verbose);
 
   stage.detail("migrating, scaffolding desks, copying skills and installing packages");
 
@@ -322,7 +344,8 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
   }
 
   changes.push(...copySkills(office));
-  await syncPackages(office, changes, stage);
+
+  if (await syncPackages(office, changes, stage)) reported.push(...await syncClones(office, false, stage, verbose));
   changes.push(...claudeFiles(office.dir, true));
   changes.push(...linkSkills(office));
   changes.push(...excludePluginClones(office));
@@ -336,7 +359,7 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
  * office manages the machine), plugin links and desktop panels. `office sync` and `office packages
  * update` both apply packages this way. Each change goes to `changes`.
  */
-export async function syncPackages(office: Office, changes: { push: (...lines: string[]) => void }, stage: Stage = silentStage): Promise<void> {
+export async function syncPackages(office: Office, changes: { push: (...lines: string[]) => void }, stage: Stage = silentStage): Promise<boolean> {
   const { packages } = resolvePackages(office);
   const rejected = new Set<string>();
 
@@ -371,11 +394,12 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   }
 
   changes.push(...installed.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
+  const published = await collectReferences(office, packages, installed, changes);
 
   if (needsEnvironmentOwners(office, installed)) {
     changes.push("FAILED the existing machine environment predates package ownership records; repair the unread packages and sync again before withdrawing packages or rewriting their machine setup");
 
-    return;
+    return published;
   }
 
   // .office/packages/ holds only what sync pulled in, so a folder no package wants goes. Its panel
@@ -402,6 +426,8 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   changes.push(...syncMachine(office, installed));
   changes.push(...linkPlugins(office, installed));
   changes.push(...installPanels(office, installed.installed, removedPanels));
+
+  return published;
 }
 
 /**

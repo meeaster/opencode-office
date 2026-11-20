@@ -3,7 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { streamChecked } from "./report/index.ts";
 
@@ -13,6 +13,37 @@ export function git(args: string[], cwd?: string): string {
 
 function head(dir: string): string {
   return git(["rev-parse", "HEAD"], dir);
+}
+
+/** Compare the configured fetch origin before even cleaning up an unborn reference clone.
+ * Git resolves a relative file remote from the checkout, independent of the CLI's cwd. */
+export function referenceOriginProblem(dir: string, wanted: string): string | undefined {
+  if ([dir, dirname(dir)].some(path => lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink())) return `${dir} is reached through a link; refusing to update it`;
+
+  if (!existsSync(join(dir, ".git"))) return undefined;
+  let actual;
+
+  try {
+    actual = git(["config", "--get-all", "remote.origin.url"], dir);
+  } catch {
+    return `expected origin ${wanted}, but ${dir} has no readable origin; checkout left unchanged`;
+  }
+
+  const identity = (url: string) => /^[^/]+:/.test(url) ? url : resolve(dir, url);
+
+  if (identity(actual) !== identity(wanted)) return `expected origin ${wanted}, found ${actual}; checkout left unchanged`;
+}
+
+// Stored with the checkout, only after a successful fetch and checkout. A package-only
+// sync can publish a new desired ref without ever applying it to an existing clone.
+export const appliedReferenceRef = "office.referenceRef";
+
+export function previouslyAppliedRef(dir: string): string | undefined {
+  try {
+    return git(["config", "--local", "--get", appliedReferenceRef], dir);
+  } catch {
+    return undefined;
+  }
 }
 
 /**

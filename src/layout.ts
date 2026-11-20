@@ -5,15 +5,15 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { join, relative } from "node:path";
 
-import { type Office, skillsFolder } from "./office.ts";
+import { type Office, type Repository, skillsFolder } from "./office.ts";
 import { type InstalledPackage, type PackageProblem, readPackage, requiredPackages, resolvePackages } from "./packages.ts";
 
-export type Clone = { name: string; url: string; ref?: string; kind: string; dir: string };
+export type Clone = { name: string; url: string; ref?: string; kind: string; dir: string; stale?: boolean };
 
 /** Every clone office.yaml declares, with the folder it belongs in. */
-export function clones(office: Office): Clone[] {
+export function clones(office: Office, references: readonly (Repository & { stale?: boolean })[] = office.references): Clone[] {
   return [
-    ...office.references.map((reference) => ({ ...reference, kind: "reference", dir: join(office.dir, "references", reference.name) })),
+    ...references.map((reference) => ({ ...reference, kind: "reference", dir: join(office.dir, "references", reference.name) })),
     ...office.desks.flatMap((desk) =>
       desk.repos.map((repo) => ({ ...repo, kind: `${desk.name} repo`, dir: join(office.dir, desk.name, "repos", repo.name) })),
     ),

@@ -57,7 +57,8 @@ tools:
   mise: __MISE_VERSION__
   sfw: __SFW_VERSION__
 
-# Read-only clones under references/, listed for every session.
+# Owner-declared read-only clones under references/. `office references list` also shows
+# contributions from selected packages. Run `office sync` after changing either source.
 references: []
 #  - name: opencode
 #    url: https://github.com/anomalyco/opencode.git

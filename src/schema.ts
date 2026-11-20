@@ -3,7 +3,10 @@
 // each naming the field and what it expected.
 import * as v from "valibot";
 
+import type { PackageContext, SettingValue } from "../packages/office/package-context.ts";
 import { validSchedule } from "./cron/schedule.ts";
+
+export type { SettingValue } from "../packages/office/package-context.ts";
 
 const name = v.pipe(v.string("must be a name"), v.regex(/^[a-z0-9][a-z0-9-]*$/, "must be lowercase letters, digits and dashes"));
 
@@ -45,7 +48,7 @@ const officeCron = v.optional(v.pipe(v.unknown(), noPrototypeKeys, v.record(jobN
 const packageCron = v.optional(v.pipe(v.unknown(), noPrototypeKeys, v.record(jobName, v.strictObject({ ...cronFields, when: v.optional(v.picklist(["managed-host", "host", "container"])) }, mapping), "must map job names to schedules and scripts")), {});
 const cronOverrides = v.optional(v.pipe(v.unknown(), noPrototypeKeys, v.record(jobName, v.strictObject({ schedule: v.optional(cronSchedule), enabled: v.optional(v.boolean("must be true or false")) }, mapping), "must map job names to schedule and enabled overrides")), {});
 
-const repository = v.strictObject(
+export const repository = v.strictObject(
   {
     name,
     url: text,
@@ -56,6 +59,8 @@ const repository = v.strictObject(
 );
 
 const repositories = v.pipe(v.nullish(v.array(repository, "must be a list"), []), v.check(uniqueNames, "lists a name twice"));
+
+export const referenceContribution = v.strictObject({ registry: v.literal("references.repository"), value: repository });
 
 const names = v.nullish(v.array(name, "must be a list"), []);
 
@@ -286,8 +291,6 @@ const skills = v.nullish(
 );
 
 export const scalarSetting = v.union([v.string(), v.pipe(v.number(), v.finite()), v.boolean()], "must be text, a number or true/false");
-
-export type SettingValue = null | boolean | number | string | SettingValue[] | { [key: string]: SettingValue };
 
 /** YAML aliases may form cycles; only data that survives .settings.json belongs here. */
 function jsonValue(value: unknown, ancestors = new Set<object>()): value is SettingValue {
@@ -624,6 +627,7 @@ export const packageManifestSchema = v.pipe(
       // What its services, volumes and variables are named after, when that isn't its name.
       namespace: v.optional(name),
       description: text,
+      setup: v.optional(v.custom<(ctx: PackageContext) => void | Promise<void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
       settings: v.optional(v.record(v.string(), packageSetting, "must map setting names to settings")),
       settings_schema: v.optional(v.union([v.boolean(), v.record(v.string(), settingValue)])),
       secrets: v.nullish(v.record(v.pipe(v.string(), v.regex(/^[A-Z][A-Z0-9_]*$/, "must be an environment variable name in capitals")), packageSecret, "must map variable names to how each is generated"), {}),

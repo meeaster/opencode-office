@@ -9,6 +9,8 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { claudeFiles } from "../claude.ts";
+import { referenceOriginProblem } from "../git.ts";
+import { resolvedReferences } from "../reference-snapshot.ts";
 import { cronRevision } from "../cron/container.ts";
 import { cronTimers, hasSystemd, refreshTimer, staleTimerUnits, timerStates } from "../cron/host.ts";
 import { collectJobs } from "../cron/jobs.ts";
@@ -73,8 +75,16 @@ async function drift(office: Office): Promise<string[]> {
     }
   }
 
-  for (const clone of clones(office)) {
+  const references = resolvedReferences(office.dir, office);
+  problems.push(...(references.ok ? references.value.notes : references.errors));
+
+  for (const clone of clones(office, references.ok ? references.value.entries : [])) {
     if (!existsSync(join(clone.dir, ".git"))) problems.push(`${clone.kind} ${relative(office.dir, clone.dir)} is not cloned`);
+    else if (clone.kind === "reference") {
+      const problem = referenceOriginProblem(clone.dir, clone.url);
+
+      if (problem) problems.push(`reference ${clone.name}: ${problem}`);
+    }
   }
 
   // What an office laid out by an earlier release still holds; `office sync` moves it on.

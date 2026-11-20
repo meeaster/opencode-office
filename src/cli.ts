@@ -2,6 +2,7 @@
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { resolvedReferences } from "./reference-snapshot.ts";
 
 import * as v from "valibot";
 
@@ -61,6 +62,8 @@ const usage = `usage: office <command> [--office <dir>]
                                --packages applies packages at their declared pins without refreshing
                                 desk repos, references or separately declared plugin clones.
                                 Each package has one definition: office.ts or package.yaml
+  references list              show desired references and their claimants without fetching.
+                               sync --references refreshes those checkouts without collecting.
   skills update                move each skills.copied group with a track to the newest commit of
                                its branch, or of its highest stable SemVer tag matching a pattern
                                such as v2.*; recopy the whole group and record the commit as its ref.
@@ -232,6 +235,16 @@ async function main(): Promise<void> {
       : await sessionInstructions(currentOffice(flags), flags.session);
 
     if (text !== "") console.log(text);
+  } else if (command === "references") {
+    if (rest.length !== 1 || rest[0] !== "list") throw new OfficeError("usage: office references list");
+    const office = currentOffice(flags);
+    const read = resolvedReferences(office.dir, office);
+
+    if (!read.ok) throw new OfficeError(read.errors.join("\n"));
+
+    for (const note of read.value.notes) console.error(note);
+
+    for (const entry of read.value.entries) console.log(`${entry.name}\t${entry.url}${entry.ref ? ` @ ${entry.ref}` : ""}\t${entry.owner}${entry.stale ? " (stale)" : ""}`);
   } else if (command === "context") {
     if (rest.length !== 0 || flags.model === undefined) throw new OfficeError("usage: office context --model <provider/model#variant>");
 

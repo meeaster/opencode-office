@@ -6,6 +6,7 @@ import { compile } from "./build.ts";
 import { git } from "./git.ts";
 import { loadOffice } from "./office.ts";
 import { preparePackageServices } from "./package-services.ts";
+import type officePlugin from "../packages/office/plugin/index.ts";
 
 const root = mkdtempSync(join(tmpdir(), "office-definition-"));
 const bin = join(root, "bin");
@@ -61,6 +62,39 @@ beforeAll(async () => {
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
+// Exercise the installed bundle through the same prompt hook that writes the session entry.
+async function prompt(dir: string, folder: string) {
+  const plugin: typeof officePlugin = (await import(join(dir, ".opencode/plugins/office/index.js"))).default;
+  const hooks: ((event: { sessionID: string }) => Promise<void>)[] = [];
+  const registration = { dispose: async () => {} };
+  let text = "";
+
+  const close = await plugin.setup({
+    location: { directory: folder },
+    session: {
+      async hook(_, handler) {
+        hooks.push(handler);
+
+        return registration;
+      },
+      instructions: { entry: { async put(entry) {
+        expect(entry.key).toBe("office");
+        text = entry.value;
+      } } },
+    },
+    skill: { transform: async () => registration, list: async () => ({ data: [] }), reload: async () => {} },
+    mcp: { transform: async () => registration },
+  });
+
+  try {
+    for (const hook of hooks) await hook({ sessionID: "fixture" });
+
+    return text;
+  } finally {
+    close?.();
+  }
+}
+
 function fixture(name: string) {
   const dir = join(root, name);
   const home = join(root, `${name}-home`);
@@ -92,6 +126,186 @@ function fixture(name: string) {
 
   return { dir, home, probe, cli, newer, select: (entries: string) => write(config, initial + entries) };
 }
+
+test("a compiled office collects independent references and scopes the last published generation to every reader", async () => {
+  const { dir, home, probe, cli } = fixture("references");
+  const yaml = join(dir, "office.yaml");
+  const snapshot = join(dir, ".office/resolved/references.json");
+  const local = join(dir, "packages/manual/office.ts");
+  const checkout = join(dir, "references/manual");
+  const floci = "https://github.com/floci-io/floci.git";
+  const upstream = join(dir, "origin");
+  const wanted = "../../origin"; // Git resolves file remotes from the checkout.
+  git(["init", "-qb", "main", upstream]);
+  write(join(upstream, "document"), "first");
+  const first = commit(upstream);
+  // Keep the built-in's real Git URL in its checkout. Git transports it over a local mirror.
+  write(join(home, ".gitconfig"), `[url "${upstream}"]\n\tinsteadOf = ${floci}\n`);
+
+  const configure = (packages: string[], owner = "z-owner") => write(yaml, `name: refs
+references: [{name: ${owner}, url: ${wanted}}, {name: a-owner, url: ${wanted}}]
+desks: {work: {app: false}, sibling: {app: false, repos: [{name: other-desk, url: ${upstream}}]}}
+packages: [${packages.join(", ")}]
+`);
+
+  const aws = "{name: aws-emulator}";
+  const manual = "{name: manual}";
+  const definition = (body: string) => write(local, `${marker} export default {name:"manual",description:"Manual",async setup({add}) {${body}}}`);
+  const add = (name: string, url = wanted) => `add({registry:"references.repository",value:{name:"${name}",url:"${url}"}});`;
+  const broken = () => definition(`${add("partial")} await Promise.resolve(); throw Error("collector interrupted");`);
+  const list = () => cli(0, "references", "list");
+  const head = (repo: string) => git(["rev-parse", "HEAD"], repo);
+
+  const verifyPrompt = async (folder: string) => {
+    const instructions = cli(0, "instructions", folder).trimEnd();
+    expect(await prompt(dir, folder)).toBe(instructions);
+
+    return instructions;
+  };
+
+  rmSync(snapshot);
+  configure([manual, aws]);
+  broken();
+  expect(list()).toContain("z-owner\t../../origin\toffice.yaml");
+  expect(list()).not.toContain("floci");
+  expect(existsSync(probe)).toBe(false);
+  expect(cli(1, "sync", "--packages")).toContain("collector interrupted");
+  expect(list()).toContain(`${floci} @ main\tpackage aws-emulator`);
+  expect(list()).not.toContain("partial");
+  expect(existsSync(join(dir, "references/floci"))).toBe(false);
+
+  definition(add("manual"));
+  cli(0, "sync");
+  const expected = list();
+  expect(expected.split("\n").slice(0, 4).map(line => line.split("\t")[0])).toEqual(["z-owner", "a-owner", "floci", "manual"]);
+  expect(read(snapshot)).not.toContain(dir);
+  expect(head(checkout)).toBe(first);
+  expect(head(join(dir, "references/floci"))).toBe(first);
+  const generation = read(snapshot);
+  configure([aws, manual]);
+  cli(0, "sync", "--packages");
+  expect(list()).toBe(expected);
+  expect(read(snapshot)).toBe(generation);
+  // Deliver just the generation and YAML at another root, without the collector modules.
+  const moved = fixture("relocated");
+  write(join(moved.dir, "office.yaml"), read(yaml));
+  write(join(moved.dir, ".office/resolved/references.json"), generation);
+  cpSync(upstream, join(moved.dir, "origin"), { recursive: true });
+  write(join(moved.home, ".gitconfig"), `[url "${moved.dir}/origin"]\n\tinsteadOf = ${floci}\n`);
+  expect(moved.cli(0, "references", "list")).toBe(expected);
+  moved.cli(0, "sync", "--references");
+  expect(head(join(moved.dir, "references/manual"))).toBe(first);
+  expect(existsSync(join(moved.dir, "packages/manual"))).toBe(false);
+
+  configure([aws, manual], "floci");
+  write(join(checkout, "document"), "keep through rejection");
+  expect(cli(1, "sync")).toContain("floci claimed by both office.yaml and package aws-emulator");
+  expect(read(snapshot)).toBe(generation);
+  expect(read(join(checkout, "document"))).toBe("keep through rejection");
+  expect(list()).toContain("reference inputs changed");
+  configure(["{name: aws-emulator, settings: {source_reference: false}}", manual], "floci");
+  cli(0, "sync", "--packages");
+  expect(list()).toContain("floci\t../../origin\toffice.yaml");
+  configure([aws, manual]);
+
+  write(join(upstream, "document"), "second");
+  const second = commit(upstream);
+  broken();
+  expect(cli(1, "sync")).toContain("collector interrupted");
+  expect(head(checkout)).toBe(second);
+  expect(list()).toContain("manual\t../../origin\tpackage manual (stale)");
+  expect(list()).not.toContain("partial");
+  rmSync(probe);
+  write(local, `${marker} throw Error("never import on read");`);
+  expect(cli(0, "--help")).toContain("references list");
+  expect(cli(0, "sync", "--references")).toContain("last-good");
+  const nested = join(dir, "work/repos/nested");
+  mkdirSync(nested, { recursive: true });
+
+  for (const folder of [dir, nested]) {
+    const text = await verifyPrompt(folder);
+    expect(text).toContain("references/floci/");
+    expect(text).toContain("references/manual/");
+    expect(text).toContain("(package manual, stale)");
+    expect(text).toContain("package manual: reference collection failed");
+    expect(text.includes("sibling/repos/other-desk/")).toBe(folder === dir);
+  }
+
+  expect(existsSync(probe)).toBe(false);
+  renameSync(checkout, `${checkout}.saved`);
+  expect(cli(1, "sync", "--references")).toContain("stale contribution cannot authorize a new clone");
+  expect(existsSync(checkout)).toBe(false);
+  renameSync(`${checkout}.saved`, checkout);
+  git(["remote", "set-url", "origin", "../../foreign"], checkout);
+  expect(cli(1, "sync", "--references")).toContain(`expected origin ${wanted}, found ../../foreign`);
+  git(["remote", "set-url", "origin", wanted], checkout);
+
+  definition(`add({registry:"references.repository",value:{name:"manual",url:"${wanted}",ref:"${first}"}});`);
+  cli(0, "sync", "--packages");
+  broken();
+  cli(1, "sync", "--packages");
+  expect(cli(1, "sync", "--references")).toContain("stale contribution cannot apply a different or unrecorded ref");
+  expect(head(checkout)).toBe(second);
+
+  // A new desired origin is not permission to replace, fetch or clean the old checkout.
+  const changed = "../../other-origin";
+  definition(add("manual", changed));
+  cli(0, "sync", "--packages");
+  write(join(checkout, "document"), "preserved");
+
+  for (const args of [["sync", "--references"], ["check"]]) {
+    expect(cli(1, ...args)).toContain(`expected origin ${changed}, found ${wanted}`);
+    expect(head(checkout)).toBe(second);
+    expect(read(join(checkout, "document"))).toBe("preserved");
+  }
+
+  broken();
+  cli(1, "sync", "--packages");
+  expect(cli(1, "sync", "--references")).toContain(`expected origin ${changed}, found ${wanted}`);
+  expect(read(join(checkout, "document"))).toBe("preserved");
+  definition("");
+  configure([manual]);
+  cli(0, "sync", "--packages");
+  expect(list()).not.toContain("manual");
+  expect(list()).not.toContain("floci");
+  expect(await verifyPrompt(nested)).not.toContain("references/manual/");
+  expect(read(join(checkout, "document"))).toBe("preserved");
+  expect(head(join(dir, "references/floci"))).toBe(second);
+
+  write(snapshot, read(snapshot).replace('"version": 1', '"version": 9'));
+  expect(cli(1, "references", "list")).toContain("unsupported references snapshot version");
+  expect(cli(1, "sync", "--references")).toContain("unsupported references snapshot version");
+  expect(await verifyPrompt(nested)).toContain("unsupported references snapshot version");
+  expect(cli(1, "sync", "--packages")).toContain("move the unreadable snapshot aside");
+  rmSync(snapshot);
+  cli(0, "sync", "--packages");
+}, 60_000);
+
+test("a different pin of a Git contributor cannot inherit the old pin's claims", () => {
+  const { dir, cli, select } = fixture("source-change");
+  const repo = join(root, "source-change-repo");
+  const module = join(repo, "pkg/office.ts");
+  const setup = `add({registry:"references.repository",value:{name:"remote-docs",url:"../../local"}});`;
+
+  const publish = (body: string) => {
+    write(module, `export default {name:"docs",description:"Docs",setup({add}){${body}}}`);
+    select(`  - {name: docs, repo: ${repo}, path: pkg, ref: ${commit(repo)}}\n`);
+  };
+
+  git(["init", "-q", repo]);
+  publish(setup);
+  cli(0, "sync", "--packages");
+  expect(cli(0, "references", "list")).toContain("remote-docs");
+  publish(`${setup} throw Error("bad new pin");`);
+  expect(cli(1, "sync", "--packages")).toContain("bad new pin");
+  const list = cli(0, "references", "list");
+  expect(list).toContain("package docs: reference collection failed");
+  expect(list).not.toContain("remote-docs");
+  expect(existsSync(join(dir, "node_modules"))).toBe(false);
+  publish('add({registry:"references.repository",value:{name:"../outside",url:"../../local"}});');
+  expect(cli(1, "sync", "--packages")).toContain("value.name:");
+  expect(cli(0, "references", "list")).not.toContain("../outside");
+}, 60_000);
 
 test("the executable syncs mixed definitions and keeps applied state when a selected definition cannot be read", () => {
   const { dir, cli, select } = fixture("mixed");
@@ -133,7 +347,7 @@ test("the executable syncs mixed definitions and keeps applied state when a sele
   write(join(pkg, "package.yaml"), "name: notes\ndescription: otherwise valid\n");
   preserved("packages/notes has both office.ts and package.yaml");
   rmSync(join(pkg, "package.yaml"));
-  write(join(pkg, "office.ts"), 'export default { name: "notes", description: "Notes", setup() {} }');
+  write(join(pkg, "office.ts"), 'export default { name: "notes", description: "Notes", setup: "handler.ts" }');
   preserved("packages/notes/office.ts: setup:");
 
   select("  - name: legacy\n");
