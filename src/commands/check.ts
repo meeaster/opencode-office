@@ -7,6 +7,7 @@
 // outside the office (the session's home, folders above the office).
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import * as v from "valibot";
 
 import { claudeFiles } from "../claude.ts";
 import { appliedReferenceProblem, git, referenceOriginProblem } from "../git.ts";
@@ -35,7 +36,7 @@ import { claim, machineReport, matchesServerUnit, requireServerConsent } from ".
 import { wrappedCommands } from "../sfw.ts";
 import { toolPins } from "../mise-toml.ts";
 import { fragmentNotes, machineBelowFloors, machineFile, oldToolFragments, orphanFragments, packagesFile, packagesFileProblems, strayFragments } from "../package-tools.ts";
-import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
+import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile, validateSetupOverrides } from "../packages.ts";
 import { describeIgnoredSkills, ignoredSkills, readIgnoredFolders } from "../../packages/office/plugin/ignored-skills.ts";
 import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces, shadowing, withLoaded } from "../outside.ts";
 import { pinnedTools } from "../schema.ts";
@@ -307,7 +308,13 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
     const settingsPath = join(item.dir, settingsFile);
     const written = existsSync(settingsPath) && readFileSync(settingsPath, "utf8") === settingsText(item);
 
-    notes.push(written ? `settings valid and written to ${relative(office.dir, settingsPath)}` : `settings valid, but ${relative(office.dir, settingsPath)} doesn't hold them; office sync writes it`);
+    try {
+      await validateSetupOverrides(item);
+      notes.push(written ? `settings valid; static settings written to ${relative(office.dir, settingsPath)}` : `settings valid, but ${relative(office.dir, settingsPath)} doesn't hold them; office sync writes it`);
+    } catch (error) {
+      notes.push(`setup settings not verified: ${error instanceof Error ? error.message : String(error)}`);
+      ok = false;
+    }
 
     if (!written) ok = false;
 
@@ -822,15 +829,18 @@ export function toolsNotes(office: Office): string[] {
 
   for (const name of ["machine.toml", "mise.toml"]) {
     const path = join(office.dir, name);
-    let setting: unknown;
+    let setting: string | undefined;
 
     try {
-      setting = existsSync(path) ? (Bun.TOML.parse(readFileSync(path, "utf8")) as { settings?: { minimum_release_age?: unknown } }).settings?.minimum_release_age : undefined;
+      if (!existsSync(path)) continue;
+      const read = v.safeParse(v.object({ settings: v.object({ minimum_release_age: v.string() }) }), Bun.TOML.parse(readFileSync(path, "utf8")));
+
+      if (read.success) setting = read.output.settings.minimum_release_age;
     } catch {
       continue;
     }
 
-    if (typeof setting !== "string" || setting === tools.minimumReleaseAge) continue;
+    if (setting === undefined || setting === tools.minimumReleaseAge) continue;
 
     const same = hours(setting);
 

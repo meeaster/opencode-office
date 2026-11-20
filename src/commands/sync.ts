@@ -16,6 +16,7 @@ import { prepareReferenceRefresh } from "../../packages/references/tasks/refresh
 import { claudeFiles } from "../claude.ts";
 import { boundRevision, collectReferences } from "../collect-references.ts";
 import { beginReferencePublication, planReferenceApply } from "../reference-publication.ts";
+import { preserveV3Owner } from "../v3-reference-owner.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { collectJobs } from "../../standard/cron/jobs.ts";
 import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
@@ -527,6 +528,7 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
 
   const rejected = new Set<string>();
   const embedded = new Map<string, string>();
+  using migration = preserveV3Owner(office, publication.value.previous);
 
   for (const item of packages) {
     const services = join(item.dir, packageComposeFile);
@@ -543,7 +545,7 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
       embedded.set(item.entry.name, result.source);
       copied = result.changes;
     } else if (item.entry.source) {
-      copied = fetchPackage(office, item.entry, item.entry.source, boundRevision(publication.value.previous, item.entry));
+      copied = await fetchPackage(office, item.entry, item.entry.source, boundRevision(publication.value.previous, item.entry));
     }
 
     changes.push(...copied);
@@ -567,6 +569,9 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
 
   changes.push(...installed.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
   const published = await collectReferences(office, packages, installed, changes, publication.value, rejected, embedded);
+
+  if (!published && migration) return false;
+  migration?.commit();
 
   if (needsEnvironmentOwners(office, installed)) {
     changes.push("FAILED the existing machine environment predates package ownership records; repair the unread packages and sync again before withdrawing packages or rewriting their machine setup");

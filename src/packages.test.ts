@@ -94,7 +94,7 @@ test("settings the package doesn't declare, and required ones left out, are name
   expect(valid.ok && valid.value.settings).toEqual({ url: "https://example.com/site", title: "Shared" });
 });
 
-test("an install ignores the source office's records, an update by full commit SHA replaces the package, an edited copy is restored, and template copies are left alone", () => {
+test("an install ignores the source office's records, an update by full commit SHA replaces the package, an edited copy is restored, and template copies are left alone", async () => {
   const repo = join(dir, "repo");
   const office = join(dir, "office");
 
@@ -126,7 +126,7 @@ test("an install ignores the source office's records, an update by full commit S
   const script = join(office, ".office/packages/demo/scripts/run.sh");
 
   const source = { repo, path: "pkgs/demo", ref: first, track: undefined };
-  expect(fetchPackage(loaded, loaded.packages[0], source)).toEqual([`installed .office/packages/demo from ${repo} at ${first}`]);
+  expect(await fetchPackage(loaded, loaded.packages[0], source)).toEqual([`installed .office/packages/demo from ${repo} at ${first}`]);
 
   const installed = read(office, "demo").result;
 
@@ -136,13 +136,13 @@ test("an install ignores the source office's records, an update by full commit S
   write(join(office, "out/AGENTS.md"), "the office's own\n");
   write(script, "echo edited\n");
 
-  const [restored] = fetchPackage(loaded, loaded.packages[0], source);
+  const [restored] = await fetchPackage(loaded, loaded.packages[0], source);
 
   expect(restored).toStartWith(`restored .office/packages/demo to its copy of ${first}, undoing edits to scripts/run.sh (edited);`);
   expect(readFileSync(script, "utf8")).toBe("echo one\n");
 
   write(join(office, "office.yaml"), entry(second));
-  expect(fetchPackage(loadOffice(office), loaded.packages[0], { ...source, ref: second })).toEqual([`updated .office/packages/demo from ${repo} pkgs/demo at ${first.slice(0, 12)} (ref ${first}) to ${second} (${second})`]);
+  expect(await fetchPackage(loadOffice(office), loaded.packages[0], { ...source, ref: second })).toEqual([`updated .office/packages/demo from ${repo} pkgs/demo at ${first.slice(0, 12)} (ref ${first}) to ${second} (${second})`]);
   expect(readFileSync(script, "utf8")).toBe("echo two\n");
 
   const updated = read(office, "demo");

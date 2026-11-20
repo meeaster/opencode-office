@@ -13,6 +13,7 @@ export type CollectionEntry = { name: string; [field: string]: SettingValue };
 
 export type Collection<T extends CollectionEntry> = {
   readonly id: string;
+  /** Validate and normalize each incoming addition during sync. Reads copy the published result. */
   parse(input: CollectionEntry): T;
 };
 

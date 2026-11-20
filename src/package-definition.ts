@@ -7,6 +7,20 @@ import { check, type PackageManifest, packageManifestSchema, type Parsed } from 
 
 const names = ["office.ts", "package.yaml"] as const;
 
+/** Setup owns declarations not present in the static manifest. Validate the complete override
+ * only after that revision's setup has finished, including any conditional declarations. */
+export async function runPackageSetup(manifest: PackageManifest, overrides: Readonly<Record<string, SettingValue>>, context: Omit<PackageContext, "booleanSetting">) {
+  const declared = new Set(Object.keys(manifest.settings));
+  const booleans: Record<string, boolean> = {};
+  await manifest.setup?.(setupContext(context, overrides, declared, booleans));
+
+  if (!manifest.settings_schema) {
+    for (const key of Object.keys(overrides)) if (!declared.has(key)) throw new Error(`settings.${key}: ${manifest.name} has no such setting`);
+  }
+
+  return booleans;
+}
+
 export function setupContext(context: Omit<PackageContext, "booleanSetting">, settings: Readonly<Record<string, SettingValue>>, declared: Set<string>, booleans: Record<string, boolean> = {}): PackageContext {
   const booleanSetting: PackageContext["booleanSetting"] = (name, definition) => {
     if (!/^[a-z][a-z0-9_]*$/.test(name) || !v.is(v.pipe(v.string(), v.nonEmpty()), definition.description) || !v.is(v.boolean(), definition.default) || declared.has(name)) throw new Error(`invalid or duplicate boolean setting ${name}`);

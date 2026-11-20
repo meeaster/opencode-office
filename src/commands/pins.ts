@@ -136,7 +136,7 @@ export async function updatePackages(loaded: Office, stage: Stage, { apply = tru
       continue;
     }
 
-    const copied = fetchPackage(office, entry, { ...source, ref: found.commit });
+    const copied = await fetchPackage(office, entry, { ...source, ref: found.commit });
     const failed = copied.find((line) => line.startsWith("FAILED"));
 
     if (failed !== undefined) {

@@ -18,7 +18,7 @@ const binding = {
 
 export const namedEntry = v.objectWithRest({ name: v.string() }, settingValue);
 
-const entry = v.pipe(v.strictObject({ id: v.string(), value: namedEntry }),
+const entry = v.pipe(v.strictObject({ id: v.string(), value: namedEntry, contract: v.optional(v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/))) }),
   v.check(row => row.id !== repositories.id || isRepository(row.value), "invalid published reference"));
 
 const contributor = v.pipe(v.strictObject({ ...binding, entries: v.array(entry) }),
@@ -92,16 +92,24 @@ export function publishedCollection<T extends CollectionEntry>(snapshot: Pick<Re
   const entries = [];
 
   if (collection.id === repositories.id) {
-    for (const reference of snapshot.owner) entries.push({ value: collection.parse(reference), owner: "office.yaml", stale: false });
+    for (const reference of snapshot.owner) entries.push({ value: canonical<T>(reference), owner: "office.yaml", stale: false });
   }
 
   for (const group of snapshot.contributors) {
     for (const { id, value } of group.entries) {
-      if (id === collection.id) entries.push({ value: collection.parse(value), owner: `package ${group.name}`, stale: group.stale });
+      if (id === collection.id) entries.push({ value: canonical<T>(value), owner: `package ${group.name}`, stale: group.stale });
     }
   }
 
   return entries;
+}
+
+// The provider's parser ran on admission. The stable public handle identifies that type
+// across separate imports; readers receive their own copy, never a second normalization.
+function canonical<T extends CollectionEntry>(value: CollectionEntry): T {
+  // SAFETY: callers matched the published row's collection ID to its typed public handle.
+  // The snapshot stores the registered parser's output (and checks YAML repository rows).
+  return structuredClone(value) as T;
 }
 
 export function claims(snapshot: Pick<ReferenceSnapshot, "owner" | "contributors">): Parsed<ClaimedReference[]> {

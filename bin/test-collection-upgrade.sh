@@ -35,6 +35,21 @@ config
 "$old" references list | grep '^floci.*package aws-emulator$'
 snapshot=.office/resolved/references.json
 grep '"version": 3' "$snapshot"
+enabled
+v3owner=.office/packages/references/office.ts
+cp "$v3owner" "$base/v3owner"
+echo '// edited' >>"$v3owner"
+if list >"$base/log" 2>&1; then exit 1; fi
+grep 'package files edited' "$base/log"
+cp "$base/v3owner" "$v3owner"
+cp "$snapshot" "$base/v3"
+sed -i 's/name: manual/name: floci/' office.yaml
+if "$new" sync --packages >"$base/log" 2>&1; then exit 1; fi
+grep 'floci claimed by both' "$base/log"
+cmp "$base/v3" "$snapshot"
+enabled
+"$old" references list | grep '^manual.*office.yaml$'
+config
 syncpkg
 grep '"version": 4' "$snapshot"
 enabled

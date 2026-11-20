@@ -1,7 +1,8 @@
 import * as v from "valibot";
 import type { Collection, CollectionEntry } from "../packages/office/package-context.ts";
+import { repositories } from "../packages/references/repositories.ts";
 import { collectJobs } from "../standard/cron/jobs.ts";
-import { setupContext } from "./package-definition.ts";
+import { runPackageSetup } from "./package-definition.ts";
 import { commandConflicts, commandRegistration, type CommandMetadata } from "./command-table.ts";
 import type { InstalledPackages } from "./layout.ts";
 import type { Office, PackageEntry } from "./office.ts";
@@ -46,7 +47,7 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
   const candidate: ReferenceSnapshot = { version: 4, inputs: inputHash(office), owner: office.references, contributors: [] };
   const available = new Map(installed.installed.map(item => [item.entry.name, item]));
   const errors: string[] = [];
-  const definitions = new Map<string, Collection<CollectionEntry>>();
+  const definitions = new Map<string, { handle: Collection<CollectionEntry>; owner: string; contract: string }>();
   const pending = new Map<string, { id: string; value: CollectionEntry }[]>();
 
   function fail(group: ReferenceSnapshot["contributors"][number], message?: string) {
@@ -84,9 +85,8 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
         const invalid: string[] = [];
         const provided = new Map<string, Collection<CollectionEntry>>();
         const settings = item.entry.settings ?? {};
-        const booleans: Record<string, boolean> = {};
-        const declared = new Set(Object.keys(pkg.manifest.settings));
-        await pkg.manifest.setup?.(setupContext({
+
+        const booleans = await runPackageSetup(pkg.manifest, settings, {
           settings: structuredClone(pkg.settings),
           collection(handle) {
             if (!handle.id.startsWith(`${name}.`) || !/^[a-z0-9-]+\.[a-z0-9-]+$/.test(handle.id) || !v.is(v.function(), handle.parse) || provided.has(handle.id)) throw new Error(`invalid or duplicate collection ${handle.id}`);
@@ -111,18 +111,23 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
               values.push({ id: handle.id, value: structuredClone(value) });
             }
           },
-        }, settings, declared, booleans));
+        });
 
-        if (pkg.manifest.settings_schema === undefined) {
-          for (const key of Object.keys(settings)) if (!declared.has(key)) throw new Error(`settings.${key}: ${name} has no such setting`);
-        }
+        const files = provided.size || (routes.length && item.kind === "remote") ? filesDigest(fileHashes(item.dir)) : undefined;
 
         const commands = routes.length ? {
           routes: [...routes], settings: pkg.settings, booleans: Object.keys(booleans).length ? booleans : undefined,
-          files: item.kind === "remote" ? filesDigest(fileHashes(item.dir)) : undefined,
+          files: item.kind !== "built-in" ? files : undefined,
         } : undefined;
 
-        for (const [id, handle] of provided) definitions.set(id, handle);
+        if (provided.size) {
+          // A local provider has no immutable revision: bind its package bytes too. Setup
+          // settings can change the meaning of an otherwise identical parser.
+          const contract = new Bun.CryptoHasher("sha256").update(JSON.stringify([source, files, pkg.settings, booleans])).digest("hex");
+
+          for (const [id, handle] of provided) definitions.set(id, { owner: name, handle, contract });
+        }
+
         pending.set(name, [...values]);
         candidate.contributors.push({ name, ...source, stale: false, entries: [], commands });
         errors.push(...invalid);
@@ -142,17 +147,60 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
   for (const group of candidate.contributors) {
     try {
       for (const { id, value } of pending.get(group.name) ?? []) {
-        const handle = definitions.get(id);
+        const provider = definitions.get(id);
 
-        if (!handle) throw new Error(`no provider registered ${id}`);
-        const entry = handle.parse(value);
+        if (!provider) throw new Error(`no provider registered ${id}`);
+        const entry = provider.handle.parse(value);
 
         if (!v.is(namedEntry, entry)) throw new Error(`${id}: expected a named JSON record`);
-        group.entries.push({ id, value: entry });
+        group.entries.push({ id, value: structuredClone(entry), contract: provider.contract });
       }
     } catch (error) {
       fail(group, String(error));
     }
+  }
+
+  // A registration and all of its owner's additions succeed as one batch. Propagate
+  // failure even across multiple levels or a cycle, independent of the package order.
+  const failed = new Set(candidate.contributors.flatMap(group => group.stale ? [group.name] : []));
+  let count;
+
+  do {
+    count = failed.size;
+
+    for (const group of candidate.contributors) {
+      if (group.stale) continue;
+      const dependency = group.entries.find(row => failed.has(definitions.get(row.id)!.owner));
+
+      if (dependency) {
+        fail(group, `provider of ${dependency.id} failed collection`);
+        failed.add(group.name);
+      }
+    }
+  } while (count !== failed.size);
+
+  for (const group of candidate.contributors) {
+    if (group.stale) group.entries = group.entries.flatMap(row => {
+      const provider = definitions.get(row.id);
+
+      if (provider && provider.contract === row.contract) return [row];
+
+      // V2/V3 had exactly one host-validated repository type. readSnapshot already
+      // checked these rows. Admit that historical input once through its built-in successor.
+      if (provider && previous && previous.version < 4 && row.id === repositories.id && embedded.has(provider.owner)) {
+        try {
+          const value = provider.handle.parse(row.value);
+
+          if (v.is(namedEntry, value)) return [{ id: row.id, value, contract: provider.contract }];
+        } catch (error) {
+          changes.push(`package ${group.name}: cannot migrate ${row.id}/${row.value.name}: ${String(error)}`);
+        }
+      }
+
+      changes.push(`package ${group.name}: omitting last-good ${row.id}/${row.value.name}: provider contract changed or unavailable; repair the contributor and sync`);
+
+      return [];
+    });
 
     for (const { id, value } of group.entries) {
       const key = JSON.stringify([id, value.name]);

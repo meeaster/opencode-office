@@ -1323,6 +1323,34 @@ for (const kind of ["local", "tracked"]) {
   }, 60_000);
 }
 
+test("published values survive repeated reads; failed registrations cannot admit dependent batches", () => {
+  const { dir, cli, select } = fixture("collections");
+  const path = (name: string) => join(dir, "packages", name, "office.ts");
+  const contract = join(dir, "packages/catalog/items.ts");
+  const author = 'import {items} from "../catalog/items.ts";export default {name:"alpha",description:"author",setup(c){c.add(items,{name:"first",count:1})}}';
+  const provider = 'import {items} from "./items.ts";export default {name:"catalog",description:"provider",setup(c){c.collection(items);}}';
+  select("  - {name: alpha}\n  - {name: beta}\n  - {name: catalog}\n");
+  write(path("alpha"), author);
+  write(path("catalog"), provider);
+  write(contract, 'export const items={id:"catalog.items",parse(i){if(!Number.isFinite(i.count))throw Error("expected count");return {...i,count:i.count+1}}}');
+  write(path("beta"), `export default {name:"beta",description:"reader",setup(c){c.command({name:"items",summary:"items",run(i){
+    const handle={id:"catalog.items",parse(){throw Error("reader parser ran")}};
+    const first=i.read(handle); if(first.length)first[0].value.count=99;console.log(JSON.stringify(i.read(handle)));
+  }})}}`);
+  cli(0, "sync", "--packages");
+  expect(cli(0, "items")).toContain('"count":2');
+  write(path("alpha"), 'throw Error("failed author")');
+  cli(1, "sync", "--packages");
+  expect(cli(0, "items")).toContain('"count":2');
+  write(contract, 'export const items={id:"catalog.items",parse(i){if(typeof i.count!=="string")throw Error("expected text");return i}}');
+  expect(cli(1, "sync", "--packages")).toContain("provider contract changed");
+  expect(cli(0, "items")).toContain("[]");
+  write(path("alpha"), author.replace("count:1", 'count:"valid"'));
+  write(path("catalog"), provider.replace("c.collection(items);", 'c.collection(items);c.add(items,{name:"bad",count:1});'));
+  expect(cli(1, "sync", "--packages")).toContain("provider of catalog.items failed");
+  expect(cli(0, "items")).toContain("[]");
+});
+
 test("tracked updates validate the consuming settings and staged assets before publishing", () => {
   const { dir, cli, select } = fixture("tracked");
   const repo = join(root, "tracked-source");
@@ -1330,7 +1358,7 @@ test("tracked updates validate the consuming settings and staged assets before p
   const installed = join(dir, ".office/packages/shared");
   const link = join(dir, ".opencode/plugins/shared");
   git(["init", "-q", "-b", "main", repo]);
-  const definition = 'export default {name:"shared",description:"Shared",settings:{title:{description:"Title",required:true}}}';
+  const definition = 'export default {name:"shared",description:"Shared",setup(ctx){ctx.command({name:"edition",summary:"Current edition",run(){console.log("original edition")}})},settings:{title:{description:"Title",required:true}}}';
   write(join(source, "office.ts"), definition);
   write(join(source, "compose.yaml"), "services:\n  shared:\n    image: example/shared\n    env_file: ./base.env\n");
   write(join(source, "base.env"), "FEATURE=original\n");
@@ -1340,7 +1368,7 @@ test("tracked updates validate the consuming settings and staged assets before p
   select(`  - {name: shared, repo: ${repo}, ref: ${first}, path: shared, track: main, settings: {title: Mine}}\nstate: ./state\n`);
   cli(0, "sync", "--packages");
   preparePackageServices(loadOffice(dir), false).apply();
-  const paths = ["office.yaml", "shared.md", ".opencode/plugins/shared/index.ts", "state/packages/shared/compose.yaml", "state/packages/shared/settings.env", "state/packages/shared/include.yaml"].map(path => join(dir, path));
+  const paths = ["office.yaml", ".office/resolved/references.json", "shared.md", ".opencode/plugins/shared/index.ts", "state/packages/shared/compose.yaml", "state/packages/shared/settings.env", "state/packages/shared/include.yaml"].map(path => join(dir, path));
   paths.push(...[".source.json", ".settings.json", ".template.json", "base.env", "compose.yaml", "office.ts"].map(file => join(installed, file)));
   const before = paths.map(read);
   write(join(source, "template/extra.md"), "new seed");
@@ -1349,6 +1377,8 @@ test("tracked updates validate the consuming settings and staged assets before p
 
   for (const [candidate, reason] of [
     ['export default {name:"shared",description:"New"}', "settings.title"],
+    ['export default {name:"shared",description:"New",setup(c){c.booleanSetting("active",{default:true,description:"Active"})}}', "settings.title"],
+    ['export default {name:"shared",description:"New",setup(c){c.booleanSetting("title",{default:true,description:"Title"})}}', "settings.title: must be true or false"],
     [definition.replace("settings:", 'cron:{job:{script:"missing.sh",schedule:"@daily"}},settings:'), "missing.sh"],
     [definition.replace("settings:", 'registerCron(ctx){ctx.cron.job("job",{script:"missing.sh",schedule:"@daily"})},settings:'), "missing.sh"],
     [definition.replace("settings:", 'registerCron(ctx){ctx.cron.job("job",false);throw Error("interrupted replacement")},settings:'), "interrupted replacement"],
@@ -1358,8 +1388,23 @@ test("tracked updates validate the consuming settings and staged assets before p
     expect(cli(1, "packages", "update")).toContain(reason);
     expect(readlinkSync(link)).toBe("../../.office/packages/shared/plugin");
     expect(paths.map(read)).toEqual(before);
+    expect(cli(0, "edition")).toContain("original edition");
     expect(existsSync(join(dir, "extra.md"))).toBe(false);
   }
+
+  // Only the new revision declares `enabled`; staging setup also needs a published sibling.
+  write(join(source, "base.env"), "FEATURE=updated\n");
+  write(join(source, "office.ts"), `export default {name:"shared",description:"New",async setup(c){
+    if(c.booleanSetting("enabled",{default:false,description:"Enabled"})){
+      const {repositories}=await import("../references/repositories.ts");
+      c.add(repositories,{name:"enabled",url:"new-revision"});
+    }
+  }}`);
+  const next = commit(repo);
+  select(`  - {name: shared, repo: ${repo}, ref: ${first}, path: shared, track: main, settings: {enabled: true}}\nstate: ./state\n`);
+  cli(0, "packages", "update");
+  expect(read(paths[0])).toContain(next);
+  expect(cli(0, "references", "list")).toContain("enabled\tnew-revision\tpackage shared");
 }, 60_000);
 
 test("a broken embedded replacement leaves the installed package usable and fails a new init", () => {

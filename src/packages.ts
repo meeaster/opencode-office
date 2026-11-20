@@ -21,7 +21,7 @@ import { panelBundle } from "./desktop.ts";
 import { collectAssets } from "../standard/opencode/assets.ts";
 import { copyFromRepository } from "./git.ts";
 import { type Office, OfficeError, type PackageEntry } from "./office.ts";
-import { readDefinition } from "./package-definition.ts";
+import { readDefinition, runPackageSetup } from "./package-definition.ts";
 import { readSnapshot } from "./reference-snapshot.ts";
 import { collectJobs } from "../standard/cron/jobs.ts";
 import { composeProblems, packageComposeFile, settingsEnv } from "./package-services.ts";
@@ -295,13 +295,13 @@ function writeJson(path: string, value: PackageRecord | string[]): void {
  * failed copy leaves the installed one as it was. The office's settings and template records stay:
  * sync reports the settings file only when the settings change, and never copies a template file twice.
  */
-function replaceFolder<Result>(dir: string, fill: (staging: string) => Result): Result {
+async function replaceFolder<Result>(dir: string, fill: (staging: string) => Result, sibling = false): Promise<Awaited<Result>> {
   mkdirSync(dirname(dir), { recursive: true });
   const temp = mkdtempSync(join(dirname(dir), `.${basename(dir)}.new-`));
-  const staging = join(temp, basename(dir));
+  const staging = sibling ? temp : join(temp, basename(dir));
 
   try {
-    const result = fill(staging);
+    const result = await fill(staging);
 
     for (const kept of [settingsFile, templateFile, officeFile]) {
       if (existsSync(join(dir, kept))) copyFileSync(join(dir, kept), join(staging, kept));
@@ -335,7 +335,7 @@ export async function installBuiltin(office: Office, entry: PackageEntry) {
   const { wanted, hashes, source } = await embeddedPackage(entry.name);
 
   try {
-    return { source, changes: installBuiltinFiles(office, entry, dir, wanted, hashes) };
+    return { source, changes: await installBuiltinFiles(office, entry, dir, wanted, hashes) };
   } catch (error) {
     return { source, changes: [`FAILED ${relative(office.dir, dir)} (${source}): ${error instanceof Error ? error.message : String(error)}`] };
   }
@@ -360,7 +360,7 @@ export async function embeddedPackage(name: string) {
   return { wanted, hashes, source: builtinSource(hashes) };
 }
 
-function installBuiltinFiles(office: Office, entry: PackageEntry, dir: string, wanted: Map<string, string>, hashes: PackageRecord["files"]): string[] {
+async function installBuiltinFiles(office: Office, entry: PackageEntry, dir: string, wanted: Map<string, string>, hashes: PackageRecord["files"]) {
   const where = relative(office.dir, dir);
   const record = readRecord(dir);
 
@@ -374,7 +374,7 @@ function installBuiltinFiles(office: Office, entry: PackageEntry, dir: string, w
 
   const edits = record === undefined ? [] : localEdits(dir, record);
 
-  replaceFolder(dir, (staging) => {
+  await replaceFolder(dir, (staging) => {
     for (const [file, content] of wanted) {
       mkdirSync(dirname(join(staging, file)), { recursive: true });
       writeFileSync(join(staging, file), content);
@@ -403,7 +403,7 @@ function verifiedCommit(ref: string, commit: string): boolean {
  * ref, and restores one whose files were edited. Returns one line per change; a failure starts
  * with FAILED.
  */
-export function fetchPackage(office: Office, entry: PackageEntry, source: NonNullable<PackageEntry["source"]>, boundCommit?: string): string[] {
+export async function fetchPackage(office: Office, entry: PackageEntry, source: NonNullable<PackageEntry["source"]>, boundCommit?: string): Promise<string[]> {
   const { name } = entry;
   const dir = pulledDir(office, name);
   const where = relative(office.dir, dir);
@@ -413,12 +413,19 @@ export function fetchPackage(office: Office, entry: PackageEntry, source: NonNul
 
   const known = current && verifiedCommit(source.ref, record.commit) && (!boundCommit || record.commit === boundCommit);
   const revision = boundCommit ?? (known ? record.commit : source.ref);
+  const movingPin = entry.source?.ref !== source.ref;
+
+  async function validate(dir: string) {
+    const item = validateReplacement(office, { entry: { ...entry, source }, dir, kind: "remote" });
+
+    if (movingPin) await validateSetupOverrides(item);
+  }
 
   try {
     if (boundCommit && !verifiedCommit(source.ref, boundCommit)) throw new Error(`invalid reference generation binding ${boundCommit} for ${source.ref}`);
 
     if (known && edits.length === 0) {
-      if (entry.source?.ref !== source.ref) validateReplacement(office, { entry: { ...entry, source }, dir, kind: "remote" });
+      if (movingPin) await validate(dir);
 
       return [];
     }
@@ -427,7 +434,7 @@ export function fetchPackage(office: Office, entry: PackageEntry, source: NonNul
       throw new Error(`cannot repair from ${source.ref} without the recorded commit; restore ${where}/${sourceFile} from office history or pin a full commit SHA`);
     }
 
-    const commit = replaceFolder(dir, (staging) => {
+    const commit = await replaceFolder(dir, async (staging) => {
       const copied = copyFromRepository({ ...source, ref: revision }, staging);
 
       if (!verifiedCommit(revision, copied)) throw new Error(`expected ${revision}, got ${copied}`);
@@ -437,10 +444,10 @@ export function fetchPackage(office: Office, entry: PackageEntry, source: NonNul
       for (const file of records) rmSync(join(staging, file), { force: true });
 
       writeJson(join(staging, sourceFile), { repo: source.repo, path: source.path, ref: source.ref, commit: copied, files: fileHashes(staging), copied: new Date().toISOString() });
-      validateReplacement(office, { entry: { ...entry, source }, dir: staging, kind: "remote" });
+      await validate(staging);
 
       return copied;
-    });
+    }, movingPin);
 
     if (record === undefined) return [`installed ${where} from ${source.repo} at ${commit}`];
 
@@ -617,7 +624,7 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
 }
 
 /** Validate a candidate against the consuming entry before any live path points at its files. */
-function validateReplacement(office: Office, resolved: ResolvedPackage): void {
+function validateReplacement(office: Office, resolved: ResolvedPackage) {
   const read = readPackage(office, resolved);
 
   if (!read.ok) throw new Error(read.errors.join("; "));
@@ -649,6 +656,15 @@ function validateReplacement(office: Office, resolved: ResolvedPackage): void {
     if (problems.length) throw new Error(`${packageComposeFile}: ${problems.join("; ")}`);
     settingsEnv(item);
   }
+
+  return item;
+}
+
+export async function validateSetupOverrides(item: InstalledPackage) {
+  const overrides = item.entry.settings ?? {};
+
+  if (!item.manifest.setup || !Object.keys(overrides).some(key => !Object.hasOwn(item.manifest.settings, key))) return;
+  await runPackageSetup(item.manifest, overrides, { settings: structuredClone(item.settings), command() {}, collection() {}, add() {} });
 }
 
 /** `.office.json`'s content: what the office declares to its packages. */

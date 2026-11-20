@@ -3,10 +3,11 @@ import { setupContext } from "./package-definition.ts";
 import * as v from "valibot";
 import { claimsInspect, commandRegistration, type RegisteredCommand } from "./command-table.ts";
 import { findOffice, loadOffice, type Office, OfficeError, readOfficeFields } from "./office.ts";
-import { builtinSource, embeddedPackage, filesDigest, gitSelection, installedDefinition, type PackageRecord, resolvePackages, type ResolvedPackage } from "./packages.ts";
+import { builtinSource, embeddedPackage, fileHashes, filesDigest, gitSelection, installedDefinition, type PackageRecord, resolvePackages, type ResolvedPackage } from "./packages.ts";
 import { publishedCollection, publishedInputs, readSnapshot, referenceInputs, type ReferenceSnapshot } from "./reference-snapshot.ts";
 import type { CommandInputs } from "../packages/office/package-context.ts";
 import { check, commandBootstrapSchema, packageEntry, referenceInputSchema } from "./schema.ts";
+import { shippedReferences } from "./v3-reference-owner.ts";
 
 type Owner = ReferenceSnapshot["contributors"][number];
 
@@ -68,7 +69,7 @@ function selectedOwner(office: Selections, name: string) {
 }
 
 function verifyBinding(item: ResolvedPackage, owner: Owner, record: PackageRecord | undefined, embedded?: string) {
-  if (item.kind === "local" && owner.source === "local") return;
+  if (item.kind === "local" && owner.source === "local" && (!owner.commands?.files || owner.commands.files === filesDigest(fileHashes(item.dir)))) return;
 
   if (item.kind === "remote" && item.entry.source && gitSelection(item.entry.source) === owner.source && record && "repo" in record && record.commit === owner.commit && filesDigest(record.files) === owner.commands?.files) return;
 
@@ -78,12 +79,13 @@ function verifyBinding(item: ResolvedPackage, owner: Owner, record: PackageRecor
 }
 
 /** Resolve functions anew, but never collect new data or validate unsynced package settings here. */
-async function handler(office: Selections, owner: Owner, canonical: string, requested: string) {
+async function handler(office: Selections, owner: Owner, canonical: string, requested: string, version: ReferenceSnapshot["version"]) {
   const matches: RegisteredCommand[] = [];
 
   try {
     const item = selectedOwner(office, owner.name);
-    const embedded = item.kind === "built-in" ? (await embeddedPackage(owner.name)).source : undefined;
+    const legacy = version === 3 && owner.name === "references" && owner.source === shippedReferences && canonical === listing.name;
+    const embedded = item.kind === "built-in" ? (legacy ? shippedReferences : (await embeddedPackage(owner.name)).source) : undefined;
     const read = installedDefinition(office, item, record => verifyBinding(item, owner, record, embedded));
 
     if (!read.ok) throw new OfficeError(read.errors.join("; "));
@@ -167,8 +169,8 @@ export async function dispatchCommand(start: string, words: string[]): Promise<b
   // Keep the runtime input of already-indexed pre-collection commands through the upgrade.
   const commandInputs = { references: entries, read: (collection) => publishedCollection(publication, collection) } satisfies CommandInputs & { references: typeof entries };
 
-  if (indexed) {
-    const run = await handler(office, indexed.owner, indexed.canonical, requested);
+  if (indexed && snapshot) {
+    const run = await handler(office, indexed.owner, indexed.canonical, requested, snapshot.version);
     await run(commandInputs);
   } else {
     selectedOwner(office, "references"); // No implicit takeover of a legacy package's name.
