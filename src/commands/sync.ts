@@ -5,7 +5,8 @@
 // setup into .office/mise/ (src/package-tools.ts) and, in a host-mode office the user agreed may
 // manage its machine, links them and machine.toml into mise's global conf.d (src/machine.ts), links enabled library skills and package plugins,
 // and installs package panels on the desktop app's machine. A package's skills aren't linked: its plugin registers them, so sync
-// removes the links earlier releases made.
+// removes the links earlier releases made. Office's links are recognized by their target
+// (standard/opencode/ownership.ts) and kept out of commits through the repository's info/exclude.
 // It never rewrites AGENTS.md, other hand-written content, an existing app or a file a package's
 // template created; it deletes such a file only with its package, and only while unchanged.
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
@@ -20,9 +21,11 @@ import { collectJobs } from "../cron/jobs.ts";
 import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
 import { cloneOrFetchStreamed, clonePluginStreamed, existingPluginDestination, git, isClone, PluginCheckoutProblem, referenceGit, referenceOriginProblem, refreshCloneStreamed, verifiedHead } from "../git.ts";
 import { type Clone, clones, installedPackages, skillSelections } from "../layout.ts";
-import { legacyPlugin, linkPlugins, requirePluginDestination, withPluginPlan } from "../../standard/opencode/delivery.ts";
+import { cloneTarget, legacyPlugin, linkPlugins, placeLink, pluginFolder, pluginScope, requirePluginDestination, stagingFolder, withPluginPlan } from "../../standard/opencode/delivery.ts";
 import { validateAssets } from "../../standard/opencode/assets.ts";
-import { type Declaration, readDeclarations } from "../../standard/opencode/receipts.ts";
+import { type Declaration, readDeclarations } from "../../standard/opencode/declarations.ts";
+import { cloneFolder, entry as entryAt, officeEntries, requireFolder } from "../../standard/opencode/ownership.ts";
+import { RenameError, renameNoReplace } from "../no-replace.ts";
 import { migrate } from "../migrate.ts";
 import { definitionFiles } from "../package-definition.ts";
 import { packageComposeFile } from "../package-services.ts";
@@ -117,12 +120,15 @@ function copySkills(office: Office): string[] {
   });
 }
 
-/** Makes each .opencode/skills/ hold exactly the enabled library skills as relative links. */
+/**
+ * Makes each .opencode/skills/ hold exactly the enabled library skills as relative links, among
+ * Office's links. An entry of the office's own with an enabled skill's name stays instead.
+ */
 function linkSkills(office: Office): string[] {
   const changes: string[] = [];
 
   for (const selection of skillSelections(office)) {
-    mkdirSync(selection.folder, { recursive: true });
+    requireFolder(selection.scope);
 
     for (const [entry, target] of selection.links) {
       if (selection.enabled.includes(entry) && target === selection.target(entry)) continue;
@@ -134,12 +140,13 @@ function linkSkills(office: Office): string[] {
     for (const skill of selection.enabled) {
       const path = join(selection.folder, skill);
 
-      if (selection.folders.includes(skill)) {
-        changes.push(`kept the real folder ${relative(office.dir, path)} instead of linking ${relative(office.dir, join(selection.folder, selection.target(skill)))}`);
+      if (selection.own.includes(skill)) {
+        changes.push(`kept the office's own ${relative(office.dir, path)} instead of linking ${relative(office.dir, join(selection.folder, selection.target(skill)))}`);
       } else if (!existsSync(join(office.dir, "skills", skill))) {
         changes.push(`not linked: skills/${skill} is missing from the library`);
       } else if (selection.links.get(skill) !== selection.target(skill)) {
-        symlinkSync(selection.target(skill), path);
+        mkdirSync(selection.folder, { recursive: true });
+        symlinkSync(selection.target(skill), path); // exclusive creation; never replace an occupied path
         changes.push(`linked ${relative(office.dir, path)}`);
       }
     }
@@ -182,33 +189,102 @@ function requirePluginCheckout(office: Office, dir: string, url: string) {
   throw new PluginCheckoutProblem("cannot verify plugin checkout origin and directory; left unchanged");
 }
 
-async function syncPlugin(office: Office, clone: Clone, present: boolean) {
+type LinkClaim = {
+  /** Office's link to this clone was already there. */
+  linked: boolean;
+  /** What moved from where earlier releases cloned. */
+  moved: string[];
+};
+
+/**
+ * Readies `.opencode/plugins/<name>` for a clone: free, or already Office's link to it. An earlier
+ * release cloned into that path; such a checkout moves to `.office/plugins/<name>` when Office can
+ * verify it is this plugin's (moving first, then linking, is safe while OpenCode runs). Returns
+ * whether the link was there, and what moved.
+ */
+function claimPluginLink(office: Office, clone: Clone): LinkClaim {
+  const at = `${pluginFolder}/${clone.name}`;
+  const existing = entryAt(pluginScope(office), clone.name);
+
+  if (!existing) return { linked: false, moved: [] };
+
+  if (existing.office && existing.target === cloneTarget(clone.name)) return { linked: true, moved: [] };
+
+  if (existing.office) throw new PluginCheckoutProblem(`${at} links to a package's plugin; a package and a plugins: entry can't share a name, so rename one of them`);
+
+  if (!existing.folder || existing.target !== undefined) throw new PluginCheckoutProblem(`${at} is the office's own (not a link office sync made), kept; move it aside or rename the plugins: entry`);
+  const legacy = join(office.dir, at);
+
+  try {
+    requirePluginCheckout(office, legacy, clone.url);
+
+    if (!verifiedHead(legacy)) throw new PluginCheckoutProblem("no commit");
+  } catch {
+    throw new PluginCheckoutProblem(`${at} is a folder office sync can't verify as this plugin's checkout (its origin, location and a commit); left unchanged. If an earlier release cloned it, check it and move it to ${cloneFolder}/${clone.name} yourself; otherwise rename one of them`);
+  }
+
+  if (lstatSync(clone.dir, { throwIfNoEntry: false })) throw new PluginCheckoutProblem(`both ${at} and ${cloneFolder}/${clone.name} exist; left unchanged. Remove the one you don't need`);
+  mkdirSync(join(office.dir, cloneFolder), { recursive: true });
+
+  try {
+    renameNoReplace(legacy, clone.dir);
+  } catch (error) {
+    throw new PluginCheckoutProblem(`could not move ${at} to ${cloneFolder}/${clone.name} (${error instanceof RenameError ? error.code : "unavailable"}); left unchanged`);
+  }
+
+  return { linked: false, moved: [`moved the checkout ${at} to ${cloneFolder}/${clone.name}`] };
+}
+
+/**
+ * Links `.opencode/plugins/<name>` to the clone, after it is published: OpenCode doesn't notice a
+ * checkout that appears behind an existing link, so a link that was there first is made again.
+ */
+function linkClone(office: Office, clone: Clone, remake: boolean): string[] {
+  const at = `${pluginFolder}/${clone.name}`;
+  const target = cloneTarget(clone.name);
+  const existing = entryAt(pluginScope(office), clone.name);
+
+  if (existing && !(existing.office && existing.target === target)) throw new PluginCheckoutProblem(`${at} changed during delivery; kept, and the clone is not linked`);
+
+  if (existing && !remake) return [];
+  placeLink(office, join(office.dir, at), target, existing ? target : undefined);
+
+  return [`${existing ? "relinked" : "linked"} ${at}`];
+}
+
+async function syncPlugin(office: Office, clone: Clone, present: boolean, linked: boolean) {
   requirePluginDestination(office);
 
   if (isClone(clone.dir) !== present) throw new Error("plugin checkout changed; retry sync");
   const verify = () => requirePluginCheckout(office, clone.dir, clone.url);
+  let result: "cloned" | "updated" | "current";
 
   try {
     if (!present) {
       // Even an empty folder is the owner's: publication would replace it and its metadata.
       if (lstatSync(clone.dir, { throwIfNoEntry: false })) throw new PluginCheckoutProblem(existingPluginDestination);
 
-      return await clonePluginStreamed(clone.url, clone.ref, clone.dir, office.dir, verify);
+      // Staging shares the filesystem of .office/plugins/, so publication is one rename.
+      const staging = join(office.dir, stagingFolder);
+      mkdirSync(staging, { recursive: true });
+      result = await clonePluginStreamed(clone.url, clone.ref, clone.dir, staging, verify);
+    } else {
+      verify();
+
+      // A checkout with no commit (such as one a failed clone left) would be filled in place, where
+      // OpenCode already looks. Refuse it before fetching rather than adopt it.
+      if (!verifiedHead(clone.dir)) throw new PluginCheckoutProblem(`existing plugin checkout has no commit; left unchanged. Move it aside so office sync can clone a fresh copy, then sync again. If an interrupted first sync left it, see "Recovering an interrupted first clone" in docs/opencode-sources.md`);
+
+      result = await refreshCloneStreamed(clone.ref, clone.dir, {}, verify);
     }
-
-    verify();
-
-    // A checkout with no commit (such as one a failed clone left) would be filled in place, where
-    // OpenCode already looks. Refuse it before fetching rather than adopt it.
-    if (!verifiedHead(clone.dir)) throw new PluginCheckoutProblem("existing plugin checkout has no commit; left unchanged. Move it aside so office sync can clone a fresh copy, then sync again. If an interrupted first sync left it, see \"Recovering an interrupted first clone\" in docs/opencode-sources.md");
-
-    return await refreshCloneStreamed(clone.ref, clone.dir, {}, verify);
   } catch (error) {
     // Raw Git output (including verbose progress) can contain credentialed URLs.
     if (error instanceof PluginCheckoutProblem) throw error;
 
     throw new Error("plugin Git operation failed; check the checkout, configured repository and ref");
   }
+
+  return { result, notes: linkClone(office, clone, linked && result === "cloned") };
 }
 
 /**
@@ -231,6 +307,12 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
   const work = clones(office, references?.value.entries ?? []).filter((clone) => scope !== "references" || clone.kind === "reference");
   const lines: string[][] = work.map(() => []);
 
+  // A clone's result shows as its part; other changes it makes show as notes.
+  const noted = (index: number, notes: string[]) => {
+    for (const note of notes) stage.note(note);
+    lines[index].push(...notes);
+  };
+
   if (work.length === 0) return [];
 
   stage.detail(`cloning and updating ${work.length} ${work.length === 1 ? "source" : "sources"}, up to ${fetchSlots} at a time (${cloneSlots} new clones)`);
@@ -249,8 +331,16 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
     };
 
     try {
-      // Only the package-link owner may withdraw a link. The clone operation never unlinks one.
-      if (clone.kind === "plugin" && lstatSync(clone.dir, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("existing symlink kept; move it aside yourself before cloning here");
+      let claim: LinkClaim = { linked: false, moved: [] };
+
+      if (clone.kind === "plugin") {
+        requirePluginDestination(office);
+
+        if (lstatSync(clone.dir, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("existing symlink kept; move it aside yourself before cloning here");
+        claim = claimPluginLink(office, clone);
+        noted(index, claim.moved);
+      }
+
       const present = isClone(clone.dir);
 
       let refresh: ReturnType<typeof prepareReferenceRefresh> | undefined;
@@ -267,13 +357,15 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
 
         try {
           let result;
+          let notes: string[] = [];
 
           if (refresh) result = await refresh(options);
-          else if (clone.kind === "plugin") result = await syncPlugin(office, clone, present);
+          else if (clone.kind === "plugin") ({ result, notes } = await syncPlugin(office, clone, present, claim.linked));
           else result = await cloneOrFetchStreamed(clone.url, clone.ref, clone.dir, options);
           part.done(result);
 
           if (result !== "current" && result !== "fetched") lines[index].push(`${result} ${clone.kind} ${where}`);
+          noted(index, notes);
         } catch (error) {
           part.fail(failed(error instanceof Error ? error.message.trim() : String(error)));
         }
@@ -371,7 +463,7 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
   reported.push(...await syncClones(office, published ? "all" : "others", stage, verbose));
   changes.push(...claudeFiles(office.dir, true));
   changes.push(...linkSkills(office));
-  changes.push(...excludePluginClones(office));
+  changes.push(...excludePlumbing(office));
 
   return reported;
 }
@@ -480,6 +572,7 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   changes.push(...plan.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
   changes.push(...linkPlugins(office, plan));
   changes.push(...installPanels(office, plan.installed, removedPanels));
+  changes.push(...excludePlumbing(office));
 
   return published;
 }
@@ -510,12 +603,19 @@ function installPanels(office: Office, installed: InstalledPackage[], removed: s
   return [...panels.flatMap((panel) => installPanel(where.machine, office, panel)), ...removed.map((name) => removalNote(where.machine, name))];
 }
 
+export const excludeStart = "# office sync: its plumbing, rewritten on each sync. Add your own lines outside this block.";
+export const excludeEnd = "# end of office sync";
+
+/** Lines earlier releases wrote one by one: a clone in `.opencode/plugins/<name>/` and first-clone staging. */
+const legacyExclude = (line: string) => /^\/\.opencode\/plugins\/[^/]+\/$/.test(line) || line === "/.office-plugin-*/";
+
 /**
- * Keeps plugin clones out of the office's commits through the repository's local
- * .git/info/exclude, so no committed file needs a section the tool rewrites, and drops the line
- * of a plugin no longer declared.
+ * Keeps Office's plumbing out of commits without touching the owner's .gitignore: one block in the
+ * repository's info/exclude naming `.office/` (packages, clones, staging and generated state) and
+ * each Office link, with a leading slash and no trailing one so a link matches. Lines outside the
+ * block are the owner's and stay. An office that isn't a Git repository's root gets nothing.
  */
-function excludePluginClones(office: Office): string[] {
+export function excludePlumbing(office: Office): string[] {
   if (!existsSync(join(office.dir, ".git"))) return [];
 
   let exclude: string;
@@ -524,21 +624,31 @@ function excludePluginClones(office: Office): string[] {
     // In a worktree office .git is a file; Git names the exclude file the worktrees share.
     exclude = resolve(office.dir, git(["rev-parse", "--git-path", "info/exclude"], office.dir));
   } catch {
-    return ["could not locate the office repository's info/exclude; plugin clones are not excluded from commits"];
+    return ["could not locate the office repository's info/exclude; Office's plumbing is not excluded from commits"];
   }
 
-  const lines = existsSync(exclude) ? readFileSync(exclude, "utf8").replace(/\n$/, "").split("\n") : [];
-  // An interrupted or refused first plugin delivery can leave its staging folder in the root.
-  const wanted = [...office.plugins.map((plugin) => `/.opencode/plugins/${plugin.name}/`), ...(office.plugins.length > 0 ? ["/.office-plugin-*/"] : [])];
-  // Lines of the shape this writes, for a plugin no longer declared: left there, one would keep
-  // a package plugin's link of the same name out of commits.
-  const stale = lines.filter((line) => /^\/\.opencode\/plugins\/[^/]+\/$/.test(line) && !wanted.includes(line));
-  const missing = wanted.filter((line) => !lines.includes(line));
+  const text = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
+  const lines = text === "" ? [] : text.replace(/\n$/, "").split("\n");
+  const start = lines.indexOf(excludeStart);
+  const end = start < 0 ? -1 : lines.indexOf(excludeEnd, start);
+  const block = start < 0 || end < 0 ? [] : lines.slice(start + 1, end);
+  const outside = start < 0 || end < 0 ? lines : [...lines.slice(0, start), ...lines.slice(end + 1)];
+  const owner = outside.filter((line) => !legacyExclude(line));
+  const wanted = ["/.office/", ...officeEntries(office).map((path) => `/${path}`)];
+  const next = `${[...owner, excludeStart, ...wanted, excludeEnd].join("\n")}\n`;
 
-  if (stale.length === 0 && missing.length === 0) return [];
+  if (next === text) return [];
 
   mkdirSync(join(exclude, ".."), { recursive: true });
-  writeFileSync(exclude, `${[...lines.filter((line) => !stale.includes(line)), ...missing].join("\n")}\n`);
+  writeFileSync(exclude, next);
 
-  return [...stale.map((line) => `stopped excluding ${line} from commits (.git/info/exclude)`), ...missing.map((line) => `excluded ${line} from commits (.git/info/exclude)`)];
+  const dropped = outside.length - owner.length;
+  const added = wanted.filter((line) => !block.includes(line));
+  const removed = block.filter((line) => !wanted.includes(line));
+
+  return [
+    ...added.map((line) => `excluded ${line} from commits (info/exclude)`),
+    ...removed.map((line) => `stopped excluding ${line} from commits (info/exclude)`),
+    ...(dropped > 0 ? [`replaced ${dropped} plugin exclude ${dropped === 1 ? "line" : "lines"} earlier releases wrote with the office sync block (info/exclude)`] : []),
+  ];
 }

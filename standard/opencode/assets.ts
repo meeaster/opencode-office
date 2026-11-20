@@ -3,16 +3,12 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import * as v from "valibot";
 import type { InstalledPackage } from "../../src/packages.ts";
 
-// Portable package-relative names. A link receipt never authorizes a path outside this owner.
-const asset = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9_-][\w.-]*(?:\/[a-zA-Z0-9_-][\w.-]*)*$/));
+// Portable package-relative names, so a registered path never leads outside its package.
+export const asset = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9_-][\w.-]*(?:\/[a-zA-Z0-9_-][\w.-]*)*$/));
 const bundle = v.pipe(asset, v.endsWith(".cjs"));
 export const assetPaths = v.strictObject({ server: v.optional(asset), panel: v.optional(bundle) });
 
 export type AssetPaths = v.InferOutput<typeof assetPaths>;
-
-export function packageTarget(name: string, target: string) {
-  return [`../../packages/${name}/`, `../../.office/packages/${name}/`].some(prefix => target.startsWith(prefix) && v.is(asset, target.slice(prefix.length)));
-}
 
 export function validateAssets(root: string, dir: string, paths: AssetPaths) {
   for (const [part, path] of Object.entries(paths)) {

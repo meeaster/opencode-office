@@ -9,7 +9,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { claudeFiles } from "../claude.ts";
-import { appliedReferenceProblem, referenceOriginProblem } from "../git.ts";
+import { appliedReferenceProblem, git, referenceOriginProblem } from "../git.ts";
 import { resolvedReferences } from "../reference-snapshot.ts";
 import { cronRevision } from "../cron/container.ts";
 import { cronTimers, hasSystemd, refreshTimer, staleTimerUnits, timerStates } from "../cron/host.ts";
@@ -20,7 +20,8 @@ import { hookNote, hookState } from "../hook.ts";
 import { planServer, serverReport } from "../host-server.ts";
 import { officeCommands, officePins, officeTool, officeToolNamed, required } from "../host-tools.ts";
 import { clones, installedPackages, library, skillSelections } from "../layout.ts";
-import { legacyPlugin, pluginLinks, unownedLink, withPluginPlan } from "../../standard/opencode/delivery.ts";
+import { cloneTarget, legacyPlugin, pluginClones, pluginLinks, pluginScope, restartNotice, withPluginPlan } from "../../standard/opencode/delivery.ts";
+import { cloneFolder, entry as entryAt, officeEntries } from "../../standard/opencode/ownership.ts";
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, oldMiseFiles, pulledLocalFolders, versionsLackSfw } from "../migrate.ts";
 import { oldExecutorAppDirs } from "../executor-app-layout.ts";
 import { executorEnvFile, type Office, readEnvFile, skillGroups, toolsBlock } from "../office.ts";
@@ -109,12 +110,22 @@ async function drift(office: Office): Promise<string[]> {
   const loaded = withPluginPlan(office, installedPackages(office));
   const plugins = pluginLinks(office, loaded.plugins);
 
-  for (const name of plugins.unrecorded) problems.push(`.opencode/plugins/${name}: ${unownedLink}`);
-
   if (!loaded.unread.has("knowledge") && legacyPlugin(office, "knowledge")) problems.push(".opencode/plugins/knowledge/ is the knowledge plugin earlier releases of office wrote, which the knowledge package replaced (office sync removes it)");
 
   for (const [name, target] of plugins.links) {
-    if (!loaded.unread.has(name) && plugins.wanted.get(name) !== target) problems.push(`.opencode/plugins/${name} links to ${target}, the plugin of no declared package (office sync removes it)`);
+    const wanted = plugins.wanted.get(name);
+
+    if (loaded.unread.has(name) || wanted === target || (office.plugins.some((plugin) => plugin.name === name) && target === cloneTarget(name))) continue;
+
+    if (wanted) problems.push(`.opencode/plugins/${name} links to ${target}, but its package's plugin is ${wanted} (office sync relinks it; then ${restartNotice(name)})`);
+    else problems.push(`.opencode/plugins/${name} links to ${target}, the plugin of no declared package (office sync removes it)`);
+  }
+
+  for (const clone of pluginClones(office)) {
+    const link = entryAt(pluginScope(office), clone.name);
+
+    if (link?.folder && link.target === undefined) problems.push(`.opencode/plugins/${clone.name}/ is where earlier releases cloned plugin ${clone.name} (office sync moves it to ${cloneFolder}/${clone.name} and links it, once it can verify the checkout)`);
+    else if (existsSync(join(clone.dir, ".git")) && !(link?.office && link.target === cloneTarget(clone.name))) problems.push(`plugin ${clone.name} is cloned but .opencode/plugins/${clone.name} doesn't link to it${link ? " (an entry of the office's own is there)" : " (office sync links it)"}`);
   }
 
   for (const group of skillGroups(office)) {
@@ -129,7 +140,7 @@ async function drift(office: Office): Promise<string[]> {
 
     for (const skill of selection.enabled) {
       if (!libraryIds.includes(skill)) problems.push(`${where} enables ${skill}, which is not in skills/`);
-      else if (!selection.links.has(skill) && !selection.folders.includes(skill)) problems.push(`${where}: ${skill} is enabled but not linked`);
+      else if (!selection.links.has(skill) && !selection.own.includes(skill)) problems.push(`${where}: ${skill} is enabled but not linked`);
     }
 
     for (const [entry, target] of selection.links) {
@@ -166,6 +177,27 @@ async function drift(office: Office): Promise<string[]> {
   }
 
   return problems;
+}
+
+/**
+ * Office's plumbing that Git still tracks, as earlier releases had offices commit it. Excludes
+ * don't apply to tracked paths, so this names the command that untracks them; the files stay.
+ */
+function trackedPlumbing(office: Office, report: Report): void {
+  if (!existsSync(join(office.dir, ".git"))) return;
+  let tracked: string[];
+
+  try {
+    tracked = git(["ls-files", "-z", "--", ".office", ...officeEntries(office)], office.dir).split("\0").filter(Boolean);
+  } catch {
+    return;
+  }
+
+  if (tracked.length === 0) return;
+  const links = officeEntries(office).filter((path) => tracked.includes(path));
+  const paths = [...(tracked.some((path) => path.startsWith(".office/")) ? [".office"] : []), ...links];
+
+  report("warn", "git", `Office's plumbing is still committed (${tracked.length} tracked ${tracked.length === 1 ? "path" : "paths"}); office sync excludes it, but Git keeps tracking it. To untrack it and keep the files: git rm -r --cached --quiet -- ${paths.join(" ")}, then commit`);
 }
 
 /**
@@ -310,7 +342,7 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
     if (plugins.has(entry.name)) {
       const pluginLinked = links.links.get(entry.name) === links.wanted.get(entry.name);
 
-      notes.push(pluginLinked ? `plugin linked as .opencode/plugins/${entry.name} (office-wide discovery)` : links.unrecorded.has(entry.name) ? unownedLink : `plugin not linked; office sync links it as .opencode/plugins/${entry.name}`);
+      notes.push(pluginLinked ? `plugin linked as .opencode/plugins/${entry.name} (office-wide discovery)` : `plugin not linked; office sync links it as .opencode/plugins/${entry.name}`);
 
       if (!pluginLinked) ok = false;
     }
@@ -441,7 +473,7 @@ async function settle<Result>(read: () => Promise<Result>, ready: (value: Result
  */
 function expectedSkills(office: Office, desk: string | undefined) {
   const selections = skillSelections(office);
-  const own = (selection: { enabled: string[]; folders: string[] } | undefined) => (selection === undefined ? [] : [...selection.enabled, ...selection.folders]);
+  const own = (selection: { enabled: string[]; own: string[] } | undefined) => (selection === undefined ? [] : [...selection.enabled, ...selection.own]);
   const root = selections.find((selection) => selection.desk === undefined);
   const mine = desk === undefined ? [] : own(selections.find((selection) => selection.desk === desk));
   const packaged = withPluginPlan(office, installedPackages(office)).installed.flatMap((item) => (item.plugin ? item.skills : []));
@@ -1030,7 +1062,7 @@ function outsideSection(office: Office, report: Report, root: RootAnswer | undef
 
   const provided: Provided = {
     skills: new Map([
-      ...skillSelections(office).flatMap((selection) => selection.folders.map((id) => [id, `the office's skill ${relative(office.dir, join(selection.folder, id))}`] as const)),
+      ...skillSelections(office).flatMap((selection) => selection.own.map((id) => [id, `the office's skill ${relative(office.dir, join(selection.folder, id))}`] as const)),
       ...library(office).map((id) => [id, `the office's library skill skills/${id}`] as const),
       ...installed.installed.flatMap((item) => (item.plugin ? item.skills.map((id) => [id, `package ${item.entry.name}'s skill`] as const) : [])),
     ]),
@@ -1078,6 +1110,7 @@ export async function check(office: Office, stage?: Stage, verbose = false): Pro
   }
 
   await packageChecks(office, report);
+  trackedPlumbing(office, report);
   spawnChecks(office, report);
 
   stage?.detail("host tools and machine settings");

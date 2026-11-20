@@ -175,9 +175,11 @@ test("a package plugin is linked while declared, gives way to a plugins: entry o
 
   const changes = await sync(loadOffice(office));
 
-  expect(changes).toContain("cloned plugin .opencode/plugins/demo");
+  expect(changes).toContain("cloned plugin .office/plugins/demo");
   expect(changes).toContain("FAILED package demo: its plugin would be .opencode/plugins/demo, where the plugins: entry demo is cloned, so it isn't linked; rename one of them");
-  expect(git(["rev-parse", "--show-toplevel"], link)).toBe(realpathSync(link));
+  expect(changes).toContain("unlinked .opencode/plugins/demo for the plugins: entry of that name; restart OpenCode to pick up demo: a running server keeps loading a plugin from where it first found it");
+  expect(readlinkSync(link)).toBe("../../.office/plugins/demo");
+  expect(git(["rev-parse", "--show-toplevel"], link)).toBe(realpathSync(join(office, ".office/plugins/demo")));
 
   rmSync(link, { recursive: true });
   write(join(office, "office.yaml"), declared);

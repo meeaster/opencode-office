@@ -24,7 +24,7 @@ beforeEach(() => {
 
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-const staging = () => readdirSync(office).filter(name => name.startsWith(".office-plugin-"));
+const staging = () => readdirSync(office).filter(name => name.startsWith("plugin-"));
 const ownerFile = (path: string) => writeFileSync(path, "owner\n", { flag: "wx" });
 
 /** A no-replace rename that runs `before` and `after` around the first rename `matches` picks. */

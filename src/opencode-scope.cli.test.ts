@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import * as v from "valibot";
 import { compile } from "./build.ts";
+import { excludeEnd, excludeStart } from "./commands/sync.ts";
 
 const sandbox = mkdtempSync(join(tmpdir(), "office-opencode-scope-"));
 const office = join(sandbox, "bin/office");
@@ -127,13 +127,13 @@ test("compiled offline inventory distinguishes scoped declarations, links, clone
 
     expect(report).toContain("[desk builder] configured local directory: builder/.opencode/opencode.jsonc#plugins[0]");
     expect(report).toContain("[folder builder/<folder-2>/<folder-3>] native config: builder/<folder-2>/<folder-3>/opencode.json");
-    expect(report).toContain("declared Git clone (no checkout observed): office.yaml plugins: imported -> .opencode/plugins/imported");
-    expect(report).toContain("Office-created package link (selected built-in package): .opencode/plugins/office");
+    expect(report).toContain("declared Git clone (no checkout observed; not linked as .opencode/plugins/imported): office.yaml plugins: imported -> .office/plugins/imported");
+    expect(report).toContain("Office package link (selected built-in package): .opencode/plugins/office");
     expect(report).toContain("convention plugin candidate (dangling)");
     const duplicates = report.split("possible duplicate source (same filesystem target; activation not checked):")[1];
 
     expect(duplicates).toContain("configured local directory: opencode.json#plugins[0]");
-    expect(duplicates).toContain("Office-created package link (selected local package): .opencode/plugins/common");
+    expect(duplicates).toContain("Office package link (selected local package): .opencode/plugins/common");
     expect(report).toContain("same package name or ID; versions not resolved");
     expect(report).toContain("bundle present; listed in app-machine opencode.json");
     expect(report).not.toContain("hidden-");
@@ -197,61 +197,90 @@ test("compiled offline inventory distinguishes scoped declarations, links, clone
   }
 }, 60_000);
 
-test("a path and target are not custody: preserve ambiguous, dangling, redirected and replaced root links", async () => {
-  const f = fixture("custody", "http://127.0.0.1:1");
-  const folder = join(f.dir, ".opencode/plugins");
-  mkdirSync(folder, { recursive: true });
-  const link = join(folder, "common");
-  const target = "../../packages/common/plugin";
-  symlinkSync(target, link);
-  symlinkSync("../../.office/packages/gone/plugin", join(folder, "gone"));
-  symlinkSync(target, join(folder, "alias"));
-  const sync = ["sync", "--packages"];
-  const inspect = ["opencode", "inspect"];
+test("ownership by target: Office's links are recognized and withdrawn by their text; the owner's entries and name clashes are left alone, at the root and in desks", async () => {
+  const f = fixture("ownership", "http://127.0.0.1:1");
+  const path = (file: string) => join(f.dir, file);
+  const plugins = path(".opencode/plugins");
+  const skills = path(".opencode/skills");
+  const deskSkills = path("builder/.opencode/skills");
+  write(path("skills/alpha/SKILL.md"), "---\nname: alpha\ndescription: fixture\n---\n");
+  write(path("skills/beta/SKILL.md"), "---\nname: beta\ndescription: fixture\n---\n");
 
-  expect(await f.run(sync)).toContain(".opencode/plugins/common: no matching Office creation receipt");
-  expect(await f.run(inspect)).toContain("package-shaped link (selected local package; no creation receipt)");
-  const ledger = join(f.dir, ".office/resolved/opencode-links.sqlite");
-  {
-    using db = new Database(ledger);
-    db.exec("PRAGMA journal_mode=WAL");
-  }
+  const select = (packages: string, root: string, desk: string) => write(path("office.yaml"), [
+    "name: sample", `state: ${f.home}/office-state`, "opencode: {mode: host, url: http://127.0.0.1:1}",
+    `desks: {builder: {app: false, skills: [${desk}]}, sibling: {app: false}}`, `skills: {enabled: [${root}]}`, `packages: [${packages}]`, "",
+  ].join("\n"));
 
-  const bytes = readFileSync(ledger);
-  expect(await f.run(inspect, 1)).toContain("ledger is changing or needs recovery");
-  expect(readFileSync(ledger)).toEqual(bytes);
+  // The owner's entries: a real plugin folder, a link elsewhere, a file, a real skill folder and
+  // a link to a library skill under another name, which Office never writes.
+  write(path(".opencode/plugins/owner-plugin/index.js"), command("owner-plugin"));
+  symlinkSync("../../builder/extensions/local", join(plugins, "owner-link"));
+  write(join(plugins, "notes.txt"), "owner\n");
+  write(join(skills, "owner-skill/SKILL.md"), "---\nname: owner-skill\ndescription: fixture\n---\n");
+  symlinkSync("../../skills/alpha", join(skills, "alias"));
+  // Office's by their text alone, though nothing recorded making them: dangling and hand-made.
+  symlinkSync("../../.office/packages/gone/plugin", join(plugins, "gone"));
+  symlinkSync("../../.office/plugins/old-clone", join(plugins, "old-clone"));
+  symlinkSync("../../packages/retired/skills/beta", join(skills, "beta"));
+  symlinkSync("../../packages/common/plugin", join(plugins, "common"));
+  mkdirSync(deskSkills, { recursive: true });
+  symlinkSync("../../../skills/alpha", join(deskSkills, "alpha"));
+  symlinkSync("../../skills/alpha", join(deskSkills, "wrong-depth"));
+  const owner = () => [readlinkSync(join(plugins, "owner-link")), readFileSync(join(plugins, "notes.txt"), "utf8"), readlinkSync(join(skills, "alias")), readlinkSync(join(deskSkills, "wrong-depth")), existsSync(path(".opencode/plugins/owner-plugin/index.js")), existsSync(join(skills, "owner-skill/SKILL.md"))];
+  const kept = owner();
+  write(path(".office/resolved/opencode-links.sqlite"), "receipts of an earlier development build");
 
-  for (const suffix of ["-wal", "-shm"]) expect(existsSync(`${ledger}${suffix}`)).toBe(false);
-  await f.run(sync);
-  await f.run(["cron", "list"]);
-  f.select("");
-  await f.run(sync);
-  expect(readlinkSync(link)).toBe(target);
-  expect(readlinkSync(join(folder, "gone"))).toBe("../../.office/packages/gone/plugin");
-  expect(readlinkSync(join(folder, "alias"))).toBe(target);
+  select("{name: common}", "alpha, beta", "beta");
+  const first = await f.run(["sync"]);
+  expect(first).toContain("removed .office/resolved/opencode-links.sqlite, the link receipts of earlier development builds");
+  expect(first).toContain("unlinked .opencode/plugins/gone");
+  expect(first).toContain("unlinked .opencode/plugins/old-clone");
+  expect(first).toContain("unlinked builder/.opencode/skills/alpha");
+  expect(first).not.toContain("linked .opencode/plugins/common");
+  expect(readlinkSync(join(plugins, "common"))).toBe("../../packages/common/plugin");
+  expect(readlinkSync(join(skills, "alpha"))).toBe("../../skills/alpha");
+  // A legacy package skill link is Office's, so the library skill of that name replaces it.
+  expect(readlinkSync(join(skills, "beta"))).toBe("../../skills/beta");
+  expect(readlinkSync(join(deskSkills, "beta"))).toBe("../../../skills/beta");
+  expect(existsSync(join(plugins, "gone")) || existsSync(join(plugins, "old-clone")) || existsSync(join(deskSkills, "alpha"))).toBe(false);
+  expect(owner()).toEqual(kept);
+  expect(await f.run(["sync"])).not.toMatch(/linked|unlinked/);
 
-  f.select("plugins: [{name: common, repo: /unavailable}]\n");
-  expect(await f.run(["sync"], 1)).toContain("existing symlink kept");
-  expect(readlinkSync(link)).toBe(target);
-  renameSync(link, join(f.home, "saved-link"));
-  f.select("packages: [{name: common}]\n");
-  await f.run(sync);
-  expect(await f.run(inspect)).toContain("Office-created package link (selected local package)");
-  renameSync(link, join(f.home, "original-inode"));
-  symlinkSync(target, link); // Replacement with IDENTICAL spelling.
-  f.select("");
-  await f.run(sync);
-  expect(readlinkSync(link)).toBe(target);
-  rmSync(link);
-  f.select("packages: [{name: common}]\n");
-  await f.run(sync);
-  rmSync(link);
-  symlinkSync("../../.office/packages/common/plugin", link); // Both target shapes are plausible.
-  expect(await f.run(sync, 1)).toContain("no matching Office creation receipt");
-  f.select("");
-  await f.run(sync);
-  await f.run(sync);
-  expect(readlinkSync(link)).toBe("../../.office/packages/common/plugin");
+  // A name clash with an owner entry is refused and reported; the owner's entry stays.
+  rmSync(join(plugins, "common"));
+  write(join(plugins, "common/index.js"), "// the owner's own common\n");
+  expect(await f.run(["sync"], 1)).toContain("which holds a plugin of this office's own (not a link office sync made), so it isn't linked; rename one of them");
+  expect(readFileSync(join(plugins, "common/index.js"), "utf8")).toBe("// the owner's own common\n");
+  rmSync(join(plugins, "common"), { recursive: true });
+  symlinkSync("../../builder/extensions/local", join(plugins, "common"));
+  expect(await f.run(["sync"], 1)).toContain("not a link office sync made");
+  expect(readlinkSync(join(plugins, "common"))).toBe("../../builder/extensions/local");
+  rmSync(join(plugins, "common"));
+  select("{name: common}", "alpha, owner-skill", "beta");
+  expect(await f.run(["sync"])).toContain("kept the office's own .opencode/skills/owner-skill instead of linking");
+  expect(existsSync(join(skills, "beta"))).toBe(false);
+
+  // Deselecting withdraws Office's links, the identical hand-made ones too; nothing of the owner's.
+  rmSync(join(plugins, "common"));
+  symlinkSync("../../packages/common/plugin", join(plugins, "common"));
+  select("", "", "");
+  const withdrawn = await f.run(["sync"]);
+  expect(withdrawn).toContain("unlinked .opencode/plugins/common");
+  expect(withdrawn).toContain("unlinked .opencode/skills/alpha");
+  expect(withdrawn).toContain("unlinked builder/.opencode/skills/beta");
+  expect(readdirSync(plugins).sort()).toEqual(["notes.txt", "office", "owner-link", "owner-plugin"]);
+  expect(readdirSync(skills).sort()).toEqual(["alias", "owner-skill"]);
+  expect(readdirSync(deskSkills)).toEqual(["wrong-depth"]);
+  expect(owner()).toEqual(kept);
+  expect(readFileSync(path("builder/.opencode/plugins/independent.js"), "utf8")).toBe(command("native-command"));
+  expect(existsSync(path(".office/resolved/opencode-links.sqlite"))).toBe(false);
+
+  // A redirected folder is never followed, for skills as for plugins.
+  rmSync(deskSkills, { recursive: true });
+  symlinkSync(f.home, deskSkills);
+  select("", "", "alpha");
+  expect(await f.run(["sync"], 1)).toContain("refusing to follow or replace it");
+  expect(existsSync(join(f.home, "alpha"))).toBe(false);
 }, 60_000);
 
 function gitAt(dir: string, env: ReturnType<typeof fixture>["env"], ...args: string[]) {
@@ -265,7 +294,8 @@ test("a first plugin clone verifies the effective origin before fetching and bef
   const f = fixture("first-origin", "http://127.0.0.1:1");
   const remote = join(f.home, "declared");
   const mirror = join(f.home, "unexpected");
-  const plugin = join(f.dir, ".opencode/plugins/imported");
+  const plugin = join(f.dir, ".office/plugins/imported");
+  const link = join(f.dir, ".opencode/plugins/imported");
   const trace = join(f.home, "git.trace");
   const shim = join(f.home, "bin/git");
   const native = Bun.which("git", { PATH: f.env.PATH });
@@ -328,13 +358,15 @@ test("a first plugin clone verifies the effective origin before fetching and bef
   expect(failed).toContain("plugin Git operation failed");
   expect(failed).not.toContain("hidden-");
   expect(existsSync(plugin)).toBe(false);
-  expect(readdirSync(f.dir).some(name => name.startsWith(".office-plugin-"))).toBe(false);
+  expect(readdirSync(join(f.dir, ".office/tmp"))).toEqual([]);
+  expect(existsSync(link)).toBe(false);
 
   rmSync(shim);
   await f.run(["sync"]);
   await f.run(["sync"]);
   expect(gitAt(plugin, f.env, "rev-parse", "HEAD")).toBe(gitAt(remote, f.env, "rev-parse", "HEAD"));
   expect(readFileSync(join(plugin, "note"), "utf8")).toBe("declared\n");
+  expect(readlinkSync(link)).toBe("../../.office/plugins/imported");
 }, 60_000);
 
 test("typed registrations replace both conventions: one owned link, isolated panel registration, explicit empty and failed collections", async () => {
@@ -443,12 +475,16 @@ test("typed registrations replace both conventions: one owned link, isolated pan
     await dev.exited;
   }
 
+  // A hand-made link with Office's text for the authored path is Office's: kept while declared,
+  // withdrawn when the registration withholds the server. An owner link elsewhere stays.
   rmSync(link);
   symlinkSync("../../packages/common/extensions/server", link);
-  expect(await f.run(sync)).toContain("no matching Office creation receipt");
+  expect(await f.run(sync)).not.toContain("linked .opencode/plugins/common");
   change("none");
+  expect(await f.run(sync)).toContain("unlinked .opencode/plugins/common");
+  symlinkSync("../../builder/extensions/local", link);
   await f.run(sync);
-  expect(readlinkSync(link)).toBe("../../packages/common/extensions/server");
+  expect(readlinkSync(link)).toBe("../../builder/extensions/local");
 }, 60_000);
 
 test("a convention package with a symlinked gui/dist keeps its link and panel; an authored claim through that symlink is refused", async () => {
@@ -545,7 +581,7 @@ test("an authored-only pinned package repairs the bound revision and rejects an 
   await f.run(["sync", "--packages"]);
   const link = join(f.dir, ".opencode/plugins/folio");
   expect(readlinkSync(link)).toBe("../../.office/packages/folio/src/server");
-  expect(await f.run(["opencode", "inspect"])).toContain("Office-created package link (selected pinned Git package)");
+  expect(await f.run(["opencode", "inspect"])).toContain("Office package link (selected pinned Git package)");
   write(join(pkg, "office.ts"), definition.replace("dist/panel.cjs", "missing.cjs"));
   git("commit", "-qam", "invalid edition B");
   git("tag", "-f", "stable");
@@ -578,7 +614,7 @@ test("deselecting a pulled authored package notes its retained panel at the auth
 test("a plugin checkout with the wrong origin is not cleaned, fetched or force-checked-out", async () => {
   const f = fixture("clone-origin", "http://127.0.0.1:1");
   const remote = join(f.home, "original");
-  const plugin = join(f.dir, ".opencode/plugins/imported");
+  const plugin = join(f.dir, ".office/plugins/imported");
   write(join(remote, "index.js"), command("original"));
   const git = (...args: string[]) => gitAt(remote, f.env, ...args);
   git("init", "-q");
@@ -669,7 +705,8 @@ function pluginRemote(f: ReturnType<typeof fixture>, files: Record<string, strin
 test("a plugin checkout with no commit is refused before fetching, even with the declared origin, and exposes nothing", async () => {
   for (const executable of [office, ...(control ? [control] : [])]) {
     const f = fixture(executable === office ? "unborn" : "unborn-control", "http://127.0.0.1:1");
-    const plugin = join(f.dir, ".opencode/plugins/imported");
+    // The control clones into .opencode/plugins/, where earlier releases did.
+    const plugin = join(f.dir, executable === office ? ".office/plugins/imported" : ".opencode/plugins/imported");
     // A required smudge filter fails on the last file, after index.js is written.
     const remote = pluginRemote(f, { ".gitattributes": "zz-last filter=fail\n", "index.js": command("exposed"), "zz-last": "last\n" });
     gitAt(f.dir, f.env, "init", "-q", plugin);
@@ -691,12 +728,22 @@ test("a plugin checkout with no commit is refused before fetching, even with the
     expect(snapshot(plugin)).toEqual(before);
     expect(existsSync(join(plugin, "index.js"))).toBe(false);
     expect(existsSync(join(plugin, ".git/FETCH_HEAD"))).toBe(false);
+    expect(existsSync(join(f.dir, ".opencode/plugins/imported"))).toBe(false);
+
+    // Where an earlier release cloned, a checkout with no commit is not provably Office's: it stays.
+    const legacy = join(f.dir, ".opencode/plugins/imported");
+    renameSync(plugin, legacy);
+    const kept = snapshot(legacy);
+    expect(await f.run(["sync"], 1)).toContain(".opencode/plugins/imported is a folder office sync can't verify as this plugin's checkout");
+    expect(snapshot(legacy)).toEqual(kept);
+    expect(existsSync(plugin)).toBe(false);
   }
 }, 60_000);
 
 test("first plugin delivery never replaces an owner's folder, even an empty one or one that appears mid-delivery", async () => {
   const f = fixture("owner-folder", "http://127.0.0.1:1");
-  const plugin = join(f.dir, ".opencode/plugins/imported");
+  const plugin = join(f.dir, ".office/plugins/imported");
+  const legacy = join(f.dir, ".opencode/plugins/imported");
   const remote = pluginRemote(f, { "index.js": command("delivered") });
   const native = Bun.which("git", { PATH: f.env.PATH });
 
@@ -708,10 +755,13 @@ test("first plugin delivery never replaces an owner's folder, even an empty one 
   expect(snapshot(plugin)).toEqual(owner);
 
   if (control) {
-    // The control publishes over the empty folder: another inode, staging's 0700 mode.
+    // The control publishes over the empty folder where it clones: another inode, staging's 0700 mode.
+    mkdirSync(legacy);
+    const before = statSync(legacy).ino;
     await f.run(["sync"], 0, control);
-    expect(statSync(plugin).ino).not.toBe(owner.ino);
-    expect(statSync(plugin).mode & 0o777).toBe(0o700);
+    expect(statSync(legacy).ino).not.toBe(before);
+    expect(statSync(legacy).mode & 0o777).toBe(0o700);
+    rmSync(legacy, { recursive: true });
   }
 
   rmSync(plugin, { recursive: true });
@@ -742,7 +792,149 @@ test("first plugin delivery never replaces an owner's folder, even an empty one 
   await f.run(["sync"]);
   expect(gitAt(plugin, f.env, "rev-parse", "HEAD")).toBe(gitAt(remote, f.env, "rev-parse", "HEAD"));
   expect(readFileSync(join(plugin, "index.js"), "utf8")).toBe(command("delivered"));
-  expect(readdirSync(f.dir).some(name => name.startsWith(".office-plugin-"))).toBe(false);
+  expect(readdirSync(join(f.dir, ".office/tmp"))).toEqual([]);
+  expect(readlinkSync(legacy)).toBe("../../.office/plugins/imported");
+}, 60_000);
+
+test("a Git-cloned plugin lives in .office/plugins, is linked after publication, updates in place and moves there from where earlier releases cloned it", async () => {
+  const f = fixture("clone-link", "http://127.0.0.1:1");
+  const remote = pluginRemote(f, { "index.js": command("cloned-v1") });
+  const checkout = join(f.dir, ".office/plugins/imported");
+  const link = join(f.dir, ".opencode/plugins/imported");
+  // OpenCode doesn't notice a checkout appearing behind an existing link, so one made first is made again.
+  mkdirSync(dirname(link), { recursive: true });
+  symlinkSync("../../.office/plugins/imported", link);
+  const dangling = lstatSync(link).ino;
+  const first = await f.run(["sync"]);
+  expect(first).toContain(".office/plugins/imported: cloned");
+  expect(first).toContain("relinked .opencode/plugins/imported");
+  expect(lstatSync(link).ino).not.toBe(dangling);
+  expect(readlinkSync(link)).toBe("../../.office/plugins/imported");
+  expect(readFileSync(join(link, "index.js"), "utf8")).toBe(command("cloned-v1"));
+  const identity = [statSync(checkout).ino, lstatSync(link).ino];
+  expect(await f.run(["sync"])).not.toMatch(/: cloned|: updated|linked \./);
+
+  write(join(remote, "index.js"), command("cloned-v2"));
+  gitAt(remote, f.env, "commit", "-qam", "v2");
+  expect(await f.run(["sync"])).toContain(".office/plugins/imported: updated");
+  expect(readFileSync(join(link, "index.js"), "utf8")).toBe(command("cloned-v2"));
+  expect([statSync(checkout).ino, lstatSync(link).ino]).toEqual(identity);
+
+  rmSync(link);
+  expect(await f.run(["check"], 1)).toContain("plugin imported is cloned but .opencode/plugins/imported doesn't link to it (office sync links it)");
+  expect(await f.run(["sync"])).toContain("linked .opencode/plugins/imported");
+  expect(statSync(checkout).ino).toBe(identity[0]);
+  expect(await f.run(["opencode", "inspect"])).toContain("Office link to a Git clone (declared): .opencode/plugins/imported");
+
+  // Withdrawal unlinks; the checkout, which may hold local work, stays.
+  f.select("");
+  expect(await f.run(["sync"])).toContain("unlinked .opencode/plugins/imported");
+  expect(existsSync(link)).toBe(false);
+  expect(existsSync(join(checkout, ".git"))).toBe(true);
+
+  // An earlier release's checkout in .opencode/plugins/ moves whole, then is linked.
+  rmSync(checkout, { recursive: true });
+  gitAt(f.home, f.env, "clone", "-q", remote, link);
+  write(join(link, "untracked-note"), "kept\n");
+  const legacy = statSync(link).ino;
+  f.select(`plugins: [{name: imported, repo: ${remote}}]\n`);
+  expect(await f.run(["check"], 1)).toContain(".opencode/plugins/imported/ is where earlier releases cloned plugin imported");
+  const migrated = await f.run(["sync"]);
+  expect(migrated).toContain("moved the checkout .opencode/plugins/imported to .office/plugins/imported");
+  expect(migrated).toContain("linked .opencode/plugins/imported");
+  expect(statSync(checkout).ino).toBe(legacy);
+  expect(readFileSync(join(checkout, "untracked-note"), "utf8")).toBe("kept\n");
+  expect(readlinkSync(link)).toBe("../../.office/plugins/imported");
+
+  // A checkout there that isn't provably this plugin's stays where it is.
+  rmSync(link);
+  gitAt(f.home, f.env, "clone", "-q", remote, link);
+  gitAt(link, f.env, "remote", "set-url", "origin", join(f.home, "elsewhere"));
+  const unproven = snapshot(link);
+  expect(await f.run(["sync"], 1)).toContain(".opencode/plugins/imported is a folder office sync can't verify as this plugin's checkout");
+  expect(snapshot(link)).toEqual(unproven);
+}, 60_000);
+
+test("a package plugin that changes location is relinked with a restart notice, which check reports before sync", async () => {
+  const f = fixture("retarget", "http://127.0.0.1:1");
+  const upstream = join(f.home, "upstream");
+  const link = join(f.dir, ".opencode/plugins/press");
+  write(join(upstream, "pkg/package.yaml"), "name: press\ndescription: fixture\n");
+  write(join(upstream, "pkg/plugin/index.js"), command("press"));
+  gitAt(upstream, f.env, "init", "-q");
+  gitAt(upstream, f.env, "add", ".");
+  gitAt(upstream, f.env, "commit", "-qm", "press");
+  f.select(`packages: [{name: press, repo: ${upstream}, path: pkg, ref: '${gitAt(upstream, f.env, "rev-parse", "HEAD")}'}]\n`);
+  await f.run(["sync", "--packages"]);
+  expect(readlinkSync(link)).toBe("../../.office/packages/press/plugin");
+
+  // The owner takes the package local: same name, another directory.
+  write(join(f.dir, "packages/press/package.yaml"), "name: press\ndescription: fixture\n");
+  write(join(f.dir, "packages/press/plugin/index.js"), command("press"));
+  f.select("packages: [{name: press}]\n");
+  expect(await f.run(["check"], 1)).toContain(".opencode/plugins/press links to ../../.office/packages/press/plugin, but its package's plugin is ../../packages/press/plugin (office sync relinks it; then restart OpenCode to pick up press");
+  expect(await f.run(["sync", "--packages"])).toContain("relinked .opencode/plugins/press to ../../packages/press/plugin; restart OpenCode to pick up press");
+  expect(readlinkSync(link)).toBe("../../packages/press/plugin");
+  expect(await f.run(["sync", "--packages"])).not.toContain("restart OpenCode");
+}, 60_000);
+
+test("sync keeps Office's plumbing out of Git in one info/exclude block, leaving the owner's lines and entries; check names tracked plumbing", async () => {
+  const f = fixture("exclude", "http://127.0.0.1:1");
+  const path = (file: string) => join(f.dir, file);
+  const remote = pluginRemote(f, { "index.js": command("cloned") });
+  const exclude = path(".git/info/exclude");
+
+  const select = (packages: string, skills: string) => write(path("office.yaml"), [
+    "name: sample", `state: ${f.home}/office-state`, "opencode: {mode: host, url: http://127.0.0.1:1}",
+    `desks: {builder: {app: false, skills: [${skills}]}, sibling: {app: false}}`, `skills: {enabled: [${skills}]}`,
+    `packages: [${packages}]`, `plugins: [{name: imported, repo: ${remote}}]`, "",
+  ].join("\n"));
+
+  const git = (...args: string[]) => gitAt(f.dir, f.env, ...args);
+  write(path("skills/alpha/SKILL.md"), "---\nname: alpha\ndescription: fixture\n---\n");
+  write(path(".opencode/plugins/owner-plugin/index.js"), command("owner-plugin"));
+  write(path(".opencode/skills/owner-skill/SKILL.md"), "---\nname: owner-skill\ndescription: fixture\n---\n");
+
+  // Without Git, sync writes no exclude and makes no repository.
+  select("{name: common}", "alpha");
+  await f.run(["sync"]);
+  expect(existsSync(path(".git"))).toBe(false);
+
+  git("init", "-q");
+  write(path(".gitignore"), "/builder/repos/\n");
+  // The owner's lines, and one an earlier release wrote for a clone in .opencode/plugins/.
+  write(exclude, "# the owner's\n*.log\n/.opencode/plugins/imported/\n");
+  const report = await f.run(["sync"]);
+  const block = (lines: string[]) => [excludeStart, "/.office/", ...lines, excludeEnd].join("\n");
+  const all = block(["/.opencode/plugins/common", "/.opencode/plugins/imported", "/.opencode/plugins/office", "/.opencode/skills/alpha", "/builder/.opencode/skills/alpha"]);
+  expect(readFileSync(exclude, "utf8")).toBe(`# the owner's\n*.log\n${all}\n`);
+  expect(report).toContain("replaced 1 plugin exclude line earlier releases wrote with the office sync block (info/exclude)");
+  expect(await f.run(["sync"])).not.toContain("info/exclude");
+  expect(readFileSync(exclude, "utf8")).toBe(`# the owner's\n*.log\n${all}\n`);
+
+  const staged = git("add", "-A", "--dry-run").split("\n").map(line => line.replace(/^add '(.*)'$/, "$1"));
+  expect(staged.filter(line => /^(\.office\/|\.opencode\/plugins\/(common|imported|office)$|\.opencode\/skills\/alpha$|builder\/\.opencode\/skills\/alpha$)/.test(line))).toEqual([]);
+  expect(staged).toContain(".opencode/plugins/owner-plugin/index.js");
+  expect(staged).toContain(".opencode/skills/owner-skill/SKILL.md");
+
+  // Withdrawn entries leave the block; a line the owner adds after it stays.
+  write(exclude, `${readFileSync(exclude, "utf8")}/scratch-notes/\n`);
+  select("", "");
+  expect(await f.run(["sync"])).toContain("stopped excluding /.opencode/plugins/common from commits (info/exclude)");
+  expect(readFileSync(exclude, "utf8")).toBe(`# the owner's\n*.log\n/scratch-notes/\n${block(["/.opencode/plugins/imported", "/.opencode/plugins/office"])}\n`);
+
+  // Plumbing committed by an earlier release stays tracked until the owner untracks it.
+  git("add", "-f", ".office/packages/office", ".opencode/plugins/office");
+  git("commit", "-qm", "plumbing as earlier releases committed it");
+  const untrack = "git rm -r --cached --quiet -- .office .opencode/plugins/office";
+  const health = await f.run(["check"], 1);
+  expect(health).toContain("Office's plumbing is still committed");
+  expect(health).toContain(untrack);
+  expect(Bun.spawnSync(["sh", "-c", untrack], { cwd: f.dir, env: f.env }).exitCode).toBe(0);
+  git("commit", "-qm", "untrack plumbing");
+  expect(await f.run(["check"], 1)).not.toContain("plumbing is still committed");
+  expect(readlinkSync(path(".opencode/plugins/office"))).toBe("../../.office/packages/office/plugin");
+  expect(git("status", "--porcelain", "--untracked-files=all", "--", ".office", ".opencode/plugins/office")).toBe("");
 }, 60_000);
 
 // A real previous release is the control: no synthetic generation and no rewriting a digest.
@@ -791,10 +983,11 @@ test.skipIf(!previous)("upgrade refuses previously indexed inspect names, aliase
     expect(report).toContain("selected pinned Git package");
     expect(report).not.toContain(remote);
     expect(report).not.toContain("stable");
-    expect(report).toContain("no creation receipt");
+    // The earlier release's link is Office's by its target, and goes with its package.
+    expect(report).toContain("Office package link (selected pinned Git package): .opencode/plugins/press");
     f.select("");
-    await f.run(["sync", "--packages"]);
-    expect(readlinkSync(join(f.dir, ".opencode/plugins/press"))).toBe("../../.office/packages/press/plugin");
+    expect(await f.run(["sync", "--packages"])).toContain("unlinked .opencode/plugins/press");
+    expect(existsSync(join(f.dir, ".opencode/plugins/press"))).toBe(false);
     await f.run(["references", "list"]);
   }
 }, 60_000);
@@ -813,7 +1006,15 @@ test.skipIf(!launcher)("OpenCode sees the shared command in both desks, the buil
   }
 
   const f = fixture("native", "http://127.0.0.1:1");
+  // A Git-cloned plugin, loaded through .opencode/plugins/cloned -> ../../.office/plugins/cloned.
+  const remote = join(f.home, "cloned-remote");
+  write(join(remote, "index.js"), command("cloned-command"));
+  gitAt(remote, f.env, "init", "-q");
+  gitAt(remote, f.env, "add", ".");
+  gitAt(remote, f.env, "commit", "-qm", "cloned");
+  f.select(`packages: [{name: common}]\nplugins: [{name: cloned, repo: ${remote}}]\n`);
   await f.run(["sync"]);
+  expect(readlinkSync(join(f.dir, ".opencode/plugins/cloned"))).toBe("../../.office/plugins/cloned");
   await f.run(["sync", "--packages"]);
   const password = crypto.randomUUID();
 
@@ -851,7 +1052,7 @@ test.skipIf(!launcher)("OpenCode sees the shared command in both desks, the buil
 
       const listing = async () => v.parse(v.object({ data: v.array(v.object({ name: v.string(), description: v.optional(v.string()) })) }), await get("command")).data;
       const deadline = Date.now() + 8_000;
-      const expected = ["scope-setting", ...(shared ? ["shared-command"] : []), ...(inBuilder ? ["builder-command", "native-command"] : [])];
+      const expected = ["scope-setting", ...(shared ? ["shared-command", "cloned-command"] : []), ...(inBuilder ? ["builder-command", "native-command"] : [])];
       let entries = await listing();
 
       // Registration is asynchronous. Wait for every positive control before testing absence.
@@ -863,6 +1064,7 @@ test.skipIf(!launcher)("OpenCode sees the shared command in both desks, the buil
       const commands = entries.map(item => item.name);
 
       expect(commands.includes("shared-command")).toBe(shared);
+      expect(commands.includes("cloned-command")).toBe(shared);
       expect(commands.includes("builder-command")).toBe(inBuilder);
       expect(commands.includes("native-command")).toBe(inBuilder);
       expect(entries.find(item => item.name === "scope-setting")?.description).toBe(inBuilder ? "builder-override" : "office-default");

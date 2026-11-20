@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { summarize, sync } from "./commands/sync.ts";
+import { excludeEnd, excludeStart, summarize, sync } from "./commands/sync.ts";
 import { cloneShallow, git } from "./git.ts";
 import { loadOffice } from "./office.ts";
 import { PlainReporter } from "./report/plain.ts";
@@ -165,7 +165,7 @@ test("packages-only sync applies changed settings and plugin links without visit
   for (const path of ["references/docs", "work/repos/example", ".opencode/plugins/other"]) expect(existsSync(join(dir, path))).toBe(false);
 });
 
-test("sync of an office that is a Git worktree excludes plugin clones in the exclude file its repository shares", async () => {
+test("sync of an office that is a Git worktree excludes its plumbing in the exclude file its repository shares", async () => {
   const main = join(dir, "main");
   const office = join(dir, "office");
   const upstream = join(dir, "upstream");
@@ -181,16 +181,19 @@ test("sync of an office that is a Git worktree excludes plugin clones in the exc
   git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "--allow-empty", "-m", "init"], main);
   git(["worktree", "add", "--quiet", office], main);
   mkdirSync(join(main, ".git/info"), { recursive: true });
-  writeFileSync(exclude, "# mine\n/.office-plugin-*/\n");
+  // The owner's line, and one an earlier release wrote for a clone in .opencode/plugins/.
+  writeFileSync(exclude, "# mine\n/.opencode/plugins/demo/\n");
   writeFileSync(join(office, "office.yaml"), `name: t\nplugins: [{ name: demo, repo: ${upstream} }]\n`);
 
   const changes = await sync(loadOffice(office));
+  const block = `# mine\n${excludeStart}\n/.office/\n/.opencode/plugins/demo\n/.opencode/plugins/office\n${excludeEnd}\n`;
 
   expect(changes.filter(line => line.startsWith("FAILED"))).toEqual([]);
-  expect(changes).toContain("excluded /.opencode/plugins/demo/ from commits (.git/info/exclude)");
+  expect(changes).toContain("excluded /.opencode/plugins/demo from commits (info/exclude)");
   expect(readFileSync(join(office, ".opencode/plugins/demo/index.js"), "utf8")).toBe("export default {}\n");
-  expect(readFileSync(exclude, "utf8")).toBe("# mine\n/.office-plugin-*/\n/.opencode/plugins/demo/\n");
-  expect(git(["status", "--porcelain"], office)).not.toContain(".opencode/plugins/demo");
+  expect(readlinkSync(join(office, ".opencode/plugins/demo"))).toBe("../../.office/plugins/demo");
+  expect(readFileSync(exclude, "utf8")).toBe(block);
+  expect(git(["status", "--porcelain", "--untracked-files=all"], office)).not.toMatch(/\.office|\.opencode\/plugins/);
   expect((await sync(loadOffice(office))).filter(line => line.includes("exclude"))).toEqual([]);
-  expect(readFileSync(exclude, "utf8")).toBe("# mine\n/.office-plugin-*/\n/.opencode/plugins/demo/\n");
+  expect(readFileSync(exclude, "utf8")).toBe(block);
 });

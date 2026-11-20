@@ -136,18 +136,15 @@ test("one sync moves an office from the earlier layout, a second changes nothing
       "moved packages/knowledge/ to .office/packages/knowledge/, where packages pulled into the office live (copied from https://github.com/meeaster/opencode-office.git)",
       expect.stringMatching(/^updated \.office\/packages\/knowledge from https:\/\/github\.com\/meeaster\/opencode-office\.git packages\/knowledge at 0123456789ab /),
       "linked .opencode/plugins/office",
-      expect.stringContaining("FAILED .opencode/plugins/knowledge: no matching Office creation receipt"),
+      // The earlier link is Office's by its target; the package moved, so a running server needs a restart.
+      "relinked .opencode/plugins/knowledge to ../../.office/packages/knowledge/plugin; restart OpenCode to pick up knowledge: a running server keeps loading a plugin from where it first found it",
     ]),
   );
   expect(readFileSync(join(office, "office.yaml"), "utf8")).toBe(
     ["name: t", "skills:", "  enabled: [office, other]", "packages:", "  # Lists the articles.", "  - name: knowledge", "  # Next.", ""].join("\n"),
   );
   expect(readFileSync(join(office, ".opencode/opencode.jsonc"), "utf8")).toBe(config(browserEntry));
-  const link = join(office, ".opencode/plugins/knowledge");
-  expect(readlinkSync(link)).toBe("../../packages/knowledge/plugin");
-  rmSync(link); // Explicit owner recovery after inspecting the preserved pre-ledger link.
-  expect(await sync(loadOffice(office))).toContain("linked .opencode/plugins/knowledge");
-  expect(readlinkSync(link)).toBe("../../.office/packages/knowledge/plugin");
+  expect(readlinkSync(join(office, ".opencode/plugins/knowledge"))).toBe("../../.office/packages/knowledge/plugin");
   expect(JSON.parse(readFileSync(join(office, ".office/packages/knowledge/.template.json"), "utf8"))).toEqual(["knowledge/AGENTS.md", "knowledge/README.md", "knowledge/origins.md"]);
   expect(readFileSync(join(office, "knowledge/AGENTS.md"), "utf8")).toContain("knowledge-base-format: 2");
   expect(existsSync(join(office, "knowledge/origins.md"))).toBe(true);

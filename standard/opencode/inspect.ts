@@ -6,9 +6,10 @@ import { findOffice, loadOffice, OfficeError, readOfficeFields, type Office } fr
 import { requiredPackages, resolvePackages } from "../../src/packages.ts";
 import { officeSchema } from "../../src/schema.ts";
 import { readSnapshot, referenceFile } from "../../src/reference-snapshot.ts";
-import { declarationBinding, ownsLink, packageLink, pluginClones, pluginFolder } from "./delivery.ts";
+import { cloneTarget, declarationBinding, pluginClones, pluginFolder } from "./delivery.ts";
 import { configSources, conventionSources, projectDirectories, type Source } from "./native.ts";
-import { readDeclarations, readReceipts } from "./receipts.ts";
+import { readDeclarations } from "./declarations.ts";
+import { officeTarget } from "./ownership.ts";
 
 /**
  * Desktop registration is machine-wide and can outlive deselection or a withdrawn claim. Show only
@@ -51,12 +52,15 @@ function scopePath(office: Office, dir: string) {
   return parts.map((part, i) => i < known ? part : `<folder-${i + 1}>`).join("/");
 }
 
+function linkTarget(path: string) {
+  return lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() ? readlinkSync(path) : undefined;
+}
+
 function inventory(office: Office, folder: string) {
   const dirs = projectDirectories(office.dir, folder);
   const selected = new Set([...requiredPackages, ...office.packages.map(entry => entry.name)]);
   const managed = join(office.dir, pluginFolder);
   const matches = new Map<string, string[]>();
-  const receipts = readReceipts(office);
   const declarations = readDeclarations(office);
   const { packages, problems } = resolvePackages(office);
   const kinds = new Map(packages.map(item => [item.entry.name, item.kind === "remote" ? "pinned Git" : item.kind]));
@@ -99,15 +103,13 @@ function inventory(office: Office, folder: string) {
     for (const [index, { path, identity }] of conventionSources(office.dir, dir).entries()) {
       const name = basename(path);
       const target = dirname(path) === managed && lstatSync(path).isSymbolicLink() ? readlinkSync(path) : undefined;
-      const owned = target && ownsLink(office, name, target, receipts);
+      const owned = target !== undefined && officeTarget("plugins", "../../", name, target);
+      const clone = owned && target === cloneTarget(name);
       const known = dirname(path) === managed && (selected.has(name) || office.plugins.some(item => item.name === name));
       const origin = join(scopePath(office, dir), ".opencode", basename(dirname(path)), known ? name : `<entry-${index + 1}>`);
       const state = selected.has(name) ? `selected ${kinds.get(name) ?? "unresolved"} package` : "not selected";
-      const claim = declarations.get(name);
-      const authored = claim?.state === "declared" ? claim.paths.server : undefined;
-      const source = authored && packages.find(item => item.entry.name === name);
-      const declaredTarget = source && authored ? relative(managed, join(source.dir, authored)) : undefined;
-      const kind = owned ? `Office-created package link (${state})` : target && (packageLink(path) || target === declaredTarget) ? `package-shaped link (${state}; no creation receipt)` : "convention plugin candidate";
+      const declared = office.plugins.some(item => item.name === name) ? "declared" : "not declared";
+      const kind = clone ? `Office link to a Git clone (${declared})` : owned ? `Office package link (${state})` : "convention plugin candidate";
 
       describe(dir, { origin, description: identity ? kind : `${kind} (dangling)`, identity });
     }
@@ -137,7 +139,7 @@ function inventory(office: Office, folder: string) {
 
     if (!existsSync(dir)) {
       describe(office.dir, { origin: relative(office.dir, dir), description: `selected ${kinds.get(entry.name)} package ${entry.name} (source missing; plugin not inspected)` });
-    } else if (existsSync(join(dir, "plugin")) && packageLink(join(managed, entry.name)) !== relative(managed, join(dir, "plugin"))) {
+    } else if (existsSync(join(dir, "plugin")) && linkTarget(join(managed, entry.name)) !== relative(managed, join(dir, "plugin"))) {
       describe(office.dir, { origin: relative(office.dir, join(dir, "plugin")), description: `selected ${kinds.get(entry.name)} package ${entry.name} (conventional asset present; no matching link or recorded registration)` });
     }
   }
@@ -146,7 +148,8 @@ function inventory(office: Office, folder: string) {
 
   for (const clone of pluginClones(office)) {
     const status = existsSync(join(clone.dir, ".git")) ? ".git present; identity not checked" : "no checkout observed";
-    describe(office.dir, { origin: `office.yaml plugins: ${clone.name} -> ${relative(office.dir, clone.dir)}`, description: `declared Git clone (${status})` });
+    const link = linkTarget(clone.link) === cloneTarget(clone.name) ? `linked as ${pluginFolder}/${clone.name}` : `not linked as ${pluginFolder}/${clone.name}`;
+    describe(office.dir, { origin: `office.yaml plugins: ${clone.name} -> ${relative(office.dir, clone.dir)}`, description: `declared Git clone (${status}; ${link})` });
   }
 
   for (const [identity, sources] of matches) {

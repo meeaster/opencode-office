@@ -2,12 +2,13 @@
 // installed packages, and the library skill and package plugin links. `office sync` makes the
 // folders match; `office check` compares. Nothing of a package but its plugin is linked: the plugin
 // gives OpenCode whatever the package provides, its skills and MCP servers included.
-import { existsSync, readdirSync, readlinkSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
-import { type Office, type Repository, skillsFolder } from "./office.ts";
+import { type Office, type Repository } from "./office.ts";
 import { type InstalledPackage, type PackageProblem, readPackage, requiredPackages, resolvePackages } from "./packages.ts";
 import { pluginClones } from "../standard/opencode/delivery.ts";
+import { entries, scope, type Scope } from "../standard/opencode/ownership.ts";
 
 export type Clone = { name: string; url: string; ref?: string; kind: string; dir: string; stale?: boolean };
 
@@ -66,10 +67,13 @@ export type InstalledPackages = {
 export type SkillSelection = {
   desk: string | undefined;
   folder: string;
+  scope: Scope;
   /** Library skills enabled here, each linked into this `.opencode/skills/`. */
   enabled: string[];
+  /** Office's links here (ownership.ts), with their targets. */
   links: Map<string, string>;
-  folders: string[];
+  /** The office's own skills here: real folders and links Office didn't write. Never changed. */
+  own: string[];
   target: (skill: string) => string;
 };
 
@@ -81,23 +85,24 @@ export function skillSelections(office: Office): SkillSelection[] {
   const levels = [{ desk: undefined, enabled: office.skills.enabled }, ...office.desks.map((desk) => ({ desk: desk.name, enabled: desk.skills }))];
 
   return levels.map(({ desk, enabled }) => {
-    const folder = skillsFolder(office, desk);
+    const where = scope(office, desk, "skills");
     const links = new Map<string, string>();
-    const folders: string[] = [];
+    const own: string[] = [];
 
-    for (const entry of existsSync(folder) ? readdirSync(folder, { withFileTypes: true }) : []) {
-      if (entry.isSymbolicLink()) links.set(entry.name, readlinkSync(join(folder, entry.name)));
-      else if (entry.isDirectory()) folders.push(entry.name);
+    for (const entry of entries(where)) {
+      if (entry.office && entry.target !== undefined) links.set(entry.name, entry.target);
+      else if (entry.folder || entry.target !== undefined) own.push(entry.name);
     }
 
     return {
       desk,
-      folder,
+      folder: where.folder,
+      scope: where,
       enabled,
       links,
-      folders,
+      own,
       /** The relative link target for a skill, so it resolves on the host and in the container. */
-      target: (skill) => relative(folder, join(office.dir, "skills", skill)),
+      target: (skill) => relative(where.folder, join(office.dir, "skills", skill)),
     };
   });
 }

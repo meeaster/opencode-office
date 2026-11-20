@@ -336,11 +336,6 @@ export function currentOffice(flags: { office?: string }): Office {
   return loadOffice(findOffice(flags.office ?? process.cwd()));
 }
 
-/** The `.opencode/skills/` folder of the root (`desk` undefined) or of one desk. */
-export function skillsFolder(office: Office, desk: string | undefined): string {
-  return desk === undefined ? join(office.dir, ".opencode/skills") : join(office.dir, desk, ".opencode/skills");
-}
-
 /**
  * The office's one Executor key, `EXECUTOR_TOKEN` and `EXECUTOR_ORGANIZATION`, which OpenCode, `office
  * apps deploy` and the office's own services use. Offices before it kept OpenCode's key as

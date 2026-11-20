@@ -301,7 +301,8 @@ function publish(rename: NoReplaceRename, from: string, to: string) {
 
 /**
  * First delivery of a plugin clone to `dir`, which must not exist. Git initializes the claim, a
- * folder with `.git` and the declared origin, in a private staging folder; the claim is renamed
+ * folder with `.git` and the declared origin, in a private staging folder made in `stagingParent`,
+ * which must share `dir`'s filesystem; the claim is renamed
  * into place without replacement, so an owner's folder (even an empty one) is never adopted or
  * written to. Git fetches with the final gitdir, so path-specific Git config applies, then checks
  * out into the staging folder. Publication withdraws the claim and renames the complete tree into
@@ -310,10 +311,10 @@ function publish(rename: NoReplaceRename, from: string, to: string) {
  * it, with the same inode and metadata. `rename` is the no-replace rename, replaceable in tests.
  */
 export async function clonePluginStreamed(
-  url: string, ref: string | undefined, dir: string, officeDir: string, verifyCheckout: () => void, rename: NoReplaceRename = renameNoReplace,
+  url: string, ref: string | undefined, dir: string, stagingParent: string, verifyCheckout: () => void, rename: NoReplaceRename = renameNoReplace,
 ): Promise<"cloned"> {
   mkdirSync(dirname(dir), { recursive: true });
-  const work = mkdtempSync(join(officeDir, ".office-plugin-"));
+  const work = mkdtempSync(join(stagingParent, "plugin-"));
   // Office's own folders, which never receive a withdrawn entry; only these are removed whole.
   const claim = join(work, "claim");
   const tree = join(work, "tree");

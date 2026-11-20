@@ -9,7 +9,7 @@ import { readPackage, resolvePackages } from "../packages.ts";
 import { loadOffice, type Office, OfficeError } from "../office.ts";
 import { collectAssets } from "../../standard/opencode/assets.ts";
 import { declarationBinding } from "../../standard/opencode/delivery.ts";
-import { readDeclarations } from "../../standard/opencode/receipts.ts";
+import { readDeclarations } from "../../standard/opencode/declarations.ts";
 
 function panelSource(office: Office, name: string) {
   const resolved = resolvePackages(office, name).packages[0];
