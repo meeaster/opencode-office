@@ -3,7 +3,7 @@ import { setupContext } from "./package-definition.ts";
 import * as v from "valibot";
 import { claimsInspect, commandRegistration, type RegisteredCommand } from "./command-table.ts";
 import { findOffice, loadOffice, type Office, OfficeError, readOfficeFields } from "./office.ts";
-import { builtinSource, embeddedPackage, fileHashes, filesDigest, gitSelection, installedDefinition, type PackageRecord, resolvePackages, type ResolvedPackage } from "./packages.ts";
+import { builtinSource, collectionContract, embeddedPackage, fileHashes, filesDigest, gitSelection, installedDefinition, type PackageRecord, resolvePackages, type ResolvedPackage, verifyInstalledCopy } from "./packages.ts";
 import { publishedCollection, publishedInputs, readSnapshot, referenceInputs, type ReferenceSnapshot } from "./reference-snapshot.ts";
 import type { CommandInputs } from "../packages/office/package-context.ts";
 import { check, commandBootstrapSchema, packageEntry, referenceInputSchema } from "./schema.ts";
@@ -114,7 +114,7 @@ async function handler(office: Selections, owner: Owner, canonical: string, requ
   }
 }
 
-function indexedInputs(dir: string, snapshot: ReferenceSnapshot, name: string) {
+function selection(dir: string, name: string, withSettings = false) {
   try {
     const document = readOfficeFields(dir, commandBootstrapSchema);
     const matches = document.packages.filter(entry => entry.name === name);
@@ -125,18 +125,54 @@ function indexedInputs(dir: string, snapshot: ReferenceSnapshot, name: string) {
     if (matches.length) {
       // Validate the exact source with the sync-time schema, independent of unsynced
       // settings and job overrides. A partial Git selection must never look local.
-      const entry = check(v.safeParse(packageEntry, { ...matches[0], settings: {}, cron: {} }));
+      const entry = check(v.safeParse(packageEntry, { ...matches[0], settings: withSettings ? matches[0].settings : {}, cron: {} }));
 
       if (!entry.ok) throw new OfficeError(entry.errors.join("; "));
       packages.push(entry.value);
     }
 
-    const current = v.safeParse(referenceInputSchema, document);
-
-    return { office: { dir, packages }, inputs: publishedInputs(snapshot, current.success ? current.output : undefined) };
+    return { office: { dir, packages }, document };
   } catch (error) {
     throw new OfficeError(`package ${name}: ${error instanceof Error ? error.message : String(error)}; repair office.yaml and run office sync --packages`);
   }
+}
+
+/** Compare only the provider of a requested collection. Inspect bytes and selection, never
+ * import its definition. A provider reading its own rows already passed handler's binding
+ * check and runs with the settings saved alongside that same publication. */
+function readerBinding(dir: string, snapshot: ReferenceSnapshot, commandOwner: string, id: string) {
+  const name = id.split(".")[0];
+
+  if (name === commandOwner) return;
+
+  const provider = snapshot.contributors.find(group => group.name === name);
+  const mismatch = `provider ${name} no longer matches the published contract`;
+
+  try {
+    const { office } = selection(dir, name, true);
+    const item = selectedOwner(office, name);
+    const record = verifyInstalledCopy(item);
+    const files = filesDigest(record?.files ?? fileHashes(item.dir));
+    const source = item.kind === "built-in" ? `built-in:${files}` : item.entry.source ? gitSelection(item.entry.source) : "local";
+    const commit = record && "repo" in record ? record.commit : undefined;
+
+    if (provider?.source !== source || provider.commit !== commit) throw new Error(mismatch);
+    const expected = collectionContract(provider, files, item.entry);
+
+    return (contract?: string) => {
+      // office.yaml repositories have the independently checked built-in repository shape.
+      if (contract !== expected && !(contract === undefined && id === "references.repository" && item.kind === "built-in")) throw new OfficeError(`${id}: ${mismatch}; repair and run office sync --packages`);
+    };
+  } catch (error) {
+    throw new OfficeError(`${id}: ${String(error)}; run office sync --packages`);
+  }
+}
+
+function indexedInputs(dir: string, snapshot: ReferenceSnapshot, name: string) {
+  const { office, document } = selection(dir, name);
+  const current = v.safeParse(referenceInputSchema, document);
+
+  return { office, inputs: publishedInputs(snapshot, current.success ? current.output : undefined) };
 }
 
 function bootstrapInputs(dir: string, snapshot: ReferenceSnapshot | undefined) {
@@ -166,8 +202,10 @@ export async function dispatchCommand(start: string, words: string[]): Promise<b
   for (const note of notes) console.error(note);
 
   const publication = snapshot ?? { owner: entries.map(({ owner, stale, ...value }) => value), contributors: [] };
+
   // Keep the runtime input of already-indexed pre-collection commands through the upgrade.
-  const commandInputs = { references: entries, read: (collection) => publishedCollection(publication, collection) } satisfies CommandInputs & { references: typeof entries };
+  const commandInputs = { references: entries, read: (collection) => publishedCollection(publication, collection,
+    indexed && snapshot ? readerBinding(dir, snapshot, indexed.owner.name, collection.id) : undefined) } satisfies CommandInputs & { references: typeof entries };
 
   if (indexed && snapshot) {
     const run = await handler(office, indexed.owner, indexed.canonical, requested, snapshot.version);

@@ -6,7 +6,7 @@ import { runPackageSetup } from "./package-definition.ts";
 import { commandConflicts, commandRegistration, type CommandMetadata } from "./command-table.ts";
 import type { InstalledPackages } from "./layout.ts";
 import type { Office, PackageEntry } from "./office.ts";
-import { fileHashes, filesDigest, gitSelection, readRecord, type ResolvedPackage } from "./packages.ts";
+import { collectionContract, fileHashes, filesDigest, gitSelection, readRecord, type ResolvedPackage } from "./packages.ts";
 import { claims, inputHash, namedEntry, referenceFile, type ReferenceSnapshot } from "./reference-snapshot.ts";
 import type { ReferencePublication } from "./reference-publication.ts";
 
@@ -123,7 +123,7 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
         if (provided.size) {
           // A local provider has no immutable revision: bind its package bytes too. Setup
           // settings can change the meaning of an otherwise identical parser.
-          const contract = new Bun.CryptoHasher("sha256").update(JSON.stringify([source, files, pkg.settings, booleans])).digest("hex");
+          const contract = collectionContract(source, files!, item.entry);
 
           for (const [id, handle] of provided) definitions.set(id, { owner: name, handle, contract });
         }

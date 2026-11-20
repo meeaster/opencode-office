@@ -29,7 +29,7 @@ export async function compile(outfile: string, version = manifest.version): Prom
   }
 
   const result = await Bun.build({
-    entrypoints: [join(root, "src/cli.ts")],
+    entrypoints: [join(root, "src/cli.ts"), join(root, "src/validate-replacement.ts")],
     compile: { outfile, execArgv: ["--no-install"], assets: assets.map((path) => join(root, path)) },
     define: { OFFICE_COMMIT: JSON.stringify(checkoutCommit()), OFFICE_VERSION: JSON.stringify(version), OFFICE_STARTING_TOOLS: JSON.stringify(startingVersions()) },
   });

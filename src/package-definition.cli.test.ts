@@ -1351,6 +1351,62 @@ test("published values survive repeated reads; failed registrations cannot admit
   expect(cli(0, "items")).toContain("[]");
 });
 
+test("an external reader cannot consume an old publication through a changed provider handle", () => {
+  const { dir, cli, select } = fixture("reader-contract");
+  const packages = join(dir, "packages");
+  const contract = join(packages, "catalog/items.ts");
+  const writer = join(packages, "alpha/office.ts");
+  const add = 'c.add(items,{name:"x",value:12});';
+  const author = (body: string) => `import {items} from "../catalog/items.ts";export default {name:"alpha",description:"author",setup(c){${body}}}`;
+  select("  - name: alpha\n  - name: catalog\n  - name: beta\n");
+  write(contract, 'export const items={id:"catalog.items",parse:i=>i};export const display=i=>i.value.toFixed(0)');
+  write(join(packages, "catalog/office.ts"), 'import {items} from "./items.ts";export default {name:"catalog",description:"provider",setup(c){c.collection(items)}}');
+  write(join(packages, "beta/office.ts"), `import {items,display} from "../catalog/items.ts";export default {name:"beta",description:"reader",
+    setup(c){c.command({name:"display",summary:"display",run(i){for(const row of i.read(items))console.log(display(row.value))}})}}`);
+  write(writer, author(add));
+  cli(0, "sync", "--packages");
+  expect(cli(0, "display")).toContain("12");
+  const snapshot = join(dir, ".office/resolved/references.json");
+  const previous = read(snapshot);
+  write(contract, 'export const items={id:"catalog.items",parse:i=>({...i,value:"v"+i.value})};export const display=i=>i.value.toUpperCase()');
+  expect(cli(1, "display")).toMatch(/catalog\.items:.*published contract.*sync --packages/);
+  write(writer, author(add + add));
+  expect(cli(1, "sync", "--packages")).toContain("claimed by both");
+  expect(read(snapshot)).toBe(previous);
+  expect(cli(1, "display")).toMatch(/catalog\.items:.*published contract.*sync --packages/);
+  write(writer, author(add));
+  cli(0, "sync", "--packages");
+  expect(cli(0, "display")).toContain("V12");
+});
+
+for (const order of [["alpha", "catalog"], ["catalog", "alpha"]]) {
+  test(`tracked ${order.join(" then ")} publishes the final parser on the first update`, () => {
+    const { dir, cli, select } = fixture(`pair-${order[0]}`);
+    const repo = join(root, `source-${order[0]}`);
+    git(["init", "-qb", "main", repo]);
+    const contract = (unit: string) => write(join(repo, "catalog/items.ts"), `export const items={id:"catalog.items",parse:i=>({...i,unit:"${unit}"})}`);
+    const consumer = join(repo, "alpha/office.ts");
+    write(consumer, `export default {name:"alpha",description:"author",async setup(c){if(c.booleanSetting("enabled",{default:false,description:"use catalog"})){
+      const {items}=await import("../catalog/items.ts");c.add(items,{name:"sample"});}}}`);
+    write(join(repo, "catalog/office.ts"), `import {items} from "./items.ts";export default {name:"catalog",description:"provider",setup(c){
+      c.collection(items);c.command({name:"measure",summary:"measure",run(i){console.log(i.read(items)[0].value.unit)}})}}`);
+    contract("metres");
+    const first = commit(repo);
+    select(order.map(name => `  - {name: ${name}, repo: ${repo}, ref: ${first}, path: ${name}, track: main${name === "alpha" ? ", settings: {enabled: true}" : ""}}\n`).join(""));
+    cli(0, "sync", "--packages");
+    expect(cli(0, "measure")).toContain("metres");
+    contract("seconds");
+    write(consumer, read(consumer) + "\n// second revision");
+    commit(repo);
+    cli(0, "packages", "update");
+    expect(cli(0, "measure")).toContain("seconds");
+    const snapshot = join(dir, ".office/resolved/references.json");
+    const published = read(snapshot);
+    cli(0, "sync", "--packages");
+    expect(read(snapshot)).toBe(published);
+  }, 60_000);
+}
+
 test("tracked updates validate the consuming settings and staged assets before publishing", () => {
   const { dir, cli, select } = fixture("tracked");
   const repo = join(root, "tracked-source");

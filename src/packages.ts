@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
+import { Worker } from "node:worker_threads";
 
 import { Ajv2020 } from "ajv/dist/2020.js";
 import * as v from "valibot";
@@ -353,6 +354,12 @@ export function gitSelection(source: NonNullable<PackageEntry["source"]>): strin
   return `git:${sha256(JSON.stringify([source.repo, source.path, source.ref]))}`;
 }
 
+// The package bytes determine defaults and setup declarations; overrides are the remaining
+// selected input. Independent readers can establish this identity without executing setup.
+export function collectionContract(source: { source: string; commit?: string }, files: string, entry: PackageEntry): string {
+  return sha256(JSON.stringify([source.source, source.commit, files, entry.settings ?? {}]));
+}
+
 export async function embeddedPackage(name: string) {
   const wanted = await builtinFiles(name);
   const hashes = Object.fromEntries([...wanted].map(([file, content]) => [file, sha256(content)]));
@@ -416,9 +423,22 @@ export async function fetchPackage(office: Office, entry: PackageEntry, source: 
   const movingPin = entry.source?.ref !== source.ref;
 
   async function validate(dir: string) {
-    const item = validateReplacement(office, { entry: { ...entry, source }, dir, kind: "remote" });
+    const resolved = { entry: { ...entry, source }, dir, kind: "remote" } satisfies ResolvedPackage;
 
-    if (movingPin) await validateSetupOverrides(item);
+    if (!movingPin) {
+      validateReplacement(office, resolved);
+
+      return;
+    }
+
+    // The candidate can import siblings whose installed paths another pin will replace.
+    // Keep its entire module graph out of the process that collects the final installation.
+    const worker = new Worker(join(import.meta.dir, Bun.isStandaloneExecutable ? "validate-replacement.js" : "validate-replacement.ts"), { workerData: { office, resolved } });
+    await new Promise<void>((resolve, reject) => {
+      worker.once("error", reject);
+      worker.once("message", resolve);
+      worker.once("exit", code => reject(new Error(`candidate validator exited (${code}) before completing`)));
+    }).finally(() => worker.terminate());
   }
 
   try {
@@ -502,33 +522,34 @@ export function removePackage(office: Office, name: string): string[] {
 
 /** Check the installed source (plus its command binding when dispatching) before importing any code. */
 export function installedDefinition(office: Pick<Office, "dir">, resolved: ResolvedPackage, verifyBinding?: (record?: PackageRecord) => void) {
-  const { entry, dir } = resolved;
-  const where = relative(office.dir, dir);
+  return readDefinition(resolved.dir, relative(office.dir, resolved.dir), () => verifyInstalledCopy(resolved, verifyBinding));
+}
 
-  return readDefinition(dir, where, () => {
-    if (resolved.kind === "local") {
-      verifyBinding?.();
+export function verifyInstalledCopy({ kind, entry, dir }: ResolvedPackage, verifyBinding?: (record?: PackageRecord) => void) {
+  if (kind === "local") {
+    verifyBinding?.();
 
-      return;
-    }
+    return;
+  }
 
-    const record = readRecord(dir);
+  const record = readRecord(dir);
 
-    if (record === undefined) throw new Error(`no readable ${sourceFile}; ${resolved.kind === "built-in" ? "office sync restores the built-in copy" : "restore it from office history or run office sync with an exact pin"}`);
+  if (record === undefined) throw new Error(`no readable ${sourceFile}; ${kind === "built-in" ? "office sync restores the built-in copy" : "restore it from office history or run office sync with an exact pin"}`);
 
-    if (resolved.kind === "built-in" && "repo" in record) throw new Error("the installed copy is remote, not built-in; run office sync");
+  if (kind === "built-in" && "repo" in record) throw new Error("the installed copy is remote, not built-in; run office sync");
 
-    if (resolved.kind === "remote" && !("repo" in record && record.repo === entry.source?.repo && record.path === entry.source.path && record.ref === entry.source.ref)) {
-      throw new Error("the installed copy is not from the selected source and ref; run office sync");
-    }
+  if (kind === "remote" && !("repo" in record && record.repo === entry.source?.repo && record.path === entry.source.path && record.ref === entry.source.ref)) {
+    throw new Error("the installed copy is not from the selected source and ref; run office sync");
+  }
 
-    if ("repo" in record && !verifiedCommit(record.ref, record.commit)) throw new Error(`invalid recorded commit ${record.commit} for ${record.ref}; run office sync`);
+  if ("repo" in record && !verifiedCommit(record.ref, record.commit)) throw new Error(`invalid recorded commit ${record.commit} for ${record.ref}; run office sync`);
 
-    verifyBinding?.(record);
-    const edits = localEdits(dir, record);
+  verifyBinding?.(record);
+  const edits = localEdits(dir, record);
 
-    if (edits.length > 0) throw new Error(`package files edited: ${edits.join(", ")}; office sync restores them`);
-  });
+  if (edits.length > 0) throw new Error(`package files edited: ${edits.join(", ")}; office sync restores them`);
+
+  return record;
 }
 
 /** Validate this office's current entry settings against the installed definition. */
@@ -624,7 +645,7 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
 }
 
 /** Validate a candidate against the consuming entry before any live path points at its files. */
-function validateReplacement(office: Office, resolved: ResolvedPackage) {
+export function validateReplacement(office: Office, resolved: ResolvedPackage) {
   const read = readPackage(office, resolved);
 
   if (!read.ok) throw new Error(read.errors.join("; "));

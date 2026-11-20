@@ -88,16 +88,20 @@ export function readSnapshot(dir: string): Parsed<ReferenceSnapshot | undefined>
 
 export type ClaimedReference = v.InferOutput<typeof repository> & { owner: string; stale: boolean };
 
-export function publishedCollection<T extends CollectionEntry>(snapshot: Pick<ReferenceSnapshot, "owner" | "contributors">, collection: Collection<T>) {
+export function publishedCollection<T extends CollectionEntry>(snapshot: Pick<ReferenceSnapshot, "owner" | "contributors">, collection: Collection<T>, verify?: (contract?: string) => void) {
   const entries = [];
 
   if (collection.id === repositories.id) {
+    if (snapshot.owner.length) verify?.();
+
     for (const reference of snapshot.owner) entries.push({ value: canonical<T>(reference), owner: "office.yaml", stale: false });
   }
 
   for (const group of snapshot.contributors) {
-    for (const { id, value } of group.entries) {
-      if (id === collection.id) entries.push({ value: canonical<T>(value), owner: `package ${group.name}`, stale: group.stale });
+    for (const { id, value, contract } of group.entries) {
+      if (id !== collection.id) continue;
+      verify?.(contract);
+      entries.push({ value: canonical<T>(value), owner: `package ${group.name}`, stale: group.stale });
     }
   }
 
