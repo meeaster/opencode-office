@@ -10,12 +10,8 @@
 import { spawnSync } from "node:child_process";
 
 import { say, warn } from "./report/index.ts";
-import { spawnsOfficeName } from "./schema.ts";
 
-/** A package's declared label for one office. */
-export function spawnsLabel(label: string, officeName: string): string {
-  return label.replace(spawnsOfficeName, officeName);
-}
+export { spawnsLabel } from "../standard/compose/services.ts";
 
 export type SpawnedKind = "container" | "network" | "volume";
 

@@ -45,7 +45,7 @@ beforeAll(async () => {
   const checkout = dirname(import.meta.dir);
   git(["init", "-q", dist]);
 
-  for (const path of ["src", "packages", "template", "image", "compose.yaml", "LICENSE", "package.json"]) cpSync(join(checkout, path), join(dist, path), { recursive: true });
+  for (const path of ["src", "standard", "packages", "template", "image", "compose.yaml", "LICENSE", "package.json"]) cpSync(join(checkout, path), join(dist, path), { recursive: true });
   write(join(dist, "packages/arrival/office.ts"), `${marker} export default { name: "arrival", description: "Newly shipped" }`);
   const changed = join(dist, "packages/artifact-share");
   rmSync(join(changed, "package.yaml"));
