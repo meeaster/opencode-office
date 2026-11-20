@@ -296,6 +296,7 @@ test("an entry without repo is built-in when shipped and local otherwise; the re
 
   expect(packages.map((item) => [item.entry.name, item.kind, item.dir.slice(office.length + 1)])).toEqual([
     ["office", "built-in", ".office/packages/office"],
+    ["references", "built-in", ".office/packages/references"],
     ["knowledge", "built-in", ".office/packages/knowledge"],
     ["mine", "local", "packages/mine"],
     ["shared", "remote", ".office/packages/shared"],

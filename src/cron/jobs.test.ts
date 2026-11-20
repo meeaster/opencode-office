@@ -7,7 +7,7 @@ import * as v from "valibot";
 import { parse } from "yaml";
 
 import { loadOffice } from "../office.ts";
-import { recordBuiltinFixture } from "../test-builtin-record.ts";
+import { recordRequiredFixtures } from "../test-builtin-record.ts";
 import { check, officeSchema } from "../schema.ts";
 import { catchUp, supercronicInput } from "./container.ts";
 import { cronTimers, installTimers, removeTimers, staleTimerUnits, unitDirVariable } from "./host.ts";
@@ -43,7 +43,7 @@ function fixtures(): void {
     "  update: { schedule: '30 7 * * *', script: updater.sh, when: managed-host }",
   ].join("\n"));
   write(".office/packages/office/updater.sh", "true");
-  recordBuiltinFixture(join(root, ".office/packages/office"));
+  recordRequiredFixtures(join(root, ".office/packages/office"));
   write("packages/demo/package.yaml", [
     "name: demo", "description: Demo", "cron:",
     "  digest: { schedule: '15 6 * * *', script: digest.sh }",
@@ -111,7 +111,7 @@ test("refuses malformed declarations and unknown overrides, even when the job wo
   }
 
   write(".office/packages/office/package.yaml", "name: office\ndescription: test\ncron: {update: {schedule: '@daily', script: updater.sh, when: external}}\n");
-  recordBuiltinFixture(join(root, ".office/packages/office"));
+  recordRequiredFixtures(join(root, ".office/packages/office"));
   config();
   expect(() => requireJobs(loadOffice(root))).toThrow("cron.update.when");
 });

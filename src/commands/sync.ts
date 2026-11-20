@@ -355,6 +355,14 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
  * update` both apply packages this way. Each change goes to `changes`.
  */
 export async function syncPackages(office: Office, changes: { push: (...lines: string[]) => void }, stage: Stage = silentStage): Promise<boolean> {
+  const { packages, problems } = resolvePackages(office);
+
+  if (problems.length) {
+    changes.push(...problems.map(problem => `FAILED ${problem.message}`));
+
+    return false;
+  }
+
   const publication = beginReferencePublication(office);
 
   if (!publication.ok) {
@@ -363,7 +371,6 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
     return false;
   }
 
-  const { packages } = resolvePackages(office);
   const rejected = new Set<string>();
   const embedded = new Map<string, string>();
 

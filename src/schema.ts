@@ -145,18 +145,12 @@ export type PinnedTool = (typeof pinnedTools)[number];
 /** The minimum release age when office.yaml sets none: for package managers, mise, and every runtime without its own. */
 export const defaultReleaseAge = "3d";
 
-/** A plain YAML mapping, not a list or a scalar. */
-function isMapping(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Refuses a mapping key outside `allowed`, naming it; `explain` says what the key is instead. */
-function onlyKeys(allowed: readonly string[], explain: (key: string) => string) {
-  return v.rawCheck<Record<string, unknown>>(({ dataset, addIssue }) => {
-    if (!dataset.typed) return;
-
-    for (const key of Object.keys(dataset.value)) if (!allowed.includes(key)) addIssue({ message: explain(key) });
-  });
+/** Check the YAML boundary before parsing a mapping's typed fields; preserve per-key diagnostics. */
+function mappingKeys(message: string, allowed: readonly string[], explain: (key: string) => string) {
+  return v.pipe(v.unknown(), v.rawCheck(({ dataset, addIssue }) => {
+    if (!v.is(v.object({}), dataset.value) || Array.isArray(dataset.value)) addIssue({ message });
+    else for (const key of Object.keys(dataset.value)) if (!allowed.includes(key)) addIssue({ message: explain(key) });
+  }));
 }
 
 /**
@@ -168,12 +162,11 @@ function runtimeEntry(tool: PinnedTool) {
   const described = tool === "sfw" ? "version, minimum_release_age and enabled" : "version and minimum_release_age";
 
   const entry = v.pipe(
-    v.custom<Record<string, unknown>>(isMapping, `must be a version such as 2.3.0, or a mapping of ${described}`),
-    onlyKeys(keys, (key) => (key === "enabled" ? "has enabled, which only sfw (Socket Firewall) has" : `has an unknown key ${key}: an entry maps ${described}`)),
+    mappingKeys(`must be a version such as 2.3.0, or a mapping of ${described}`, keys, (key) => (key === "enabled" ? "has enabled, which only sfw (Socket Firewall) has" : `has an unknown key ${key}: an entry maps ${described}`)),
     v.object({ version: v.optional(version), minimum_release_age: v.optional(age), enabled: v.optional(v.boolean("must be true or false")) }),
   );
 
-  return v.lazy((input) => (typeof input === "string" ? v.pipe(version, v.transform((pinned): v.InferOutput<typeof entry> => ({ version: pinned }))) : entry));
+  return v.lazy((input) => (v.is(v.string(), input) ? v.pipe(version, v.transform((pinned): v.InferOutput<typeof entry> => ({ version: pinned }))) : entry));
 }
 
 const toolKeys = ["minimum_release_age", ...pinnedTools] as const;
@@ -186,8 +179,7 @@ const toolKeys = ["minimum_release_age", ...pinnedTools] as const;
  */
 const tools = v.nullish(
   v.pipe(
-    v.custom<Record<string, unknown>>(isMapping, "must be a mapping of minimum_release_age, opencode, claude, codex, executor, mise and sfw"),
-    onlyKeys(toolKeys, (key) => `has an unknown key ${key}: tools maps minimum_release_age, opencode, claude, codex, executor, mise and sfw`),
+    mappingKeys("must be a mapping of minimum_release_age, opencode, claude, codex, executor, mise and sfw", toolKeys, (key) => `has an unknown key ${key}: tools maps minimum_release_age, opencode, claude, codex, executor, mise and sfw`),
     v.object({
       minimum_release_age: v.optional(age),
       opencode: v.optional(runtimeEntry("opencode")),
@@ -309,7 +301,7 @@ function jsonValue(value: unknown, ancestors = new Set<object>()): value is Sett
   return valid;
 }
 
-const settingValue = v.custom<SettingValue>((value) => jsonValue(value), "must be JSON-compatible YAML");
+export const settingValue = v.custom<SettingValue>((value) => jsonValue(value), "must be JSON-compatible YAML");
 
 /** Names no package may have, for the mise fragment sync writes as `.office/mise/<name>.toml`. */
 export const reservedPackageNames = ["machine", "config", "mise"];
@@ -427,6 +419,7 @@ export function resolveTools(config: Pick<OfficeConfig, "tools" | "versions" | "
   if ((config.tools !== undefined && config.tools !== null) || legacy.length === 0) {
     const entries = config.tools ?? {};
     const general = entries.minimum_release_age ?? defaultReleaseAge;
+    // SAFETY: each PinnedTool appears exactly once in pinnedTools, the source of this record's keys.
     const runtimes = Object.fromEntries(pinnedTools.map((tool) => [tool, { version: entries[tool]?.version, minimumReleaseAge: entries[tool]?.minimum_release_age ?? general }])) as Record<PinnedTool, Runtime>;
 
     return { minimumReleaseAge: general, runtimes, pinsVersions: pinnedTools.some((tool) => entries[tool]?.version !== undefined), socketFirewall: entries.sfw?.enabled ?? true, legacy: [], ignoredAges: [] };
@@ -434,8 +427,9 @@ export function resolveTools(config: Pick<OfficeConfig, "tools" | "versions" | "
 
   const upgradeAges = config.upgrades ?? {};
   const runtimeAge = upgradeAges.minimum_release_age ?? defaultReleaseAge;
+  // SAFETY: the same exhaustive tuple supplies every key for legacy pins.
   const runtimes = Object.fromEntries(pinnedTools.map((tool) => [tool, { version: config.versions?.[tool], minimumReleaseAge: upgradeAges[tool] ?? runtimeAge }])) as Record<PinnedTool, Runtime>;
-  const ignoredAges = Object.keys(upgradeAges).filter((key) => key !== "minimum_release_age" && !(pinnedTools as readonly string[]).includes(key));
+  const ignoredAges = Object.keys(upgradeAges).filter((key) => key !== "minimum_release_age" && !pinnedTools.some(tool => tool === key));
 
   return { minimumReleaseAge: defaultReleaseAge, runtimes, pinsVersions: config.versions !== undefined, socketFirewall: config.socket_firewall ?? true, legacy, ignoredAges };
 }

@@ -55,6 +55,8 @@ beforeAll(async () => {
   write(join(dist, "packages/arrival/office.ts"), `${marker} export default { name: "arrival", description: "Newly shipped" }`);
   const aws = join(dist, "packages/aws-emulator/office.ts");
   write(aws, read(aws).replace("if (settings.source_reference === false) return;", 'throw Error("changed built-in collector");'));
+  const commands = join(dist, "packages/references/office.ts");
+  write(commands, read(commands).replace("ctx.command(listing)", 'ctx.command({ ...listing, run(inputs) { console.log("variant package handler"); listing.run(inputs) } })'));
   const changed = join(dist, "packages/artifact-share");
   rmSync(join(changed, "package.yaml"));
   write(join(changed, "office.ts"), 'import title from "./missing.ts"; export default {name:"artifact-share", description:title}');
@@ -136,6 +138,68 @@ function fixture(name: string) {
 
   return { dir, home, env, probe, cli, newer, select: (entries: string) => write(config, initial + entries) };
 }
+
+test("indexed references execute the installed author's registration; legacy listing only bootstraps", () => {
+  const f = fixture("command-upgrade");
+  const path = join(f.dir, ".office/resolved/references.json");
+  const installed = join(f.dir, ".office/packages/references");
+  write(path, JSON.stringify({ version: 2, inputs: "", owner: [{ name: "previous", url: "old" }], contributors: [] }));
+  rmSync(installed, { recursive: true });
+  expect(f.newer(0, "references", "list")).toContain("previous\told\toffice.yaml");
+  f.newer(0, "sync", "--packages");
+  expect(f.newer(0, "references", "list")).toContain("variant package handler");
+  expect(f.cli(1, "references", "list")).toContain("changed source/revision");
+  rmSync(installed, { recursive: true });
+  expect(f.newer(0, "--help")).toContain("references list");
+  expect(f.newer(1, "references", "list")).toContain("office sync --packages");
+  f.newer(0, "sync", "--packages");
+  expect(f.newer(0, "references", "list")).toContain("variant package handler");
+}, 60_000);
+
+test("independent command authors share one publication; failed collection cannot lend a stale callable", () => {
+  const { dir, probe, cli, select } = fixture("direct");
+  const ink = join(dir, "packages/ink");
+  const repo = join(root, "press-source");
+  const path = join(dir, ".office/resolved/references.json");
+  const route = `ctx.command({name:"folio show", aliases:["folio read"], summary:"Print edition", run:() => print(ctx.settings.label)});`;
+
+  const module = (extra = "") => `import {print} from "./edition.ts"; export default {
+    name:"ink",description:"Ink",settings:{label:{description:"Label",default:"old"}},
+    setup(ctx) {ctx.add({registry:"references.repository",value:{name:"paper",url:"local"}}); ${route} ${extra}}}`;
+
+  write(join(ink, "office.ts"), module());
+  write(join(ink, "edition.ts"), 'export function print(label: string) { console.log("first:" + label) }');
+  git(["init", "-q", repo]);
+  write(join(repo, "pkg/office.ts"), `${marker} import {edition} from "./edition.ts"; export default {name:"press",description:"Press",setup({command}){command({name:"issue read",summary:"Print issue",run:edition})}}`);
+  write(join(repo, "pkg/edition.ts"), 'export function edition(){console.log("from Git")}');
+  const press = `  - {name: press, repo: ${repo}, ref: ${commit(repo)}, path: pkg}\n`;
+  select(`${press}  - name: ink\n`);
+  cli(0, "sync", "--packages");
+  expect(cli(0, "issue", "read")).toContain("from Git");
+  rmSync(probe);
+  expect(cli(0, "--help")).toContain("folio read");
+  select(`${press}  - {name: ink, settings: {label: new}}\n`);
+  write(join(ink, "edition.ts"), 'export function print(label: string){console.log("edited:" + label)}');
+  expect(cli(0, "folio", "read")).toContain("edited:old");
+  expect(existsSync(probe)).toBe(false);
+  const synced = read(path);
+
+  for (const alias of ["issue read", "sync", "sync --packages", "--help"]) {
+    write(join(ink, "office.ts"), module(`ctx.command({name:"draft show",aliases:["${alias}"],summary:"Draft",run:print})`));
+    expect(cli(1, "sync", "--packages")).toContain(alias);
+    expect(read(path)).toBe(synced);
+    expect(cli(0, "--help")).not.toContain("draft show");
+  }
+
+  write(join(ink, "office.ts"), module('throw Error("ink collector failed")'));
+  expect(cli(1, "sync", "--packages")).toContain("ink collector failed");
+  write(join(ink, "office.ts"), module());
+  expect(cli(0, "references", "list")).toContain("package ink (stale)");
+  expect(cli(0, "--help")).not.toContain("folio read");
+  expect(cli(2, "folio", "read")).not.toContain("edited:");
+  cli(0, "sync", "--packages");
+  expect(cli(0, "folio", "read")).toContain("edited:new");
+}, 60_000);
 
 test("a compiled office collects independent references and scopes the last published generation to every reader", async () => {
   const { dir, home, probe, cli } = fixture("references");
@@ -287,7 +351,7 @@ packages: [${packages.join(", ")}]
   expect(read(join(checkout, "document"))).toBe("preserved");
   expect(head(join(dir, "references/floci"))).toBe(second);
 
-  write(snapshot, read(snapshot).replace('"version": 2', '"version": 9'));
+  write(snapshot, read(snapshot).replace('"version": 3', '"version": 9'));
   expect(cli(1, "references", "list")).toContain("unsupported references snapshot version");
   expect(cli(1, "sync", "--references")).toContain("unsupported references snapshot version");
   expect(await verifyPrompt(nested)).toContain("unsupported references snapshot version");
@@ -584,7 +648,11 @@ test.skipIf(process.getuid?.() === 0)("a failed materialization matches only the
     expect(f.cli(1, "sync", "--references")).toContain("stale contribution cannot authorize a new clone");
     expect(existsSync(join(f.dir, "references/floci"))).toBe(false);
     expect(f.newer(1, "sync", "--packages")).toContain("EACCES");
-    expect(f.newer(0, "references", "list")).not.toContain("floci\t");
+    // The variant's references handler also changed and could not be installed.
+    // There is no fallback; the independent data reader still sees the correct generation.
+    expect(f.newer(0, "--help")).toContain("package references: collection failed");
+    expect(f.newer(2, "references", "list")).toContain("office sync --packages");
+    expect(f.newer(0, "instructions", f.dir)).not.toContain("references/floci/");
   } finally {
     chmodSync(folder, 0o755);
   }
