@@ -510,7 +510,7 @@ const hostPathEntry = v.pipe(
 /** Variables office's environment file sets itself, or that would change how a shell runs. */
 export const reservedVariables = ["PATH", "HOME", "SHELL", "ENV", "BASH_ENV", "ZDOTDIR", "IFS", "NPM_CONFIG_MIN_RELEASE_AGE", "pnpm_config_minimum_release_age", "UV_EXCLUDE_NEWER", "PIP_UPLOADED_PRIOR_TO", "MISE_MINIMUM_RELEASE_AGE", ...Object.keys(managedAgentEnvironment)];
 
-const hostVariable = v.pipe(
+export const hostVariable = v.pipe(
   v.string(),
   v.regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be an environment variable name"),
   v.check((name) => !reservedVariables.includes(name) && !name.startsWith("OFFICE_"), "is set by office itself, or changes how a shell runs"),

@@ -105,7 +105,7 @@ export function realMise(): string | undefined {
 }
 
 /** What a package's host block adds to the environment file, with absolute folders. */
-type PackageEnvironment = { name: string; path: string[]; variables: [string, string][] };
+export type PackageEnvironment = { name: string; path: string[]; variables: [string, string][] };
 
 /** A declared folder as an absolute path: `~/…` in the home folder, `/…` as it is, anything else in the package. */
 function folder(item: InstalledPackage, entry: string): string {
@@ -125,15 +125,17 @@ function packageEnvironment(office: Office, item: InstalledPackage): PackageEnvi
 }
 
 /** The environment file's content, and a problem per variable two packages both set. */
-export type HostEnvironment = { environment: Environment; problems: string[] };
+export type HostEnvironment = { environment: Environment; problems: string[]; contributions: PackageEnvironment[] };
 
 /**
  * The host's environment: the wrappers first while the firewall is on, mise's shims, OpenCode's bin,
  * then the folders packages declare; the release ages, then the variables packages declare. A
  * variable two packages set is left out, named in `problems`.
  */
-export function hostEnvironment(office: Office, installed: InstalledPackage[]): HostEnvironment {
-  const declared = installed.map((item) => packageEnvironment(office, item));
+export function hostEnvironment(office: Office, installed: InstalledPackage[], retained: PackageEnvironment[] = []): HostEnvironment {
+  const current = new Map(installed.map(item => [item.entry.name, packageEnvironment(office, item)]));
+  const prior = new Map(retained.map(item => [item.name, item]));
+  const declared = [...new Set(["office", ...office.packages.map(item => item.name)])].flatMap(name => current.get(name) ?? prior.get(name) ?? []);
   const setters = new Map<string, string[]>();
 
   for (const item of declared) {
@@ -152,7 +154,13 @@ export function hostEnvironment(office: Office, installed: InstalledPackage[]): 
     for (const [name, value] of item.variables) if ((setters.get(name) ?? []).length === 1) variables.push([name, value]);
   }
 
-  return { environment: { path, variables }, problems };
+  const contributions = declared.flatMap(item => {
+    const applied = item.variables.filter(([name]) => setters.get(name)?.length === 1);
+
+    return applied.length || item.path.length ? [{ ...item, variables: applied }] : [];
+  });
+
+  return { environment: { path, variables }, problems, contributions };
 }
 
 /** The line that sources the environment file, for the user's shell startup file, guarded by its existence. */

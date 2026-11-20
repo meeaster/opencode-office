@@ -240,6 +240,14 @@ test("office up runs the applied copy through an include in the package's folder
   upgrade.apply();
   expect(readFileSync(join(state, "demo/compose.yaml"), "utf8")).toBe(`${services}# changed\n`);
 
+  // Converting a still-selected package to a broken TS definition isn't a service removal.
+  rmSync(join(office, "packages/demo/package.yaml"));
+  write(join(office, "packages/demo/office.ts"), 'throw new Error("cannot load demo");');
+  rmSync(join(office, "packages/demo/compose.yaml"));
+  preparePackageServices(loaded, true).apply();
+  expect(readFileSync(join(state, "demo/compose.yaml"), "utf8")).toBe(`${services}# changed\n`);
+  expect(readFileSync(join(state, "demo/settings.env"), "utf8")).toBe("DEMO_URL='https://example.com'\n");
+
   // An invalid file is refused rather than applied.
   write(join(office, "packages/zeta/compose.yaml"), "services:\n  web:\n    ports: ['80:80']\n");
   expect(() => preparePackageServices(loaded, true)).toThrow("package zeta: compose.yaml: services.web: must be named zeta or zeta-*");

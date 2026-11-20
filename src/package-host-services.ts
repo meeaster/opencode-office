@@ -46,10 +46,10 @@ function installed(office: Office) {
 }
 
 export function reconcileHostServices(office: Office, action: "up" | "upgrade" | "down") {
-  const packages = installedPackages(office);
+  const packages = action === "down" ? undefined : installedPackages(office);
 
-  if (action !== "down" && packages.problems.length) throw new OfficeError(packages.problems.map(problem => problem.message).join("\n"));
-  const wanted = action === "down" ? new Map<string, string>() : units(office, packages);
+  if (packages?.problems.length) throw new OfficeError(packages.problems.map(problem => problem.message).join("\n"));
+  const wanted = packages === undefined ? new Map<string, string>() : units(office, packages);
   const owned = installed(office);
   const dir = unitDir();
 

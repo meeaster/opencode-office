@@ -4,7 +4,7 @@
 // touches only its own category: no clones, references, desks or the other category, and no sync.
 // A group or package whose track can't be resolved, or whose copy can't be applied, keeps its pin.
 import { editConfig, type Office, OfficeError, skillGroups, withScalar } from "../office.ts";
-import { fetchPackage } from "../packages.ts";
+import { fetchPackage, requirePackageOwnership } from "../packages.ts";
 import type { Stage } from "../report/index.ts";
 import { describeGroup, stageGroup } from "../skill-copies.ts";
 import { resolveTrack, type Resolved, short } from "../track.ts";
@@ -108,6 +108,7 @@ export async function updateSkills(loaded: Office, stage: Stage): Promise<void> 
  * that commit as its ref, then applies the packages as sync does, when any pin moved.
  */
 export async function updatePackages(loaded: Office, stage: Stage, { apply = true } = {}): Promise<void> {
+  requirePackageOwnership(loaded);
   let office = loaded;
   const lines = new UpdateProgress(stage);
   const tracked = office.packages.flatMap((entry, index) => (entry.source === undefined ? [] : [{ entry, index, source: entry.source }]));
@@ -135,7 +136,7 @@ export async function updatePackages(loaded: Office, stage: Stage, { apply = tru
       continue;
     }
 
-    const copied = fetchPackage(office, entry.name, { ...source, ref: found.commit });
+    const copied = fetchPackage(office, entry, { ...source, ref: found.commit });
     const failed = copied.find((line) => line.startsWith("FAILED"));
 
     if (failed !== undefined) {

@@ -22,14 +22,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import * as v from "valibot";
-import { parse } from "yaml";
 
 import { fetchBytes } from "./download.ts";
 import { toolPins } from "./mise-toml.ts";
 import { type Office, OfficeError } from "./office.ts";
+import { readDefinition } from "./package-definition.ts";
 import { cliToolsPackage, fragmentPath, packagesFile, packagesPath } from "./package-tools.ts";
 import { newestRelease, type Candidate } from "./releases.ts";
-import { check, packageManifestSchema } from "./schema.ts";
+import { check } from "./schema.ts";
 import { toolPath } from "./tool.ts";
 import { compareVersions } from "./versions.ts";
 import { currentReporter, progress, say, stream, warn } from "./report/index.ts";
@@ -173,13 +173,19 @@ export function officePins(office: Office): Record<string, string> {
   return path === undefined ? {} : Object.fromEntries(toolPins(readFileSync(path, "utf8")).filter((pin) => tools.includes(pin.tool)).map((pin) => [pin.tool, pin.version]));
 }
 
+// Bootstrap before sync, without executing an installed or virtual-filesystem package.
+declare const OFFICE_STARTING_TOOLS: Record<string, string>;
+
 /** The versions this executable's office package starts its tools at. */
 export function startingVersions(): Record<string, string> {
-  const result = check(v.safeParse(packageManifestSchema, parse(readFileSync(toolPath(`packages/${cliToolsPackage}/package.yaml`), "utf8"))));
+  if (Bun.isStandaloneExecutable) return OFFICE_STARTING_TOOLS;
 
-  if (!result.ok) throw new OfficeError(`the office package's package.yaml doesn't read: ${result.errors.join("; ")}`);
+  const folder = `packages/${cliToolsPackage}`;
+  const result = readDefinition(toolPath(folder), folder);
 
-  return result.value.tools;
+  if (!result.ok) throw new OfficeError(result.errors.join("; "));
+
+  return result.value.manifest.tools;
 }
 
 /** What the office wants installed: its versions in machine.packages.toml, and the package's starting ones until sync writes them. */

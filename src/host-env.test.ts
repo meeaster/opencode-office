@@ -206,11 +206,68 @@ test("a package's host block adds folders and variables to the environment file;
 
   expect(sourced).toBe(`${hostWrappers()}:${join(process.env.MISE_DATA_DIR || join(dir, "home/.local/share/mise"), "shims")}:${join(dir, "home/.opencode/bin")}:${join(office, "packages/demo/bin")}:${join(dir, "home/.local/bin")}:/opt/demo/bin:/usr/bin:/bin|it's on`);
 
+  const conflict = join(office, "packages/demo/office.ts");
+  write(conflict, "throw new Error('must not be evaluated')");
+  expect((await sync(loadOffice(office))).join("\n")).toContain("has both office.ts and package.yaml");
+  expect(readFileSync(envFilePath(), "utf8")).toBe(env);
+  rmSync(conflict);
+
   write(join(office, "office.yaml"), `${readFileSync(join(office, "office.yaml"), "utf8")}  - name: other\n`);
   write(join(office, "packages/other/package.yaml"), "name: other\ndescription: Another.\nhost:\n  env:\n    DEMO_MODE: off\n");
 
   expect(await sync(loadOffice(office))).toContain(`FAILED packages demo and other both set DEMO_MODE in their host or system block, so ${envFilePath()} sets neither; remove it from one`);
   expect(readFileSync(envFilePath(), "utf8")).not.toContain("DEMO_MODE");
+});
+
+test("one failed read and one deselection keep and withdraw their respective machine inputs together", async () => {
+  const host = (name: string) => `host:\n  path: [${name}-bin]\n  env: { ${name.toUpperCase()}_MODE: ok }\n  install: {description: Install, creates: ~/.local/bin/${name}, script: install.ts}\n`;
+  makeOffice({ firewall: false, host: host("demo") });
+  const config = join(office, "office.yaml");
+  const initial = readFileSync(config, "utf8");
+  write(config, `${initial}  - name: other\n`);
+  write(join(office, "packages/other/package.yaml"), `name: other\ndescription: Other\n${host("other")}`);
+
+  for (const name of ["demo", "other"]) write(join(office, `packages/${name}/install.ts`), "");
+  grantConsent(loadOffice(office));
+  const run = () => sync(loadOffice(office), { scope: "packages" });
+  expect((await run()).join("\n")).not.toContain("FAILED");
+  const link = (name: string) => join(globalConfD(), `office-t-1-${name}.toml`);
+  const before = readFileSync(link("demo"), "utf8");
+  expect(readFileSync(link("other"), "utf8")).toContain("other:install");
+  expect(readFileSync(envFilePath(), "utf8")).toContain("OTHER_MODE");
+  write(config, initial);
+  write(join(office, "packages/demo/package.yaml"), "[bad");
+  expect((await run()).join("\n")).toContain("FAILED package demo");
+  expect(readFileSync(link("demo"), "utf8")).toBe(before);
+  expect(existsSync(join(office, ".office/mise/other.toml"))).toBe(false);
+  expect(lstatSync(link("other"), { throwIfNoEntry: false })).toBeUndefined();
+  const env = readFileSync(envFilePath(), "utf8");
+  expect(env).toContain("export DEMO_MODE='ok'");
+  expect(env).toContain("demo-bin");
+  expect(env).not.toContain("OTHER_MODE");
+  expect(env).not.toContain("other-bin");
+});
+
+test("an older combined environment is kept until sync can record its owners", async () => {
+  makeOffice({ firewall: false, host: "host: {env: {DEMO_MODE: on}}\n" });
+  grantConsent(loadOffice(office));
+  const run = () => sync(loadOffice(office), { scope: "packages" });
+  await run();
+  const record = readMachine();
+
+  if (!record) throw new Error("missing fixture record");
+
+  for (const file of record.files) if (file.kind === "file") delete file.contributions;
+  const path = join(dir, "record/machine.json");
+  write(path, JSON.stringify(record));
+  const before = readFileSync(envFilePath(), "utf8");
+  write(join(office, "packages/demo/office.ts"), "throw Error('conflict')");
+  expect((await run()).join("\n")).toContain("predates package ownership records");
+  expect(readFileSync(envFilePath(), "utf8")).toBe(before);
+  expect(readFileSync(path, "utf8")).toBe(JSON.stringify(record));
+  rmSync(join(office, "packages/demo/office.ts"));
+  expect((await run()).join("\n")).not.toContain("FAILED");
+  expect(readFileSync(path, "utf8")).toContain("DEMO_MODE");
 });
 
 test("a host block's folders and variables are plain: no shell code, PATH separators or variables office sets", () => {

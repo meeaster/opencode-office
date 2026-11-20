@@ -121,7 +121,7 @@ test("with consent, sync links machine.packages.toml first, each fragment, machi
       { kind: "link", path: join(confD, "office-t-0-packages.toml"), package: null, target: join(office, "machine.packages.toml") },
       { kind: "link", path: join(confD, "office-t-1-demo.toml"), package: "demo", target: join(office, ".office/mise/demo.toml") },
       { kind: "link", path: join(confD, "office-t-2-machine.toml"), package: null, target: join(office, "machine.toml") },
-      { kind: "file", path: join(dir, "data/env.sh"), package: null, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) },
+      { kind: "file", path: join(dir, "data/env.sh"), package: null, sha256: expect.stringMatching(/^[0-9a-f]{64}$/), contributions: [] },
     ],
   });
   expect(await sync(loadOffice(office))).toEqual([]);

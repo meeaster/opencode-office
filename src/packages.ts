@@ -1,4 +1,4 @@
-// Packages: capabilities an office opts into, each a folder with a package.yaml, an OpenCode
+// Packages: capabilities an office opts into, each a folder with a definition, an OpenCode
 // plugin, skills the plugin registers, package-owned scripts, a template copied once into the
 // office and a desktop app panel (src/desktop.ts). There are three kinds, by where a package comes from:
 //
@@ -11,17 +11,20 @@
 // hash of each file is recorded in `.source.json`, `office check` reports an edit and `office
 // sync` restores the copy. Every kind is committed with the office, so a clone needs nothing fetched.
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative } from "node:path";
 
 import { Ajv2020 } from "ajv/dist/2020.js";
 import * as v from "valibot";
-import { parse } from "yaml";
 
 import { panelBundle } from "./desktop.ts";
 import { copyFromRepository } from "./git.ts";
-import type { Office, PackageEntry } from "./office.ts";
-import { check, type PackageManifest, packageManifestSchema, type Parsed, scalarSetting, type SettingValue, settingVariable } from "./schema.ts";
+import { type Office, OfficeError, type PackageEntry } from "./office.ts";
+import { readDefinition } from "./package-definition.ts";
+import { collectJobs } from "./cron/jobs.ts";
+import { composeProblems, packageComposeFile, settingsEnv } from "./package-services.ts";
+import { systemSection } from "./package-system.ts";
+import { check, type PackageManifest, type Parsed, scalarSetting, type SettingValue, settingVariable } from "./schema.ts";
 import { build, buildCommit, builtinFiles, builtinPackages, toolRepository } from "./tool.ts";
 
 /** Where a pulled-in package records where it came from and the hash of each of its files. */
@@ -122,8 +125,40 @@ export function localFolders(office: Office): string[] {
 }
 
 /** Whether `repo` is this tool's own repository, which publishes the built-in packages. */
-export function isToolRepository(repo: string): boolean {
+function isToolRepository(repo: string): boolean {
   return repo.replace(/\/+$/, "").replace(/\.git$/, "") === `https://github.com/${toolRepository}`;
+}
+
+/** The historical first-party migration is not a claim on names shipped by future executables. */
+export function legacyBuiltin(entry: PackageEntry): boolean {
+  return ["office", "browser", "knowledge", "design", "aws-emulator", "artifact-share"].includes(entry.name)
+    && entry.source !== undefined && isToolRepository(entry.source.repo) && entry.source.path === `packages/${entry.name}` && entry.source.track === undefined;
+}
+
+function ownershipProblems(office: Office, builtins: string[]): PackageProblem[] {
+  const problems: PackageProblem[] = [];
+
+  for (const name of new Set([...requiredPackages, ...office.packages.map(entry => entry.name)])) {
+    if (!builtins.includes(name)) continue;
+
+    const entry = office.packages.find(item => item.name === name);
+    const local = localDir(office, name);
+    const record = readRecord(local);
+    const legacy = entry !== undefined && legacyBuiltin(entry);
+    const migratedCopy = legacy && record !== undefined && "repo" in record && record.repo === entry.source?.repo && record.path === entry.source.path;
+
+    if (existsSync(local) && !migratedCopy) problems.push({ packages: [name], message: `built-in package ${name} conflicts with local ${relative(office.dir, local)}; rename one before syncing` });
+
+    if (entry?.source && !legacy) problems.push({ packages: [name], message: `built-in package ${name} conflicts with ${entry.source.repo}@${entry.source.ref}:${entry.source.path}; rename one before syncing` });
+  }
+
+  return problems;
+}
+
+export function requirePackageOwnership(office: Office): void {
+  const collisions = ownershipProblems(office, builtinPackages());
+
+  if (collisions.length) throw new OfficeError(collisions.map(problem => problem.message).join("\n"));
 }
 
 /**
@@ -133,7 +168,9 @@ export function isToolRepository(repo: string): boolean {
  */
 export function resolvePackages(office: Office): ResolvedPackages {
   const builtins = builtinPackages();
-  const problems: PackageProblem[] = [];
+  const problems = ownershipProblems(office, builtins);
+
+  if (problems.length) return { packages: [], problems };
 
   const packages: ResolvedPackage[] = requiredPackages.map((name) => ({
     entry: office.packages.find((entry) => entry.name === name) ?? { name, settings: {}, cron: {}, source: undefined },
@@ -148,12 +185,6 @@ export function resolvePackages(office: Office): ResolvedPackages {
 
     if (!builtins.includes(entry.name)) {
       packages.push({ entry, kind: entry.source === undefined ? "local" : "remote", dir: entry.source === undefined ? localDir(office, entry.name) : pulledDir(office, entry.name) });
-
-      continue;
-    }
-
-    if (entry.source !== undefined && !isToolRepository(entry.source.repo)) {
-      problem(`${entry.name} is a built-in package, so its entry can't take it from ${entry.source.repo}; list that copy under a name of its own`);
 
       continue;
     }
@@ -244,9 +275,9 @@ function writeJson(path: string, value: PackageRecord | string[]): void {
  * sync reports the settings file only when the settings change, and never copies a template file twice.
  */
 function replaceFolder<Result>(dir: string, fill: (staging: string) => Result): Result {
-  const staging = join(dirname(dir), `.${relative(dirname(dir), dir)}.new`);
-
-  rmSync(staging, { recursive: true, force: true });
+  mkdirSync(dirname(dir), { recursive: true });
+  const temp = mkdtempSync(join(dirname(dir), `.${basename(dir)}.new-`));
+  const staging = join(temp, basename(dir));
 
   try {
     const result = fill(staging);
@@ -260,7 +291,7 @@ function replaceFolder<Result>(dir: string, fill: (staging: string) => Result): 
 
     return result;
   } finally {
-    rmSync(staging, { recursive: true, force: true });
+    rmSync(temp, { recursive: true, force: true });
   }
 }
 
@@ -278,7 +309,8 @@ function thisCopy(): string {
  * one that differs (written by another `office`, copied from a repository, or edited), and records
  * an unchanged copy that lacks a built-in record. Returns one line per change.
  */
-export async function installBuiltin(office: Office, name: string): Promise<string[]> {
+export async function installBuiltin(office: Office, entry: PackageEntry): Promise<string[]> {
+  const { name } = entry;
   const dir = pulledDir(office, name);
   const where = relative(office.dir, dir);
   const wanted = await builtinFiles(name);
@@ -295,14 +327,19 @@ export async function installBuiltin(office: Office, name: string): Promise<stri
 
   const edits = record === undefined ? [] : localEdits(dir, record);
 
-  replaceFolder(dir, (staging) => {
-    for (const [file, content] of wanted) {
-      mkdirSync(dirname(join(staging, file)), { recursive: true });
-      writeFileSync(join(staging, file), content);
-    }
+  try {
+    replaceFolder(dir, (staging) => {
+      for (const [file, content] of wanted) {
+        mkdirSync(dirname(join(staging, file)), { recursive: true });
+        writeFileSync(join(staging, file), content);
+      }
 
-    writeJson(join(staging, sourceFile), builtinRecordFor(hashes));
-  });
+      writeJson(join(staging, sourceFile), builtinRecordFor(hashes));
+      validateReplacement(office, { entry, dir: staging, kind: "built-in" });
+    });
+  } catch (error) {
+    return [`FAILED ${where}: ${error instanceof Error ? error.message : String(error)}`];
+  }
 
   if (record === undefined) return [`installed ${where}, the built-in ${name} package`];
 
@@ -311,37 +348,60 @@ export async function installBuiltin(office: Office, name: string): Promise<stri
   return [`updated ${where} from ${describeRecord(record)} to ${thisCopy()}`];
 }
 
+const fullCommit = /^[a-f0-9]{40}$/i;
+
+function verifiedCommit(ref: string, commit: string): boolean {
+  return fullCommit.test(commit) && (!fullCommit.test(ref) || ref.toLowerCase() === commit.toLowerCase());
+}
+
 /**
  * Copies or updates a package declared with a repository into `.office/packages/<name>/`: it
  * installs a missing one, replaces one whose record differs from the entry's repository, path or
  * ref, and restores one whose files were edited. Returns one line per change; a failure starts
  * with FAILED.
  */
-export function fetchPackage(office: Office, name: string, source: Pick<NonNullable<PackageEntry["source"]>, "repo" | "path" | "ref">): string[] {
+export function fetchPackage(office: Office, entry: PackageEntry, source: NonNullable<PackageEntry["source"]>): string[] {
+  const { name } = entry;
   const dir = pulledDir(office, name);
   const where = relative(office.dir, dir);
   const record = readRecord(dir);
   const current = record !== undefined && "repo" in record && record.repo === source.repo && record.path === source.path && record.ref === source.ref;
   const edits = record === undefined ? [] : localEdits(dir, record);
 
-  if (current && edits.length === 0) return [];
+  const known = current && verifiedCommit(source.ref, record.commit);
 
   try {
+    if (known && edits.length === 0) {
+      if (entry.source?.ref !== source.ref) validateReplacement(office, { entry: { ...entry, source }, dir, kind: "remote" });
+
+      return [];
+    }
+
+    if ((record === undefined || (current && !known)) && existsSync(dir) && readdirSync(dir).length > 0 && !fullCommit.test(source.ref)) {
+      throw new Error(`cannot repair from ${source.ref} without the recorded commit; restore ${where}/${sourceFile} from office history or pin a full commit SHA`);
+    }
+
     const commit = replaceFolder(dir, (staging) => {
-      const copied = copyFromRepository(source, staging, "package.yaml");
+      const ref = known ? record.commit : source.ref;
+      const copied = copyFromRepository({ ...source, ref }, staging);
+
+      if (!verifiedCommit(ref, copied)) throw new Error(`expected ${ref}, got ${copied}`);
 
       // A package shared from another office's packages/ carries that office's records; its
       // .template.json would make this office skip template files it never received.
       for (const file of records) rmSync(join(staging, file), { force: true });
 
       writeJson(join(staging, sourceFile), { repo: source.repo, path: source.path, ref: source.ref, commit: copied, files: fileHashes(staging), copied: new Date().toISOString() });
+      validateReplacement(office, { entry: { ...entry, source }, dir: staging, kind: "remote" });
 
       return copied;
     });
 
     if (record === undefined) return [`installed ${where} from ${source.repo} at ${commit}`];
 
-    if (current) return [`restored ${where} to its copy of ${source.ref}, undoing edits to ${edits.join(", ")}; ${readOnlyNote}`];
+    if (current && !known) return [`restored ${where} from the exact pin ${source.ref}; its record named commit ${record.commit}`];
+
+    if (current) return [`restored ${where} to its copy of ${source.ref}${commit === source.ref ? "" : ` (${commit})`}, undoing edits to ${edits.join(", ")}; ${readOnlyNote}`];
 
     return [`updated ${where} from ${describeRecord(record)} to ${source.ref} (${commit})`];
   } catch (error) {
@@ -389,39 +449,42 @@ export function removePackage(office: Office, name: string): string[] {
 }
 
 /**
- * Reads an installed package and resolves its entry's settings against package.yaml: an unknown
+ * Reads an installed package and resolves its entry's settings against its definition: an unknown
  * setting, or a missing required one, is an error naming the field.
  */
 export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<InstalledPackage> {
-  const { entry, kind, dir } = resolved;
+  const { entry, dir } = resolved;
   const where = relative(office.dir, dir);
 
-  if (!existsSync(join(dir, "package.yaml"))) {
-    return {
-      ok: false,
-      errors: [kind === "local" ? `${where}/package.yaml is missing; an entry without repo names a built-in package (${builtinPackages().join(", ")}) or one written in ${where}/` : `${where} is not installed; office sync installs it`],
-    };
-  }
+  const read = readDefinition(dir, where, () => {
+    if (resolved.kind === "local") return;
 
-  let document;
+    const record = readRecord(dir);
 
-  try {
-    document = parse(readFileSync(join(dir, "package.yaml"), "utf8"), { stringKeys: true });
-  } catch (error) {
-    return { ok: false, errors: [`${where}/package.yaml: ${error instanceof Error ? error.message : String(error)}`] };
-  }
+    if (record === undefined) throw new Error(`no readable ${sourceFile}; ${resolved.kind === "built-in" ? "office sync restores the built-in copy" : "restore it from office history or run office sync with an exact pin"}`);
 
-  const read = check(v.safeParse(packageManifestSchema, document));
+    if (resolved.kind === "built-in" && "repo" in record) throw new Error("the installed copy is remote, not built-in; run office sync");
 
-  if (!read.ok) return { ok: false, errors: read.errors.map((error) => `${where}/package.yaml: ${error}`) };
+    if (resolved.kind === "remote" && !("repo" in record && record.repo === entry.source?.repo && record.path === entry.source.path && record.ref === entry.source.ref)) {
+      throw new Error("the installed copy is not from the selected source and ref; run office sync");
+    }
 
-  const manifest = read.value;
+    if ("repo" in record && !verifiedCommit(record.ref, record.commit)) throw new Error(`invalid recorded commit ${record.commit} for ${record.ref}; run office sync`);
+
+    const edits = localEdits(dir, record);
+
+    if (edits.length > 0) throw new Error(`package files edited: ${edits.join(", ")}; office sync restores them`);
+  });
+
+  if (!read.ok) return read;
+
+  const { manifest, file } = read.value;
   const accepted = Object.keys(manifest.settings);
-  const errors = manifest.name === entry.name ? [] : [`${where}/package.yaml names the package ${manifest.name}, not ${entry.name}`];
+  const errors = manifest.name === entry.name ? [] : [`${file} names the package ${manifest.name}, not ${entry.name}`];
   const settings = structuredClone(entry.settings ?? {});
 
   for (const key of Object.keys(entry.cron)) {
-    if (!Object.hasOwn(manifest.cron, key)) errors.push(`packages.${entry.name}.cron.${key}: no such job in ${where}/package.yaml`);
+    if (!Object.hasOwn(manifest.cron, key)) errors.push(`packages.${entry.name}.cron.${key}: no such job in ${file}`);
   }
 
   if (manifest.settings_schema !== undefined) {
@@ -437,7 +500,7 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
         }
       }
     } catch (error) {
-      errors.push(`${where}/package.yaml: settings_schema: ${error instanceof Error ? error.message : String(error)}`);
+      errors.push(`${file}: settings_schema: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     for (const key of Object.keys(settings)) {
@@ -492,6 +555,39 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
   const panel = join(dir, panelBundle);
 
   return { ok: true, value: { ...resolved, manifest, settings, skills, plugin: existsSync(join(dir, "plugin")), panel: existsSync(panel) ? panel : undefined } };
+}
+
+/** Validate a candidate against the consuming entry before any live path points at its files. */
+function validateReplacement(office: Office, resolved: ResolvedPackage): void {
+  const read = readPackage(office, resolved);
+
+  if (!read.ok) throw new Error(read.errors.join("; "));
+
+  const item = read.value;
+  const { host, system } = item.manifest;
+
+  for (const file of [host?.install?.script, system?.bootstrap, system?.prepare, system?.verify]) {
+    if (file === undefined) continue;
+    const path = join(item.dir, file);
+
+    if (!statSync(path, { throwIfNoEntry: false })?.isFile() || relative(realpathSync(item.dir), realpathSync(path)).startsWith("..")) throw new Error(`${file} must be a file inside the package`);
+  }
+
+  const jobs = collectJobs({ ...office, cron: {} }, { installed: [item], problems: [] });
+
+  if (!jobs.ok) throw new Error(jobs.errors.join("; "));
+  const section = systemSection(office, item);
+
+  if (!section.ok) throw new Error(section.errors.join("; "));
+
+  const compose = join(item.dir, packageComposeFile);
+
+  if (existsSync(compose)) {
+    const problems = composeProblems(item.manifest.namespace, readFileSync(compose, "utf8"));
+
+    if (problems.length) throw new Error(`${packageComposeFile}: ${problems.join("; ")}`);
+    settingsEnv(item);
+  }
 }
 
 /** `.office.json`'s content: what the office declares to its packages. */

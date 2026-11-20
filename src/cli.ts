@@ -59,7 +59,8 @@ const usage = `usage: office <command> [--office <dir>]
                                desktop app's machine, migrate old layouts. --release-machine only
                                removes every file the office wrote on this machine, and its consent.
                                --packages applies packages at their declared pins without refreshing
-                               desk repos, references or separately declared plugin clones
+                                desk repos, references or separately declared plugin clones.
+                                Each package has one definition: office.ts or package.yaml
   skills update                move each skills.copied group with a track to the newest commit of
                                its branch, or of its highest stable SemVer tag matching a pattern
                                such as v2.*; recopy the whole group and record the commit as its ref.
@@ -103,7 +104,7 @@ const usage = `usage: office <command> [--office <dir>]
                                (minimum age: 0d by default), or exactly <release>; --check only reports.
                                Offices pick it up with office sync and office up; it never
                                changes office.yaml's tools
-  cron list | run <job-id>      list applicable YAML jobs or run one by its qualified ID
+  cron list | run <job-id>      list applicable jobs or run one by its qualified ID
   cron supercronic | catch-up   container internals: print generated supercronic input or run
                                jobs missed since their last success
   migrate-home                 the container's start: move sessions and logins stored under

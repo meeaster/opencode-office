@@ -14,15 +14,16 @@ import { join, relative } from "node:path";
 import { claudeFiles } from "../claude.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { collectJobs } from "../cron/jobs.ts";
-import { syncMachine } from "../machine.ts";
+import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
 import { cloneOrFetchStreamed, cloneShallowStreamed, discardFailedClone, isClone, refreshCloneStreamed } from "../git.ts";
-import { clones, installedPackages, oldKnowledgePlugin, packageLink, pluginLinks, skillSelections } from "../layout.ts";
+import { clones, installedPackages, type InstalledPackages, oldKnowledgePlugin, packageLink, pluginLinks, skillSelections } from "../layout.ts";
 import { migrate } from "../migrate.ts";
+import { definitionFiles } from "../package-definition.ts";
 import { packageComposeFile } from "../package-services.ts";
 import { syncTools } from "../package-tools.ts";
 import { type Desk, type Office, skillGroups } from "../office.ts";
 import { silentStage, type Stage } from "../report/index.ts";
-import { fetchPackage, installBuiltin, type InstalledPackage, installPackage, pulledDir, pulledFolders, removePackage, resolvePackages } from "../packages.ts";
+import { fetchPackage, installBuiltin, type InstalledPackage, installPackage, pulledDir, pulledFolders, removePackage, requirePackageOwnership, resolvePackages } from "../packages.ts";
 import { describeGroup, stageGroup } from "../skill-copies.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
 
@@ -142,12 +143,12 @@ function linkSkills(office: Office): string[] {
 }
 
 /** Makes `.opencode/plugins/` hold a relative link to each declared package's plugin, and no other link to a package plugin. */
-function linkPlugins(office: Office): string[] {
-  const { folder, wanted, links } = pluginLinks(office);
+function linkPlugins(office: Office, installed: InstalledPackages): string[] {
+  const { folder, wanted, links } = pluginLinks(office, installed.plugins);
   const changes: string[] = [];
 
   for (const [name, target] of links) {
-    if (wanted.get(name) === target) continue;
+    if (installed.unread.has(name) || wanted.get(name) === target) continue;
 
     unlinkSync(join(folder, name));
     changes.push(`unlinked .opencode/plugins/${name}`);
@@ -169,8 +170,6 @@ function linkPlugins(office: Office): string[] {
  * package replaced; without that package declared, it says which entry keeps the listing.
  */
 function removeOldKnowledgePlugin(office: Office): string[] {
-  if (!oldKnowledgePlugin(office)) return [];
-
   rmSync(join(office.dir, ".opencode/plugins/knowledge"), { recursive: true });
 
   const removed = "removed .opencode/plugins/knowledge/, the knowledge plugin earlier releases of office wrote";
@@ -299,6 +298,8 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
     },
   };
 
+  if (scope !== "references") requirePackageOwnership(office);
+
   if (scope === "packages") {
     await syncPackages(office, changes, stage);
 
@@ -337,13 +338,22 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
  */
 export async function syncPackages(office: Office, changes: { push: (...lines: string[]) => void }, stage: Stage = silentStage): Promise<void> {
   const { packages } = resolvePackages(office);
+  const rejected = new Set<string>();
 
   for (const item of packages) {
     const services = join(item.dir, packageComposeFile);
     const before = existsSync(services) ? readFileSync(services, "utf8") : undefined;
 
-    if (item.kind === "built-in") changes.push(...(await installBuiltin(office, item.entry.name)));
-    else if (item.kind === "remote" && item.entry.source !== undefined) changes.push(...fetchPackage(office, item.entry.name, item.entry.source));
+    if (item.kind !== "local" && definitionFiles(item.dir).length > 1) {
+      changes.push(`${relative(office.dir, item.dir)} has both office.ts and package.yaml; restoring from the selected ${item.kind} source`);
+    }
+
+    const copied = item.kind === "built-in" ? await installBuiltin(office, item.entry)
+      : item.kind === "remote" && item.entry.source !== undefined ? fetchPackage(office, item.entry, item.entry.source) : [];
+
+    changes.push(...copied);
+
+    if (copied.some(line => line.startsWith("FAILED"))) rejected.add(item.entry.name);
 
     // A pulled-in package's services run on this machine's Docker, so a new or changed file is worth seeing.
     const after = existsSync(services) ? readFileSync(services, "utf8") : undefined;
@@ -353,23 +363,32 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
     }
   }
 
+  let installed = installedPackages(office, rejected);
+
+  if (!installed.unread.has("knowledge") && oldKnowledgePlugin(office)) {
+    changes.push(...removeOldKnowledgePlugin(office));
+    installed = installedPackages(office, rejected);
+  }
+
+  changes.push(...installed.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
+
+  if (needsEnvironmentOwners(office, installed)) {
+    changes.push("FAILED the existing machine environment predates package ownership records; repair the unread packages and sync again before withdrawing packages or rewriting their machine setup");
+
+    return;
+  }
+
   // .office/packages/ holds only what sync pulled in, so a folder no package wants goes. Its panel
   // stays on the app's machine, where other offices may use it.
   const removedPanels: string[] = [];
 
   for (const name of pulledFolders(office)) {
-    if (packages.some((item) => item.kind !== "local" && item.entry.name === name)) continue;
+    if (installed.unread.has(name) || packages.some((item) => item.kind !== "local" && item.entry.name === name)) continue;
 
     if (existsSync(join(pulledDir(office, name), panelBundle))) removedPanels.push(name);
 
     changes.push(...removePackage(office, name));
   }
-
-  changes.push(...removeOldKnowledgePlugin(office));
-
-  const installed = installedPackages(office);
-
-  changes.push(...installed.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
 
   const cron = collectJobs(office, { ...installed, problems: [] });
 
@@ -378,9 +397,10 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   for (const item of installed.installed) changes.push(...installPackage(office, item));
 
   stage.detail("writing the packages' tools and linking skills and plugins");
-  changes.push(...syncTools(office, installed.installed, packages.map((item) => item.entry.name)));
-  changes.push(...syncMachine(office));
-  changes.push(...linkPlugins(office));
+  changes.push(...syncTools(office, installed.installed, [...installed.selected]));
+
+  changes.push(...syncMachine(office, installed));
+  changes.push(...linkPlugins(office, installed));
   changes.push(...installPanels(office, installed.installed, removedPanels));
 }
 

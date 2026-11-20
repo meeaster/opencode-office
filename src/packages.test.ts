@@ -125,7 +125,8 @@ test("an install ignores the source office's records, an update by full commit S
   const loaded = loadOffice(office);
   const script = join(office, ".office/packages/demo/scripts/run.sh");
 
-  expect(fetchPackage(loaded, "demo", { repo, path: "pkgs/demo", ref: first })).toEqual([`installed .office/packages/demo from ${repo} at ${first}`]);
+  const source = { repo, path: "pkgs/demo", ref: first, track: undefined };
+  expect(fetchPackage(loaded, loaded.packages[0], source)).toEqual([`installed .office/packages/demo from ${repo} at ${first}`]);
 
   const installed = read(office, "demo").result;
 
@@ -135,13 +136,13 @@ test("an install ignores the source office's records, an update by full commit S
   write(join(office, "out/AGENTS.md"), "the office's own\n");
   write(script, "echo edited\n");
 
-  const [restored] = fetchPackage(loaded, "demo", { repo, path: "pkgs/demo", ref: first });
+  const [restored] = fetchPackage(loaded, loaded.packages[0], source);
 
   expect(restored).toStartWith(`restored .office/packages/demo to its copy of ${first}, undoing edits to scripts/run.sh (edited);`);
   expect(readFileSync(script, "utf8")).toBe("echo one\n");
 
   write(join(office, "office.yaml"), entry(second));
-  expect(fetchPackage(loadOffice(office), "demo", { repo, path: "pkgs/demo", ref: second })).toEqual([`updated .office/packages/demo from ${repo} pkgs/demo at ${first.slice(0, 12)} (ref ${first}) to ${second} (${second})`]);
+  expect(fetchPackage(loadOffice(office), loaded.packages[0], { ...source, ref: second })).toEqual([`updated .office/packages/demo from ${repo} pkgs/demo at ${first.slice(0, 12)} (ref ${first}) to ${second} (${second})`]);
   expect(readFileSync(script, "utf8")).toBe("echo two\n");
 
   const updated = read(office, "demo");
@@ -287,10 +288,6 @@ test("an entry without repo is built-in when shipped and local otherwise; the re
       "    repo: https://example.com/shared.git",
       "    path: packages/shared",
       "    ref: main",
-      "  - name: artifact-share",
-      "    repo: https://example.com/fork.git",
-      "    path: packages/artifact-share",
-      "    ref: main",
       "",
     ].join("\n"),
   );
@@ -303,7 +300,7 @@ test("an entry without repo is built-in when shipped and local otherwise; the re
     ["mine", "local", "packages/mine"],
     ["shared", "remote", ".office/packages/shared"],
   ]);
-  expect(problems.map((problem) => problem.packages)).toEqual([["artifact-share"]]);
+  expect(problems).toEqual([]);
 });
 
 test("sync installs the built-in packages from the tool and restores an edited copy, keeping the office's records", async () => {

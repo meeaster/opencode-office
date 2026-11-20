@@ -9,6 +9,7 @@ import { requireJobs } from "../cron/jobs.ts";
 import { hostEnvironment } from "../host-env.ts";
 import { loadOffice } from "../office.ts";
 import { shellQuote } from "../sfw.ts";
+import { recordBuiltinFixture } from "../test-builtin-record.ts";
 import { agentUpdateJob } from "./agent-cli-update.ts";
 
 let root: string;
@@ -63,6 +64,7 @@ function fixture(): void {
   mkdirSync(join(pkg, "scripts"), { recursive: true });
   copyFileSync(join(import.meta.dir, "../../packages/office/package.yaml"), join(pkg, "package.yaml"));
   cpSync(join(import.meta.dir, "../../packages/office/scripts"), join(pkg, "scripts"), { recursive: true });
+  recordBuiltinFixture(pkg);
 
   const place = shellQuote(root);
 

@@ -6,7 +6,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from "
 import { join, relative } from "node:path";
 
 import { type Office, skillsFolder } from "./office.ts";
-import { type InstalledPackage, type PackageProblem, readPackage, resolvePackages } from "./packages.ts";
+import { type InstalledPackage, type PackageProblem, readPackage, requiredPackages, resolvePackages } from "./packages.ts";
 
 export type Clone = { name: string; url: string; ref?: string; kind: string; dir: string };
 
@@ -37,16 +37,21 @@ export function library(office: Office): string[] {
  * `problems` names each package that isn't, each entry that can't be one, and each plugin not
  * linked because of its name.
  */
-export function installedPackages(office: Office): InstalledPackages {
+export function installedPackages(office: Office, rejected: ReadonlySet<string> = new Set()): InstalledPackages {
   const installed: InstalledPackage[] = [];
   const resolved = resolvePackages(office);
   const problems = [...resolved.problems];
+  const selected = new Set([...requiredPackages, ...office.packages.map((entry) => entry.name)]);
+  const unread = new Set(selected);
 
   for (const item of resolved.packages) {
+    if (rejected.has(item.entry.name)) continue;
     const read = readPackage(office, item);
 
-    if (read.ok) installed.push(read.value);
-    else problems.push(...read.errors.map((message) => ({ packages: [item.entry.name], message })));
+    if (read.ok) {
+      installed.push(read.value);
+      unread.delete(item.entry.name);
+    } else problems.push(...read.errors.map((message) => ({ packages: [item.entry.name], message })));
   }
 
   // A package's plugin is linked under the package's name, which office.yaml keeps unique among
@@ -71,14 +76,17 @@ export function installedPackages(office: Office): InstalledPackages {
     else problems.push({ packages: [entry.name], message: `${problem}, so it isn't linked; rename one of them` });
   }
 
-  return { installed, plugins, problems };
+  return { selected, installed, plugins, problems, unread };
 }
 
 export type InstalledPackages = {
+  selected: Set<string>;
   installed: InstalledPackage[];
   /** Each package plugin to link, by package name, with its folder. */
   plugins: Map<string, string>;
   problems: PackageProblem[];
+  /** Selected but unresolved or unreadable: absence from `installed` cannot authorize cleanup. */
+  unread: Set<string>;
 };
 
 function occupied(path: string): boolean {
@@ -112,9 +120,8 @@ export function packageLink(path: string): string | undefined {
  * The package plugins of `.opencode/plugins/`: the links the office's packages want, by name with
  * their relative targets, and the links to package plugins there now.
  */
-export function pluginLinks(office: Office) {
+export function pluginLinks(office: Office, plugins: Map<string, string>) {
   const folder = join(office.dir, ".opencode/plugins");
-  const { plugins } = installedPackages(office);
   const wanted = new Map([...plugins].map(([name, dir]) => [name, relative(folder, dir)]));
   const links = new Map<string, string>();
 

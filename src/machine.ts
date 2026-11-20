@@ -36,12 +36,12 @@ import * as v from "valibot";
 import { fetchBytes } from "./download.ts";
 import { envFilePath, hostEnvironment, hostLayout, hostWrappers, realMise } from "./host-env.ts";
 import { type ServerPlan, serverUnit, serverUnitPath, userSystemd } from "./host-server.ts";
-import { installedPackages } from "./layout.ts";
+import { installedPackages, type InstalledPackages } from "./layout.ts";
 import { oldFragments, oldMiseFiles } from "./migrate.ts";
 import { type Office, OfficeError, readConfig } from "./office.ts";
 import { fragmentOwner, machineFile, machineFiles, packagesFile } from "./package-tools.ts";
 import { platformAsset } from "./releases.ts";
-import { check, type Lock } from "./schema.ts";
+import { check, hostVariable, type Lock } from "./schema.ts";
 import { atomicWrite } from "./secrets.ts";
 import { envScript, wrapperFiles } from "./sfw.ts";
 import { defaultPins, hostPlatform, readApplied, wantedPins } from "./versions.ts";
@@ -75,7 +75,9 @@ const fileSchema = v.variant("kind", [
   // A symbolic link to a file in the office.
   v.strictObject({ kind: v.literal("link"), ...owned, target: absolute }),
   // A real file the office wrote, starting with its marker line.
-  v.strictObject({ kind: v.literal("file"), ...owned, sha256: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/)), service: v.optional(v.literal("opencode")), program: v.optional(absolute) }),
+  v.strictObject({ kind: v.literal("file"), ...owned, sha256: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/)), service: v.optional(v.literal("opencode")), program: v.optional(absolute),
+    contributions: v.optional(v.array(v.object({ name: v.string(), path: v.array(absolute), variables: v.array(v.tuple([hostVariable, v.string()])) }))),
+  }),
 ]);
 
 const recordSchema = v.strictObject({
@@ -245,10 +247,23 @@ function sfwDigest(pin: Lock["sfw"]): string | undefined {
 /** What the office wants on the machine, and the problems that kept something out. */
 type WantedFiles = { wanted: Wanted[]; problems: string[] };
 
-function wantedFiles(office: Office): WantedFiles {
-  const { environment, problems } = hostEnvironment(office, installedPackages(office).installed);
+/** An older combined env.sh cannot be attributed until every selected definition reads once. */
+export function needsEnvironmentOwners(office: Office, packages: InstalledPackages): boolean {
+  if (office.opencode.mode !== "host" || !packages.unread.size) return false;
+  const current = claim(office);
+
+  if (current.kind !== "ours") return false;
+
+  return current.record.files.some(file => file.kind === "file" && file.path === envFilePath() && file.contributions === undefined);
+}
+
+function wantedFiles(office: Office, record: MachineRecord, packages = installedPackages(office)): WantedFiles {
+  const previous = record.files.find(file => file.path === envFilePath());
+  const retained = previous?.kind === "file" ? previous.contributions?.filter(item => packages.unread.has(item.name)) : [];
+  const { environment, problems, contributions } = hostEnvironment(office, packages.installed, retained);
   const envText = envScript(`the environment of office ${office.name}, which agents and your terminal share`, envFilePath(), environment);
-  const wanted: Wanted[] = [...wantedLinks(office), { file: { kind: "file", path: envFilePath(), package: null, sha256: sha256(envText) }, what: "the office's environment file", made: "; source it from your shell's startup file (office setup prints the line)", text: envText }];
+  const links = wantedLinks(office).filter(({ file }) => file.package === null || !packages.unread.has(file.package) || record.files.some(prior => prior.path === file.path && same(prior, file) && fileState(prior) === "present"));
+  const wanted: Wanted[] = [...links, { file: { kind: "file", path: envFilePath(), package: null, sha256: sha256(envText), contributions }, what: "the office's environment file", made: "; source it from your shell's startup file (office setup prints the line)", text: envText }];
 
   if (!office.socketFirewall) return { wanted, problems };
 
@@ -584,7 +599,7 @@ export function removeUnwantedServer(office: Office): void {
  * of an office that moved; in container mode it removes everything the office wrote and the record.
  * Returns one line per change; a refusal starts with FAILED.
  */
-export function syncMachine(office: Office): string[] {
+export function syncMachine(office: Office, packages?: InstalledPackages): string[] {
   const current = claim(office);
 
   if (office.opencode.mode !== "host") return current.kind === "ours" ? release(current.record, "as the office now runs OpenCode in its container") : [];
@@ -597,8 +612,8 @@ export function syncMachine(office: Office): string[] {
     return [`not linking machine.toml, machine.packages.toml and .office/mise/ into ${globalConfD()} or writing ${envFilePath()} yet, so the office's tools apply nowhere${firewall}: office writes outside its folder only once you agree; run ${consentCommand}`];
   }
 
-  const { wanted, problems } = wantedFiles(office);
   const { record, movedFrom } = current;
+  const { wanted, problems } = wantedFiles(office, record, packages);
   const lines = [...(movedFrom === undefined ? [] : [`office ${office.name} moved from ${movedFrom}; ${machineRecordPath()} now names ${office.dir}`]), ...problems.map((problem) => `FAILED ${problem}`)];
   const files: MachineFile[] = [];
 
@@ -668,8 +683,8 @@ export function machineReport(office: Office): MachineLine[] {
     return [...lines, { ok: false, name: "machine", detail: `no consent for this office to manage this machine, so machine.toml and the packages' tools in machine.packages.toml apply nowhere and ${envFilePath()} isn't written; run ${consentCommand}, then office sync` }];
   }
 
-  const { wanted, problems } = wantedFiles(office);
   const { record, movedFrom } = current;
+  const { wanted, problems } = wantedFiles(office, record);
 
   lines.push(
     movedFrom === undefined

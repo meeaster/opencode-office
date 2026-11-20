@@ -123,7 +123,7 @@ pre-commit install
 | `office apps adopt <catalog-id>` | Copies an installed Executor catalog app's currently deployed source into `executor-apps/<catalog-id>/` for customization. Future deployments target that app in place |
 | `office upgrade-tools [--apply]` | Bumps each exact pin in the office's own `mise.toml` files (root and desks), its `machine.toml` and `machine.packages.toml` (keeping each line's package comment; see "Tools"), and the runtimes' versions in `office.yaml`, to the newest release at least the office's minimum release age old (`tools.minimum_release_age`, or a runtime's own), and commits the changed files alone as the office's git identity, else `office cron`. `--apply` then runs `office up --upgrade` if the bump succeeded, even if cron already bumped the pins. Run it from a separate terminal because managed OpenCode can restart. The daily job omits `--apply`. See "Cron" |
 | `office update [--check] [--minimum-release-age <age> \| --version <release>]` | Replaces this `office` executable with the newest eligible GitHub release newer than this one (default minimum age: `0d`), or exactly `<release>`. `--check` only reports. It changes no office; see "Updating" |
-| `office cron list` / `office cron run <job-id>` | Lists enabled, applicable YAML jobs or runs one by its qualified ID; see "Cron" |
+| `office cron list` / `office cron run <job-id>` | Lists enabled, applicable jobs or runs one by its qualified ID; see "Cron" |
 | `office context --model <provider/model#variant>` | Measures the tokens the office adds to the first request of a session started in the current folder on the running host-mode OpenCode server. Repeat `--model` to compare models; see "Measuring what the office adds" |
 
 ### Measuring what the office adds
@@ -359,7 +359,7 @@ cron:
 
 Schedules are five-field UTC cron expressions or time macros such as `@daily`. The script must be a regular `.sh` file relative to its declaring office or package, with no symlinks. All jobs run under `/bin/sh` from the office root. `office cron list` shows IDs such as `office.daily-report` and `package.office.update-references`; use `office cron run <job-id>` to run one directly in the execution environment you intend. Keep the job name when renaming its script: the ID tracks the job across renames.
 
-A package's `package.yaml` uses the same `cron:` mapping. A package job may also set `when: host`, `when: managed-host`, or `when: container`; omitting `when` makes it applicable in both modes. An office may change a package's schedule or disable a job under that package entry's `cron:` (alongside `settings`), for example:
+A package definition uses the same `cron` mapping. A package job may also set `when: host`, `when: managed-host`, or `when: container`; omitting `when` makes it applicable in both modes. An office may change a package's schedule or disable a job under that package entry's `cron:` (alongside `settings`), for example:
 
 ```yaml
 packages:
@@ -419,7 +419,7 @@ A package is a capability an office opts into, where the tool itself holds only 
 
 ```
 <name>/
-  package.yaml          # name, description, and the settings it accepts
+  office.ts             # package definition (or package.yaml in an existing package)
   plugin/               # its OpenCode plugin: everything the package gives OpenCode
   skills/<id>/SKILL.md  # skills the plugin registers
   scripts/              # package-owned, for tooling and CI
@@ -438,13 +438,32 @@ There are three kinds, by where a package comes from:
 
 - An entry without `repo` is built-in when this tool ships a package of that name, and the office's own otherwise; a local package can't use a built-in's name. The built-in packages are this repository's `packages/`: `office`, `knowledge`, `artifact-share`, `design`, `browser` and `aws-emulator`.
 - `office` is required: every office has it without an entry, and an optional entry may only configure its one setting (below) and cron. It holds what every office needs from OpenCode, given by its plugin: the guidance for a session's folder (which `office instructions` prints), the `office` skill and the `office-executor` MCP server (see "Runtime"). `knowledge`, `artifact-share`, `design`, `browser` and `aws-emulator` are optional.
-- A built-in package follows the `office` executable: `office sync` replaces the office's copy whenever it differs from the executable's. An entry naming a built-in with a `repo` other than this tool's repository is an error: a built-in can't be pinned or forked under its own name.
+- A built-in package follows the `office` executable. If a new executable ships the name of a selected local or Git package, `sync`, `packages update` and `refresh` stop before changing either source, its pin or its links. Rename the package and selection to resolve the collision. Full sync still recognizes the historical untracked first-party entries for the original built-ins.
 - A remote package moves when its `ref` changes: a tag, a branch or a full 40-character commit SHA (git can't fetch an abbreviated one). With `track` (a branch, or a tag pattern such as `v1.*`, resolved as "Copied skills" describes), `office packages update` moves `ref` to the full SHA it resolves and applies the package; `office sync` installs whatever `ref` pins and never moves it.
 - Every kind is committed with the office, so a clone and CI work with nothing fetched. A built-in package's `test/` stays in this repository, which runs it with `pnpm test`.
 
-`.office/packages/` is a dot-folder, so searches and a plain `ls` skip what the office pulled in; `packages/` holds only the office's own packages. A pulled-in package is read-only: its `.source.json` records the SHA-256 of each file as installed (and, for a remote package, the repository, path, ref and commit), `office check` fails when a file differs from the record (edited, added or removed), and `office sync` restores the copy, from the executable for a built-in and by copying the recorded ref again for a remote package. To change a package, copy it into `packages/` under a name of your own and list that instead.
+`.office/packages/` is a dot-folder, so searches and a plain `ls` skip what the office pulled in; `packages/` holds only the office's own packages. A pulled-in package is read-only: its `.source.json` records the SHA-256 of each file as installed (and, for a remote package, the repository, path, ref and commit). `office check` fails when a file differs from the record. `office sync` repairs a built-in from the executable. For a remote with the same declared source and ref, it fetches the **recorded commit**, even if the tag or branch moved. If that commit is unavailable, repair fails and leaves the copy in place. If the record itself is damaged, restore it from office history or pin the full commit SHA. To change a package, copy it into `packages/` under a name of your own and list that instead.
 
-`package.yaml` holds only what can't be discovered:
+Use exactly one definition at the package root. `office.ts` default-exports a plain object:
+
+```ts
+// packages/notes/office.ts
+import { defaultTitle } from "./defaults.ts"; // a sibling exporting a string
+
+export default {
+  name: "notes",
+  description: "Publish office notes",
+  settings: { title: { description: "Page title", default: defaultTitle } },
+};
+```
+
+Office loads the module synchronously as trusted code when it reads the package, including during `check`. Ship its relative imports in the package; consumers need no SDK, build step or dependency install. The export is data: it accepts the same fields, defaults and validation as `package.yaml`. OpenCode still loads `plugin/` separately, and Compose still reads `compose.yaml`.
+
+Existing YAML packages continue to work. The YAML examples below describe the same fields. When converting a package, replace its `package.yaml`: both files together are an error, and an import or validation error fails the read. Sync keeps the failed selection's existing settings, tool pins and plugin link; removing its selection from `office.yaml` requests cleanup.
+
+Office reads a managed replacement in a staging directory with the consuming office's settings and cron overrides. A broken definition, missing declared script or invalid Compose declaration leaves the installed files and tracked pin in place. A failed initial sync makes `office init` exit nonzero. For both definition formats, repair uses the executable or pinned repository rather than importing an edited installed definition. An exact Git SHA takes precedence over a contradictory source record.
+
+On a managed host, the machine record keeps each package's applied environment entries. An unread selected package keeps its last applied environment alongside its mise fragment and link. Deselecting another package withdraws its entries, fragment and link in the same sync. An older machine record needs one successful read of all selected packages to establish ownership; until then sync reports the unread owners and defers withdrawal. `office down` reads applied Compose files and office-owned units without loading selected definitions.
 
 ```yaml
 name: artifact-share
@@ -462,7 +481,7 @@ spawns:                # for a package with services: the label on Docker resour
   label: share_owner=office-${OFFICE_NAME}-share
 ```
 
-For structured settings, declare `settings_schema` **instead of** `settings` in `package.yaml`. This is a synchronous JSON Schema (draft 2020-12), written in YAML, for the entire settings mapping. For example:
+For structured settings, declare `settings_schema` **instead of** `settings`. This is a synchronous JSON Schema (draft 2020-12) for the entire settings mapping. For example, in YAML:
 
 ```yaml
 settings_schema:

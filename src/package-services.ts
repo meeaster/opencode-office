@@ -17,7 +17,7 @@ import { parse, stringify } from "yaml";
 
 import { installedPackages } from "./layout.ts";
 import { type Office, OfficeError, readEnvFile } from "./office.ts";
-import { type InstalledPackage, resolvePackages } from "./packages.ts";
+import type { InstalledPackage } from "./packages.ts";
 import { check, type ComposeFile, composeFileSchema, type PackageManifest, type Parsed, scalarSetting, settingVariable } from "./schema.ts";
 import { spawnsLabel } from "./package-spawns.ts";
 import { say } from "./report/index.ts";
@@ -263,7 +263,7 @@ export type UpgradedServices = { name: string; services: string[]; volumes: stri
  * labels of packages whose services it stopped, for a sweep.
  */
 export function preparePackageServices(office: Office, upgrade: boolean) {
-  const { installed } = installedPackages(office);
+  const { installed, selected: listed } = installedPackages(office);
   const current = new Map(installed.map((item) => [item.entry.name, currentFile(item)]));
   const namespaces = new Map(installed.map((item) => [item.entry.name, item.manifest.namespace]));
   const namespaceOf = (name: string) => namespaces.get(name) ?? name;
@@ -274,11 +274,10 @@ export function preparePackageServices(office: Office, upgrade: boolean) {
       (namespace) => `packages ${installed.flatMap((item) => (item.manifest.namespace === namespace ? [item.entry.name] : [])).join(" and ")} claim the same namespace, ${namespace}`,
     );
 
-    throw new OfficeError(`refusing to start package services: ${claims.join("; ")}; give one of them another namespace: in its package.yaml`);
+    throw new OfficeError(`refusing to start package services: ${claims.join("; ")}; give one of them another namespace in its package definition`);
   }
 
   const applied = appliedServices(office);
-  const listed = new Set(resolvePackages(office).packages.map((item) => item.entry.name));
   const plan = planServices(current, applied, listed, upgrade);
   const problems = plan.apply.flatMap((change) => (change.to === undefined ? [] : composeProblems(namespaceOf(change.name), change.to).map((problem) => `package ${change.name}: ${packageComposeFile}: ${problem}`)));
 

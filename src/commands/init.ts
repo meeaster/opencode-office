@@ -37,9 +37,12 @@ export async function init(target: string, name: string | undefined) {
   // browser package's mise tools, links their plugins, scaffolds the example desk and links the
   // enabled skills.
   const changes = await sync(loadOffice(dir));
+  const failures = changes.filter(line => line.startsWith("FAILED"));
 
   // main whatever git's default branch is on this machine.
   if (!existsSync(resolve(dir, ".git"))) git(["init", "--quiet", "--initial-branch=main", dir]);
+
+  if (failures.length) throw new OfficeError(`${failures.join("\n")}\nInitial sync failed in ${dir}; fix the failures and run office sync.`);
 
   // The gitleaks hook guards the first commit too, when this machine already has the office's
   // pre-commit; otherwise office setup installs both.

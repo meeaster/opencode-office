@@ -10,7 +10,7 @@ import * as v from "valibot";
 import { editConfig, type Office, updateConfig, withoutItem, withoutKeys } from "./office.ts";
 import { moveExecutorAppDirs } from "./executor-app-layout.ts";
 import { fragmentOwner, fragmentsFolder, machineFile, moveFragmentTools } from "./package-tools.ts";
-import { isToolRepository, localDir, localFolders, pulledDir, readRecord, sourceFile } from "./packages.ts";
+import { legacyBuiltin, localDir, localFolders, pulledDir, readRecord, sourceFile } from "./packages.ts";
 import { check } from "./schema.ts";
 import { builtinPackages, toolPath } from "./tool.ts";
 import { defaultPins, lockFile, lockLacksSfw, readLock, writeLock } from "./versions.ts";
@@ -104,7 +104,7 @@ function removeOfficeSkill(office: Office): Migrated {
 export function toolRepositoryEntries(office: Office): string[] {
   const builtins = builtinPackages();
 
-  return office.packages.flatMap((entry) => (entry.source !== undefined && builtins.includes(entry.name) && isToolRepository(entry.source.repo) ? [entry.name] : []));
+  return office.packages.flatMap((entry) => (builtins.includes(entry.name) && legacyBuiltin(entry) ? [entry.name] : []));
 }
 
 /** Makes each of those a built-in entry by dropping `repo`, `path` and `ref`, keeping its settings and comments. */

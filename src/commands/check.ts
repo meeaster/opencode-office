@@ -95,12 +95,13 @@ async function drift(office: Office): Promise<string[]> {
 
   for (const name of pulledLocal) problems.push(`packages/${name}/ was pulled in from a repository (office sync moves it to .office/packages/${name}/)`);
 
-  if (oldKnowledgePlugin(office)) problems.push(".opencode/plugins/knowledge/ is the knowledge plugin earlier releases of office wrote, which the knowledge package replaced (office sync removes it)");
+  const loaded = installedPackages(office);
+  const plugins = pluginLinks(office, loaded.plugins);
 
-  const plugins = pluginLinks(office);
+  if (!loaded.unread.has("knowledge") && oldKnowledgePlugin(office)) problems.push(".opencode/plugins/knowledge/ is the knowledge plugin earlier releases of office wrote, which the knowledge package replaced (office sync removes it)");
 
   for (const [name, target] of plugins.links) {
-    if (plugins.wanted.get(name) !== target) problems.push(`.opencode/plugins/${name} links to ${target}, the plugin of no declared package (office sync removes it)`);
+    if (!loaded.unread.has(name) && plugins.wanted.get(name) !== target) problems.push(`.opencode/plugins/${name} links to ${target}, the plugin of no declared package (office sync removes it)`);
   }
 
   for (const group of skillGroups(office)) {
@@ -132,17 +133,17 @@ async function drift(office: Office): Promise<string[]> {
   for (const folder of localFolders(office)) {
     if (pulledLocal.includes(folder)) continue;
 
-    if (builtins.includes(folder)) problems.push(`packages/${folder}/ has the name of a built-in package, which an entry without repo always means; rename the folder, its package.yaml and its entry`);
+    if (builtins.includes(folder)) problems.push(`packages/${folder}/ has the name of a built-in package, which an entry without repo always means; rename the folder and the package name in its definition and office.yaml`);
     else if (!packages.some((item) => item.kind === "local" && item.entry.name === folder)) problems.push(`packages/${folder}/ is not a package in office.yaml, so its plugin isn't linked`);
   }
 
   for (const folder of pulledFolders(office)) {
-    if (!packages.some((item) => item.kind !== "local" && item.entry.name === folder)) problems.push(`.office/packages/${folder}/ is a package office.yaml no longer lists (office sync removes it)`);
+    if (!loaded.unread.has(folder) && !packages.some((item) => item.kind !== "local" && item.entry.name === folder)) problems.push(`.office/packages/${folder}/ is a package office.yaml no longer lists (office sync removes it)`);
   }
 
-  const listed = packages.map((item) => item.entry.name);
+  const listed = [...loaded.selected];
 
-  problems.push(...orphanFragments(office, listed), ...strayFragments(office), ...oldToolFragments(office), ...packagesFileProblems(office, installedPackages(office).installed, listed));
+  problems.push(...orphanFragments(office, listed), ...strayFragments(office), ...oldToolFragments(office), ...packagesFileProblems(office, loaded.installed, listed));
 
   if (versionsLackSfw(office)) problems.push("office.yaml's versions don't pin sfw (Socket Firewall), which earlier releases didn't pin, so the tool's default applies (office sync pins it)");
   else if (office.tools.runtimes.sfw.version === defaultPins.sfw.version && lockLacksSfw(office.dir)) problems.push(`${lockFile} has no sfw entry, as earlier releases wrote it (office sync adds it)`);
@@ -197,9 +198,10 @@ async function pulledCopy(dir: string, kind: "built-in" | "remote", name: string
  * whether its settings are valid and written, its mise tools, and the plugin it links.
  */
 async function packageChecks(office: Office, report: Report): Promise<void> {
-  const { installed, plugins, problems } = installedPackages(office);
+  const loaded = installedPackages(office);
+  const { installed, plugins, problems } = loaded;
   const shared = sharedNamespaces(installed);
-  const links = pluginLinks(office);
+  const links = pluginLinks(office, plugins);
   const { packages } = resolvePackages(office);
   const reported = new Set<string>();
   let running: string[] | undefined;
@@ -266,7 +268,7 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
 
     if (sharing !== undefined) {
       ok = false;
-      notes.push(`its namespace ${item.manifest.namespace} is also package ${sharing.join(" and ")}'s, so office up refuses both; give one another namespace: in its package.yaml`);
+      notes.push(`its namespace ${item.manifest.namespace} is also package ${sharing.join(" and ")}'s, so office up refuses both; give one another namespace in its package definition`);
     }
 
     if (services.services.length > 0 || services.problems.length > 0) {

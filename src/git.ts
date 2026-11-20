@@ -123,13 +123,12 @@ const licenseNames = ["LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"];
 
 /**
  * Copies the folder `path` of `repo` at `ref` into `to`, with the repository's licence when the
- * folder has none of its own, and returns the commit copied. The folder must hold `marker`, such
- * as SKILL.md. `ref` is a branch, a tag or a full commit SHA: git fetches nothing by an
- * abbreviated SHA.
+ * folder has none of its own, and returns the commit copied. `ref` is a branch, a tag or a full
+ * commit SHA: git fetches nothing by an abbreviated SHA.
  */
-export function copyFromRepository({ repo, ref, path }: { repo: string; ref?: string; path: string }, to: string, marker: string): string {
+export function copyFromRepository({ repo, ref, path }: { repo: string; ref?: string; path: string }, to: string): string {
   return withCheckout(repo, ref, (checkout) => {
-    copyFolder(checkout, path, to, marker, `${repo}${ref === undefined ? "" : `@${ref}`}`);
+    copyFolder(checkout, path, to, undefined, `${repo}${ref === undefined ? "" : `@${ref}`}`);
 
     return head(checkout);
   });
@@ -164,12 +163,12 @@ export function checkoutCommit(checkout: string): string {
 
 /**
  * Copies the folder `path` of a checkout into `to`, with the repository's licence when the folder
- * has none of its own. The folder must hold `marker`; `label` names the checkout in the error.
+ * has none of its own. When required, `marker` must exist; `label` names the checkout in the error.
  */
-export function copyFolder(checkout: string, path: string, to: string, marker: string, label: string): void {
+export function copyFolder(checkout: string, path: string, to: string, marker: string | undefined, label: string): void {
   const source = join(checkout, path);
 
-  if (!existsSync(join(source, marker))) throw new Error(`${label} has no ${path}/${marker}`);
+  if (marker !== undefined && !existsSync(join(source, marker))) throw new Error(`${label} has no ${path}/${marker}`);
 
   cpSync(source, to, { recursive: true });
 

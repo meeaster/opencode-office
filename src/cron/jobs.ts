@@ -31,7 +31,7 @@ function scriptPath(dir: string, script: string): string | undefined {
 }
 
 /** Both runners and manual execution use the same declarations, overrides and applicability. */
-export function collectJobs(office: Office, packages: InstalledPackages = installedPackages(office)): Parsed<CronJob[]> {
+export function collectJobs(office: Office, packages: Pick<InstalledPackages, "installed" | "problems"> = installedPackages(office)): Parsed<CronJob[]> {
   const jobs: CronJob[] = [];
   const errors = packages.problems.map((problem) => `package ${problem.packages.join(", ")}: ${problem.message}`);
 
