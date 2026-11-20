@@ -55,7 +55,7 @@ beforeAll(async () => {
   write(join(dist, "packages/arrival/office.ts"), `${marker} export default { name: "arrival", description: "Newly shipped" }`);
   write(join(dist, "packages/legacy/package.yaml"), "name: legacy\ndescription: Legacy YAML fixture\n");
   const aws = join(dist, "packages/aws-emulator/office.ts");
-  write(aws, read(aws).replace("if (settings.source_reference === false) return;", 'throw Error("changed built-in collector");'));
+  write(aws, read(aws).replace("if (!includeSource) return;", 'throw Error("changed built-in collector");'));
   const commands = join(dist, "packages/references/office.ts");
   write(commands, read(commands).replace("ctx.command(listing)", 'ctx.command({ ...listing, run(inputs) { console.log("variant package handler"); listing.run(inputs) } })'));
   const changed = join(dist, "packages/artifact-share");
@@ -278,7 +278,10 @@ test("all readers reject a Git command owner missing its files binding before fe
 
   // Only Git owners of commands need this binding. Both data-only formats remain usable.
   for (const version of [2, 3]) {
-    write(path, JSON.stringify({ ...generation, version }, (key, value) =>
+    const contributors = generation.contributors.map(({ entries, ...group }: { entries: { value: { name: string; url: string } }[] }) =>
+      ({ ...group, references: entries.map(entry => entry.value) }));
+
+    write(path, JSON.stringify({ ...generation, contributors, version }, (key, value) =>
       key === "commands" && (version === 2 || value.files) ? undefined : value));
     expect(cli(0, "references", "list")).toContain(`manual\t${repo}\tpackage press`);
   }
@@ -443,7 +446,7 @@ packages: [${packages.join(", ")}]
   expect(read(join(checkout, "document"))).toBe("preserved");
   expect(head(join(dir, "references/floci"))).toBe(second);
 
-  write(snapshot, read(snapshot).replace('"version": 3', '"version": 9'));
+  write(snapshot, read(snapshot).replace('"version": 4', '"version": 9'));
   expect(cli(1, "references", "list")).toContain("unsupported references snapshot version");
   expect(cli(1, "sync", "--references")).toContain("unsupported references snapshot version");
   expect(await verifyPrompt(nested)).toContain("unsupported references snapshot version");

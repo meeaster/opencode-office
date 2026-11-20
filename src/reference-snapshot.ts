@@ -3,24 +3,41 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as v from "valibot";
-import { check, type OfficeConfig, type Parsed, repository } from "./schema.ts";
+import { check, type OfficeConfig, type Parsed, repository, settingValue } from "./schema.ts";
+import { isRepository, repositories } from "../packages/references/repositories.ts";
+import type { Collection, CollectionEntry } from "../packages/office/package-context.ts";
 import { commandConflicts, commandTable } from "./command-table.ts";
 
 export const referenceFile = ".office/resolved/references.json";
 
-const contributor = v.pipe(v.strictObject({
+const binding = {
   name: v.string(), source: v.pipe(v.string(), v.regex(/^(?:local|unverified built-in|(?:git|built-in):[0-9a-f]{64})$/)),
-  commit: v.optional(v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/))), stale: v.boolean(), references: v.array(repository),
+  commit: v.optional(v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/))), stale: v.boolean(),
   commands: v.optional(commandTable),
-}), v.check(group => !group.source.startsWith("git:") || group.commit !== undefined || (group.stale && !group.references.length), "a Git contribution needs its resolved commit"),
+};
+
+export const namedEntry = v.objectWithRest({ name: v.string() }, settingValue);
+
+const entry = v.pipe(v.strictObject({ id: v.string(), value: namedEntry }),
+  v.check(row => row.id !== repositories.id || isRepository(row.value), "invalid published reference"));
+
+const contributor = v.pipe(v.strictObject({ ...binding, entries: v.array(entry) }),
+v.check(group => !group.source.startsWith("git:") || group.commit !== undefined || (group.stale && !group.entries.length), "a Git contribution needs its resolved commit"),
 v.check(group => !group.commands || !group.source.startsWith("git:") || group.commands.files !== undefined, issue => `Git command owner ${issue.input.name} is missing its commands.files digest`),
 v.check(group => !group.commands || !group.stale, "a failed collector cannot own commands"));
 
+const legacy = v.pipe(v.strictObject({
+  version: v.union([v.literal(2), v.literal(3)]),
+  inputs: v.string(), owner: v.array(repository),
+  contributors: v.array(v.strictObject({ ...binding, references: v.array(repository) })),
+}), v.transform(snapshot => ({ ...snapshot, contributors: snapshot.contributors.map(({ references, ...group }) =>
+  ({ ...group, entries: references.map(value => ({ id: repositories.id, value })) })) })));
+
 const schema = v.pipe(v.strictObject({
-  version: v.union([v.literal(2), v.literal(3)], "unsupported references snapshot version (expected 2 or 3)"),
+  version: v.union([v.literal(2), v.literal(3), v.literal(4)], "unsupported references snapshot version (expected 2, 3 or 4)"),
   inputs: v.string(), owner: v.array(repository),
   contributors: v.pipe(v.array(contributor), v.check(groups => new Set(groups.map(group => group.name)).size === groups.length, "ambiguous contributor identity")),
-}), v.check(s => s.version === 3 || !s.contributors.some(group => group.commands), "legacy references snapshot cannot contain commands"));
+}), v.check(s => s.version !== 2 || !s.contributors.some(group => group.commands), "legacy references snapshot cannot contain commands"));
 
 export type ReferenceSnapshot = v.InferOutput<typeof schema>;
 
@@ -36,7 +53,16 @@ export function readSnapshot(dir: string): Parsed<ReferenceSnapshot | undefined>
   const path = join(dir, referenceFile);
 
   try {
-    const result = check(v.safeParse(schema, JSON.parse(readFileSync(path, "utf8"))));
+    let document = JSON.parse(readFileSync(path, "utf8"));
+
+    if (document?.version === 2 || document?.version === 3) {
+      const migrated = check(v.safeParse(legacy, document));
+
+      if (!migrated.ok) return { ok: false, errors: migrated.errors.map(message => `${referenceFile}: ${message}`) };
+      document = migrated.value;
+    }
+
+    const result = check(v.safeParse(schema, document));
 
     if (result.ok) {
       const errors = commandConflicts(result.value.contributors, "v3");
@@ -62,24 +88,38 @@ export function readSnapshot(dir: string): Parsed<ReferenceSnapshot | undefined>
 
 export type ClaimedReference = v.InferOutput<typeof repository> & { owner: string; stale: boolean };
 
+export function publishedCollection<T extends CollectionEntry>(snapshot: Pick<ReferenceSnapshot, "owner" | "contributors">, collection: Collection<T>) {
+  const entries = [];
+
+  if (collection.id === repositories.id) {
+    for (const reference of snapshot.owner) entries.push({ value: collection.parse(reference), owner: "office.yaml", stale: false });
+  }
+
+  for (const group of snapshot.contributors) {
+    for (const { id, value } of group.entries) {
+      if (id === collection.id) entries.push({ value: collection.parse(value), owner: `package ${group.name}`, stale: group.stale });
+    }
+  }
+
+  return entries;
+}
+
 export function claims(snapshot: Pick<ReferenceSnapshot, "owner" | "contributors">): Parsed<ClaimedReference[]> {
   const entries: ClaimedReference[] = [];
   const names = new Map<string, string>();
   const errors: string[] = [];
 
-  const add = (references: OfficeConfig["references"], owner: string, stale: boolean) => {
-    for (const reference of references) {
+  try {
+    for (const { value: reference, owner, stale } of publishedCollection(snapshot, repositories)) {
       const first = names.get(reference.name);
 
       if (first !== undefined) errors.push(`reference ${reference.name} claimed by both ${first} and ${owner}; select one claimant and run office sync --packages`);
       else names.set(reference.name, owner);
       entries.push({ ...reference, owner, stale });
     }
-  };
-
-  add(snapshot.owner, "office.yaml", false);
-
-  for (const item of snapshot.contributors) add(item.references, `package ${item.name}`, item.stale);
+  } catch (error) {
+    errors.push(String(error));
+  }
 
   return errors.length ? { ok: false, errors } : { ok: true, value: entries };
 }

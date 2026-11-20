@@ -41,10 +41,9 @@ test("the spawns label is the namespace Floci labels what it starts with, so off
 test("the compose file uses only the package's settings and the office's name", () => {
   if (!manifest.ok) throw new Error(manifest.errors.join("\n"));
 
-  const { source_reference, ...serviceSettings } = manifest.value.settings;
+  const serviceSettings = manifest.value.settings;
   const used = new Set([...composeText.matchAll(/\$\{([A-Z0-9_]+)/g)].map((match) => match[1]));
 
-  expect(source_reference.default).toBe(true);
   expect([...used].sort()).toEqual([...Object.keys(serviceSettings).map(key => settingVariable(manifest.value.namespace, key)), "OFFICE_NAME"].sort());
 });
 

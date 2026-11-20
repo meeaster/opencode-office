@@ -21,6 +21,7 @@ export type CommandMetadata = Omit<RegisteredCommand, "run">;
 export const commandTable = v.strictObject({
   routes: v.pipe(v.array(v.strictObject(metadata)), v.nonEmpty()),
   settings: v.record(v.string(), settingValue),
+  booleans: v.optional(v.record(v.string(), v.boolean())),
   files: v.optional(v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/))),
 });
 

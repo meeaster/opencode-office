@@ -8,8 +8,16 @@ export type OpenCodeContext = {
   desktopPanel(bundle: string): void;
 };
 
+/** A collection of named JSON records. The defining package owns its parser and ID prefix. */
+export type CollectionEntry = { name: string; [field: string]: SettingValue };
+
+export type Collection<T extends CollectionEntry> = {
+  readonly id: string;
+  parse(input: CollectionEntry): T;
+};
+
 export type CommandInputs = {
-  references: readonly { name: string; url: string; ref?: string; description?: string; owner: string; stale: boolean }[];
+  read<T extends CollectionEntry>(collection: Collection<T>): readonly { value: T; owner: string; stale: boolean }[];
 };
 
 export type PackageCommand = {
@@ -22,10 +30,9 @@ export type PackageCommand = {
 export type PackageContext = {
   settings: Readonly<Record<string, SettingValue>>;
   command(command: PackageCommand): void;
-  add(item: {
-    registry: "references.repository";
-    value: { name: string; url: string; ref?: string; description?: string };
-  }): void;
+  booleanSetting(name: string, definition: { description: string; default: boolean }): boolean;
+  collection<T extends CollectionEntry>(collection: Collection<T>): void;
+  add<T extends CollectionEntry>(collection: Collection<T>, value: NoInfer<T>): void;
 };
 
 export type CronContext = {

@@ -573,6 +573,12 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
     if (appGate !== undefined && !v.is(v.boolean(), settings[appGate])) errors.push(`${entry.name}.settings.${appGate}: executor_app.setting requires a boolean`);
   } else {
     for (const [key, value] of Object.entries(settings)) {
+      // Setup can consume additional overrides. Do not deliver unvalidated input to services or plugins.
+      if (!accepted.includes(key) && manifest.setup) {
+        delete settings[key];
+        continue;
+      }
+
       if (!accepted.includes(key)) errors.push(`settings.${key}: ${entry.name} has no such setting (it accepts ${accepted.join(", ") || "none"}); remove it from the entry in office.yaml`);
       else if (!v.is(scalarSetting, value)) errors.push(`settings.${key}: must be text, a number or true/false`);
     }

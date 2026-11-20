@@ -519,14 +519,21 @@ import type { PackageContext } from "../../.office/packages/office/package-conte
 export default {
   name: "notes",
   description: "Notes format and examples",
-  setup({ add }: PackageContext) {
-    add({ registry: "references.repository", value: {
+  async setup(ctx: PackageContext) {
+    const { repositories } = await import("../../.office/packages/references/repositories.ts");
+    ctx.add(repositories, {
       name: "notes-manual", url: "https://example.org/notes.git", ref: "main",
       description: "Notes format and examples.",
-    } });
+    });
   },
 };
 ```
+
+`references` exports the `repositories` handle (a stable `id` and a `parse` function), registers it with `ctx.collection(repositories)`, and calls `inputs.read(repositories)` in its list handler. Each row has a typed `value`, `owner` and `stale` flag. Another package can define a collection of named JSON records the same way: use `<package>.<collection>` as its ID and validate the entry in `parse`. The registered provider's parser validates every addition after all setups finish. Within a collection each entry name must be unique.
+
+Use the actual **installed** module path. Local packages are under `packages/`; Git and built-in packages are under `.office/packages/`. From either managed consumer, import `../references/repositories.ts` **inside setup**: managed definitions are first checked in a staging directory without their installed neighbors. Package selection does not install npm dependencies. A local provider and local consumer can use sibling relative imports.
+
+For a setup-only boolean, call `ctx.booleanSetting("source_reference", { default: true, description: "Include the Floci source checkout in references/" })`. The return value is validated during collection; reads during indexed command registration use the published settings. Static settings still supply plugin and service configuration.
 
 `setup` receives the package's resolved `settings` and may return a promise. Full sync and `sync --packages` collect the complete list before publishing `.office/resolved/references.json`. Sync keeps all of `.office/` out of Git through `info/exclude`; a fresh clone recreates it with `office sync --packages`. Owner references retain their YAML order, followed by package name and registration order. Before first collection, readers use just `office.yaml`. Afterwards `references list`, `instructions`, the office plugin and `sync --references` all read the same versioned list without executing contributors. Run package or full sync after editing either source.
 
@@ -534,7 +541,7 @@ A failed collector loses its partial additions. Sync exits nonzero, publishes he
 
 The checkout records the applied origin, requested ref and checked-out commit together in its local Git config after a successful refresh. `office check` compares that record with the desired source and actual HEAD offline. Older records without a commit need a healthy sync before they can authorize a stale refresh. The scheduled `package.office.update-references` job loads only its declaring package. Setup's GitHub access planning uses the resolved references too.
 
-Snapshot version 3 adds command metadata and owner inputs to the existing reference generation. With a v2 snapshot, the executable's copy of the `references` handler lists its last-good data; with no snapshot, it lists only YAML and says so. `office sync --packages` upgrades either case. Once v3 is published, there is **no embedded fallback** for a missing or failed indexed owner. Update host and container executables before publishing v3; older readers reject the new version.
+Snapshot version 4 stores collections in the same atomic generation as the command index. The CLI can read shipped v2/v3 reference rows; `office sync --packages` installs matching command owners and publishes v4. With a v2 snapshot, the executable's copy of the `references` handler lists its last-good data; with no snapshot, it lists only YAML and says so. Indexed generations have **no embedded fallback** for a missing or failed command owner. Update host and container executables before publishing v4; older readers reject the new version.
 
 As in v2, built-in contributions bind to the executable's package bytes, even when installation fails, and Git contributions bind to the selected repo, package path, ref and resolved commit. Losing a contributor's installed folder doesn't make a moving tag a new pin. If both source records are lost, restore a trusted copy or pin a full commit SHA. Unreadable or incompatible snapshots report an error; only a missing snapshot uses legacy YAML. When upgrading an experimental v1 snapshot, verify the installed Git source records or pin exact commits before moving it aside and rerunning `office sync --packages`.
 

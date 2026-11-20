@@ -64,8 +64,6 @@ export const repository = v.strictObject(
 
 const repositories = v.pipe(v.nullish(v.array(repository, "must be a list"), []), v.check(uniqueNames, "lists a name twice"));
 
-export const referenceContribution = v.strictObject({ registry: v.literal("references.repository"), value: repository });
-
 const names = v.nullish(v.array(name, "must be a list"), []);
 
 const desk = v.nullish(

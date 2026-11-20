@@ -4,7 +4,8 @@ import * as v from "valibot";
 import { claimsInspect, commandRegistration, type RegisteredCommand } from "./command-table.ts";
 import { findOffice, loadOffice, type Office, OfficeError, readOfficeFields } from "./office.ts";
 import { builtinSource, embeddedPackage, filesDigest, gitSelection, installedDefinition, type PackageRecord, resolvePackages, type ResolvedPackage } from "./packages.ts";
-import { publishedInputs, readSnapshot, referenceInputs, type ReferenceSnapshot } from "./reference-snapshot.ts";
+import { publishedCollection, publishedInputs, readSnapshot, referenceInputs, type ReferenceSnapshot } from "./reference-snapshot.ts";
+import type { CommandInputs } from "../packages/office/package-context.ts";
 import { check, commandBootstrapSchema, packageEntry, referenceInputSchema } from "./schema.ts";
 
 type Owner = ReferenceSnapshot["contributors"][number];
@@ -41,7 +42,7 @@ export function commandHelp(start: string): string[] {
 
   const snapshot = read ? read.value : undefined;
 
-  if (snapshot?.version !== 3) return [`  ${listing.name}    ${listing.summary} (bootstrap)`];
+  if (!snapshot || snapshot.version === 2) return [`  ${listing.name}    ${listing.summary} (bootstrap)`];
 
   const lines: string[] = [];
 
@@ -92,7 +93,7 @@ async function handler(office: Selections, owner: Owner, canonical: string, requ
     if (manifest.name !== owner.name || !owner.commands) throw new OfficeError("command owner changed");
 
     await manifest.setup?.(setupContext({
-      settings: structuredClone(owner.commands.settings), add() {},
+      settings: structuredClone(owner.commands.settings), add() {}, collection() {},
       command(input) {
         const read = commandRegistration(input);
 
@@ -101,7 +102,7 @@ async function handler(office: Selections, owner: Owner, canonical: string, requ
 
         if (command.name === canonical || named(command, requested)) matches.push(command);
       },
-    }));
+    }, owner.commands.booleans ?? {}, new Set(Object.keys(manifest.settings))));
 
     if (matches.length !== 1 || matches[0].name !== canonical || !named(matches[0], requested)) throw new OfficeError("owner no longer provides this registration unambiguously");
 
@@ -152,7 +153,7 @@ export async function dispatchCommand(start: string, words: string[]): Promise<b
   const snapshot = read.value;
   const requested = words.join(" ");
   const indexed = indexedCommand(snapshot, requested);
-  const bootstrap = snapshot?.version !== 3 && requested === listing.name;
+  const bootstrap = (!snapshot || snapshot.version === 2) && requested === listing.name;
 
   if (!bootstrap && !indexed) return false;
   const { office, inputs } = indexed && snapshot ? indexedInputs(dir, snapshot, indexed.owner.name) : bootstrapInputs(dir, snapshot);
@@ -162,13 +163,17 @@ export async function dispatchCommand(start: string, words: string[]): Promise<b
 
   for (const note of notes) console.error(note);
 
+  const publication = snapshot ?? { owner: entries.map(({ owner, stale, ...value }) => value), contributors: [] };
+  // Keep the runtime input of already-indexed pre-collection commands through the upgrade.
+  const commandInputs = { references: entries, read: (collection) => publishedCollection(publication, collection) } satisfies CommandInputs & { references: typeof entries };
+
   if (indexed) {
     const run = await handler(office, indexed.owner, indexed.canonical, requested);
-    await run({ references: entries });
+    await run(commandInputs);
   } else {
     selectedOwner(office, "references"); // No implicit takeover of a legacy package's name.
     console.error(snapshot ? "Legacy reference generation; run office sync --packages to index commands." : "No reference generation yet; listing office.yaml only. Run office sync --packages to collect contributors.");
-    listing.run({ references: entries });
+    listing.run(commandInputs);
   }
 
   return true;
