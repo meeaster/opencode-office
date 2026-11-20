@@ -64,3 +64,11 @@ done
 config 'storage: persistent'
 observe 4566 4500 persistent
 "$exe" references list | grep '^floci.*package aws-emulator$'
+
+# Before the next sync, up uses the current selection; plugin delivery stays published.
+config 'port: "24566", storage: hybrid'
+if "$exe" up > "$base/up.log" 2>&1; then exit 1; fi
+grep -q 'offline Docker stop' "$base/up.log"
+OFFICE_NAME=exercise "$docker" compose -p example -f "$applied/include.yaml" config --format json |
+  jq -e '.services.floci.ports[0].published=="24566" and .services.floci.environment.FLOCI_STORAGE_MODE=="hybrid"'
+jq -e '.port==4566 and .storage=="persistent"' "$record"

@@ -455,8 +455,8 @@ export async function fetchPackage(office: Office, entry: PackageEntry, source: 
   const revision = boundCommit ?? (known ? record.commit : source.ref);
   const movingPin = entry.source?.ref !== source.ref;
 
-  async function validate(dir: string) {
-    const resolved = { entry: { ...entry, source }, dir, kind: "remote" } satisfies ResolvedPackage;
+  async function validate(candidate: string) {
+    const resolved = { entry: { ...entry, source }, dir: candidate, kind: "remote" } satisfies ResolvedPackage;
 
     await validateStaged(office, resolved, existsSync(dir), movingPin);
   }
@@ -536,6 +536,7 @@ export function removePackage(office: Office, name: string): string[] {
   }
 
   rmSync(dir, { recursive: true });
+  rmSync(scalarReceipt(office, name), { force: true });
 
   return [...changes, `removed ${where}/, which office.yaml no longer lists`];
 }
@@ -665,12 +666,14 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
 }
 
 /** Validate a candidate against the consuming entry before any live path points at its files. */
-export function validateReplacement(office: Office, resolved: ResolvedPackage) {
+export async function validateReplacement(office: Office, resolved: ResolvedPackage, resolveSetup: boolean) {
   const read = readPackage(office, resolved);
 
   if (!read.ok) throw new Error(read.errors.join("; "));
 
   const item = read.value;
+
+  if (resolveSetup) await resolveSetupSettings(item);
 
   if (item.manifest.opencode) collectAssets(office.dir, item);
   const { host, system } = item.manifest;
@@ -702,8 +705,8 @@ export function validateReplacement(office: Office, resolved: ResolvedPackage) {
 }
 
 async function validateStaged(office: Office, resolved: ResolvedPackage, replacing: boolean, movingPin = false) {
-  if (!movingPin && !(replacing && existsSync(join(resolved.dir, packageComposeFile)))) {
-    validateReplacement(office, resolved);
+  if (!movingPin && !replacing) {
+    await validateReplacement(office, resolved, false);
 
     return;
   }
@@ -725,12 +728,22 @@ export function applyScalarSettings(item: InstalledPackage, scalars: Record<stri
   item.settings = settings;
 }
 
-export async function validateSetupOverrides(item: InstalledPackage, all = false) {
+async function resolveSetupSettings(item: InstalledPackage) {
   const overrides = item.entry.settings ?? {};
 
-  if (!item.manifest.setup || !(all || existsSync(join(item.dir, packageComposeFile)) || Object.keys(overrides).some(key => !Object.hasOwn(item.manifest.settings, key)))) return;
+  if (!item.manifest.setup) return;
   const { scalars } = await runPackageSetup(item.manifest, overrides, { settings: structuredClone(item.settings), command() {}, collection() {}, add() {} });
   applyScalarSettings(item, scalars);
+}
+
+// Inventory must know whether setup supplies defaults independently of the delivery
+// it is checking. Keep this receipt outside package bytes and the v4 command index.
+function scalarReceipt(office: Office, name: string) {
+  return join(office.dir, ".office/resolved/scalar-settings", name);
+}
+
+export async function validateSetupOverrides(office: Office, item: InstalledPackage) {
+  if (!item.manifest.settings_schema && (existsSync(scalarReceipt(office, item.entry.name)) || Object.keys(item.entry.settings ?? {}).some(key => !Object.hasOwn(item.manifest.settings, key)))) await resolveSetupSettings(item);
 }
 
 /** `.office.json`'s content: what the office declares to its packages. */
@@ -752,6 +765,13 @@ export function installPackage(office: Office, installed: InstalledPackage): str
   const changes: string[] = [];
   const settingsPath = join(installed.dir, settingsFile);
   const settings = settingsText(installed);
+  const receipt = scalarReceipt(office, installed.entry.name);
+  const usesScalars = !installed.manifest.settings_schema && Object.keys(installed.settings).some(key => !Object.hasOwn(installed.manifest.settings, key));
+
+  if (usesScalars && !existsSync(receipt)) {
+    mkdirSync(dirname(receipt), { recursive: true });
+    writeFileSync(receipt, "setup supplies scalar settings\n");
+  } else if (!usesScalars && existsSync(receipt)) rmSync(receipt);
 
   if (!existsSync(settingsPath) || readFileSync(settingsPath, "utf8") !== settings) {
     writeFileSync(settingsPath, settings);

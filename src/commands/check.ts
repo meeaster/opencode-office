@@ -308,10 +308,8 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
     const settingsPath = join(item.dir, settingsFile);
 
     try {
-      // An unchanged static settings file needs no extra setup execution for inventory.
-      // A delivered default can add keys even when office.yaml has no overrides.
       const previous = existsSync(settingsPath) ? readFileSync(settingsPath, "utf8") : undefined;
-      await validateSetupOverrides(item, previous !== settingsText(item));
+      await validateSetupOverrides(office, item);
       const written = previous === settingsText(item);
       notes.push(written ? `settings valid; settings written to ${relative(office.dir, settingsPath)}` : `settings valid, but ${relative(office.dir, settingsPath)} doesn't hold them; office sync writes it`);
 

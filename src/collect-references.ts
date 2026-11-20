@@ -115,13 +115,12 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
 
         const files = provided.size || (routes.length && item.kind === "remote") ? providerFiles(item) : undefined;
 
+        applyScalarSettings(pkg, scalars);
+
         const commands = routes.length ? {
           routes: [...routes], settings: pkg.settings, booleans: Object.keys(booleans).length ? booleans : undefined,
-          scalars: Object.keys(scalars).length ? scalars : undefined,
           files: item.kind !== "built-in" ? files : undefined,
         } : undefined;
-
-        applyScalarSettings(pkg, scalars);
 
         if (provided.size) {
           // A local provider has no immutable revision: bind its package bytes too. Setup

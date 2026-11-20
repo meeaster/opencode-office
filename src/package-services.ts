@@ -67,9 +67,10 @@ export function serviceStatus(office: Office, item: InstalledPackage) {
 
 export async function preparePackageServices(office: Office, upgrade: boolean) {
   const { installed, selected } = installedPackages(office);
+  const applied = compose.appliedServices(office);
 
   for (const item of installed) {
-    if (existsSync(join(item.dir, compose.packageComposeFile))) await validateSetupOverrides(item);
+    if (existsSync(join(item.dir, compose.packageComposeFile)) || (!upgrade && applied.has(item.entry.name))) await validateSetupOverrides(office, item);
   }
 
   const plan = compose.prepareServices(office, installed.map(source), selected, upgrade);

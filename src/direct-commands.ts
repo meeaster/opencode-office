@@ -94,8 +94,10 @@ async function handler(office: Selections, owner: Owner, canonical: string, requ
 
     if (manifest.name !== owner.name || !owner.commands) throw new OfficeError("command owner changed");
 
+    const delivered = owner.commands.settings;
+    const staticSettings = manifest.settings_schema ? delivered : Object.fromEntries(Object.entries(delivered).filter(([key]) => Object.hasOwn(manifest.settings, key)));
     await manifest.setup?.(setupContext({
-      settings: structuredClone(owner.commands.settings), add() {}, collection() {},
+      settings: structuredClone(staticSettings), add() {}, collection() {},
       command(input) {
         const read = commandRegistration(input);
 
@@ -104,7 +106,7 @@ async function handler(office: Selections, owner: Owner, canonical: string, requ
 
         if (command.name === canonical || named(command, requested)) matches.push(command);
       },
-    }, { ...owner.commands.scalars, ...owner.commands.booleans }, new Set(Object.keys(manifest.settings))));
+    }, { ...delivered, ...owner.commands.booleans }, new Set(Object.keys(manifest.settings))));
 
     if (matches.length !== 1 || matches[0].name !== canonical || !named(matches[0], requested)) throw new OfficeError("owner no longer provides this registration unambiguously");
 

@@ -1402,6 +1402,7 @@ for (const order of [["alpha", "catalog"], ["catalog", "alpha"]]) {
     git(["init", "-qb", "main", repo]);
     const contract = (unit: string) => write(join(repo, "catalog/items.ts"), `export const items={id:"catalog.items",parse:i=>({...i,unit:"${unit}"})}`);
     const consumer = join(repo, "alpha/office.ts");
+    write(join(repo, "alpha/compose.yaml"), "services: {alpha: {image: example/alpha}}\n");
     write(consumer, `export default {name:"alpha",description:"author",async setup(c){if(c.booleanSetting("enabled",{default:false,description:"use catalog"})){
       const {items}=await import("../catalog/items.ts");c.add(items,{name:"sample"});}}}`);
     write(join(repo, "catalog/office.ts"), `import {items} from "./items.ts";export default {name:"catalog",description:"provider",setup(c){
@@ -1452,6 +1453,7 @@ test("tracked updates validate the consuming settings and staged assets before p
     ['export default {name:"shared",description:"New",setup(c){c.booleanSetting("active",{default:true,description:"Active"})}}', "settings.title"],
     ['export default {name:"shared",description:"New",setup(c){c.booleanSetting("title",{default:true,description:"Title"})}}', "settings.title: must be true or false"],
     ['export default {name:"shared",description:"New",setup(c){c.scalarSetting("title",{default:"ok",description:"Title"});c.scalarSetting("new_key",{default:"can\'t",description:"Not an env literal"})}}', "setting new_key holds a quote"],
+    ['export default {name:"shared",description:"New",setup(c){c.scalarSetting("title",{default:"fallback",description:"Title"})},opencode(c){if(c.settings.title==="Mine")c.serverPlugin("missing")}}', "existing directory"],
     [definition.replace("settings:", 'cron:{job:{script:"missing.sh",schedule:"@daily"}},settings:'), "missing.sh"],
     [definition.replace("settings:", 'registerCron(ctx){ctx.cron.job("job",{script:"missing.sh",schedule:"@daily"})},settings:'), "missing.sh"],
     [definition.replace("settings:", 'registerCron(ctx){ctx.cron.job("job",false);throw Error("interrupted replacement")},settings:'), "interrupted replacement"],
