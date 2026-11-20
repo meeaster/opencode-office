@@ -1,0 +1,29 @@
+export default {
+  name: "design",
+  namespace: "doop",
+  description: "A self-hosted Doop design canvas (https://github.com/kgoedecke/doop) in the office's compose project, connected to every session as the doop MCP server.",
+  settings: {
+    port: {
+      description: "The loopback port Doop is published on, and listens on inside its container, so the browser opens http://localhost:<port>",
+      default: 41441,
+    },
+    url: {
+      description: "The exact address the browser opens Doop at, when a reverse proxy such as a Tailscale Service fronts it, such as https://doop.<tailnet>.ts.net, without a trailing slash; empty for http://localhost:<port>",
+      default: "",
+    },
+    executor_app: {
+      description: "Whether sessions reach Doop through the doop Executor app, with one Doop account a person connects in Executor for the whole office, instead of the doop MCP server and the agent key file; office apps deploy deploys the app",
+      default: false,
+    },
+    oauth: {
+      description: "Whether the doop Executor app offers signing in to Doop (OAuth) beside the agent key. Without url, Doop then opens at http://doop.localhost:<port>, which the browser and Executor's container both reach; with url, that address must reach Doop from Executor's container too. False offers only the agent key and keeps http://localhost:<port>",
+      default: true,
+    },
+  },
+  executor_app: { setting: "executor_app" },
+  secrets: {
+    DOOP_BETTER_AUTH_SECRET: { generate: "hex", bytes: 32 },
+    DOOP_SECRETS_ENCRYPTION_KEYS: { generate: "base64", bytes: 32, prefix: "k1:" },
+    DOOP_DB_PASSWORD: { generate: "hex", bytes: 32 },
+  },
+};
