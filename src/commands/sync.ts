@@ -18,7 +18,7 @@ import { beginReferencePublication, planReferenceApply } from "../reference-publ
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { collectJobs } from "../cron/jobs.ts";
 import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
-import { cloneOrFetchStreamed, clonePluginStreamed, git, isClone, referenceGit, referenceOriginProblem, refreshCloneStreamed } from "../git.ts";
+import { cloneOrFetchStreamed, clonePluginStreamed, existingPluginDestination, git, isClone, PluginCheckoutProblem, referenceGit, referenceOriginProblem, refreshCloneStreamed, verifiedHead } from "../git.ts";
 import { type Clone, clones, installedPackages, skillSelections } from "../layout.ts";
 import { legacyPlugin, linkPlugins, requirePluginDestination, withPluginPlan } from "../../standard/opencode/delivery.ts";
 import { migrate } from "../migrate.ts";
@@ -163,8 +163,6 @@ function removeOldKnowledgePlugin(office: Office): string[] {
 const fetchSlots = 8;
 const cloneSlots = 4;
 
-class PluginCheckoutProblem extends Error {}
-
 /** Check both the working tree being updated and the effective fetch URL. */
 function requirePluginCheckout(office: Office, dir: string, url: string) {
   requirePluginDestination(office);
@@ -189,8 +187,18 @@ async function syncPlugin(office: Office, clone: Clone, present: boolean) {
   const verify = () => requirePluginCheckout(office, clone.dir, clone.url);
 
   try {
-    if (!present) return await clonePluginStreamed(clone.url, clone.ref, clone.dir, office.dir, verify);
+    if (!present) {
+      // Even an empty folder is the owner's: publication would replace it and its metadata.
+      if (lstatSync(clone.dir, { throwIfNoEntry: false })) throw new PluginCheckoutProblem(existingPluginDestination);
+
+      return await clonePluginStreamed(clone.url, clone.ref, clone.dir, office.dir, verify);
+    }
+
     verify();
+
+    // A checkout with no commit (such as one a failed clone left) would be filled in place, where
+    // OpenCode already looks. Refuse it before fetching rather than adopt it.
+    if (!verifiedHead(clone.dir)) throw new PluginCheckoutProblem("existing plugin checkout has no commit; left unchanged. Move it aside so office sync can clone a fresh copy, then sync again");
 
     return await refreshCloneStreamed(clone.ref, clone.dir, {}, verify);
   } catch (error) {

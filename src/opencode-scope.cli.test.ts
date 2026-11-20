@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import * as v from "valibot";
@@ -10,6 +10,9 @@ const sandbox = mkdtempSync(join(tmpdir(), "office-opencode-scope-"));
 const office = join(sandbox, "bin/office");
 const launcher = process.env.OFFICE_TEST_OPENCODE;
 const previous = process.env.OFFICE_TEST_PRE_INSPECT;
+
+// Optional control: the compiled CLI from before plugin delivery refused owner folders (567252f).
+const control = process.env.OFFICE_TEST_PLUGIN_CONTROL;
 
 function write(path: string, text: string) {
   mkdirSync(dirname(path), { recursive: true });
@@ -287,24 +290,25 @@ test("a first plugin clone verifies the effective origin before fetching and bef
   gitAt(f.home, f.env, "config", "--file", policy, rewrite, remote);
   gitAt(f.home, f.env, "config", "--global", `includeIf.gitdir:${plugin}/.git.path`, policy);
 
-  for (const preexisting of [false, true]) {
-    if (preexisting) mkdirSync(plugin);
-    const inode = preexisting ? statSync(plugin).ino : undefined;
-
-    for (let attempt = 0; attempt < 2; attempt++) {
-      write(trace, "");
-      const report = await f.run(["sync"], 1);
-      expect(readFileSync(trace, "utf8").split("\n")).not.toContain("fetch");
-      expect(report).toContain("cannot verify plugin checkout origin");
-      expect(report).not.toContain(remote);
-      expect(report).not.toContain("unexpected");
-
-      if (inode !== undefined) {
-        expect(statSync(plugin).ino).toBe(inode);
-        expect(readdirSync(plugin)).toEqual([]);
-      } else expect(existsSync(plugin)).toBe(false);
-    }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    write(trace, "");
+    const report = await f.run(["sync"], 1);
+    expect(readFileSync(trace, "utf8").split("\n")).not.toContain("fetch");
+    expect(report).toContain("cannot verify plugin checkout origin");
+    expect(report).not.toContain(remote);
+    expect(report).not.toContain("unexpected");
+    expect(existsSync(plugin)).toBe(false);
   }
+
+  // An owner's empty folder is refused before Git runs at all, origin aside.
+  mkdirSync(plugin);
+  const inode = statSync(plugin).ino;
+  write(trace, "");
+  expect(await f.run(["sync"], 1)).toContain("Move it aside");
+  expect(readFileSync(trace, "utf8")).not.toContain("fetch");
+  expect(statSync(plugin).ino).toBe(inode);
+  expect(readdirSync(plugin)).toEqual([]);
+  rmSync(plugin, { recursive: true });
 
   gitAt(f.home, f.env, "config", "--file", policy, "--unset", rewrite);
   // Change the configured origin only after a successful, ordinary local fetch.
@@ -314,14 +318,14 @@ test("a first plugin clone verifies the effective origin before fetching and bef
   const commands = readFileSync(trace, "utf8").split("\n");
   expect(commands).toContain("fetch");
   expect(commands).not.toContain("checkout");
-  expect(readdirSync(plugin)).toEqual([]);
+  expect(existsSync(plugin)).toBe(false);
 
   // A checkout can write files and still exit nonzero. Nothing partial becomes a plugin.
   write(shim, `#!/bin/sh\n"${native}" "$@" || exit $?\ncase " $* " in *" checkout "*) echo 'https://hidden-user:hidden-pass@example.invalid' >&2; exit 92;; esac\n`);
   const failed = await f.run(["sync"], 1);
   expect(failed).toContain("plugin Git operation failed");
   expect(failed).not.toContain("hidden-");
-  expect(readdirSync(plugin)).toEqual([]);
+  expect(existsSync(plugin)).toBe(false);
   expect(readdirSync(f.dir).some(name => name.startsWith(".office-plugin-"))).toBe(false);
 
   rmSync(shim);
@@ -382,9 +386,123 @@ test("a plugin checkout with the wrong origin is not cleaned, fetched or force-c
   expect(readFileSync(join(plugin, ".git/config"))).toEqual(config);
   gitAt(plugin, f.env, "remote", "set-url", "origin", remote);
   write(join(plugin, ".git/owner-note"), "keep\n");
-  f.select(`plugins: [{name: imported, repo: ${remote}, ref: missing}]\n`);
-  expect(await f.run(["sync"], 1)).toContain("plugin Git operation failed");
+  // The right origin does not make a checkout with no commit Office's to fill in.
+  expect(await f.run(["sync"], 1)).toContain("has no commit");
   expect(readFileSync(join(plugin, ".git/owner-note"), "utf8")).toBe("keep\n");
+  expect(existsSync(join(plugin, ".git/FETCH_HEAD"))).toBe(false);
+}, 60_000);
+
+/** Every entry under `dir` with its mode and contents, and the folder's own inode and mode. */
+function snapshot(dir: string) {
+  const entries: Record<string, string> = {};
+
+  const walk = (folder: string) => {
+    for (const name of readdirSync(join(dir, folder)).sort()) {
+      const path = join(folder, name);
+      const info = lstatSync(join(dir, path));
+
+      if (info.isDirectory()) {
+        entries[path] = `folder ${info.mode}`;
+        walk(path);
+      } else entries[path] = `${info.mode} ${readFileSync(join(dir, path), "base64")}`;
+    }
+  };
+
+  walk("");
+  const { ino, mode } = statSync(dir);
+
+  return { ino, mode, entries };
+}
+
+function pluginRemote(f: ReturnType<typeof fixture>, files: Record<string, string>) {
+  const remote = join(f.home, "remote");
+
+  for (const [name, text] of Object.entries(files)) write(join(remote, name), text);
+  gitAt(remote, f.env, "init", "-q");
+  gitAt(remote, f.env, "add", ".");
+  gitAt(remote, f.env, "commit", "-qm", "plugin");
+  f.select(`plugins: [{name: imported, repo: ${remote}}]\n`);
+
+  return remote;
+}
+
+test("a plugin checkout with no commit is refused before fetching, even with the declared origin, and exposes nothing", async () => {
+  for (const executable of [office, ...(control ? [control] : [])]) {
+    const f = fixture(executable === office ? "unborn" : "unborn-control", "http://127.0.0.1:1");
+    const plugin = join(f.dir, ".opencode/plugins/imported");
+    // A required smudge filter fails on the last file, after index.js is written.
+    const remote = pluginRemote(f, { ".gitattributes": "zz-last filter=fail\n", "index.js": command("exposed"), "zz-last": "last\n" });
+    gitAt(f.dir, f.env, "init", "-q", plugin);
+    gitAt(plugin, f.env, "remote", "add", "origin", remote);
+    gitAt(plugin, f.env, "config", "filter.fail.smudge", "false");
+    gitAt(plugin, f.env, "config", "filter.fail.required", "true");
+    const before = snapshot(plugin);
+    const report = await f.run(["sync"], 1, executable);
+
+    if (executable !== office) {
+      // The control: refresh checks out into the folder OpenCode discovers.
+      expect(existsSync(join(plugin, "index.js"))).toBe(true);
+      expect(existsSync(join(plugin, "zz-last"))).toBe(false);
+      continue;
+    }
+
+    expect(report).toContain("existing plugin checkout has no commit; left unchanged. Move it aside");
+    expect(report).not.toContain(remote);
+    expect(snapshot(plugin)).toEqual(before);
+    expect(existsSync(join(plugin, "index.js"))).toBe(false);
+    expect(existsSync(join(plugin, ".git/FETCH_HEAD"))).toBe(false);
+  }
+}, 60_000);
+
+test("first plugin delivery never replaces an owner's folder, even an empty one or one that appears mid-delivery", async () => {
+  const f = fixture("owner-folder", "http://127.0.0.1:1");
+  const plugin = join(f.dir, ".opencode/plugins/imported");
+  const remote = pluginRemote(f, { "index.js": command("delivered") });
+  const native = Bun.which("git", { PATH: f.env.PATH });
+
+  if (!native) throw new Error("git required for plugin checkout test");
+  mkdirSync(plugin, { recursive: true });
+  chmodSync(plugin, 0o750);
+  const owner = snapshot(plugin);
+  expect(await f.run(["sync"], 1)).toContain("existing folder at the plugin destination kept; office sync clones only into a path that does not exist. Move it aside");
+  expect(snapshot(plugin)).toEqual(owner);
+
+  if (control) {
+    // The control publishes over the empty folder: another inode, staging's 0700 mode.
+    await f.run(["sync"], 0, control);
+    expect(statSync(plugin).ino).not.toBe(owner.ino);
+    expect(statSync(plugin).mode & 0o777).toBe(0o700);
+  }
+
+  rmSync(plugin, { recursive: true });
+  // An owner folder replaces the claim while Git fetches. It stays, with its inode and mode.
+  const shim = join(f.home, "bin/git");
+  const aside = join(f.home, "aside");
+  const substitute = join(f.home, "substitute");
+  write(shim, `#!/bin/sh\n"${native}" "$@" || exit $?\nif [ "$1" = fetch ]; then mv "${plugin}" "${aside}"; mkdir -m 750 "${plugin}"; stat -c %i "${plugin}" > "${substitute}"; fi\n`);
+  chmodSync(shim, 0o755);
+  const originalPath = f.env.PATH;
+  f.env.PATH = `${dirname(shim)}:${originalPath}`;
+  expect(await f.run(["sync"], 1)).toContain("cannot verify plugin checkout origin");
+  expect(statSync(plugin).ino).toBe(Number(readFileSync(substitute, "utf8")));
+  expect(statSync(plugin).mode & 0o777).toBe(0o750);
+  expect(readdirSync(plugin)).toEqual([]);
+  rmSync(plugin, { recursive: true });
+  rmSync(aside, { recursive: true });
+
+  // A file an owner puts inside the claim survives, and nothing is published around it.
+  write(shim, `#!/bin/sh\n"${native}" "$@" || exit $?\nif [ "$1" = fetch ]; then echo owner > "${plugin}/owner.txt"; fi\n`);
+  expect(await f.run(["sync"], 1)).toContain("plugin destination changed during delivery; kept what appeared there and published nothing");
+  expect(readdirSync(plugin)).toEqual(["owner.txt"]);
+  expect(readFileSync(join(plugin, "owner.txt"), "utf8")).toBe("owner\n");
+  rmSync(plugin, { recursive: true });
+
+  f.env.PATH = originalPath;
+  await f.run(["sync"]);
+  await f.run(["sync"]);
+  expect(gitAt(plugin, f.env, "rev-parse", "HEAD")).toBe(gitAt(remote, f.env, "rev-parse", "HEAD"));
+  expect(readFileSync(join(plugin, "index.js"), "utf8")).toBe(command("delivered"));
+  expect(readdirSync(f.dir).some(name => name.startsWith(".office-plugin-"))).toBe(false);
 }, 60_000);
 
 // A real previous release is the control: no synthetic generation and no rewriting a digest.

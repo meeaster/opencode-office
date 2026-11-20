@@ -2,12 +2,13 @@
 // copies of one folder of a repository.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, type BigIntStats } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, type BigIntStats } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import * as v from "valibot";
 
 import type { ReferenceGit } from "../packages/references/tasks/refresh.ts";
+import { RenameError, renameNoReplace } from "./no-replace.ts";
 import { streamChecked } from "./report/index.ts";
 import { check } from "./schema.ts";
 
@@ -262,59 +263,124 @@ function sameEntry(path: string, original: BigIntStats) {
   return entry?.dev === original.dev && entry.ino === original.ino;
 }
 
-/** Fetch with the final gitdir (including its path-specific Git config), but publish only
- * a completed worktree. A failed checkout must not leave discoverable plugin sources. */
+/** A plugin refusal whose message is safe to show: it never quotes Git output or URLs. */
+export class PluginCheckoutProblem extends Error {}
+
+export const existingPluginDestination = "existing folder at the plugin destination kept; office sync clones only into a path that does not exist. Move it aside, then sync again";
+
+/** The commit a checkout's HEAD names, read without fetching missing promisor objects; undefined
+ * when it names none (an unborn or broken checkout). Changes nothing in the checkout. */
+export function verifiedHead(dir: string): string | undefined {
+  try {
+    return execFileSync("git", ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], {
+      cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+    }).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Office's rename into place: atomic, and never over an entry someone else put there. */
+function publish(from: string, to: string) {
+  try {
+    renameNoReplace(from, to);
+  } catch (error) {
+    const code = error instanceof RenameError ? error.code : "unavailable";
+
+    if (code === "EEXIST") throw new PluginCheckoutProblem(existingPluginDestination);
+    throw new PluginCheckoutProblem(`cannot place the plugin without risking replacing an entry (${code}); nothing was published`);
+  }
+}
+
+/**
+ * Moves `path` into the private `holding` path and keeps it there only while it is still
+ * `original` (and, with `empty`, holds nothing). Anything else, which someone substituted, goes
+ * straight back without replacing anything. Returns whether `path` was ours.
+ */
+function withdraw(path: string, original: BigIntStats, holding: string, empty: boolean): boolean {
+  try {
+    renameNoReplace(path, holding);
+  } catch (error) {
+    if (error instanceof RenameError && error.code === "ENOENT") return false;
+    throw error;
+  }
+
+  if (sameEntry(holding, original) && (!empty || readdirSync(holding).length === 0)) return true;
+
+  try {
+    renameNoReplace(holding, path);
+  } catch {
+    throw new PluginCheckoutProblem(`an entry that appeared at ${path} during delivery is kept at ${holding}; move it back yourself`);
+  }
+
+  return false;
+}
+
+/**
+ * First delivery of a plugin clone to `dir`, which must not exist. The destination is claimed
+ * with a folder made in a private staging folder and renamed into place without replacement, so
+ * an owner's folder (even an empty one) is never adopted. Git fetches with the final gitdir, so
+ * path-specific Git config applies, then checks out into the staging folder. Publication withdraws
+ * the claim and renames the complete tree into place, again without replacement: OpenCode sees at
+ * most the empty claim with its `.git`, then the whole checkout. Anything that replaces or enters
+ * the claim meanwhile stays where its author put it, with the same inode and metadata.
+ */
 export async function clonePluginStreamed(url: string, ref: string | undefined, dir: string, officeDir: string, verifyCheckout: () => void): Promise<"cloned"> {
   mkdirSync(dirname(dir), { recursive: true });
-  const created = mkdirSync(dir, { recursive: true }) !== undefined;
-  const folder = lstatSync(dir, { bigint: true });
+  const work = mkdtempSync(join(officeDir, ".office-plugin-"));
+  const claim = join(work, "claim");
+  const tree = join(work, "tree");
   const metadata = join(dir, ".git");
-  // Reserve metadata exclusively: init must never adopt a .git that arrived since planning.
-  mkdirSync(metadata);
-  const owned = lstatSync(metadata, { bigint: true });
+  mkdirSync(join(claim, ".git"), { recursive: true });
+  const folder = lstatSync(claim, { bigint: true });
+  const owned = lstatSync(join(claim, ".git"), { bigint: true });
+  let keep = false;
 
   const verify = () => {
     verifyCheckout();
 
-    if (!sameEntry(dir, folder) || !sameEntry(metadata, owned)) throw new Error("plugin checkout was replaced; retry sync");
+    if (!sameEntry(dir, folder) || !sameEntry(metadata, owned)) throw new PluginCheckoutProblem("plugin destination changed during delivery; nothing was published");
   };
 
   try {
-    await fetchNewShallow(url, ref, dir, {}, verify);
-    verify();
-    const staging = mkdtempSync(join(officeDir, ".office-plugin-"));
-    let moved = false;
+    publish(claim, dir);
 
     try {
-      git(["--work-tree", staging, "checkout", "--quiet", "--detach", "FETCH_HEAD"], dir);
+      await fetchNewShallow(url, ref, dir, {}, verify);
       verify();
-      renameSync(metadata, join(staging, ".git"));
-      renameSync(staging, dir); // Fails if any owner entry appeared in the destination.
-      moved = true;
-    } finally {
-      if (!moved) rmSync(staging, { recursive: true, force: true });
-    }
+      mkdirSync(tree);
+      git(["--work-tree", tree, "checkout", "--quiet", "--detach", "FETCH_HEAD"], dir);
+      verify();
 
-    return "cloned";
+      if (!withdraw(metadata, owned, join(tree, ".git"), false) || !withdraw(dir, folder, join(work, "released"), true)) {
+        throw new PluginCheckoutProblem("plugin destination changed during delivery; kept what appeared there and published nothing");
+      }
+
+      publish(tree, dir);
+
+      return "cloned";
+    } catch (error) {
+      // Take back only our own claim; withdraw restores a substituted entry.
+      if (withdraw(metadata, owned, join(work, "metadata"), false)) withdraw(dir, folder, join(work, "released"), true);
+      throw error;
+    }
   } catch (error) {
-    if (sameEntry(dir, folder)) {
-      if (sameEntry(metadata, owned)) rmSync(metadata, { recursive: true });
-
-      if (created && readdirSync(dir).length === 0) rmdirSync(dir);
-    }
-
+    // Keep the staging folder if it now holds an entry that could not be put back.
+    if (error instanceof PluginCheckoutProblem && error.message.includes(work)) keep = true;
     throw error;
+  } finally {
+    if (!keep) rmSync(work, { recursive: true, force: true });
   }
 }
 
-/** `refreshClone`, without blocking. */
+/** `refreshClone` for a plugin checkout already verified to name a commit, without blocking. */
 export async function refreshCloneStreamed(ref: string | undefined, dir: string, options: GitOptions, verifyCheckout: () => void): Promise<"updated" | "current"> {
-  // Keep a verified unborn checkout's metadata (including owner config) across retries.
-  const before = unbornClone(dir) ? undefined : head(dir);
+  const before = verifiedHead(dir);
 
+  if (!before) throw new PluginCheckoutProblem("plugin checkout has no commit; left unchanged");
   await gitStreamed(["fetch", "--depth", "1", "origin", ref ?? "HEAD"], dir, options);
   verifyCheckout(); // The fetch may have waited while another process redirected the checkout.
-  git(["checkout", "--quiet", ...(before ? ["--force"] : []), "--detach", "FETCH_HEAD"], dir);
+  git(["checkout", "--quiet", "--force", "--detach", "FETCH_HEAD"], dir);
 
   return head(dir) === before ? "current" : "updated";
 }
