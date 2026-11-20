@@ -49,10 +49,16 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
     const name = item.entry.name;
     const pkg = available.get(name);
 
-    if (pkg && !pkg.manifest.setup) continue;
+    if (pkg && !pkg.manifest.setup && !pkg.manifest.opencode) continue;
 
     const source = provenance(item, previous, rejected.has(name), embedded);
     const values: Repository[] = [];
+
+    if (pkg && !pkg.manifest.setup) {
+      // Bind an OpenCode-only Git contributor's immutable revision for repair too.
+      candidate.contributors.push({ name, ...source, stale: false, references: [] });
+      continue;
+    }
 
     if (pkg?.manifest.setup) {
       try {

@@ -5,15 +5,41 @@ import { existsSync, mkdirSync, readFileSync, watch } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 
 import { installPanel, locate, panelBundle, sha256 } from "../desktop.ts";
-import { localDir, resolvePackages } from "../packages.ts";
-import { type Office, OfficeError } from "../office.ts";
+import { readPackage, resolvePackages } from "../packages.ts";
+import { loadOffice, type Office, OfficeError } from "../office.ts";
+import { collectAssets, validateAssets } from "../../standard/opencode/assets.ts";
+import { declarationBinding } from "../../standard/opencode/delivery.ts";
+import { readDeclarations } from "../../standard/opencode/receipts.ts";
 
-export async function guiDev(office: Office, name: string): Promise<void> {
-  const resolved = resolvePackages(office).packages.find((item) => item.entry.name === name);
+function panelSource(office: Office, name: string) {
+  const resolved = resolvePackages(office, name).packages[0];
 
   if (resolved === undefined) throw new OfficeError(`office.yaml lists no package ${name}`);
 
   if (resolved.kind !== "local") throw new OfficeError(`${name} is a ${resolved.kind} package; office gui dev works on the office's own packages, in packages/<name>/`);
+  const read = readPackage(office, resolved);
+
+  if (!read.ok) throw new OfficeError(read.errors.join("; "));
+  let asset = panelBundle;
+  const declared = readDeclarations(office).get(name);
+
+  if (read.value.manifest.opencode || declared) {
+    if (!read.value.manifest.opencode) throw new OfficeError(`${name}'s definition and synced OpenCode registration differ; sync and restart office gui dev`);
+    const fresh = collectAssets(office.dir, read.value).panel;
+
+    if (!fresh || declared?.state !== "declared" || declared.binding !== declarationBinding(resolved) || declared.paths.panel !== fresh) throw new OfficeError(`${name} has no matching synced desktop registration; run office sync --packages`);
+    asset = fresh;
+  }
+
+  const path = join(resolved.dir, asset);
+
+  if (existsSync(path)) validateAssets(office.dir, resolved.dir, { panel: asset });
+
+  return path;
+}
+
+export async function guiDev(office: Office, name: string): Promise<void> {
+  const bundle = panelSource(office, name);
 
   const where = locate();
 
@@ -21,12 +47,13 @@ export async function guiDev(office: Office, name: string): Promise<void> {
 
   if (where.kind === "unreachable") throw new OfficeError(`can't install panels: ${where.reason}`);
 
-  const bundle = join(localDir(office, name), panelBundle);
   const panel = { name, bundle };
   let installed: string | undefined;
 
   const install = () => {
     if (!existsSync(bundle)) return;
+
+    if (panelSource(loadOffice(office.dir), name) !== bundle) throw new OfficeError("panel registration changed; restart office gui dev for the new source");
 
     const content = readFileSync(bundle);
 
@@ -39,16 +66,25 @@ export async function guiDev(office: Office, name: string): Promise<void> {
   };
 
   install();
-  console.log(`watching ${relative(office.dir, bundle)}; build the panel with the package's own script. Ctrl-C stops.`);
 
   // The build may replace the file rather than write it, so its folder is watched. Builds empty
   // that folder but keep it.
   mkdirSync(dirname(bundle), { recursive: true });
 
-  const stop = watch(dirname(bundle), (_event, file) => {
-    if (file === basename(bundle)) install();
-  });
+  await new Promise<void>((done, fail) => {
+    const stop = () => { watcher.close(); done(); };
 
-  await new Promise<void>((resolve) => process.once("SIGINT", resolve));
-  stop.close();
+    const watcher = watch(dirname(bundle), (_event, file) => {
+      if (file !== basename(bundle)) return;
+
+      try { install(); } catch (error) {
+        watcher.close();
+        process.off("SIGINT", stop);
+        fail(error);
+      }
+    });
+
+    process.once("SIGINT", stop);
+    console.log(`watching ${relative(office.dir, bundle)}; build the panel with the package's own script. Ctrl-C stops.`);
+  });
 }

@@ -4,7 +4,9 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSy
 import { basename, join, relative } from "node:path";
 import { OfficeError, type Office } from "../../src/office.ts";
 import type { InstalledPackages } from "../../src/layout.ts";
-import { linkIdentity, readReceipts, reconcileReceipts } from "./receipts.ts";
+import { builtinSource, gitSelection, readRecord, sourceFile, type ResolvedPackage } from "../../src/packages.ts";
+import { collectAssets, packageTarget, validateAssets, type AssetPaths } from "./assets.ts";
+import { type Declaration, linkIdentity, readDeclarations, readReceipts, reconcileReceipts } from "./receipts.ts";
 
 export const pluginFolder = ".opencode/plugins";
 
@@ -36,16 +38,77 @@ export function packageLink(path: string): string | undefined {
   return target === `../../packages/${name}/plugin` || target === `../../.office/packages/${name}/plugin` ? target : undefined;
 }
 
-export function withPluginPlan(office: Office, installed: InstalledPackages) {
+export function declarationBinding(item: ResolvedPackage) {
+  if (item.kind !== "local" && !lstatSync(join(item.dir, sourceFile), { throwIfNoEntry: false })?.isFile()) return undefined;
+  const record = item.kind === "local" ? undefined : readRecord(item.dir);
+  let source: string = item.kind;
+
+  if (item.kind === "remote") {
+    const selected = item.entry.source;
+
+    if (!selected || !record || !("repo" in record) || record.repo !== selected.repo || record.path !== selected.path || record.ref !== selected.ref) return undefined;
+    source = `${gitSelection(selected)}:${record.commit}`;
+  } else if (item.kind === "built-in") {
+    if (!record || "repo" in record) return undefined;
+    source = builtinSource(record.files);
+  }
+
+  return new Bun.CryptoHasher("sha256").update(JSON.stringify([source, item.entry.settings])).digest("hex");
+}
+
+export function withPluginPlan(office: Office, installed: InstalledPackages, mode: "observe" | "collect" = "observe") {
   const plugins = new Map<string, string>();
   const problems = [...installed.problems];
+  const unread = new Set(installed.unread);
+  const saved = mode === "observe" ? readDeclarations(office) : undefined;
+  const declarations = new Map<string, Declaration>();
+  const projected = [];
 
-  for (const { entry, dir, plugin } of installed.installed) {
-    if (!plugin) continue;
+  for (const name of unread) {
+    // Unknown source: withhold both outputs, never restore a previous declaration as new authority.
+    declarations.set(name, { state: "unavailable" });
+  }
 
+  for (const item of installed.installed) {
+    const { entry, dir } = item;
+    let paths: AssetPaths;
+
+    try {
+      if (!item.manifest.opencode) paths = collectAssets(office.dir, item);
+      else {
+        declarations.set(entry.name, { state: "unavailable" });
+        const binding = declarationBinding(item);
+
+        if (!binding) throw new Error("package source has changed; sync its selected revision");
+
+        if (mode === "collect") paths = collectAssets(office.dir, item);
+        else {
+          const old = saved?.get(entry.name);
+
+          if (old?.state !== "declared" || old.binding !== binding) throw new Error("no current successful OpenCode registration; run office sync --packages");
+          validateAssets(office.dir, dir, old.paths);
+          paths = old.paths;
+        }
+
+        declarations.set(entry.name, { state: "declared", binding, paths });
+      }
+    } catch (error) {
+      unread.add(entry.name);
+      problems.push({ packages: [entry.name], message: `OpenCode registration: ${error instanceof Error ? error.message : "failed"}` });
+      projected.push({ ...item, plugin: false, panel: undefined });
+      continue;
+    }
+
+    projected.push({ ...item, plugin: !!paths.server, panel: paths.panel && join(dir, paths.panel) });
+
+    if (!paths.server) continue;
+    const plugin = join(dir, paths.server);
     const at = `${pluginFolder}/${entry.name}`;
     const path = join(office.dir, at);
-    const taken = lstatSync(path, { throwIfNoEntry: false }) && packageLink(path) === undefined;
+    const info = lstatSync(path, { throwIfNoEntry: false });
+    const target = info?.isSymbolicLink() ? readlinkSync(path) : undefined;
+    // Plausible package targets go to receipt reconciliation; spelling never authorizes unlink.
+    const taken = info && !(target && packageTarget(entry.name, target));
 
     const problem = office.plugins.some(cloned => cloned.name === entry.name)
       ? `its plugin would be ${at}, where the plugins: entry ${entry.name} is cloned`
@@ -55,11 +118,11 @@ export function withPluginPlan(office: Office, installed: InstalledPackages) {
           ? `its plugin would be ${at}, which holds a plugin of this office's own (not a link office sync made)`
           : undefined;
 
-    if (problem === undefined) plugins.set(entry.name, join(dir, "plugin"));
+    if (problem === undefined) plugins.set(entry.name, plugin);
     else problems.push({ packages: [entry.name], message: `${problem}, so it isn't linked; rename one of them` });
   }
 
-  return { ...installed, plugins, problems };
+  return { ...installed, installed: projected, unread, plugins, declarations, problems };
 }
 
 export const unownedLink = "no matching Office creation receipt; kept. To authorize delivery, move the existing entry aside yourself and run office sync --packages";
@@ -79,26 +142,32 @@ export function pluginLinks(office: Office, plugins: Map<string, string>, record
 
   for (const name of existsSync(folder) ? readdirSync(folder) : []) {
     const path = join(folder, name);
-    const target = packageLink(path);
+    const target = lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink() ? readlinkSync(path) : undefined;
 
     if (target === undefined) continue;
 
     if (ownsLink(office, name, target, recorded)) links.set(name, target);
-    else unrecorded.add(name);
+    else if (packageLink(path) || (wanted.has(name) && packageTarget(name, target))) unrecorded.add(name);
   }
 
   return { folder, wanted, links, unrecorded };
 }
 
-export function linkPlugins(office: Office, installed: { plugins: Map<string, string>; unread: Set<string> }): string[] {
+export function linkPlugins(office: Office, installed: ReturnType<typeof withPluginPlan>): string[] {
   requirePluginDestination(office);
 
-  return reconcileReceipts(office, (recorded, created, forget) => {
+  return reconcileReceipts(office, installed.declarations, (recorded, created, forget) => {
+    for (const item of installed.installed) {
+      const claim = installed.declarations.get(item.entry.name);
+
+      if (claim?.state === "declared") validateAssets(office.dir, item.dir, claim.paths);
+    }
+
     const { folder, wanted, links, unrecorded } = pluginLinks(office, installed.plugins, recorded);
     const changes: string[] = [];
 
     for (const name of unrecorded) {
-      const different = wanted.has(name) && wanted.get(name) !== packageLink(join(folder, name));
+      const different = wanted.has(name) && wanted.get(name) !== readlinkSync(join(folder, name));
       changes.push(`${different ? "FAILED " : ""}${pluginFolder}/${name}: ${unownedLink}`);
     }
 
@@ -115,7 +184,7 @@ export function linkPlugins(office: Office, installed: { plugins: Map<string, st
 
       if (installed.unread.has(name) || wanted.get(name) === target) continue;
 
-      if (packageLink(path) !== target || !ownsLink(office, name, target, recorded)) throw new OfficeError(`kept changed ${pluginFolder}/${name}; retry sync after the edit`);
+      if (!ownsLink(office, name, target, recorded) || readlinkSync(path) !== target) throw new OfficeError(`kept changed ${pluginFolder}/${name}; retry sync after the edit`);
       unlinkSync(path);
       forget(name);
       changes.push(`unlinked ${pluginFolder}/${name}`);
@@ -129,7 +198,7 @@ export function linkPlugins(office: Office, installed: { plugins: Map<string, st
       symlinkSync(target, path); // exclusive creation; never replace an occupied path
       const identity = linkIdentity(path);
 
-      if (!identity || packageLink(path) !== target) throw new OfficeError("package link changed before recording delivery");
+      if (!identity || readlinkSync(path) !== target) throw new OfficeError("package link changed before recording delivery");
       created({ owner: name, path: `${pluginFolder}/${name}`, target, identity });
       changes.push(`linked ${pluginFolder}/${name}`);
     }

@@ -271,7 +271,7 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
     }
 
     // Skills reach OpenCode only through the package's plugin; earlier releases linked them.
-    if (item.skills.length > 0 && !item.plugin) {
+    if (item.skills.length > 0 && !item.plugin && !item.manifest.opencode) {
       ok = false;
       notes.push(`skills ${item.skills.join(", ")} don't load: the package has no plugin to register them${kind === "remote" ? " (move ref to a version that has one)" : ""}`);
     }
@@ -335,7 +335,7 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
  * last sync wins). Also one line for each panel this office installed whose package it no longer lists.
  */
 function panelChecks(office: Office, report: Report): void {
-  const panels = installedPackages(office).installed.flatMap((item) => (item.panel === undefined ? [] : [{ name: item.entry.name, bundle: item.panel }]));
+  const panels = withPluginPlan(office, installedPackages(office)).installed.flatMap((item) => (item.panel === undefined ? [] : [{ name: item.entry.name, bundle: item.panel }]));
   const where = locate();
 
   if (where.kind === "container") {
@@ -386,7 +386,9 @@ function panelChecks(office: Office, report: Report): void {
   }
 
   for (const name of installedPanelNames(machine)) {
-    if (panels.some((panel) => panel.name === name) || readPanelRecord(machine, name)?.dir !== office.dir) continue;
+    const record = readPanelRecord(machine, name);
+
+    if (panels.some((panel) => panel.name === name) || record?.dir !== office.dir || record.office !== office.name) continue;
 
     report("warn", `panel ${panelId(name)}`, `this office installed it, but none of its packages has that panel now. ${removalNote(machine, name)}`);
   }
@@ -439,7 +441,7 @@ function expectedSkills(office: Office, desk: string | undefined) {
   const own = (selection: { enabled: string[]; folders: string[] } | undefined) => (selection === undefined ? [] : [...selection.enabled, ...selection.folders]);
   const root = selections.find((selection) => selection.desk === undefined);
   const mine = desk === undefined ? [] : own(selections.find((selection) => selection.desk === desk));
-  const packaged = installedPackages(office).installed.flatMap((item) => (item.plugin ? item.skills : []));
+  const packaged = withPluginPlan(office, installedPackages(office)).installed.flatMap((item) => (item.plugin ? item.skills : []));
   const expected = new Set([...own(root), ...mine, ...packaged]);
   const everything = new Set([...library(office), ...selections.flatMap(own)]);
 

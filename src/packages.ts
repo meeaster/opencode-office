@@ -18,6 +18,7 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import * as v from "valibot";
 
 import { panelBundle } from "./desktop.ts";
+import { collectAssets } from "../standard/opencode/assets.ts";
 import { copyFromRepository } from "./git.ts";
 import { type Office, OfficeError, type PackageEntry } from "./office.ts";
 import { readDefinition } from "./package-definition.ts";
@@ -91,9 +92,9 @@ export type InstalledPackage = ResolvedPackage & {
   settings: Record<string, SettingValue>;
   /** Skill IDs under `skills/`, each a folder with a SKILL.md, which the package's plugin registers. */
   skills: string[];
-  /** Whether it has `plugin/`, an OpenCode plugin `office sync` links as `.opencode/plugins/<name>`. */
+  /** Conventional server asset on read; withPluginPlan projects the effective registration. */
   plugin: boolean;
-  /** Its desktop app panel's built bundle, `gui/dist/gui-experimental.cjs`, when it has one; `office sync` installs it on the app's machine. */
+  /** Conventional desktop bundle on read; withPluginPlan projects the effective bundle. */
   panel: string | undefined;
 };
 
@@ -606,7 +607,7 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
 
   const panel = join(dir, panelBundle);
 
-  return { ok: true, value: { ...resolved, manifest, settings, skills, plugin: existsSync(join(dir, "plugin")), panel: existsSync(panel) ? panel : undefined } };
+  return { ok: true, value: { ...resolved, manifest, settings, skills, plugin: !manifest.opencode && existsSync(join(dir, "plugin")), panel: !manifest.opencode && existsSync(panel) ? panel : undefined } };
 }
 
 /** Validate a candidate against the consuming entry before any live path points at its files. */
@@ -616,6 +617,8 @@ function validateReplacement(office: Office, resolved: ResolvedPackage): void {
   if (!read.ok) throw new Error(read.errors.join("; "));
 
   const item = read.value;
+
+  if (item.manifest.opencode) collectAssets(office.dir, item);
   const { host, system } = item.manifest;
 
   for (const file of [host?.install?.script, system?.bootstrap, system?.prepare, system?.verify]) {

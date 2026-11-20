@@ -78,7 +78,7 @@ Already-working pre-ledger links can remain in place. `inspect`, `sync` and `che
 
 The old CLI allowed packages to register `opencode inspect`, including aliases and descendants. When the saved generation contains such a claim, the new CLI refuses inspection instead of shadowing or importing the author. Rename the route/alias in the package, or deselect its owner, then run `office sync --packages`. A renewed collision rejects publication; **keep the existing generation**, which remains readable by unrelated commands and retains the commit used for immutable pinned repair.
 
-The compiled `standard/opencode/` owner implements this inspection and the existing package-link plan/apply used by sync and check. It exposes **no new package-author API**. A future typed contribution from an Office package's `setup(ctx)` could declare a server plugin directory; collection would record the declaration, leaving installation to apply and execution to OpenCode.
+The compiled `standard/opencode/` owner also accepts [typed registrations from a package's `opencode(ctx)` callback](opencode-authoring.md). Inspect reports the last collected choices separately from current filesystem and app-machine evidence. The callback is not executed by inspect.
 
 ### Reproduce the native check
 

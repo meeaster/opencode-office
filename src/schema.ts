@@ -3,7 +3,7 @@
 // each naming the field and what it expected.
 import * as v from "valibot";
 
-import type { PackageContext, SettingValue } from "../packages/office/package-context.ts";
+import type { OpenCodeContext, PackageContext, SettingValue } from "../packages/office/package-context.ts";
 import { validSchedule } from "./cron/schedule.ts";
 
 export type { SettingValue } from "../packages/office/package-context.ts";
@@ -632,6 +632,7 @@ export const packageManifestSchema = v.pipe(
       namespace: v.optional(name),
       description: text,
       setup: v.optional(v.custom<(ctx: PackageContext) => void | Promise<void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
+      opencode: v.optional(v.custom<(ctx: OpenCodeContext) => void>(value => v.is(v.function(), value), "must be a synchronous registration function in office.ts")),
       settings: v.optional(v.record(v.string(), packageSetting, "must map setting names to settings")),
       settings_schema: v.optional(v.union([v.boolean(), v.record(v.string(), settingValue)])),
       secrets: v.nullish(v.record(v.pipe(v.string(), v.regex(/^[A-Z][A-Z0-9_]*$/, "must be an environment variable name in capitals")), packageSecret, "must map variable names to how each is generated"), {}),

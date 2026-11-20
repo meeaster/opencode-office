@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { claimsInspect } from "../../src/command-table.ts";
 import { configFile, installedPanelNames, isRegistered, locate, panelDir, readPanelRecord } from "../../src/desktop.ts";
@@ -6,9 +6,9 @@ import { findOffice, loadOffice, OfficeError, readOfficeFields, type Office } fr
 import { requiredPackages, resolvePackages } from "../../src/packages.ts";
 import { officeSchema } from "../../src/schema.ts";
 import { readSnapshot, referenceFile } from "../../src/reference-snapshot.ts";
-import { ownsLink, packageLink, pluginClones, pluginFolder } from "./delivery.ts";
+import { declarationBinding, ownsLink, packageLink, pluginClones, pluginFolder } from "./delivery.ts";
 import { configSources, conventionSources, projectDirectories, type Source } from "./native.ts";
-import { readReceipts } from "./receipts.ts";
+import { readDeclarations, readReceipts } from "./receipts.ts";
 
 /** Desktop registration is machine-wide and can outlive deselection. Show only this office's records. */
 function desktopSources(office: Office, selected: Set<string>): string[] {
@@ -53,6 +53,7 @@ function inventory(office: Office, folder: string) {
   const managed = join(office.dir, pluginFolder);
   const matches = new Map<string, string[]>();
   const receipts = readReceipts(office);
+  const declarations = readDeclarations(office);
   const { packages, problems } = resolvePackages(office);
   const kinds = new Map(packages.map(item => [item.entry.name, item.kind === "remote" ? "pinned Git" : item.kind]));
 
@@ -92,22 +93,45 @@ function inventory(office: Office, folder: string) {
   for (const dir of dirs) {
     for (const [index, { path, identity }] of conventionSources(office.dir, dir).entries()) {
       const name = basename(path);
-      const target = dirname(path) === managed ? packageLink(path) : undefined;
+      const target = dirname(path) === managed && lstatSync(path).isSymbolicLink() ? readlinkSync(path) : undefined;
       const owned = target && ownsLink(office, name, target, receipts);
       const known = dirname(path) === managed && (selected.has(name) || office.plugins.some(item => item.name === name));
       const origin = join(scopePath(office, dir), ".opencode", basename(dirname(path)), known ? name : `<entry-${index + 1}>`);
       const state = selected.has(name) ? `selected ${kinds.get(name) ?? "unresolved"} package` : "not selected";
-      const kind = owned ? `Office-created package link (${state})` : target ? `package-shaped link (${state}; no creation receipt)` : "convention plugin candidate";
+      const claim = declarations.get(name);
+      const authored = claim?.state === "declared" ? claim.paths.server : undefined;
+      const source = authored && packages.find(item => item.entry.name === name);
+      const declaredTarget = source && authored ? relative(managed, join(source.dir, authored)) : undefined;
+      const kind = owned ? `Office-created package link (${state})` : target && (packageLink(path) || target === declaredTarget) ? `package-shaped link (${state}; no creation receipt)` : "convention plugin candidate";
 
       describe(dir, { origin, description: identity ? kind : `${kind} (dangling)`, identity });
     }
   }
 
-  for (const { entry, dir } of packages) {
+  for (const item of packages) {
+    const { entry, dir } = item;
+    const declared = declarations.get(entry.name);
+
+    if (declared) {
+      const origin = `${relative(office.dir, dir)}/office.ts#opencode`;
+
+      if (declared.state === "unavailable") describe(office.dir, { origin, description: "OpenCode registration unavailable at last sync" });
+      else if (declared.binding !== declarationBinding(item)) describe(office.dir, { origin, description: "OpenCode declaration inputs changed; sync required" });
+      else {
+        const { server, panel } = declared.paths;
+        describe(office.dir, { origin, description: `last synced registration: server ${server ? "declared" : "withheld"}, desktop ${panel ? "declared" : "withheld"}` });
+        const link = join(managed, entry.name);
+
+        if (server && (!lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink() || readlinkSync(link) !== relative(managed, join(dir, server)))) describe(office.dir, { origin, description: "declared server link missing or different" });
+      }
+
+      continue;
+    }
+
     if (!existsSync(dir)) {
       describe(office.dir, { origin: relative(office.dir, dir), description: `selected ${kinds.get(entry.name)} package ${entry.name} (source missing; plugin not inspected)` });
     } else if (existsSync(join(dir, "plugin")) && packageLink(join(managed, entry.name)) !== relative(managed, join(dir, "plugin"))) {
-      describe(office.dir, { origin: relative(office.dir, join(dir, "plugin")), description: `selected ${kinds.get(entry.name)} package ${entry.name} (expected link missing or different)` });
+      describe(office.dir, { origin: relative(office.dir, join(dir, "plugin")), description: `selected ${kinds.get(entry.name)} package ${entry.name} (conventional asset present; no matching link or recorded registration)` });
     }
   }
 

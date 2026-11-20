@@ -21,6 +21,7 @@ import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
 import { cloneOrFetchStreamed, clonePluginStreamed, existingPluginDestination, git, isClone, PluginCheckoutProblem, referenceGit, referenceOriginProblem, refreshCloneStreamed, verifiedHead } from "../git.ts";
 import { type Clone, clones, installedPackages, skillSelections } from "../layout.ts";
 import { legacyPlugin, linkPlugins, requirePluginDestination, withPluginPlan } from "../../standard/opencode/delivery.ts";
+import { validateAssets } from "../../standard/opencode/assets.ts";
 import { migrate } from "../migrate.ts";
 import { definitionFiles } from "../package-definition.ts";
 import { packageComposeFile } from "../package-services.ts";
@@ -438,8 +439,7 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
     installed = installedPackages(office, rejected);
   }
 
-  const plan = withPluginPlan(office, installed);
-  changes.push(...plan.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
+  changes.push(...installed.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
   const published = await collectReferences(office, packages, installed, changes, publication.value, rejected, embedded);
 
   if (needsEnvironmentOwners(office, installed)) {
@@ -470,8 +470,10 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   changes.push(...syncTools(office, installed.installed, [...installed.selected]));
 
   changes.push(...syncMachine(office, installed));
+  const plan = withPluginPlan(office, { ...installed, problems: [] }, "collect");
+  changes.push(...plan.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
   changes.push(...linkPlugins(office, plan));
-  changes.push(...installPanels(office, installed.installed, removedPanels));
+  changes.push(...installPanels(office, plan.installed, removedPanels));
 
   return published;
 }
@@ -482,7 +484,12 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
  * panel to handle; inside the container, or when it can't be reached, nothing is installed.
  */
 function installPanels(office: Office, installed: InstalledPackage[], removed: string[]): string[] {
-  const panels = installed.flatMap((item) => (item.panel === undefined ? [] : [{ name: item.entry.name, bundle: item.panel }]));
+  const panels = installed.flatMap((item) => {
+    if (!item.panel) return [];
+    validateAssets(office.dir, item.dir, { panel: relative(item.dir, item.panel) });
+
+    return [{ name: item.entry.name, bundle: item.panel }];
+  });
 
   if (panels.length === 0 && removed.length === 0) return [];
 

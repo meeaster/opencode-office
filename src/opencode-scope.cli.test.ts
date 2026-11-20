@@ -9,6 +9,7 @@ import { compile } from "./build.ts";
 const sandbox = mkdtempSync(join(tmpdir(), "office-opencode-scope-"));
 const office = join(sandbox, "bin/office");
 const launcher = process.env.OFFICE_TEST_OPENCODE;
+const groundwork = process.env.OFFICE_TEST_PRE_ASSETS;
 const previous = process.env.OFFICE_TEST_PRE_INSPECT;
 
 // Optional control: the compiled CLI from before plugin delivery refused owner folders (567252f).
@@ -56,6 +57,7 @@ function fixture(name: string, endpoint: string) {
     XDG_DATA_HOME: join(home, "data"), XDG_CONFIG_HOME: join(home, "config"), XDG_CACHE_HOME: join(home, "cache"), XDG_STATE_HOME: join(home, "state"),
     OFFICE_MACHINE_RECORD: join(home, "machine.json"), OFFICE_MACHINE_DIR: join(home, "machine"), OFFICE_MISE_CONFIG_DIR: join(home, "mise"),
     OFFICE_APP_CONFIG_DIR: join(home, "app"), OFFICE_APP_PANELS_DIR: join(home, "panels"), OFFICE_SYSTEMD_USER_DIR: join(home, "units"),
+    DOCKER_HOST: `unix://${home}/absent.sock`, DBUS_SESSION_BUS_ADDRESS: `unix:path=${home}/no-bus`,
     SCOPE_IMPORTS: imports,
   };
 
@@ -333,6 +335,153 @@ test("a first plugin clone verifies the effective origin before fetching and bef
   await f.run(["sync"]);
   expect(gitAt(plugin, f.env, "rev-parse", "HEAD")).toBe(gitAt(remote, f.env, "rev-parse", "HEAD"));
   expect(readFileSync(join(plugin, "note"), "utf8")).toBe("declared\n");
+}, 60_000);
+
+test("typed registrations replace both conventions: one owned link, isolated panel registration, explicit empty and failed collections", async () => {
+  const f = fixture("authored", "http://127.0.0.1:1");
+  const pkg = join(f.dir, "packages/common");
+  const link = join(f.dir, ".opencode/plugins/common");
+  const panel = join(f.env.OFFICE_APP_PANELS_DIR, "common/gui-experimental.cjs");
+  const appConfig = join(f.env.OFFICE_APP_CONFIG_DIR, "opencode.json");
+  write(appConfig, '{"plugins":["independent-owner-panel"]}');
+  write(join(pkg, "extensions/server/index.js"), command("custom-command"));
+  write(join(pkg, "desktop/built.cjs"), "// custom panel");
+  write(join(pkg, "gui/dist/gui-experimental.cjs"), "// convention must not win");
+  rmSync(join(pkg, "package.yaml"));
+  write(join(pkg, "office.ts"), `import type {OpenCodeContext} from "../../.office/packages/office/package-context.ts";
+    import {appendFileSync} from "node:fs";
+    export default {name:"common",description:"fixture",settings:{edition:{description:"edition",default:"both"}},
+      setup(ctx) { appendFileSync(process.env.SCOPE_IMPORTS,"setup\\n"); ctx.command({name:"folio edition",summary:"fixture",run(){console.log("fiction")}}); },
+      opencode(ctx:OpenCodeContext) {
+        appendFileSync(process.env.SCOPE_IMPORTS, "collected\\n");
+        if(ctx.settings.edition === "none") return;
+        ctx.serverPlugin("extensions/server");
+        if(ctx.settings.edition === "duplicate") ctx.serverPlugin("plugin");
+        if(ctx.settings.edition === "throw") throw Error("fixture failure after first claim");
+        if(ctx.settings.edition === "escape") ctx.desktopPanel("../outside.cjs");
+        else if(ctx.settings.edition === "linked") ctx.desktopPanel("redirect/built.cjs");
+        else if(ctx.settings.edition === "both") ctx.desktopPanel("desktop/built.cjs");
+      }};`);
+  write(join(f.home, "foreign/built.cjs"), "// foreign bytes");
+  symlinkSync(join(f.home, "foreign"), join(pkg, "redirect"));
+  const sync = ["sync", "--packages"];
+  const change = (edition: string) => f.select(`packages: [{name: common, settings: {edition: ${edition}}}]\n`);
+  await f.run(sync);
+  expect(readlinkSync(link)).toBe("../../packages/common/extensions/server");
+  expect(readFileSync(panel, "utf8")).toBe("// custom panel");
+  const registration = readFileSync(appConfig, "utf8");
+  expect(JSON.parse(registration).plugins).toHaveLength(2);
+  await f.run(sync);
+  expect(readFileSync(appConfig, "utf8")).toBe(registration);
+  const collections = readFileSync(f.imports, "utf8");
+  expect(collections).toBe("setup\ncollected\nsetup\ncollected\n");
+  expect(await f.run(["opencode", "inspect"])).toContain("last synced registration: server declared, desktop declared");
+  await f.run(["cron", "list"]);
+  // A minimal fixture intentionally fails full office health; inventory must still not re-collect.
+  await f.run(["check"], 1);
+  await f.run(["references", "list"]);
+  expect(readFileSync(f.imports, "utf8")).toBe(collections);
+  expect(await f.run(["folio", "edition"])).toContain("fiction");
+  expect(readFileSync(f.imports, "utf8")).toBe(`${collections}setup\n`);
+
+  if (groundwork) {
+    // Custom receipts do not change the schema/data in the older reader's links table.
+    await f.run(["opencode", "inspect"], 0, groundwork);
+    expect(await f.run(sync, 1, groundwork)).toContain("opencode");
+    expect(readlinkSync(link)).toBe("../../packages/common/extensions/server");
+    expect(readFileSync(panel, "utf8")).toBe("// custom panel");
+  }
+
+  for (const mode of ["throw", "duplicate", "escape", "linked"]) {
+    change(mode);
+    expect(await f.run(sync, 1)).toContain("OpenCode registration");
+    expect(await f.run(["opencode", "inspect"])).toContain("registration unavailable at last sync");
+    expect(readlinkSync(link)).toBe("../../packages/common/extensions/server");
+    expect(readFileSync(panel, "utf8")).toBe("// custom panel");
+  }
+
+  write(panel, "// a later office's copy");
+  change("server");
+  await f.run(sync);
+  expect(readFileSync(panel, "utf8")).toBe("// a later office's copy");
+  change("none");
+  await f.run(sync);
+  expect(existsSync(link)).toBe(false);
+  expect(readFileSync(appConfig, "utf8")).toBe(registration);
+  expect(readFileSync(panel, "utf8")).toBe("// a later office's copy");
+  expect(await f.run(["opencode", "inspect"])).toContain("server withheld, desktop withheld");
+  expect(await f.run(["gui", "dev", "common"], 1)).toContain("no matching synced desktop registration");
+  expect(existsSync(join(f.dir, "builder/.opencode/plugins/independent.js"))).toBe(true);
+  change("both");
+  await f.run(sync);
+  const dev = Bun.spawn([office, "gui", "dev", "common"], { cwd: f.dir, env: f.env, stdout: "pipe", stderr: "pipe" });
+  const timeout = setTimeout(() => dev.kill("SIGKILL"), 10_000);
+
+  try {
+    let watching = "";
+    const reader = dev.stdout.getReader();
+
+    while (!watching.includes("watching packages/common/desktop/built.cjs")) {
+      const next = await reader.read();
+
+      if (next.done) throw new Error("gui dev did not watch the claimed bundle");
+      watching += new TextDecoder().decode(next.value);
+    }
+
+    write(join(pkg, "desktop/built.cjs"), "// watched build");
+
+    for (let i = 0; i < 80 && readFileSync(panel, "utf8") !== "// watched build"; i++) await Bun.sleep(50);
+    expect(readFileSync(panel, "utf8")).toBe("// watched build");
+    change("server");
+    await f.run(sync);
+    write(join(pkg, "desktop/built.cjs"), "// no longer declared");
+    expect(await dev.exited).toBe(1);
+    expect(readFileSync(panel, "utf8")).toBe("// watched build");
+  } finally {
+    clearTimeout(timeout);
+    dev.kill();
+    await dev.exited;
+  }
+
+  rmSync(link);
+  symlinkSync("../../packages/common/extensions/server", link);
+  expect(await f.run(sync)).toContain("no matching Office creation receipt");
+  change("none");
+  await f.run(sync);
+  expect(readlinkSync(link)).toBe("../../packages/common/extensions/server");
+}, 60_000);
+
+test("an authored-only pinned package repairs the bound revision and rejects an invalid staged replacement", async () => {
+  const f = fixture("authored-pin", "http://127.0.0.1:1");
+  const upstream = join(f.home, "upstream");
+  const pkg = join(upstream, "pkg");
+  const pulled = join(f.dir, ".office/packages/folio");
+  const git = (...args: string[]) => gitAt(upstream, f.env, ...args);
+  const select = (ref: string) => f.select(`packages: [{name: folio, repo: ${upstream}, path: pkg, ref: '${ref}'}]\n`);
+  const definition = `export default {name:"folio", description:"fixture", opencode(ctx){ctx.serverPlugin("src/server"); ctx.desktopPanel("dist/panel.cjs")}};`;
+  write(join(pkg, "office.ts"), definition);
+  write(join(pkg, "src/server/index.js"), command("bound-asset"));
+  write(join(pkg, "dist/panel.cjs"), "// edition A");
+  git("init", "-q");
+  git("add", ".");
+  git("commit", "-qm", "edition A");
+  git("tag", "stable");
+  select("stable");
+  await f.run(["sync", "--packages"]);
+  const link = join(f.dir, ".opencode/plugins/folio");
+  expect(readlinkSync(link)).toBe("../../.office/packages/folio/src/server");
+  expect(await f.run(["opencode", "inspect"])).toContain("Office-created package link (selected pinned Git package)");
+  write(join(pkg, "office.ts"), definition.replace("dist/panel.cjs", "missing.cjs"));
+  git("commit", "-qam", "invalid edition B");
+  git("tag", "-f", "stable");
+  rmSync(pulled, { recursive: true });
+  await f.run(["sync", "--packages"]);
+  expect(readFileSync(join(pulled, "office.ts"), "utf8")).toBe(definition);
+  select(git("rev-parse", "HEAD"));
+  expect(await f.run(["sync", "--packages"], 1)).toContain("existing regular file");
+  expect(readFileSync(join(pulled, "office.ts"), "utf8")).toBe(definition);
+  expect(readlinkSync(link)).toBe("../../.office/packages/folio/src/server");
+  expect(readFileSync(join(f.env.OFFICE_APP_PANELS_DIR, "folio/gui-experimental.cjs"), "utf8")).toBe("// edition A");
 }, 60_000);
 
 test("a plugin checkout with the wrong origin is not cleaned, fetched or force-checked-out", async () => {
