@@ -1,6 +1,6 @@
 import { listing } from "../packages/references/commands/list.ts";
 import * as v from "valibot";
-import { commandRegistration, type RegisteredCommand } from "./command-table.ts";
+import { claimsInspect, commandRegistration, type RegisteredCommand } from "./command-table.ts";
 import { findOffice, loadOffice, type Office, OfficeError, readOfficeFields } from "./office.ts";
 import { builtinSource, embeddedPackage, filesDigest, gitSelection, installedDefinition, type PackageRecord, resolvePackages, type ResolvedPackage } from "./packages.ts";
 import { publishedInputs, readSnapshot, referenceInputs, type ReferenceSnapshot } from "./reference-snapshot.ts";
@@ -46,6 +46,8 @@ export function commandHelp(start: string): string[] {
 
   for (const owner of snapshot.contributors) {
     if (owner.stale) lines.push(`  package ${owner.name}: collection failed; run office sync --packages`);
+
+    if (claimsInspect(owner)) lines.push(`  opencode inspect unavailable: indexed route of package ${owner.name}; rename its claim or deselect it and sync`);
 
     for (const route of owner.commands?.routes ?? []) lines.push(`  ${[route.name, ...route.aliases].join(" | ")}    ${route.summary}`);
   }

@@ -31,7 +31,16 @@ export function commandRegistration(command: PackageCommand) {
 
 type Owner = { name: string; commands?: v.InferOutput<typeof commandTable> };
 
-export function commandConflicts(groups: Owner[]): string[] {
+export function inspectRoute(name: string) {
+  return name === "opencode inspect" || name.startsWith("opencode inspect ");
+}
+
+export function claimsInspect(owner: Owner) {
+  return owner.commands?.routes.some(route => [route.name, ...route.aliases].some(inspectRoute));
+}
+
+/** Historical V3 generations retain their original grammar; new reservations apply only at publication. */
+export function commandConflicts(groups: Owner[], policy: "v3" | "publish"): string[] {
   const owners = new Map<string, string>();
   const errors: string[] = [];
 
@@ -41,7 +50,7 @@ export function commandConflicts(groups: Owner[]): string[] {
         const first = owners.get(name);
 
         if (first) errors.push(`command ${name} claimed by both package ${first} and package ${owner.name}`);
-        else if (reserved.has(name.split(" ")[0]) || name === "opencode inspect" || name.startsWith("opencode inspect ") || (name === "references list" && owner.name !== "references")) errors.push(`package ${owner.name}: command ${name} is reserved`);
+        else if (reserved.has(name.split(" ")[0]) || (policy === "publish" && inspectRoute(name)) || (name === "references list" && owner.name !== "references")) errors.push(`package ${owner.name}: command ${name} is reserved`);
         owners.set(name, owner.name);
       }
     }

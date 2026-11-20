@@ -96,7 +96,7 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
 
   const combined = claims(candidate);
 
-  errors.push(...commandConflicts(candidate.contributors));
+  errors.push(...commandConflicts(candidate.contributors, "publish"));
 
   if (!combined.ok) errors.push(...combined.errors);
 

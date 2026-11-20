@@ -7,7 +7,7 @@ import { commandHelp, dispatchCommand } from "./direct-commands.ts";
 import * as v from "valibot";
 
 import { officeInstructions } from "../packages/office/plugin/instructions.ts";
-import { inspect } from "../standard/opencode/inspect.ts";
+import { inspect, inspectInvocation } from "../standard/opencode/inspect.ts";
 import { agentUpdateJob, updateAgentClis } from "./commands/agent-cli-update.ts";
 import { adopt, deploy } from "./commands/apps.ts";
 import { check } from "./commands/check.ts";
@@ -129,6 +129,7 @@ Commands other than init and update act on the office in the current folder or a
 --office.`;
 
 const updateUsage = "usage: office update [--check] [--minimum-release-age <age> | --version <release>]";
+const inspectUsage = "usage: office opencode inspect [folder] [--office <dir>]";
 
 /** `office update`'s own options: its --version names a release, unlike the global --version. */
 async function updateCommand(args: string[]): Promise<void> {
@@ -160,16 +161,8 @@ async function updateCommand(args: string[]): Promise<void> {
   await update({ check: flags.check === true, age: minimumAge, version: flags.version });
 }
 
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-
-  if (args[0] === "update") {
-    await updateCommand(args.slice(1));
-
-    return;
-  }
-
-  const { values: flags, positionals } = parseArgs({
+function commandArgs(args: string[]) {
+  return parseArgs({
     args,
     allowPositionals: true,
     options: {
@@ -196,11 +189,46 @@ async function main(): Promise<void> {
       help: { type: "boolean", short: "h" },
     },
   });
+}
 
+async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+
+  if (args[0] === "update") {
+    await updateCommand(args.slice(1));
+
+    return;
+  }
+
+  let parsed;
+
+  try {
+    parsed = commandArgs(args);
+  } catch (error) {
+    if (args.includes("opencode") && args.includes("inspect")) throw new OfficeError(inspectUsage);
+    throw error;
+  }
+
+  const { values: flags, positionals } = parsed;
   const [command, ...rest] = positionals;
 
   if (flags.version) {
     console.log(version());
+
+    return;
+  }
+
+  if (command === "opencode" && rest[0] === "inspect") {
+    const invocation = inspectInvocation(flags.office ?? process.cwd());
+
+    if (flags.help) {
+      console.log(inspectUsage);
+
+      return;
+    }
+
+    if (rest.length > 2 || Object.keys(flags).some(key => key !== "office")) throw new OfficeError(inspectUsage);
+    console.log(inspect(resolve(flags.office ?? ".", rest[1] ?? "."), flags.office, invocation).join("\n"));
 
     return;
   }
@@ -239,10 +267,6 @@ async function main(): Promise<void> {
       : await sessionInstructions(currentOffice(flags), flags.session);
 
     if (text !== "") console.log(text);
-  } else if (command === "opencode" && rest[0] === "inspect") {
-    if (rest.length > 2 || Object.keys(flags).some(key => key !== "office")) throw new OfficeError("usage: office opencode inspect [folder] [--office <dir>]");
-
-    console.log(inspect(resolve(flags.office ?? ".", rest[1] ?? "."), flags.office).join("\n"));
   } else if (command === "context") {
     if (rest.length !== 0 || flags.model === undefined) throw new OfficeError("usage: office context --model <provider/model#variant>");
 

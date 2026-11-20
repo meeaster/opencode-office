@@ -8,7 +8,7 @@
 // removes the links earlier releases made.
 // It never rewrites AGENTS.md, other hand-written content, an existing app or a file a package's
 // template created; it deletes such a file only with its package, and only while unchanged.
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { prepareReferenceRefresh } from "../../packages/references/tasks/refresh.ts";
@@ -18,9 +18,9 @@ import { beginReferencePublication, planReferenceApply } from "../reference-publ
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { collectJobs } from "../cron/jobs.ts";
 import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
-import { cloneOrFetchStreamed, cloneShallowStreamed, discardFailedClone, isClone, referenceGit, refreshCloneStreamed } from "../git.ts";
+import { cloneOrFetchStreamed, cloneShallowStreamed, discardFailedClone, git, isClone, referenceGit, referenceOriginProblem, refreshCloneStreamed } from "../git.ts";
 import { clones, installedPackages, skillSelections } from "../layout.ts";
-import { legacyPlugin, linkPlugins, packageLink, requirePluginDestination } from "../../standard/opencode/delivery.ts";
+import { legacyPlugin, linkPlugins, requirePluginDestination, withPluginPlan } from "../../standard/opencode/delivery.ts";
 import { migrate } from "../migrate.ts";
 import { definitionFiles } from "../package-definition.ts";
 import { packageComposeFile } from "../package-services.ts";
@@ -163,6 +163,25 @@ function removeOldKnowledgePlugin(office: Office): string[] {
 const fetchSlots = 8;
 const cloneSlots = 4;
 
+/** Check both the working tree being updated and the effective fetch URL. Don't fetch (or
+ * clean an unborn clone) through a linked worktree, a different origin or a Git URL rewrite. */
+function requirePluginCheckout(office: Office, dir: string, url: string) {
+  requirePluginDestination(office);
+  const metadata = join(dir, ".git");
+  const info = lstatSync(metadata, { throwIfNoEntry: false });
+
+  try {
+    if (!referenceOriginProblem(dir, url) && (!info || (
+      info.isDirectory() &&
+      realpathSync(git(["rev-parse", "--show-toplevel"], dir)) === realpathSync(dir) &&
+      realpathSync(git(["rev-parse", "--absolute-git-dir"], dir)) === realpathSync(metadata) &&
+      git(["remote", "get-url", "--all", "origin"], dir) === git(["config", "--local", "--get", "remote.origin.url"], dir)
+    ))) return;
+  } catch { /* Refuse without quoting raw Git URLs or credentials. */ }
+
+  throw new Error("cannot verify plugin checkout origin and directory; left unchanged");
+}
+
 /**
  * Clones and updates the office's repositories, references and plugin clones, each reported
  * as a part of `stage` as it runs. Returns one line per change, in office.yaml's
@@ -201,12 +220,8 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
     };
 
     try {
-      // A declared clone replaces a package plugin link; never fetch through the link.
-      if (clone.kind === "plugin" && packageLink(clone.dir) !== undefined) unlinkSync(clone.dir);
-      else if (clone.kind === "plugin" && lstatSync(clone.dir, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("owner symlink occupies the plugin clone path");
-
-      // A shallow clone that failed under an earlier release left a .git with no commit; clone again.
-      if (clone.kind === "plugin") discardFailedClone(clone.dir);
+      // Only the package-link owner may withdraw a link. The clone operation never unlinks one.
+      if (clone.kind === "plugin" && lstatSync(clone.dir, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("existing symlink kept; move it aside yourself before cloning here");
       const present = isClone(clone.dir);
 
       let refresh: ReturnType<typeof prepareReferenceRefresh> | undefined;
@@ -226,7 +241,11 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
 
           if (refresh) result = await refresh(options);
           else if (clone.kind === "plugin") {
-            result = present ? await refreshCloneStreamed(clone.ref, clone.dir, options) : await cloneShallowStreamed(clone.url, clone.ref, clone.dir, options);
+            const verify = () => requirePluginCheckout(office, clone.dir, clone.url);
+            verify();
+            // Even an unborn checkout can belong to another owner.
+            discardFailedClone(clone.dir);
+            result = isClone(clone.dir) ? await refreshCloneStreamed(clone.ref, clone.dir, options, verify) : await cloneShallowStreamed(clone.url, clone.ref, clone.dir, options);
           } else result = await cloneOrFetchStreamed(clone.url, clone.ref, clone.dir, options);
           part.done(result);
 
@@ -397,7 +416,8 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
     installed = installedPackages(office, rejected);
   }
 
-  changes.push(...installed.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
+  const plan = withPluginPlan(office, installed);
+  changes.push(...plan.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
   const published = await collectReferences(office, packages, installed, changes, publication.value, rejected, embedded);
 
   if (needsEnvironmentOwners(office, installed)) {
@@ -428,7 +448,7 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   changes.push(...syncTools(office, installed.installed, [...installed.selected]));
 
   changes.push(...syncMachine(office, installed));
-  changes.push(...linkPlugins(office, installed));
+  changes.push(...linkPlugins(office, plan));
   changes.push(...installPanels(office, installed.installed, removedPanels));
 
   return published;

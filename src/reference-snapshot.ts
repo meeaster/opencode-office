@@ -39,7 +39,7 @@ export function readSnapshot(dir: string): Parsed<ReferenceSnapshot | undefined>
     const result = check(v.safeParse(schema, JSON.parse(readFileSync(path, "utf8"))));
 
     if (result.ok) {
-      const errors = commandConflicts(result.value.contributors);
+      const errors = commandConflicts(result.value.contributors, "v3");
 
       return errors.length ? { ok: false, errors } : result;
     }

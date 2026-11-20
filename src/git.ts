@@ -292,10 +292,11 @@ export async function cloneShallowStreamed(url: string, ref: string | undefined,
 }
 
 /** `refreshClone`, without blocking. */
-export async function refreshCloneStreamed(ref: string | undefined, dir: string, options: GitOptions = {}): Promise<"updated" | "current"> {
+export async function refreshCloneStreamed(ref: string | undefined, dir: string, options: GitOptions, verifyCheckout: () => void): Promise<"updated" | "current"> {
   const before = head(dir);
 
   await gitStreamed(["fetch", "--depth", "1", "origin", ref ?? "HEAD"], dir, options);
+  verifyCheckout(); // The fetch may have waited while another process redirected the checkout.
   git(["checkout", "--quiet", "--force", "--detach", "FETCH_HEAD"], dir);
 
   return head(dir) === before ? "current" : "updated";

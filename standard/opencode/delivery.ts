@@ -3,7 +3,8 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { OfficeError, type Office } from "../../src/office.ts";
-import type { InstalledPackage, PackageProblem } from "../../src/packages.ts";
+import type { InstalledPackages } from "../../src/layout.ts";
+import { linkIdentity, readReceipts, reconcileReceipts } from "./receipts.ts";
 
 export const pluginFolder = ".opencode/plugins";
 
@@ -35,11 +36,11 @@ export function packageLink(path: string): string | undefined {
   return target === `../../packages/${name}/plugin` || target === `../../.office/packages/${name}/plugin` ? target : undefined;
 }
 
-export function planPlugins(office: Office, installed: InstalledPackage[]) {
+export function withPluginPlan(office: Office, installed: InstalledPackages) {
   const plugins = new Map<string, string>();
-  const problems: PackageProblem[] = [];
+  const problems = [...installed.problems];
 
-  for (const { entry, dir, plugin } of installed) {
+  for (const { entry, dir, plugin } of installed.installed) {
     if (!plugin) continue;
 
     const at = `${pluginFolder}/${entry.name}`;
@@ -58,44 +59,83 @@ export function planPlugins(office: Office, installed: InstalledPackage[]) {
     else problems.push({ packages: [entry.name], message: `${problem}, so it isn't linked; rename one of them` });
   }
 
-  return { plugins, problems };
+  return { ...installed, plugins, problems };
 }
 
-export function pluginLinks(office: Office, plugins: Map<string, string>) {
+export const unownedLink = "no matching Office creation receipt; kept. To authorize delivery, move the existing entry aside yourself and run office sync --packages";
+
+export function ownsLink(office: Office, name: string, target: string, receipts: ReturnType<typeof readReceipts>) {
+  const record = receipts.get(name);
+  const path = `${pluginFolder}/${name}`;
+
+  return record?.path === path && record.target === target && record.identity === linkIdentity(join(office.dir, path));
+}
+
+export function pluginLinks(office: Office, plugins: Map<string, string>, recorded = readReceipts(office)) {
   const folder = join(office.dir, pluginFolder);
   const wanted = new Map([...plugins].map(([name, dir]) => [name, relative(folder, dir)]));
   const links = new Map<string, string>();
+  const unrecorded = new Set<string>();
 
   for (const name of existsSync(folder) ? readdirSync(folder) : []) {
-    const target = packageLink(join(folder, name));
+    const path = join(folder, name);
+    const target = packageLink(path);
 
-    if (target !== undefined) links.set(name, target);
+    if (target === undefined) continue;
+
+    if (ownsLink(office, name, target, recorded)) links.set(name, target);
+    else unrecorded.add(name);
   }
 
-  return { folder, wanted, links };
+  return { folder, wanted, links, unrecorded };
 }
 
 export function linkPlugins(office: Office, installed: { plugins: Map<string, string>; unread: Set<string> }): string[] {
   requirePluginDestination(office);
-  const { folder, wanted, links } = pluginLinks(office, installed.plugins);
-  const changes: string[] = [];
 
-  for (const [name, target] of links) {
-    if (installed.unread.has(name) || wanted.get(name) === target) continue;
+  return reconcileReceipts(office, (recorded, created, forget) => {
+    const { folder, wanted, links, unrecorded } = pluginLinks(office, installed.plugins, recorded);
+    const changes: string[] = [];
 
-    unlinkSync(join(folder, name));
-    changes.push(`unlinked ${pluginFolder}/${name}`);
-  }
+    for (const name of unrecorded) {
+      const different = wanted.has(name) && wanted.get(name) !== packageLink(join(folder, name));
+      changes.push(`${different ? "FAILED " : ""}${pluginFolder}/${name}: ${unownedLink}`);
+    }
 
-  for (const [name, target] of wanted) {
-    if (links.get(name) === target) continue;
+    for (const name of recorded.keys()) {
+      const path = join(folder, name);
+      const target = links.get(name);
 
-    mkdirSync(folder, { recursive: true });
-    symlinkSync(target, join(folder, name));
-    changes.push(`linked ${pluginFolder}/${name}`);
-  }
+      if (!target) {
+        // Loss of custody: a changed or missing path must never regain authority by spelling.
+        if (!unrecorded.has(name) && lstatSync(path, { throwIfNoEntry: false })) changes.push(`kept changed ${pluginFolder}/${name}; Office no longer owns it`);
+        forget(name);
+        continue;
+      }
 
-  return changes;
+      if (installed.unread.has(name) || wanted.get(name) === target) continue;
+
+      if (packageLink(path) !== target || !ownsLink(office, name, target, recorded)) throw new OfficeError(`kept changed ${pluginFolder}/${name}; retry sync after the edit`);
+      unlinkSync(path);
+      forget(name);
+      changes.push(`unlinked ${pluginFolder}/${name}`);
+    }
+
+    for (const [name, target] of wanted) {
+      if (unrecorded.has(name) || links.get(name) === target) continue;
+
+      mkdirSync(folder, { recursive: true });
+      const path = join(folder, name);
+      symlinkSync(target, path); // exclusive creation; never replace an occupied path
+      const identity = linkIdentity(path);
+
+      if (!identity || packageLink(path) !== target) throw new OfficeError("package link changed before recording delivery");
+      created({ owner: name, path: `${pluginFolder}/${name}`, target, identity });
+      changes.push(`linked ${pluginFolder}/${name}`);
+    }
+
+    return changes;
+  });
 }
 
 /** Recognize the historical single-file bundles before migrating them. */

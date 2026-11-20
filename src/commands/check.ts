@@ -20,7 +20,7 @@ import { hookNote, hookState } from "../hook.ts";
 import { planServer, serverReport } from "../host-server.ts";
 import { officeCommands, officePins, officeTool, officeToolNamed, required } from "../host-tools.ts";
 import { clones, installedPackages, library, skillSelections } from "../layout.ts";
-import { legacyPlugin, pluginLinks } from "../../standard/opencode/delivery.ts";
+import { legacyPlugin, pluginLinks, unownedLink, withPluginPlan } from "../../standard/opencode/delivery.ts";
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, oldMiseFiles, pulledLocalFolders, versionsLackSfw } from "../migrate.ts";
 import { oldExecutorAppDirs } from "../executor-app-layout.ts";
 import { executorEnvFile, type Office, readEnvFile, skillGroups, toolsBlock } from "../office.ts";
@@ -106,8 +106,10 @@ async function drift(office: Office): Promise<string[]> {
 
   for (const name of pulledLocal) problems.push(`packages/${name}/ was pulled in from a repository (office sync moves it to .office/packages/${name}/)`);
 
-  const loaded = installedPackages(office);
+  const loaded = withPluginPlan(office, installedPackages(office));
   const plugins = pluginLinks(office, loaded.plugins);
+
+  for (const name of plugins.unrecorded) problems.push(`.opencode/plugins/${name}: ${unownedLink}`);
 
   if (!loaded.unread.has("knowledge") && legacyPlugin(office, "knowledge")) problems.push(".opencode/plugins/knowledge/ is the knowledge plugin earlier releases of office wrote, which the knowledge package replaced (office sync removes it)");
 
@@ -209,7 +211,7 @@ async function pulledCopy(dir: string, kind: "built-in" | "remote", name: string
  * whether its settings are valid and written, its mise tools, and the plugin it links.
  */
 async function packageChecks(office: Office, report: Report): Promise<void> {
-  const loaded = installedPackages(office);
+  const loaded = withPluginPlan(office, installedPackages(office));
   const { installed, plugins, problems } = loaded;
   const shared = sharedNamespaces(installed);
   const links = pluginLinks(office, plugins);
@@ -307,7 +309,7 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
     if (plugins.has(entry.name)) {
       const pluginLinked = links.links.get(entry.name) === links.wanted.get(entry.name);
 
-      notes.push(pluginLinked ? `plugin linked as .opencode/plugins/${entry.name} (office-wide discovery)` : `plugin not linked; office sync links it as .opencode/plugins/${entry.name}`);
+      notes.push(pluginLinked ? `plugin linked as .opencode/plugins/${entry.name} (office-wide discovery)` : links.unrecorded.has(entry.name) ? unownedLink : `plugin not linked; office sync links it as .opencode/plugins/${entry.name}`);
 
       if (!pluginLinked) ok = false;
     }
@@ -667,7 +669,7 @@ async function runtime(office: Office, report: Report, stage?: Stage): Promise<R
 
       // The root's plugins, which every desk loads: each package's, the office package's
       // included. A folder still loading lists none of them yet.
-      const plugins = [...installedPackages(office).plugins.keys()];
+      const plugins = [...withPluginPlan(office, installedPackages(office)).plugins.keys()];
       const folder = `${base}/.opencode/plugins/`;
 
       // Each plugin OpenCode loaded from the root's .opencode/plugins/, by folder name.
@@ -1019,7 +1021,7 @@ function outsideSection(office: Office, report: Report, root: RootAnswer | undef
 
   for (const line of lines) info(`     - ${line}`);
 
-  const installed = installedPackages(office);
+  const installed = withPluginPlan(office, installedPackages(office));
 
   const provided: Provided = {
     skills: new Map([

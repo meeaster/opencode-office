@@ -21,32 +21,18 @@ function within(root: string, path: string) {
   return !isAbsolute(part) && part !== ".." && !part.startsWith(`..${sep}`);
 }
 
-/** Output paths may come from owner files or directory entries. Do not echo opaque specs. */
-export function displayPath(path: string) {
-  return /^(?:[A-Za-z]:[\\/])?[\w .@/\\+-]+$/u.test(path) ? path : "[path withheld]";
-}
-
 export type Source = { origin: string; description: string; identity?: string };
-
-/** URL paths, refs, query strings and userinfo can all carry credentials. */
-export function remoteHost(spec: string) {
-  if (!/^(?:git\+)?(?:https?|ssh):\/\//i.test(spec)) return undefined;
-
-  const host = URL.parse(spec)?.hostname;
-
-  return host && /^[\w.-]+$/.test(host) ? host : undefined;
-}
 
 function configured(root: string, path: string, origin: string, spec: string): Source {
   const npm = /^((?:@[\w.-]+\/)?[a-z0-9][\w.-]*)(?:@(?:[\d.~^*-]+|latest))?$/.exec(spec);
 
-  if (npm) return { origin, description: `configured ${spec}`, identity: `npm:${npm[1]}` };
+  // An apparent package name, path component or hostname can itself be a credential.
+  // Use values for private comparisons only. The config path, field and index are the origin.
+  if (npm) return { origin, description: "configured package or ID", identity: `npm:${npm[1]}` };
 
-  if (/^-?[\w.*-]+$/.test(spec) && (spec.startsWith("-") || spec.includes("*"))) return { origin, description: `plugin control ${spec}` };
+  if (/^-?[\w.*-]+$/.test(spec) && (spec.startsWith("-") || spec.includes("*"))) return { origin, description: "plugin control" };
 
-  const host = remoteHost(spec);
-
-  if (host) return { origin, description: `configured remote source on ${host}` };
+  if (/^(?:git\+)?(?:https?|ssh):\/\//i.test(spec)) return { origin, description: "configured remote source" };
 
   let local: string | undefined;
 
@@ -57,20 +43,18 @@ function configured(root: string, path: string, origin: string, spec: string): S
     } catch { /* Not an inspectable local file URL. */ }
   }
 
-  if (!local || displayPath(local) === "[path withheld]" || /[?#{}]/.test(spec)) return { origin, description: "configured source (details withheld)" };
+  if (!local || /[?#{}\p{Cc}]/u.test(spec)) return { origin, description: "configured source (details withheld)" };
 
   if (!within(root, local)) return { origin, description: "configured external path (not inspected)" };
 
   const info = statSync(local, { throwIfNoEntry: false });
-  const label = displayPath(relative(root, local));
 
-  if (!info?.isDirectory()) return { origin, description: `configured ${label} (${info ? "not a plugin directory" : "missing"})` };
+  if (!info?.isDirectory()) return { origin, description: `configured local path (${info ? "not a plugin directory" : "missing"})` };
 
-  return { origin, description: `configured ${label}`, identity: realpathSync(local) };
+  return { origin, description: "configured local directory", identity: realpathSync(local) };
 }
 
-export function configSources(root: string, path: string): Source[] {
-  const origin = displayPath(relative(root, path));
+export function configSources(root: string, path: string, origin: string): Source[] {
   const file = lstatSync(path, { throwIfNoEntry: false });
 
   if (!file) return [];

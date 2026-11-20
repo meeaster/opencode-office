@@ -7,7 +7,7 @@ import { join, relative } from "node:path";
 
 import { type Office, type Repository, skillsFolder } from "./office.ts";
 import { type InstalledPackage, type PackageProblem, readPackage, requiredPackages, resolvePackages } from "./packages.ts";
-import { planPlugins, pluginClones } from "../standard/opencode/delivery.ts";
+import { pluginClones } from "../standard/opencode/delivery.ts";
 
 export type Clone = { name: string; url: string; ref?: string; kind: string; dir: string; stale?: boolean };
 
@@ -33,11 +33,8 @@ export function library(office: Office): string[] {
     .map((entry) => entry.name);
 }
 
-/**
- * The office's packages that are installed with valid settings, and each one's plugin to link.
- * `problems` names each package that isn't, each entry that can't be one, and each plugin not
- * linked because of its name.
- */
+/** Packages installed with valid settings. Filesystem conflicts in plugin delivery are not
+ * package-load failures and must not disable independent consumers such as cron. */
 export function installedPackages(office: Office, rejected: ReadonlySet<string> = new Set()): InstalledPackages {
   const installed: InstalledPackage[] = [];
   const resolved = resolvePackages(office);
@@ -55,16 +52,12 @@ export function installedPackages(office: Office, rejected: ReadonlySet<string> 
     } else problems.push(...read.errors.map((message) => ({ packages: [item.entry.name], message })));
   }
 
-  const plan = planPlugins(office, installed);
-
-  return { selected, installed, plugins: plan.plugins, problems: [...problems, ...plan.problems], unread };
+  return { selected, installed, problems, unread };
 }
 
 export type InstalledPackages = {
   selected: Set<string>;
   installed: InstalledPackage[];
-  /** Each package plugin to link, by package name, with its folder. */
-  plugins: Map<string, string>;
   problems: PackageProblem[];
   /** Selected but unresolved or unreadable: absence from `installed` cannot authorize cleanup. */
   unread: Set<string>;

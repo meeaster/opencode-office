@@ -10,7 +10,7 @@
 // office to sync a panel wins; a record beside the bundle says which office that was.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -389,7 +389,7 @@ export function readPanelRecord(machine: AppMachine, name: string): PanelRecord 
   const path = join(panelDir(machine, name), panelRecordFile);
 
   try {
-    if (!statSync(path, { throwIfNoEntry: false })?.isFile()) return undefined;
+    if (!lstatSync(path, { throwIfNoEntry: false })?.isFile()) return undefined;
 
     const read = check(v.safeParse(recordSchema, JSON.parse(readFileSync(path, "utf8"))));
 

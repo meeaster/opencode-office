@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import * as v from "valibot";
@@ -8,6 +9,7 @@ import { compile } from "./build.ts";
 const sandbox = mkdtempSync(join(tmpdir(), "office-opencode-scope-"));
 const office = join(sandbox, "bin/office");
 const launcher = process.env.OFFICE_TEST_OPENCODE;
+const previous = process.env.OFFICE_TEST_PRE_INSPECT;
 
 function write(path: string, text: string) {
   mkdirSync(dirname(path), { recursive: true });
@@ -70,8 +72,8 @@ function fixture(name: string, endpoint: string) {
   write(join(dir, "builder/.opencode/plugins/independent.js"), command("native-command"));
   write(join(repo, "opencode.json"), '{"commands":{"scope-setting":{"description":"direct-repo","template":"Repo"}}}');
 
-  const run = async (args: string[], status = 0) => {
-    const proc = Bun.spawn([office, ...args], { cwd: dir, env: args.includes("inspect") ? { ...env, PATH: join(home, "empty") } : env, stdout: "pipe", stderr: "pipe" });
+  const run = async (args: string[], status = 0, executable = office) => {
+    const proc = Bun.spawn([executable, ...args], { cwd: dir, env: args.includes("inspect") ? { ...env, PATH: join(home, "empty") } : env, stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
 
     expect(code, stdout + stderr).toBe(status);
@@ -104,7 +106,8 @@ test("compiled offline inventory distinguishes scoped declarations, links, clone
     symlinkSync("../../packages/common/plugin", path(".opencode/plugins/owner-alias"));
     symlinkSync("../../packages/missing/elsewhere", path(".opencode/plugins/owner-dangling"));
     write(path("opencode.json"), JSON.stringify({ plugins: [
-      "./packages/common/plugin", "https://hidden-user:hidden-password@example.invalid/hidden-path?hidden-query",
+      "./packages/common/plugin", "https://hidden-user:hidden-password@hidden-host.invalid/hidden-path?hidden-query",
+      "hidden-token-shaped-npm", "./hidden-opaque-component", "hidden-company@1.0.0", "hidden-company@2.0.0",
     ], providers: { fixture: { headers: { Authorization: "hidden-header" } } } }));
     const selected = "packages: [{name: common}]\nplugins: [{name: imported, repo: 'https://hidden-git@example.invalid/demo?hidden-ref'}]\n";
 
@@ -117,22 +120,42 @@ test("compiled offline inventory distinguishes scoped declarations, links, clone
     write(join(f.home, "config/opencode/opencode.json"), '{"plugins":["hidden-global-plugin"]}');
     const report = await f.run(inspect);
 
-    expect(report).toContain("[desk builder] configured builder/extensions/local: builder/.opencode/opencode.jsonc#plugins[0]");
-    expect(report).toContain("[folder builder/repos/sample] native config: builder/repos/sample/opencode.json");
-    expect(report).toContain("declared Git clone (example.invalid; no checkout observed): office.yaml plugins: imported -> .opencode/plugins/imported");
-    expect(report).toContain("Office package link (selected; ../../packages/common/plugin)");
-    expect(report).toContain("convention plugin candidate (dangling): .opencode/plugins/owner-dangling");
-    const duplicates = report.split("possible duplicate source (same target; activation not checked):")[1];
+    expect(report).toContain("[desk builder] configured local directory: builder/.opencode/opencode.jsonc#plugins[0]");
+    expect(report).toContain("[folder builder/<folder-2>/<folder-3>] native config: builder/<folder-2>/<folder-3>/opencode.json");
+    expect(report).toContain("declared Git clone (no checkout observed): office.yaml plugins: imported -> .opencode/plugins/imported");
+    expect(report).toContain("Office-created package link (selected built-in package): .opencode/plugins/office");
+    expect(report).toContain("convention plugin candidate (dangling)");
+    const duplicates = report.split("possible duplicate source (same filesystem target; activation not checked):")[1];
 
-    expect(duplicates).toContain("configured packages/common/plugin: opencode.json#plugins[0]");
-    expect(duplicates).toContain("Office package link (selected; ../../packages/common/plugin): .opencode/plugins/common");
-    expect(report).toContain(`bundle present; listed in ${f.env.OFFICE_APP_CONFIG_DIR}/opencode.json`);
+    expect(duplicates).toContain("configured local directory: opencode.json#plugins[0]");
+    expect(duplicates).toContain("Office-created package link (selected local package): .opencode/plugins/common");
+    expect(report).toContain("same package name or ID; versions not resolved");
+    expect(report).toContain("bundle present; listed in app-machine opencode.json");
     expect(report).not.toContain("hidden-");
     expect(report).toContain("runtime not checked");
     expect(existsSync(f.imports)).toBe(false);
     expect(requests).toBe(0);
     expect(await f.run(["opencode", "inspect", "sibling"])).not.toContain("builder/");
     expect((await f.run(["opencode", "inspect", ".opencode"])).match(/native config: \.opencode\/opencode\.jsonc/g)).toHaveLength(1);
+    const failed = await f.run(["opencode", "inspect", join(f.home, "hidden-lookup\nINJECTED")], 1);
+    expect(failed).not.toMatch(/hidden-lookup|INJECTED/);
+    expect(await f.run(["opencode", "inspect", "--hidden-flag\nINJECTED"], 1)).not.toMatch(/hidden-flag|INJECTED/);
+
+    const panels = f.env.OFFICE_APP_PANELS_DIR;
+    const record = join(panels, "common/office-panel.json");
+    const bundle = join(panels, "common/gui-experimental.cjs");
+    const backup = `${record}.original`;
+    renameSync(record, backup);
+    symlinkSync(backup, record);
+    expect(await f.run(inspect)).not.toContain("desktop: common");
+    rmSync(record);
+    write(record, readFileSync(backup, "utf8").replace('"sample"', '"another-office"'));
+    expect(await f.run(inspect)).not.toContain("desktop: common");
+    renameSync(backup, record);
+    rmSync(bundle);
+    mkdirSync(bundle);
+    expect(await f.run(inspect)).toContain("bundle missing or not a regular file");
+    rmSync(bundle, { recursive: true });
 
     f.select(selected);
     await f.run(sync, 1);
@@ -159,12 +182,179 @@ test("compiled offline inventory distinguishes scoped declarations, links, clone
     f.select("packages: [{name: common}]\n");
     expect(await f.run(sync, 1)).toContain("not a link office sync made");
     expect(readFileSync(link, "utf8")).toBe("owner bytes\n");
+    await f.run(["cron", "list"]); // A plugin destination collision is not a broken cron provider.
     rmSync(path(".opencode/plugins"), { recursive: true });
     symlinkSync(f.env.OFFICE_APP_CONFIG_DIR, path(".opencode/plugins"));
     expect(await f.run(sync, 1)).toContain("refusing to follow or replace it");
     expect(existsSync(join(f.env.OFFICE_APP_CONFIG_DIR, "common"))).toBe(false);
   } finally {
     trap.stop(true);
+  }
+}, 60_000);
+
+test("a path and target are not custody: preserve ambiguous, dangling, redirected and replaced root links", async () => {
+  const f = fixture("custody", "http://127.0.0.1:1");
+  const folder = join(f.dir, ".opencode/plugins");
+  mkdirSync(folder, { recursive: true });
+  const link = join(folder, "common");
+  const target = "../../packages/common/plugin";
+  symlinkSync(target, link);
+  symlinkSync("../../.office/packages/gone/plugin", join(folder, "gone"));
+  symlinkSync(target, join(folder, "alias"));
+  const sync = ["sync", "--packages"];
+  const inspect = ["opencode", "inspect"];
+
+  expect(await f.run(sync)).toContain(".opencode/plugins/common: no matching Office creation receipt");
+  expect(await f.run(inspect)).toContain("package-shaped link (selected local package; no creation receipt)");
+  const ledger = join(f.dir, ".office/resolved/opencode-links.sqlite");
+  {
+    using db = new Database(ledger);
+    db.exec("PRAGMA journal_mode=WAL");
+  }
+
+  const bytes = readFileSync(ledger);
+  expect(await f.run(inspect, 1)).toContain("ledger is changing or needs recovery");
+  expect(readFileSync(ledger)).toEqual(bytes);
+
+  for (const suffix of ["-wal", "-shm"]) expect(existsSync(`${ledger}${suffix}`)).toBe(false);
+  await f.run(sync);
+  await f.run(["cron", "list"]);
+  f.select("");
+  await f.run(sync);
+  expect(readlinkSync(link)).toBe(target);
+  expect(readlinkSync(join(folder, "gone"))).toBe("../../.office/packages/gone/plugin");
+  expect(readlinkSync(join(folder, "alias"))).toBe(target);
+
+  f.select("plugins: [{name: common, repo: /unavailable}]\n");
+  expect(await f.run(["sync"], 1)).toContain("existing symlink kept");
+  expect(readlinkSync(link)).toBe(target);
+  renameSync(link, join(f.home, "saved-link"));
+  f.select("packages: [{name: common}]\n");
+  await f.run(sync);
+  expect(await f.run(inspect)).toContain("Office-created package link (selected local package)");
+  renameSync(link, join(f.home, "original-inode"));
+  symlinkSync(target, link); // Replacement with IDENTICAL spelling.
+  f.select("");
+  await f.run(sync);
+  expect(readlinkSync(link)).toBe(target);
+  rmSync(link);
+  f.select("packages: [{name: common}]\n");
+  await f.run(sync);
+  rmSync(link);
+  symlinkSync("../../.office/packages/common/plugin", link); // Both target shapes are plausible.
+  expect(await f.run(sync, 1)).toContain("no matching Office creation receipt");
+  f.select("");
+  await f.run(sync);
+  await f.run(sync);
+  expect(readlinkSync(link)).toBe("../../.office/packages/common/plugin");
+}, 60_000);
+
+function gitAt(dir: string, env: ReturnType<typeof fixture>["env"], ...args: string[]) {
+  const res = Bun.spawnSync(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args], { cwd: dir, env });
+  expect(res.exitCode, res.stderr.toString()).toBe(0);
+
+  return res.stdout.toString().trim();
+}
+
+test("a plugin checkout with the wrong origin is not cleaned, fetched or force-checked-out", async () => {
+  const f = fixture("clone-origin", "http://127.0.0.1:1");
+  const remote = join(f.home, "original");
+  const plugin = join(f.dir, ".opencode/plugins/imported");
+  write(join(remote, "index.js"), command("original"));
+  const git = (...args: string[]) => gitAt(remote, f.env, ...args);
+  git("init", "-q");
+  git("add", ".");
+  git("commit", "-qm", "original");
+  f.select(`plugins: [{name: imported, repo: ${remote}}]\n`);
+  await f.run(["sync"]);
+  write(join(remote, "index.js"), command("changed-upstream"));
+  git("commit", "-qam", "advance");
+  write(join(plugin, "index.js"), "// owner edits");
+  const head = gitAt(plugin, f.env, "rev-parse", "HEAD");
+  f.select(`plugins: [{name: imported, repo: ${f.home}/different}]\n`);
+  expect(await f.run(["sync"], 1)).toContain("cannot verify plugin checkout origin");
+  expect(gitAt(plugin, f.env, "rev-parse", "HEAD")).toBe(head);
+  expect(readFileSync(join(plugin, "index.js"), "utf8")).toBe("// owner edits");
+  f.select(`plugins: [{name: imported, repo: ${remote}}]\n`);
+  gitAt(plugin, f.env, "config", `url.${f.home}/different.insteadOf`, remote);
+  expect(await f.run(["sync"], 1)).toContain("cannot verify plugin checkout origin");
+  expect(readFileSync(join(plugin, "index.js"), "utf8")).toBe("// owner edits");
+  gitAt(plugin, f.env, "config", "--unset", `url.${f.home}/different.insteadOf`);
+  // A real fetch can wait. Change only the fixture's origin after fetching, before --force.
+  const gitPath = Bun.which("git", { PATH: f.env.PATH });
+
+  if (!gitPath) throw new Error("git required for plugin checkout test");
+  const shim = join(f.home, "bin/git");
+  write(shim, `#!/bin/sh\n"${gitPath}" "$@" || exit $?\nif [ "$1" = fetch ]; then "${gitPath}" remote set-url origin ../different; fi\n`);
+  chmodSync(shim, 0o755);
+  const originalPath = f.env.PATH;
+  f.env.PATH = `${dirname(shim)}:${originalPath}`;
+  expect(await f.run(["sync"], 1)).toContain("cannot verify plugin checkout origin");
+  f.env.PATH = originalPath;
+  expect(gitAt(plugin, f.env, "rev-parse", "HEAD")).toBe(head);
+  expect(readFileSync(join(plugin, "index.js"), "utf8")).toBe("// owner edits");
+  gitAt(plugin, f.env, "remote", "set-url", "origin", remote);
+  await f.run(["sync"]);
+  expect(gitAt(plugin, f.env, "rev-parse", "HEAD")).toBe(git("rev-parse", "HEAD"));
+  rmSync(plugin, { recursive: true });
+  gitAt(f.dir, f.env, "init", "-q", plugin);
+  gitAt(plugin, f.env, "remote", "add", "origin", `${f.home}/different`);
+  const config = readFileSync(join(plugin, ".git/config"));
+  expect(await f.run(["sync"], 1)).toContain("cannot verify plugin checkout origin");
+  expect(readFileSync(join(plugin, ".git/config"))).toEqual(config);
+}, 60_000);
+
+// A real previous release is the control: no synthetic generation and no rewriting a digest.
+test.skipIf(!previous)("upgrade refuses previously indexed inspect names, aliases and descendants while preserving unrelated routes and pinned repair", async () => {
+  if (!previous) throw new Error("set OFFICE_TEST_PRE_INSPECT to the compiled pre-inspect Office CLI");
+
+  for (const [kind, name, alias] of [["name", "opencode inspect", "folio"], ["alias", "folio", "opencode inspect"], ["descendant", "opencode inspect drawer show", "folio"]]) {
+    const f = fixture(`upgrade-${kind}`, "http://127.0.0.1:1");
+    const remote = join(f.home, "press-remote");
+    const author = join(f.dir, "packages/author/office.ts");
+    const snapshot = join(f.dir, ".office/resolved/references.json");
+    const pinned = join(f.dir, ".office/packages/press/plugin/index.js");
+    const commandModule = (route: string, alternate: string) => `import {writeFileSync} from "node:fs"; writeFileSync(process.env.SCOPE_IMPORTS,"imported"); export default { name:"author",description:"fixture",setup(ctx){ctx.command({name:${JSON.stringify(route)},aliases:[${JSON.stringify(alternate)}],summary:"fixture",run(){console.log("previous author command")}})}}`;
+    const git = (...args: string[]) => gitAt(remote, f.env, ...args);
+    write(author, commandModule(name, alias));
+    write(join(remote, "pkg/office.ts"), 'export default {name:"press",description:"fixture",setup(ctx){ctx.add({registry:"references.repository",value:{name:"bound-reference",url:"local"}});ctx.command({name:"edition",summary:"fixture",run(){console.log("edition")}})}}');
+    write(join(remote, "pkg/plugin/index.js"), command("edition-a"));
+    git("init", "-q");
+    git("add", ".");
+    git("commit", "-qm", "first");
+    git("tag", "stable");
+    const selection = `packages:\n  - {name: press, repo: ${remote}, path: pkg, ref: stable}\n`;
+    f.select(`${selection}  - name: author\n`);
+    await f.run(["sync", "--packages"], 0, previous);
+    const oldRoute = kind === "alias" ? alias : name;
+    expect(await f.run(oldRoute.split(" "), 0, previous)).toContain("previous author command");
+    rmSync(f.imports);
+    const original = readFileSync(snapshot, "utf8");
+    expect(await f.run(oldRoute.split(" "), 1)).toContain("previously indexed package command or alias");
+    expect(await f.run(["--help"])).toContain("indexed route of package author");
+    expect(await f.run(["references", "list"])).toContain("bound-reference");
+    expect(existsSync(f.imports)).toBe(false);
+    write(join(remote, "pkg/plugin/index.js"), command("edition-b"));
+    git("commit", "-qam", "moved tag");
+    git("tag", "-f", "stable");
+    rmSync(dirname(dirname(pinned)), { recursive: true });
+    expect(await f.run(["sync", "--packages"], 1)).toContain("is reserved");
+    expect(readFileSync(snapshot, "utf8")).toBe(original);
+    expect(readFileSync(pinned, "utf8")).toBe(command("edition-a"));
+    expect(await f.run(["references", "list"])).toContain("bound-reference");
+
+    if (kind === "alias") f.select(selection);
+    else write(author, commandModule("folio read", "folio"));
+    await f.run(["sync", "--packages"]);
+    const report = await f.run(["opencode", "inspect"]);
+    expect(report).toContain("selected pinned Git package");
+    expect(report).not.toContain(remote);
+    expect(report).not.toContain("stable");
+    expect(report).toContain("no creation receipt");
+    f.select("");
+    await f.run(["sync", "--packages"]);
+    expect(readlinkSync(join(f.dir, ".opencode/plugins/press"))).toBe("../../.office/packages/press/plugin");
+    await f.run(["references", "list"]);
   }
 }, 60_000);
 
