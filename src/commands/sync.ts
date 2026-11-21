@@ -14,7 +14,7 @@ import { join, relative, resolve } from "node:path";
 
 import { prepareReferenceRefresh } from "../../packages/references/tasks/refresh.ts";
 import { claudeFiles } from "../claude.ts";
-import { boundRevision, collectReferences } from "../collect-references.ts";
+import { boundRevision, collectReferences, unresolvedMachineOwner } from "../collect-references.ts";
 import { beginReferencePublication, planReferenceApply } from "../reference-publication.ts";
 import { preserveV3Owner } from "../v3-reference-owner.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
@@ -22,7 +22,7 @@ import { collectJobs } from "../../standard/cron/jobs.ts";
 import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
 import { cloneOrFetchStreamed, clonePluginStreamed, existingPluginDestination, git, isClone, PluginCheckoutProblem, referenceGit, referenceOriginProblem, refreshCloneStreamed, verifiedHead } from "../git.ts";
 import { type Clone, clones, installedPackages, skillSelections } from "../layout.ts";
-import { cloneTarget, legacyPlugin, linkPlugins, placeLink, pluginFolder, pluginScope, requirePluginDestination, stagingFolder, withPluginPlan } from "../../standard/opencode/delivery.ts";
+import { cloneTarget, legacyPlugin, linkPlugins, placeLink, pluginFolder, pluginScope, requirePluginDestination, stagingFolder, withdrawDeselectedPlugins, withPluginPlan } from "../../standard/opencode/delivery.ts";
 import { validateAssets } from "../../standard/opencode/assets.ts";
 import { type Declaration, readDeclarations } from "../../standard/opencode/declarations.ts";
 import { cloneFolder, entry as entryAt, officeEntries, requireFolder } from "../../standard/opencode/ownership.ts";
@@ -31,8 +31,7 @@ import { migrate } from "../migrate.ts";
 import { atomicWrite } from "../secrets.ts";
 import { definitionFiles } from "../package-definition.ts";
 import { packageComposeFile } from "../package-services.ts";
-import { machineCollection } from "../../standard/mise-integration/projection.ts";
-import { changesSetup, fragmentPath, syncTools } from "../package-tools.ts";
+import { syncTools } from "../package-tools.ts";
 import { type Desk, type Office, skillGroups } from "../office.ts";
 import { silentStage, type Stage } from "../report/index.ts";
 import { fetchPackage, installBuiltin, type InstalledPackage, installPackage, pulledDir, pulledFolders, removePackage, requirePackageOwnership, resolvePackages } from "../packages.ts";
@@ -510,6 +509,7 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
  * update` both apply packages this way. Each change goes to `changes`.
  */
 export async function syncPackages(office: Office, changes: { push: (...lines: string[]) => void }, stage: Stage = silentStage, exclude = true): Promise<boolean> {
+  if (office.opencode.mode === "container") changes.push(...syncMachine(office));
   requirePluginDestination(office);
   const { packages, problems } = resolvePackages(office);
 
@@ -571,7 +571,12 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   changes.push(...installed.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
   const published = await collectReferences(office, packages, installed, changes, publication.value, rejected, embedded);
 
-  if (!published) return false;
+  if (!published) {
+    if (!migration) changes.push(...withdrawDeselectedPlugins(office, installed.selected));
+
+    return false;
+  }
+
   migration?.commit();
 
   if (needsEnvironmentOwners(office, installed)) {
@@ -605,12 +610,13 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   for (const item of installed.installed) changes.push(...installPackage(office, item));
 
   stage.detail("writing the packages' tools and linking skills and plugins");
-  const unknown = [...installed.unread].find(name => (existsSync(fragmentPath(office, name)) && installed.installed.some(item => item.machine?.install || changesSetup(office, item))) || publication.value.previous?.contributors.find(group => group.name === name)?.entries.some(row => machineCollection(row.id)));
+  const unknown = unresolvedMachineOwner(office, installed, publication.value.previous);
 
   if (unknown) changes.push(`FAILED package ${unknown}: machine claims unresolved; keeping last-good tools, fragments and links`);
   else {
     changes.push(...syncTools(office, installed.installed, [...installed.selected]));
-    changes.push(...syncMachine(office, installed));
+
+    if (office.opencode.mode === "host") changes.push(...syncMachine(office, installed));
   }
 
   const plan = withPluginPlan(office, { ...installed, problems: [] }, "collect");

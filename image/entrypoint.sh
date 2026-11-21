@@ -76,11 +76,16 @@ export OFFICE_EXECUTOR_TOKEN="${OFFICE_EXECUTOR_TOKEN:-${EXECUTOR_TOKEN:-}}"
 conf_d="${MISE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/mise}/conf.d"
 mkdir -p "$conf_d"
 find "$conf_d" -maxdepth 1 -type l -name 'office-*.toml' -delete
-if [ -f "$office/machine.packages.toml" ]; then
+# A failed sync can retain a host generation. Only link outputs that sync
+# actually projected for this mode; the owner's native machine.toml is independent.
+container_projection() {
+  [ -f "$1" ] && sed '/^$/q' "$1" | grep -Fxq '# Projected for container mode.'
+}
+if container_projection "$office/machine.packages.toml"; then
   ln -s "$office/machine.packages.toml" "$conf_d/office-${OFFICE_NAME:-unnamed}-0-packages.toml"
 fi
 for fragment in "$office"/.office/mise/*.toml; do
-  [ -f "$fragment" ] && head -n 1 "$fragment" | grep -Eq '^# The mise (setup|tools) of package ' || continue
+  container_projection "$fragment" && head -n 1 "$fragment" | grep -Eq '^# The mise (setup|tools) of package ' || continue
   ln -s "$fragment" "$conf_d/office-${OFFICE_NAME:-unnamed}-1-$(basename "$fragment")"
 done
 if [ -f "$office/machine.toml" ]; then

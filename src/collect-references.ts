@@ -3,13 +3,15 @@ import type { Collection, CollectionEntry } from "../packages/office/package-con
 import { project, destinationProblems, machineCollection } from "../standard/mise-integration/projection.ts";
 import { repositories } from "../packages/references/repositories.ts";
 import { collectJobs } from "../standard/cron/jobs.ts";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { changesSetup, fragmentPath } from "./package-tools.ts";
 import { runPackageSetup, standardImports } from "./package-definition.ts";
 import { commandConflicts, commandRegistration, type CommandMetadata } from "./command-table.ts";
-import type { InstalledPackages } from "./layout.ts";
+import { installedPackages, type InstalledPackages } from "./layout.ts";
 import type { Office, PackageEntry } from "./office.ts";
-import { applyScalarSettings, collectionContract, gitSelection, providerFiles, readRecord, type ResolvedPackage } from "./packages.ts";
-import { claims, inputHash, namedEntry, referenceFile, type ReferenceSnapshot } from "./reference-snapshot.ts";
+import { applyScalarSettings, builtinSource, collectionContract, gitSelection, providerFiles, readRecord, resolvePackages, type InstalledPackage, type ResolvedPackage } from "./packages.ts";
+import { claims, inputHash, namedEntry, readSnapshot, referenceFile, type ReferenceSnapshot } from "./reference-snapshot.ts";
 import type { ReferencePublication } from "./reference-publication.ts";
 
 // The package name is the key. A different kind, selection or installed Git revision
@@ -19,6 +21,61 @@ export function boundRevision(previous: ReferenceSnapshot | undefined, entry: Pa
   const source = gitSelection(entry.source);
 
   return previous?.contributors.find(group => group.name === entry.name && group.source === source)?.commit;
+}
+
+/** A failed collector cannot withdraw an earlier machine claim, or authorize a
+ * different package to replace its still-delivered setup. */
+export function unresolvedMachineOwner(office: Office, installed: InstalledPackages, previous?: ReferenceSnapshot) {
+  return [...installed.unread].find(name =>
+    previous?.contributors.find(group => group.name === name)?.entries.some(row => machineCollection(row.id)) ||
+    (existsSync(fragmentPath(office, name)) && installed.installed.some(item => item.machine?.install || changesSetup(office, item))));
+}
+
+/** Before swapping a tracked tree, collect the staged revision alongside the
+ * current peers (including earlier updates in this batch), without publishing. */
+export async function admitReplacement(office: Office, item: InstalledPackage, expectedBuiltins?: ReadonlyMap<string, string>) {
+  const name = item.entry.name;
+  const snapshot = readSnapshot(office.dir);
+
+  if (!snapshot.ok) throw new Error(snapshot.errors.join("; "));
+  const effective = { ...office, packages: office.packages.map(entry => entry.name === name ? item.entry : entry) };
+  const selected = resolvePackages(effective).packages.map(peer => peer.entry.name === name ? item : peer);
+  const peers = installedPackages(effective, new Set([name]), false);
+  peers.installed.push(item);
+  peers.unread.delete(name);
+  const sources = new Map<string, string>();
+
+  if (peers.problems.length) throw new Error(`${peers.problems.map(problem => problem.message).join("; ")}; sync the selected peers before updating`);
+
+  for (const peer of selected) {
+    if (peer.kind !== "built-in") continue;
+    const record = readRecord(peer.dir);
+
+    if (!record) throw new Error(`cannot validate with missing ${peer.entry.name} package; sync the selected peers first`);
+    const source = builtinSource(record.files);
+    const expected = expectedBuiltins?.get(peer.entry.name);
+
+    if (expected && expected !== source) throw new Error(`sync the current ${peer.entry.name} package before updating`);
+    sources.set(peer.entry.name, source);
+  }
+
+  const failures: string[] = [];
+  let staleCandidate = false;
+
+  const accepted = await collectReferences(effective, selected, peers, { push(...lines) { failures.push(...lines.filter(line => line.startsWith("FAILED"))); } }, {
+    previous: snapshot.value,
+    publish(candidate) {
+      staleCandidate = candidate.contributors.some(group => group.name === name && group.stale);
+
+      return false;
+    },
+  }, new Set(), sources);
+
+  if (!accepted || peers.unread.has(name) || staleCandidate) throw new Error(failures.join("; ") || "could not validate package claims");
+
+  const unresolved = unresolvedMachineOwner(effective, peers, snapshot.value);
+
+  if (unresolved) throw new Error(`unresolved machine claims of ${unresolved}; repair that package before replacing the installed tree`);
 }
 
 function provenance(item: ResolvedPackage, previous: ReferenceSnapshot | undefined, rejected: boolean, embedded: ReadonlyMap<string, string>) {

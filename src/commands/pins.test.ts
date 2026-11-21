@@ -304,6 +304,55 @@ packages:
   expect(record(".office/packages/demo").commit).toBe(pkgTwo);
 });
 
+test("a pending peer setting and duplicate requirements reject the staged tree; repaired installers advance together", () => {
+  const repo = join(dir, "installers");
+  const root = join(dir, "office");
+  const yaml = join(root, "office.yaml");
+  const names = ["alpha", "bravo"];
+
+  const installer = (name: string, destination: string, extra = "") => `export default {name:"${name}",description:"fixture",async setup(c){
+    const {installs}=await c.importStandard("mise-integration/claims");
+    c.add(installs,{name:"install",description:"Install",script:"run.ts",destination:"${destination}",ready:"${destination}",executable:false});
+    ${extra}
+  }}`;
+
+  const alpha = installer("alpha", "~/.local/alpha");
+  const first = commit(repo, { "alpha/office.ts": alpha, "bravo/office.ts": installer("bravo", "~/.local/bravo"), "alpha/run.ts": "// original", "bravo/run.ts": "// original" });
+  write(yaml, `name: test\nopencode: {mode: host, url: 'http://127.0.0.1:49999'}\npackages:\n  - {name: browser, settings: {browse: false}}\n${names.map(name => `  - {name: ${name}, repo: ${repo}, ref: ${first}, track: main, path: ${name}}`).join("\n")}\n`);
+  expect(office("sync", "--packages").status).toBe(0);
+  write(yaml, read(yaml).replace("browse: false", "browse: true"));
+  const receipts = ["office.yaml", ".office/resolved/references.json", ".office/mise/alpha.toml", ".office/packages/alpha/.source.json", ".office/packages/alpha/run.ts", ".office/packages/alpha/office.ts"];
+  const stamp = () => receipts.map(path => read(join(root, path)));
+  // Hold bravo on the old ref while alpha's candidate is invalid.
+  git(["branch", "hold", first], repo);
+  const selected = read(yaml);
+  write(yaml, selected.replace("track: main, path: bravo", "track: hold, path: bravo"));
+  const before = stamp();
+
+  for (const [code, problem] of [
+    [installer("alpha", "~/.local/bin/browse"), "claimed by both package browser and package alpha"],
+    [installer("alpha", "~/.local/alpha", `const {requirements}=await c.importStandard("tooling/requirements");for(const v of ["1.1","1.2"])c.add(requirements,{name:"widget",minimumVersion:v})`), "tooling.requirements widget claimed by both"],
+  ]) {
+    commit(repo, { "alpha/office.ts": code, "alpha/run.ts": "// rejected" });
+    const rejected = office("packages", "update");
+    expect(rejected.status).toBe(1);
+    expect(rejected.out).toContain(problem);
+    expect(stamp()).toEqual(before);
+  }
+
+  const next = commit(repo, { "alpha/office.ts": alpha, "alpha/run.ts": "// repaired", "bravo/run.ts": "// new" });
+
+  // A valid tree must also roll back if the pin editor refuses a YAML alias.
+  write(yaml, read(yaml).replace(`ref: ${first}`, "ref: *original").replace("packages:", `references: [{name: fixture, url: &original "${first}"}]\npackages:`));
+  const aliased = stamp();
+  expect(office("packages", "update").out).toContain("by hand");
+  expect(stamp()).toEqual(aliased);
+  write(yaml, selected);
+  expect(office("packages", "update").out).toContain("done: 2 updated");
+
+  for (const name of names) expect(record(`.office/packages/${name}`).commit).toBe(next);
+}, 30_000);
+
 test("help names both update commands, and office.yaml refuses a track without a repository", () => {
   expect(office("--help").out).toContain("skills update");
   expect(office("--help").out).toContain("packages update");

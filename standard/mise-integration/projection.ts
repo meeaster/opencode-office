@@ -1,6 +1,6 @@
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, normalize, relative } from "node:path";
+import { join, resolve, relative } from "node:path";
 import * as v from "valibot";
 import { installs, recipes, tasks, type Install, type Task } from "../../packages/mise-integration/claims.ts";
 import type { CollectionEntry } from "../../packages/office/package-context.ts";
@@ -54,7 +54,11 @@ export function project(item: InstalledPackage, rows: readonly { id: string; val
       }
 
       const files = readBootstrap(item, recipe.bootstrap).files ?? {};
-      system = v.parse(systemBlock, { ...recipe, ready: [...new Set([...recipe.ready, ...Object.keys(files)])] });
+
+      const present = Object.entries(files).flatMap(([path, spec]) =>
+        spec.state === "absent" || spec.remove_empty || spec.os !== undefined ? [] : [effectivePath(path)]);
+
+      system = v.parse(systemBlock, { ...recipe, ready: [...new Set([...recipe.ready, ...present])] });
 
       if (item.manifest.settings[system.setting]?.default !== false) throw new Error(`${name}: system recipe needs a default-off setting`);
 
@@ -65,26 +69,51 @@ export function project(item: InstalledPackage, rows: readonly { id: string; val
   item.machine = claims;
 }
 
-const native = v.strictObject({ bootstrap: v.object({ packages: v.optional(v.record(v.string(), settingValue)), files: v.optional(v.record(v.pipe(v.string(), v.startsWith("/")), settingValue)) }) });
+// Inspect the resource fields that affect ownership and positive presence. The
+// original TOML, including the rest of the resource's native options, is delivered.
+const resources = v.optional(v.record(v.pipe(v.string(), v.regex(/^(?:\/|~\/).+/)), v.object({
+  state: v.optional(v.picklist(["absent", "present"])),
+  remove_empty: v.optional(v.boolean()),
+  os: v.optional(v.union([v.string(), v.array(v.string())])),
+})));
+
+const native = v.strictObject({ bootstrap: v.strictObject({
+  packages: v.optional(v.record(v.string(), settingValue)),
+  files: resources,
+  directories: resources,
+}) });
+
+function effectivePath(path: string) {
+  return resolve(path.startsWith("~/") ? join(process.env.HOME ?? homedir(), path.slice(2)) : path);
+}
 
 function readBootstrap(item: InstalledPackage, file: string) {
   return v.parse(native, Bun.TOML.parse(readFileSync(join(item.dir, file), "utf8"))).bootstrap;
 }
 
-/** Only the declarative files of native recipes and explicit install roots own destinations. */
+type PathClaim = { owner: string; directory: boolean; absent: boolean };
+
+function allowsChild(parent: PathClaim, child: PathClaim) {
+  return parent.directory && (!parent.absent || child.absent);
+}
+
+/** Install roots own their subtree; native directories manage the directory itself. */
 export function destinationProblems(office: Office, items: InstalledPackage[]): string[] {
-  const owners = new Map<string, string>();
+  const owners = new Map<string, PathClaim>();
   const packages = new Map<string, { owner: string; spec: SettingValue }>();
   const problems: string[] = [];
 
-  function claim(path: string, owner: string) {
-    const key = normalize(path.startsWith("~/") ? join(homedir(), path.slice(2)) : path);
+  function claim(path: string, owner: string, directory = false, absent = false) {
+    const key = effectivePath(path);
+    const next = { owner, directory, absent };
+
+    if (key === "/") problems.push(`package ${owner} cannot manage the filesystem root`);
 
     for (const [other, first] of owners) {
-      if (key === other || key.startsWith(`${other}/`) || other.startsWith(`${key}/`)) problems.push(`${path} claimed by both package ${first} and package ${owner}`);
+      if (key === other || (key.startsWith(`${other}/`) && !allowsChild(first, next)) || (other.startsWith(`${key}/`) && !allowsChild(next, first))) problems.push(`${path} claimed by both package ${first.owner} and package ${owner}`);
     }
 
-    owners.set(key, owner);
+    owners.set(key, next);
   }
 
   for (const item of items) {
@@ -113,7 +142,9 @@ export function destinationProblems(office: Office, items: InstalledPackage[]): 
 
         const recipe = readBootstrap(item, item.manifest.system.bootstrap);
 
-        for (const path of Object.keys(recipe.files ?? {})) claim(path, owner);
+        for (const [path, spec] of Object.entries(recipe.files ?? {})) claim(path, owner, false, spec.state === "absent");
+
+        for (const [path, spec] of Object.entries(recipe.directories ?? {})) claim(path, owner, true, spec.state === "absent");
 
         for (const [name, spec] of Object.entries(recipe.packages ?? {})) {
           const previous = packages.get(name);

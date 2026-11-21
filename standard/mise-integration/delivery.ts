@@ -116,8 +116,14 @@ function packageLine(tool: string, version: string, packages: string[]): string 
 }
 
 /** machine.packages.toml's text with these lines, in this order. */
-function renderPackages(lines: [string, { version: string; packages: string[] }][]): string {
-  return `${[...packagesHeader, "", "[tools]", ...lines.map(([tool, line]) => packageLine(tool, line.version, line.packages))].join("\n")}\n`;
+const containerProjection = "# Projected for container mode.";
+
+function containerMarker(office: Office) {
+  return office.opencode.mode === "container" ? [containerProjection] : [];
+}
+
+function renderPackages(lines: [string, { version: string; packages: string[] }][], modeMarker: string[] = []): string {
+  return `${[...packagesHeader, ...modeMarker, "", "[tools]", ...lines.map(([tool, line]) => packageLine(tool, line.version, line.packages))].join("\n")}\n`;
 }
 
 /** A change sync makes to machine.packages.toml, and what it says of it. */
@@ -177,7 +183,12 @@ export function planPackageTools(office: Office, installed: InstalledPackage[], 
     changes.push({ kind: "removed", tool, line: `removed ${tool} from ${packagesFile}, as no package declares it here any more` });
   }
 
-  return { text: lines.length === 0 ? undefined : renderPackages(lines), changes };
+  // An unread legacy owner may have contributed host-only tools. Preserving
+  // its pins does not authorize a container to consume a host generation.
+  const retained = lines.some(([, line]) => line.packages.some(name => unread.includes(name)));
+  const modeMarker = retained && !current?.split("\n\n", 1)[0].split("\n").includes(containerProjection) ? [] : containerMarker(office);
+
+  return { text: lines.length === 0 ? undefined : renderPackages(lines, modeMarker), changes };
 }
 
 /** Writes machine.packages.toml as `planPackageTools` makes it. Returns one line per change. */
@@ -287,8 +298,8 @@ function fragmentSection(office: Office, item: InstalledPackage): Parsed<string 
 }
 
 /** The fragment's text for a package's setup. */
-function fragmentText(name: string, section: string): string {
-  return `${[...header(name), "", ...section.replace(/\n$/, "").split("\n")].join("\n")}\n`;
+function fragmentText(name: string, section: string, modeMarker: string[] = []): string {
+  return `${[...header(name), ...modeMarker, "", ...section.replace(/\n$/, "").split("\n")].join("\n")}\n`;
 }
 
 /** Whether applying a selected setup would introduce a new or changed machine fragment. */
@@ -300,7 +311,7 @@ export function changesSetup(office: Office, item: InstalledPackage) {
   if (section.value === undefined) return false;
   const path = fragmentPath(office, item.entry.name);
 
-  return !existsSync(path) || readFileSync(path, "utf8") !== fragmentText(item.entry.name, section.value);
+  return !existsSync(path) || readFileSync(path, "utf8") !== fragmentText(item.entry.name, section.value, containerMarker(office));
 }
 
 /** The line of the host install's task in a fragment, which tells sync's messages it is there. */
@@ -507,7 +518,7 @@ function syncFragments(office: Office, installed: InstalledPackage[], declared: 
       continue;
     }
 
-    const text = fragmentText(name, section);
+    const text = fragmentText(name, section, containerMarker(office));
 
     if (text === current) continue;
 
@@ -616,7 +627,7 @@ function setupNotes(office: Office, item: InstalledPackage, section: string | un
 
   if (section === undefined) return { ok: false, notes: [`${where} is left from a mise setup the package no longer has here; office sync deletes it`] };
 
-  if (text !== fragmentText(item.entry.name, section)) return { ok: false, notes: [`${where} lacks or differs from the package's host install or system setup; office sync rewrites it`] };
+  if (text !== fragmentText(item.entry.name, section, containerMarker(office))) return { ok: false, notes: [`${where} lacks or differs from the package's host install or system setup; office sync rewrites it`] };
 
   return { ok: true, notes: [`mise setup in ${where}`] };
 }

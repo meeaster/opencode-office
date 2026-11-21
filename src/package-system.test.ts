@@ -87,6 +87,29 @@ function mode(which: "host" | "container", settings = ""): void {
 
 const on = "    settings:\n      system: true\n";
 
+test("native directories allow children; absent and conditional files own paths without requiring presence", async () => {
+  demo();
+  mode("host", on);
+  write(ready(), "");
+  const file = join(office, "packages/demo/system/bootstrap.toml");
+  write(file, `[bootstrap.directories."~/.config/demo"]\nmode="0755"\n[bootstrap.files."~/.config/demo/old"]\nstate="absent"\n[bootstrap.files."~/.config/demo/optional"]\nos="macos"\ncontent="mac"\n`);
+  const manifest = join(office, "packages/demo/package.yaml");
+  // Convert the native recipe to the typed author; keep its explicit readiness marker.
+  rmSync(manifest);
+  write(join(office, "packages/demo/office.ts"), `export default {name:"demo",description:"fixture",settings:{system:{default:false,description:"use"}},async setup(c){
+    const {recipes}=await c.importStandard("mise-integration/claims");
+    c.add(recipes,{name:"demo",setting:"system",description:"Example",platforms:["ubuntu-24.04-amd64-wsl"],bootstrap:"system/bootstrap.toml",ready:[${JSON.stringify(ready())}],env:{}})
+  }}`);
+  const run = () => sync(loadOffice(office), { scope: "packages" });
+  expect((await run()).join("\n")).not.toContain("FAILED");
+  expect(notes().notes).toContain("Example is set up on this machine");
+  const original = fragment();
+  const target = join(dir, "home/.config/demo/old");
+  write(file, `${readFileSync(file, "utf8")}[bootstrap.directories.${JSON.stringify(target)}]\nmode="0755"\n`);
+  expect((await run()).join("\n")).toContain(`${target} claimed by both`);
+  expect(fragment()).toBe(original);
+});
+
 /** demo's fragment, or "" when it has none. */
 const fragment = () => (existsSync(join(office, ".office/mise/demo.toml")) ? readFileSync(join(office, ".office/mise/demo.toml"), "utf8") : "");
 

@@ -753,7 +753,7 @@ An office from a release that kept each package's tools in its fragment, in a `[
 
 ### The office CLI's tools
 
-A tool the CLI itself runs belongs to the CLI; `machine.toml` is for your own choices. The required `office` package declares SOPS and age (for the office's encrypted secrets), gh (GitHub logins and sources) and pre-commit (the gitleaks hook) in its `tools`, so every office has them in `machine.packages.toml` like any package's tools: `office upgrade-tools` bumps them, a host-mode office links that file machine-wide (`office-<name>-0-packages.toml`), and the container installs them at start.
+A tool the CLI itself runs belongs to the CLI; `machine.toml` is for your own choices. The required `office` package registers the minimum versions from `packages/office/floors.ts` for SOPS and age (encrypted secrets), gh (GitHub logins and sources) and pre-commit (the gitleaks hook). `office upgrade-tools` bumps their adopted versions in `machine.packages.toml`. A host-mode office links that file machine-wide (`office-<name>-0-packages.toml`). The container installs tools from the last container-mode sync; run `office sync --packages` before starting the new image. It skips package files retained from a host-mode sync.
 
 The CLI runs the version `machine.packages.toml` pins, as mise installed it, which it finds with `mise which <command> --tool=<tool>@<version>`, run from `/` without config files: no shims, PATH entry, link or consent needed, so it works the same from your terminal, cron jobs, systemd timers and CI, in either mode. Until that version is installed, the newest copy mise installed, on PATH or left in host-tools by an earlier release serves, and `office check` says which.
 

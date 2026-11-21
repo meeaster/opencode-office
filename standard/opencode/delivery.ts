@@ -186,6 +186,28 @@ export function restartNotice(name: string) {
   return `restart OpenCode to pick up ${name}: a running server keeps loading a plugin from where it first found it`;
 }
 
+function unlinkPlugin(folder: string, name: string, target: string) {
+  const path = join(folder, name);
+
+  if (readlinkSync(path) !== target) throw new OfficeError(`kept changed ${pluginFolder}/${name}; retry sync after the edit`);
+  unlinkSync(path);
+}
+
+/** Explicit package deselection needs no new publication or asset declarations. */
+export function withdrawDeselectedPlugins(office: Office, selected: Set<string>) {
+  requirePluginDestination(office);
+  const { folder, links } = pluginLinks(office, new Map());
+  const changes: string[] = [];
+
+  for (const [name, target] of links) {
+    if (selected.has(name) || target === cloneTarget(name)) continue;
+    unlinkPlugin(folder, name, target);
+    changes.push(`unlinked ${pluginFolder}/${name}`);
+  }
+
+  return changes;
+}
+
 /**
  * Makes the root's `.opencode/plugins/` hold a link for each package plugin, and no other Office
  * link except those of declared clones, which the clone step manages. An Office link whose package
@@ -206,10 +228,7 @@ export function linkPlugins(office: Office, installed: ReturnType<typeof withPlu
 
   for (const [name, target] of links) {
     if (installed.unread.has(name) || wanted.has(name) || (cloned.has(name) && target === cloneTarget(name))) continue;
-    const path = join(folder, name);
-
-    if (readlinkSync(path) !== target) throw new OfficeError(`kept changed ${pluginFolder}/${name}; retry sync after the edit`);
-    unlinkSync(path);
+    unlinkPlugin(folder, name, target);
     changes.push(cloned.has(name) ? `unlinked ${pluginFolder}/${name} for the plugins: entry of that name; ${restartNotice(name)}` : `unlinked ${pluginFolder}/${name}`);
   }
 

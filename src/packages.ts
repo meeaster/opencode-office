@@ -18,7 +18,7 @@ import { Worker } from "node:worker_threads";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import * as v from "valibot";
 
-import { project, destinationProblems, type MachineClaims } from "../standard/mise-integration/projection.ts";
+import { project, type MachineClaims } from "../standard/mise-integration/projection.ts";
 import type { CollectionEntry } from "../packages/office/package-context.ts";
 import { panelBundle } from "./desktop.ts";
 import { collectAssets } from "../standard/opencode/assets.ts";
@@ -301,10 +301,9 @@ function writeJson(path: string, value: PackageRecord | string[]): void {
  * failed copy leaves the installed one as it was. The office's settings and template records stay:
  * sync reports the settings file only when the settings change, and never copies a template file twice.
  */
-async function replaceFolder<Result>(dir: string, fill: (staging: string) => Result, sibling = false): Promise<Awaited<Result>> {
+async function replaceFolder<Result>(dir: string, fill: (staging: string) => Result, commitPin?: () => void): Promise<Awaited<Result>> {
   mkdirSync(dirname(dir), { recursive: true });
-  const temp = mkdtempSync(join(dirname(dir), `.${basename(dir)}.new-`));
-  const staging = sibling ? temp : join(temp, basename(dir));
+  const staging = mkdtempSync(join(dirname(dir), `.${basename(dir)}.new-`));
 
   try {
     const result = await fill(staging);
@@ -313,12 +312,25 @@ async function replaceFolder<Result>(dir: string, fill: (staging: string) => Res
       if (existsSync(join(dir, kept))) copyFileSync(join(dir, kept), join(staging, kept));
     }
 
-    rmSync(dir, { recursive: true, force: true });
-    renameSync(staging, dir);
+    const backup = existsSync(dir) ? mkdtempSync(join(dirname(dir), `.${basename(dir)}.old-`)) : undefined;
+
+    if (backup) renameSync(dir, backup);
+
+    try {
+      renameSync(staging, dir);
+      commitPin?.();
+    } catch (error) {
+      if (!existsSync(staging)) renameSync(dir, staging);
+
+      if (backup) renameSync(backup, dir);
+      throw error;
+    }
+
+    if (backup) rmSync(backup, { recursive: true, force: true });
 
     return result;
   } finally {
-    rmSync(temp, { recursive: true, force: true });
+    rmSync(staging, { recursive: true, force: true });
   }
 }
 
@@ -427,7 +439,7 @@ async function installBuiltinFiles(office: Office, entry: PackageEntry, dir: str
 
     writeJson(join(staging, sourceFile), builtinRecordFor(hashes));
     await validateStaged(office, { entry, dir: staging, kind: "built-in" }, existsSync(dir));
-  }, true);
+  });
 
   if (record === undefined) return [`installed ${where}, the built-in ${entry.name} package`];
 
@@ -448,7 +460,7 @@ function verifiedCommit(ref: string, commit: string): boolean {
  * ref, and restores one whose files were edited. Returns one line per change; a failure starts
  * with FAILED.
  */
-export async function fetchPackage(office: Office, entry: PackageEntry, source: NonNullable<PackageEntry["source"]>, boundCommit?: string): Promise<string[]> {
+export async function fetchPackage(office: Office, entry: PackageEntry, source: NonNullable<PackageEntry["source"]>, boundCommit?: string, commitPin?: () => void): Promise<string[]> {
   const { name } = entry;
   const dir = pulledDir(office, name);
   const where = relative(office.dir, dir);
@@ -471,6 +483,7 @@ export async function fetchPackage(office: Office, entry: PackageEntry, source: 
 
     if (known && edits.length === 0) {
       if (movingPin) await validate(dir);
+      commitPin?.();
 
       return [];
     }
@@ -492,7 +505,7 @@ export async function fetchPackage(office: Office, entry: PackageEntry, source: 
       await validate(staging);
 
       return copied;
-    }, true);
+    }, commitPin);
 
     if (record === undefined) return [`installed ${where} from ${source.repo} at ${commit}`];
 
@@ -671,7 +684,7 @@ export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<I
 }
 
 /** Validate a candidate against the consuming entry before any live path points at its files. */
-export async function validateReplacement(office: Office, resolved: ResolvedPackage, resolveSetup: boolean) {
+export async function validateReplacement(office: Office, resolved: ResolvedPackage, resolveSetup: boolean, expectedBuiltins?: ReadonlyMap<string, string>) {
   const read = readPackage(office, resolved);
 
   if (!read.ok) throw new Error(read.errors.join("; "));
@@ -679,15 +692,10 @@ export async function validateReplacement(office: Office, resolved: ResolvedPack
   const item = read.value;
 
   if (resolveSetup) {
-    await resolveSetupSettings(office, item, true);
-
-    if (item.kind === "remote" && (item.manifest.system || item.manifest.host?.install || item.machine?.install)) {
-      const { installedPackages } = await import("./layout.ts");
-      const peers = installedPackages(office, new Set([item.entry.name]));
-      const conflicts = destinationProblems(office, [...peers.installed, item]);
-
-      if (conflicts.length) throw new Error(conflicts.join("; "));
-    }
+    if (item.kind === "remote" && (item.manifest.setup || item.manifest.system || item.manifest.host?.install)) {
+      const { admitReplacement } = await import("./collect-references.ts");
+      await admitReplacement(office, item, expectedBuiltins);
+    } else await resolveSetupSettings(office, item, true);
   }
 
   if (item.manifest.opencode) collectAssets(office.dir, item);
@@ -728,7 +736,15 @@ async function validateStaged(office: Office, resolved: ResolvedPackage, replaci
 
   // A candidate can import siblings that the same sync is about to replace. Never warm
   // the collector's module cache with the staged graph.
-  const worker = new Worker(join(import.meta.dir, Bun.isStandaloneExecutable ? "validate-replacement.js" : "validate-replacement.ts"), { workerData: { office, resolved } });
+  const expectedBuiltins = new Map<string, string>();
+
+  if (movingPin) {
+    for (const peer of resolvePackages(office).packages) {
+      if (peer.kind === "built-in") expectedBuiltins.set(peer.entry.name, (await embeddedPackage(peer.entry.name)).source);
+    }
+  }
+
+  const worker = new Worker(join(import.meta.dir, Bun.isStandaloneExecutable ? "validate-replacement.js" : "validate-replacement.ts"), { workerData: { office, resolved, expectedBuiltins } });
   await new Promise<void>((resolve, reject) => {
     worker.once("error", reject);
     worker.once("message", resolve);

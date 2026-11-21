@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { withVersion } from "./commands/upgrade.ts";
 import { sync } from "./commands/sync.ts";
 import { installedPackages } from "./layout.ts";
+import { globalConfD, grantConsent, machineRecordPath } from "./machine.ts";
 import { toolPins } from "./mise-toml.ts";
 import { loadOffice } from "./office.ts";
 import { localEdits, pulledDir, readRecord } from "./packages.ts";
@@ -481,7 +482,11 @@ test("an earlier release's fragments move their tools to machine.packages.toml, 
   expect(oldToolFragments(loadOffice(office))).toEqual([]);
 
   // other declares no setup, so sync deletes what was left of its fragment.
-  expect(await sync(loadOffice(office))).toEqual(["deleted .office/mise/other.toml, as package other has no mise setup here"]);
+  expect(await sync(loadOffice(office))).toEqual([
+    "rewrote the comments of machine.packages.toml, which say who changes what in it and which packages need each tool",
+    "deleted .office/mise/other.toml, as package other has no mise setup here",
+  ]);
+  expect(packages()).toContain("# Projected for container mode.");
   expect(await sync(loadOffice(office))).toEqual([]);
 });
 
@@ -560,4 +565,36 @@ test("exclusive install roots are independent of task and readiness names", asyn
   expect((await run()).join("\n")).toContain("~/.local/share/release claimed by both package first and package second");
   expect(readFileSync(first, "utf8")).toBe(before);
   expect(existsSync(join(office, ".office/mise/second.toml"))).toBe(false);
+});
+
+test("a rejected publication cannot retain host consent or a deselected plugin", async () => {
+  const config = join(office, "office.yaml");
+  const writeConfig = (mode: string, selected: string) => write(config, `name: test\nopencode: ${mode}\npackages: [{name: browser}, {name: first}, {name: ${selected}}]\n`);
+
+  for (const name of ["first", "second"]) {
+    write(join(office, `packages/${name}/office.ts`), `export default {name:"${name}",description:"Reference",async setup(c){
+      const {repositories}=await import("../../.office/packages/references/repositories.ts");
+      c.add(repositories,{name:"guide",url:"https://example.invalid/guide"})
+    }}`);
+  }
+
+  pkg("editor", "");
+  write(join(office, "packages/editor/plugin/index.ts"), "// fixture");
+  writeConfig("{mode: host, url: 'http://127.0.0.1:49999'}", "editor");
+  grantConsent(loadOffice(office));
+  const run = () => sync(loadOffice(office), { scope: "packages" });
+  expect((await run()).join("\n")).not.toContain("FAILED");
+  const link = join(globalConfD(), "office-test-1-browser.toml");
+  const plugin = join(office, ".opencode/plugins/editor");
+  const generation = join(office, ".office/resolved/references.json");
+  const before = readFileSync(generation);
+  expect(readFileSync(link, "utf8")).toContain("postinstall =");
+  expect(existsSync(plugin)).toBe(true);
+  writeConfig("container", "second");
+  expect((await run()).join("\n")).toContain("claimed by both");
+  expect(readFileSync(generation)).toEqual(before);
+  expect(existsSync(machineRecordPath())).toBe(false);
+  expect(existsSync(link)).toBe(false);
+  expect(existsSync(plugin)).toBe(false);
+  expect(packages()).not.toContain("# Projected for container mode.");
 });

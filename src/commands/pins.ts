@@ -136,19 +136,14 @@ export async function updatePackages(loaded: Office, stage: Stage, { apply = tru
       continue;
     }
 
-    const copied = await fetchPackage(office, entry, { ...source, ref: found.commit });
+    const copied = await fetchPackage(office, entry, { ...source, ref: found.commit }, undefined, () => {
+      office = editConfig(office, (text) => withScalar(text, ["packages", index, "ref"], found.commit));
+    });
+
     const failed = copied.find((line) => line.startsWith("FAILED"));
 
     if (failed !== undefined) {
       lines.push(`FAILED package ${entry.name}: found ${short(found.commit)} (${found.via}), but ${failed.replace(/^FAILED\s*/, "")}; pin left at ${short(source.ref)}`);
-
-      continue;
-    }
-
-    try {
-      office = editConfig(office, (text) => withScalar(text, ["packages", index, "ref"], found.commit));
-    } catch (error) {
-      lines.push(`FAILED package ${entry.name}: ${error instanceof Error ? error.message : String(error)}; pin left at ${short(source.ref)}, and office sync puts its copy back there`);
 
       continue;
     }
