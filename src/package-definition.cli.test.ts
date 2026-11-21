@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { compile } from "./build.ts";
@@ -138,6 +138,47 @@ function fixture(name: string) {
 
   return { dir, home, env, probe, cli, newer, run, select: (entries: string) => write(config, initial + entries) };
 }
+
+test("consenting host sync and bound check agree on Browser's stable mise fragment", () => {
+  const { dir, home, env, cli } = fixture("browser-mise");
+  const config = join(dir, "office.yaml");
+  const path = join(dir, ".office/mise/browser.toml");
+  const stable = ".office/packages/browser";
+  const browserLine = (output: string) => output.split("\n").find(line => /^(?:ok|FAIL)\s+package browser:/.test(line)) ?? "";
+
+  write(config, JSON.stringify({
+    name: "browser-mise",
+    opencode: { mode: "host", url: "http://127.0.0.1:1" },
+    tools: { sfw: { enabled: false } },
+    packages: [{ name: "browser" }],
+  }));
+  write(env.OFFICE_MACHINE_RECORD, JSON.stringify({ office: { name: "browser-mise", dir }, consented: "fixture", files: [] }));
+  // Only presence is checked. Don't actually install or invoke Browse.
+  write(join(home, ".local/bin/browse"), "#!/bin/sh\nexit 1\n", 0o755);
+  cli(0, "sync", "--packages");
+  const original = read(path);
+  const generation = readlinkSync(join(dir, ".office/current"));
+  const generationPath = `.office/${generation}/packages/browser`;
+
+  expect(original).toContain(`${stable}/scripts/install-browse.ts`);
+  expect(original).not.toContain(".office/generations/");
+  expect(readlinkSync(join(env.OFFICE_MISE_CONFIG_DIR, "conf.d/office-browser-mise-1-browser.toml"))).toBe(path);
+  // Check exits 1 for unrelated host prerequisites in this fixture; require Browser itself to pass.
+  expect(browserLine(cli(1, "check"))).toMatch(/^ok\s+package browser:.*mise setup in \.office\/mise\/browser\.toml/);
+
+  utimesSync(path, 1, 1);
+  expect(cli(0, "sync", "--packages")).toContain("already in sync");
+  expect(statSync(path).mtimeMs).toBe(1000);
+  expect(read(path)).toBe(original);
+  expect(browserLine(cli(1, "check"))).toMatch(/^ok\s+package browser:.*mise setup in \.office\/mise\/browser\.toml/);
+
+  // A genuinely wrong delivery path must still fail check, even if the generation still exists.
+  write(path, original.replaceAll(stable, generationPath));
+  expect(browserLine(cli(1, "check"))).toMatch(/^FAIL package browser:.*lacks or differs from the package's host install or system setup/);
+  cli(0, "sync", "--packages");
+  expect(read(path)).toBe(original);
+  expect(browserLine(cli(1, "check"))).toMatch(/^ok\s+package browser:.*mise setup in \.office\/mise\/browser\.toml/);
+});
 
 test("a legacy writer replacing the references bridge cannot publish or serve a stale index", () => {
   const { dir, cli, select } = fixture("legacy-writer");

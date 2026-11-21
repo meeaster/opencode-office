@@ -26,6 +26,7 @@ import { homedir } from "node:os";
 import { join, relative } from "node:path";
 
 import { adoptVersion, cliToolsPackage, compareToolVersions, declaredTools, hostApplies, switchedOn, wantedTools } from "../tooling/requirements.ts";
+import { packageDeliveryDir } from "../../src/bound-paths.ts";
 import { toolPins } from "../../src/mise-toml.ts";
 import type { Office } from "../../src/office.ts";
 import { fragmentOfficeRoot, systemApplyCommand, systemMarker, systemNotes, systemSection, systemState } from "../../src/package-system.ts";
@@ -262,7 +263,7 @@ export function hostSection(office: Office, item: InstalledPackage): string | un
 
   if (install === undefined || office.opencode.mode !== "host" || (!item.machine?.install && !hostApplies(office, item))) return undefined;
 
-  const script = relative(office.dir, join(item.dir, install.script));
+  const script = relative(office.dir, join(packageDeliveryDir(office.dir, item), install.script));
   const creates = install.creates.replace(/^~\//, "$HOME/");
   const test = install.executable ? "test -x" : "test -f";
 
@@ -286,7 +287,7 @@ function fragmentSection(office: Office, item: InstalledPackage): Parsed<string 
   if (!system.ok) return system;
 
   const tasks = (item.machine?.tasks ?? []).map(task => {
-    const path = relative(office.dir, join(item.dir, task.script));
+    const path = relative(office.dir, join(packageDeliveryDir(office.dir, item), task.script));
     const runner = path.endsWith(".ts") ? "bun" : "bash";
 
     return [`[tasks.${JSON.stringify(`${item.entry.name}:${task.name}`)}]`, `description = ${JSON.stringify(task.description)}`, `env = { OFFICE_ROOT = ${JSON.stringify(officeRoot)} }`, `run = ${JSON.stringify(`${runner} "$OFFICE_ROOT/${path}"`)}`, ""].join("\n");

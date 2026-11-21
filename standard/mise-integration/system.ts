@@ -13,6 +13,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import { packageDeliveryDir } from "../../src/bound-paths.ts";
 import type { Office } from "../../src/office.ts";
 import type { InstalledPackage } from "../../src/packages.ts";
 import type { Parsed } from "../../src/schema.ts";
@@ -153,7 +154,7 @@ export function systemSection(office: Office, item: InstalledPackage): Parsed<st
       ? []
       : [
           "[vars]",
-          `${variable} = ${JSON.stringify(`${fragmentOfficeRoot}/${relative(office.dir, item.dir)}`)}`,
+          `${variable} = ${JSON.stringify(`${fragmentOfficeRoot}/${relative(office.dir, packageDeliveryDir(office.dir, item))}`)}`,
           "",
           "[bootstrap.hooks.pre-packages]",
           `description = ${JSON.stringify(`Prepare ${system.description}`)}`,

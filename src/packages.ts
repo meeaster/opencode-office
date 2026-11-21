@@ -11,7 +11,7 @@
 // hash of each file is recorded in `.source.json`, `office check` reports an edit and `office
 // sync` restores the copy. Every kind is committed with the office, so a clone needs nothing fetched.
 import { createHash } from "node:crypto";
-import { packageRoot } from "./bound-paths.ts";
+import { packageRoot, pulledFolder } from "./bound-paths.ts";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { Worker } from "node:worker_threads";
@@ -64,9 +64,6 @@ const records = [sourceFile, settingsFile, templateFile, officeFile];
 /** The built-in packages every office has, without an entry in office.yaml. */
 export const requiredPackages = ["tooling", "mise-integration", "office", "references"];
 
-/** Where packages pulled into the office live: hidden, so searches and a plain `ls` skip them. */
-export const pulledFolder = ".office/packages";
-
 const files = v.record(v.string(), v.string());
 
 /** A copy from a repository: where it came from, and when it was copied. */
@@ -81,7 +78,7 @@ export type PackageRecord = v.InferOutput<typeof recordSchema>;
 
 export type PackageKind = "built-in" | "remote" | "local";
 
-/** A package the office has, with its kind and its folder. */
+/** A package the office has, with the source folder to read (possibly bound or staged). */
 export type ResolvedPackage = { entry: PackageEntry; kind: PackageKind; dir: string };
 
 /** Why a package isn't installed, or its plugin isn't linked. */
