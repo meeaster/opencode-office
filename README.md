@@ -85,6 +85,10 @@ Updating `office` changes no office. Each office picks the new one up when you r
 
 Before the first generation sync, inspect `git ls-files -- .office/packages .office/resolved/references.json .office/tsconfig.contracts.json`. A tracked managed path stops adoption. Migrate dependent workflows first; see the [owner-led clean-clone renderer check](packages/artifact-share/README.md#install). Office preserves the index.
 
+Upgrade every host, container and scheduled CLI that reads or writes this office before switching package definitions (including Shell) to `@office/` imports. An old writer does not honor the generation lease and can replace discovery links. Do not use it to sync an adopted office. For rollback to a pre-generation CLI, also restore compatible package definitions and the matching pre-adoption managed state from backup.
+
+A missing discovery link is recreated. If a checkout or old writer left a file, directory or different link at `.office/packages`, `.office/resolved/references.json` or `.office/tsconfig.contracts.json`, stop the old writer, return to the untracked revision, preserve the conflicting entry by moving it aside, and run `office sync --packages` with the upgraded CLI. Verify an indexed command and the package plugin links before resuming other readers.
+
 ### Building from source
 
 To build it from this checkout, with Bun, pnpm and pre-commit from `mise.toml`:

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { compile } from "./build.ts";
@@ -136,8 +136,134 @@ function fixture(name: string) {
   const cli = (status: number, ...args: string[]) => run(exe, status, "--office", dir, ...args);
   const newer = (status: number, ...args: string[]) => run(variant, status, "--office", dir, ...args);
 
-  return { dir, home, env, probe, cli, newer, select: (entries: string) => write(config, initial + entries) };
+  return { dir, home, env, probe, cli, newer, run, select: (entries: string) => write(config, initial + entries) };
 }
+
+test("a legacy writer replacing the references bridge cannot publish or serve a stale index", () => {
+  const { dir, cli, select } = fixture("legacy-writer");
+  const bridge = join(dir, ".office/resolved/references.json");
+  const current = join(dir, ".office/current");
+  const before = readlinkSync(current);
+  const config = join(dir, ".office/tsconfig.contracts.json");
+  const pkg = join(dir, "packages/notes/office.ts");
+  const command = 'ctx.command({name:"notes bye",summary:"bye",run(){console.log("updated")}})';
+  select("  - name: notes\n");
+  // Simulate the old executable's atomic replacement during collection, after reservation.
+  write(pkg, `import {renameSync,writeFileSync} from "node:fs"; export default {name:"notes",description:"notes",setup(ctx){
+    writeFileSync(${JSON.stringify(`${bridge}.tmp`)}, "owner bytes"); renameSync(${JSON.stringify(`${bridge}.tmp`)}, ${JSON.stringify(bridge)}); ${command}}}`);
+  expect(cli(1, "sync", "--packages")).toContain(bridge);
+  expect(readlinkSync(current)).toBe(before);
+  rmSync(config);
+  expect(cli(1, "notes", "bye")).toContain("move the conflicting entry aside");
+  expect(existsSync(config)).toBe(false);
+  expect(read(bridge)).toBe("owner bytes");
+  renameSync(bridge, `${bridge}.saved`);
+  symlinkSync(`${bridge}.saved`, bridge);
+  expect(cli(1, "sync", "--packages")).toContain(bridge);
+  expect(readlinkSync(current)).toBe(before);
+  rmSync(bridge);
+  write(pkg, `export default {name:"notes",description:"notes",setup(ctx){${command}}}`);
+  cli(0, "sync", "--packages");
+  expect(readlinkSync(bridge)).toBe("../current/references.json");
+  expect(readlinkSync(config)).toBe("current/tsconfig.contracts.json");
+  expect(cli(0, "notes", "bye")).toContain("updated");
+  expect(read(`${bridge}.saved`)).toBe("owner bytes");
+});
+
+test("recovery checks every discovery destination before rolling the pending journal forward", () => {
+  const { dir, cli } = fixture("bridge-journal");
+  const current = join(dir, ".office/current");
+  const previous = readlinkSync(current).split("/")[1];
+  cli(0, "sync", "--packages");
+  const candidate = readlinkSync(current).split("/")[1];
+  rmSync(current);
+  symlinkSync(`generations/${previous}`, current);
+  const journal = join(dir, ".office/publishing.json");
+  const digest = new Bun.CryptoHasher("sha256").update(read(join(dir, "office.yaml"))).digest("hex");
+  write(journal, JSON.stringify({ previous, candidate, before: digest, after: digest }));
+  const config = join(dir, ".office/tsconfig.contracts.json");
+  rmSync(config);
+  write(join(config, "mine"), "keep");
+  const packages = join(dir, ".office/packages");
+  rmSync(packages);
+  expect(cli(1, "sync", "--packages")).toContain(config);
+  expect(readlinkSync(current)).toBe(`generations/${previous}`);
+  expect(existsSync(packages)).toBe(false);
+  expect(existsSync(journal)).toBe(true);
+  renameSync(config, `${config}.saved`);
+  cli(0, "references", "list");
+  expect(readlinkSync(config)).toBe("current/tsconfig.contracts.json");
+  expect(readlinkSync(packages)).toBe("current/packages");
+  cli(0, "sync", "--packages");
+  expect(read(join(current, "previous"))).toBe(candidate);
+  expect(existsSync(journal)).toBe(false);
+  expect(read(join(`${config}.saved`, "mine"))).toBe("keep");
+});
+
+test("checking out a tracked package tree blocks writers; switching back restores discovery and plugins", () => {
+  const { dir, cli } = fixture("tracked-history");
+  const yaml = join(dir, "office.yaml");
+  write(yaml, "name: history\npackages: []\n");
+  cli(0, "sync", "--packages");
+  const packages = join(dir, ".office/packages");
+  const current = join(dir, ".office/current");
+  const before = readlinkSync(current);
+  const saved = join(packages, "artifact-share/renderer");
+  rmSync(packages);
+  write(saved, "tracked renderer");
+  write(join(dir, ".gitignore"), read(join(dir, ".gitignore")) + "\n/.office/\n");
+  git(["add", "-f", ".office/packages"], dir);
+  const legacy = commit(dir);
+  git(["rm", "-qr", ".office/packages"], dir);
+  commit(dir);
+  git(["checkout", "-q", legacy], dir);
+  expect(cli(1, "sync", "--packages")).toContain("tracked in Git");
+  expect(read(saved)).toBe("tracked renderer");
+  expect(readlinkSync(current)).toBe(before);
+  git(["checkout", "-q", "-"], dir);
+  expect(existsSync(packages)).toBe(false);
+  write(yaml, "name: history\npackages: [{name: knowledge}]\n");
+  cli(0, "sync", "--packages");
+  expect(readlinkSync(packages)).toBe("current/packages");
+  expect(realpathSync(join(dir, ".opencode/plugins/knowledge"))).toBe(realpathSync(join(packages, "knowledge/plugin")));
+});
+
+test("a symlinked office publishes relocatable public imports and rejects private and relative bypasses", () => {
+  const { dir, run, select } = fixture("alias-seed");
+  select("  - name: consumer\n  - name: provider\n");
+
+  const definition = `import {requirements} from "@office/tooling/requirements"; import {token} from "@office/provider/token";
+    export default {name:"consumer",description:"consumer",setup(ctx){ctx.command({name:"consumer show",summary:"show",run(){console.log(requirements.id,token)}})}}`;
+
+  write(join(dir, "packages/consumer/office.ts"), definition);
+  write(join(dir, "packages/provider/office.ts"), 'export default {name:"provider",description:"provider"}');
+  write(join(dir, "packages/provider/exports/token.ts"), 'import {readFileSync} from "node:fs"; export const token=readFileSync(new URL("../asset",import.meta.url),"utf8");');
+  write(join(dir, "packages/provider/asset"), "source-relative");
+  const nested = join(root, "deep/a/b");
+  mkdirSync(dirname(nested), { recursive: true });
+  renameSync(dir, nested);
+  symlinkSync(nested, dir);
+  run(exe, 0, "--office", dir, "sync", "--packages");
+  const show = (path: string, status = 0) => run(exe, status, "--office", path, "consumer", "show");
+  expect(show(dir)).toContain("tooling.requirements source-relative");
+  const office = join(dir, ".office");
+  const map = JSON.parse(read(join(office, "tsconfig.contracts.json")));
+  expect(realpathSync(join(office, map.compilerOptions.paths["@office/provider/token"][0]))).toBe(join(nested, "packages/provider/exports/token.ts"));
+
+  for (const include of map.include) expect(existsSync(join(office, include))).toBe(true);
+  const source = join(dir, "packages/consumer/office.ts");
+  write(source, definition.replace("@office/tooling/requirements", "../../.office/packages/tooling/exports/requirements.ts"));
+  expect(show(dir, 1)).toContain("import the selected public module as @office/tooling/requirements");
+  write(source, definition.replace("@office/tooling/requirements", "@office/tooling/private"));
+  expect(show(dir, 1)).toContain("not a public export");
+  write(source, definition);
+  select("  - name: consumer\n");
+  expect(show(dir, 1)).toContain("selection of imported package provider differs");
+  select("  - name: consumer\n  - name: provider\n");
+  rmSync(dir);
+  renameSync(nested, dir);
+  expect(show(dir)).toContain("tooling.requirements source-relative");
+});
 
 test("indexed references execute the installed author's registration; legacy listing only bootstraps", () => {
   const f = fixture("command-upgrade");
@@ -332,7 +458,7 @@ packages: [${packages.join(", ")}]
     return instructions;
   };
 
-  rmSync(snapshot);
+  rmSync(realpathSync(snapshot));
   configure([manual, aws]);
   broken();
   expect(list()).toContain("z-owner\t../../origin\toffice.yaml");
@@ -451,7 +577,7 @@ packages: [${packages.join(", ")}]
   expect(cli(1, "sync", "--references")).toContain("unsupported references snapshot version");
   expect(await verifyPrompt(nested)).toContain("unsupported references snapshot version");
   expect(cli(1, "sync", "--packages")).toContain("restore a readable generation");
-  rmSync(snapshot);
+  rmSync(realpathSync(snapshot));
   cli(0, "sync", "--packages");
 }, 60_000);
 
@@ -1235,7 +1361,7 @@ test.skipIf(process.getuid?.() === 0)("inaccessible generation fails closed; gen
   expect(cli(1, "references", "list")).toContain(".office/resolved/references.json");
   cli(1, "sync", "--references");
   expect(existsSync(join(dir, "references/legacy"))).toBe(false);
-  rmSync(join(folder, "references.json"));
+  rmSync(realpathSync(join(folder, "references.json")));
   expect(cli(0, "references", "list")).toContain("listing office.yaml only");
   cli(0, "sync", "--references");
   expect(read(join(dir, "references/legacy/document"))).toBe("legacy");

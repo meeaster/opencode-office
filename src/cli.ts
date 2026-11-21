@@ -31,6 +31,7 @@ import { namedJob } from "../standard/cron/discovery.ts";
 import { migrateHome } from "./home-migration.ts";
 import { releaseMachine, serviceEnvironment } from "./machine.ts";
 import { currentOffice, findOffice, type Office, OfficeError } from "./office.ts";
+import { ensureDiscovery } from "./package-generation.ts";
 import { bindReader, evaluateAdmission, runReader } from "./package-operation.ts";
 import { packageSecret } from "./package-services.ts";
 import { decrypt } from "./secrets.ts";
@@ -239,12 +240,14 @@ async function main(): Promise<void> {
   const { values: flags, positionals } = parsed;
   const [command, ...rest] = positionals;
 
-  if (!reader && command && !flags.version && !flags.help && !["init", "sync", "refresh", "packages", "sfw-wrappers", "migrate-home", "env"].includes(command)) {
+  if (!reader && !flags.version && command !== "init") {
     let dir;
 
     try { dir = findOffice(flags.office ?? process.cwd()); } catch { /* bootstrap handles offices not found */ }
 
-    if (dir) {
+    if (dir) ensureDiscovery(dir);
+
+    if (dir && command && !flags.help && !["sync", "refresh", "packages", "sfw-wrappers", "migrate-home", "env"].includes(command)) {
       const status = await runReader(dir, args);
 
       if (status !== undefined) {

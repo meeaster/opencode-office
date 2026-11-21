@@ -35,8 +35,9 @@ function publicModules(packages: ResolvedPackage[]) {
 
 export function createImportMap(folder: string, packages: ResolvedPackage[]) {
   const paths: Record<string, string[]> = {};
-  const config = dirname(dirname(folder));
-  const nodePath = join(folder, "node_modules");
+  const physical = realpathSync(folder);
+  const config = dirname(dirname(physical));
+  const nodePath = join(physical, "node_modules");
 
   for (const [alias, { path }] of publicModules(packages)) {
     const link = join(nodePath, `${alias}.ts`);
@@ -45,7 +46,10 @@ export function createImportMap(folder: string, packages: ResolvedPackage[]) {
     paths[alias] = [`./${relative(config, path)}`];
   }
 
-  writeFileSync(join(folder, "tsconfig.contracts.json"), JSON.stringify({ compilerOptions: { paths }, include: packages.map(pkg => `./${relative(config, pkg.dir)}/office.ts`) }, null, 2));
+  // A selected local definition can be missing. Its lexical path and the
+  // candidate folder share the office prefix even when it is a symlink.
+  const include = packages.map(pkg => `./${relative(dirname(dirname(folder)), pkg.dir)}/office.ts`);
+  writeFileSync(join(folder, "tsconfig.contracts.json"), JSON.stringify({ compilerOptions: { paths }, include }, null, 2));
 
   return nodePath;
 }
@@ -115,8 +119,8 @@ export function coupledFailures(rejected: string[], pending: string[], views: Re
 /** One native module cache per evaluating process. The scan also catches an owner dependency
  * shadowing NODE_PATH; the reserved import must resolve to exactly the selected source. */
 export function importGuard(dir: string, packages: ResolvedPackage[], checkSelection?: (pkg: ResolvedPackage) => void) {
-  const selected = packages.filter(pkg => pkg.kind !== "local");
-  const managed = join(dir, ".office");
+  const selected = packages.flatMap(pkg => pkg.kind !== "local" && existsSync(pkg.dir) ? [{ pkg, root: realpathSync(pkg.dir) }] : []);
+  const managed = join(realpathSync(dir), ".office");
   const seen = new Set<string>();
   const verified = new Set<string>();
 
@@ -169,11 +173,11 @@ export function importGuard(dir: string, packages: ResolvedPackage[], checkSelec
           catch { resolved = resolve(dirname(path), spec); }
 
           if (!inside(root, resolved) && inside(managed, resolved)) {
-            const peer = selected.some(pkg => pkg.dir === root) && selected.find(pkg => inside(pkg.dir, resolved));
+            const peer = selected.some(item => item.root === root) && selected.find(item => inside(item.root, resolved));
 
             if (peer) {
-              verify(peer);
-              visit(resolved, peer.dir);
+              verify(peer.pkg);
+              visit(resolved, peer.root);
               continue;
             }
 

@@ -59,7 +59,7 @@ export async function runReader(dir: string, args: string[]) {
 
 export function bindReader(dir: string, name: string, candidate = false) {
   const folder = managedDirectory(dir, name);
-  bindPaths(dir, folder, candidate);
+  bindPaths(dir, folder);
   const selection = join(folder, "selection.json");
 
   if (existsSync(selection)) {
