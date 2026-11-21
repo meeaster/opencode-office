@@ -755,10 +755,74 @@ const lockEntries = { opencode: lockEntry, claude: lockEntry, codex: lockEntry, 
 
 export const lockSchema = v.strictObject(lockEntries);
 
-/** office.lock and applied.json as stored: those written before sfw was pinned lack it, and the tool's default fills it in. */
+/** Runtime pins as stored in office.lock and applied.json: those written before sfw was pinned lack it, and the tool's default fills it in. */
 export const storedLockSchema = v.strictObject({ ...lockEntries, sfw: v.optional(lockEntry), codex: v.optional(lockEntry) });
 
 export type Lock = v.InferOutput<typeof lockSchema>;
+
+/** A Git package as office.lock locks it: the source office.yaml selected, and the full commit its ref resolved to. */
+const packageLockEntry = v.strictObject({
+  repo: v.string(),
+  path: v.string(),
+  ref: v.string(),
+  commit: v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/, "must be a full 40-character commit SHA")),
+});
+
+export type LockedPackage = v.InferOutput<typeof packageLockEntry>;
+
+/** office.lock's `packages:` section, keyed by package name. */
+export type PackageLock = Map<string, LockedPackage>;
+
+/**
+ * A section of office.lock keyed by name, validated entry by entry into a Map: valibot's `record`
+ * drops keys such as `constructor`, which are valid package names and paths.
+ */
+function parseKeyed<T>(section: string, value: unknown, entry: v.GenericSchema<unknown, T>, keyProblem: (key: string) => string | undefined = () => undefined): Parsed<Map<string, T>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return { ok: false, errors: [`${section}: must be a mapping`] };
+  const parsed = new Map<string, T>();
+  const errors: string[] = [];
+
+  for (const [key, item] of Object.entries(value)) {
+    const result = v.safeParse(entry, item);
+    const problem = keyProblem(key);
+
+    if (problem !== undefined) errors.push(`${section}.${key}: ${problem}`);
+    else if (result.success) parsed.set(key, result.output);
+    else errors.push(...result.issues.map((issue) => `${[section, key, ...(issue.path ?? []).map((part) => String(part.key))].join(".")}: ${issue.message}`));
+  }
+
+  return errors.length === 0 ? { ok: true, value: parsed } : { ok: false, errors };
+}
+
+/** office.lock's `packages:` section from a parsed document. */
+export function parsePackageLock(value: unknown): Parsed<PackageLock> {
+  return parseKeyed("packages", value, packageLockEntry);
+}
+
+/**
+ * A seed file's receipt in office.lock: the package that handled it, and either the SHA-256 of
+ * the bytes office wrote (office created it) or `existing: true` (a file was already there, so
+ * the office owns it).
+ */
+const seedReceipt = v.union([
+  v.strictObject({ package: name, sha256: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/, "must be 64 lowercase hex digits")) }),
+  v.strictObject({ package: name, existing: v.literal(true) }),
+], "must be { package, sha256 } or { package, existing: true }");
+
+export type SeedReceipt = v.InferOutput<typeof seedReceipt>;
+
+/** office.lock's `seeds:` section, keyed by each file's path relative to the office. */
+export type SeedReceipts = Map<string, SeedReceipt>;
+
+/** Whether `path` is a plain office-relative file path: no leading slash, `.`, `..` or empty parts. */
+export function officeRelativePath(path: string): boolean {
+  return path !== "" && !path.includes("\\") && !/[\n\r]/.test(path) && path.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+}
+
+/** office.lock's `seeds:` section from a parsed document. */
+export function parseSeedReceipts(value: unknown): Parsed<SeedReceipts> {
+  return parseKeyed("seeds", value, seedReceipt, (path) => (officeRelativePath(path) ? undefined : "must be a path relative to the office"));
+}
 
 /** Where an issue is, such as `desks.assistant.repos[0].url`. */
 function location(issue: v.BaseIssue<unknown>): string {

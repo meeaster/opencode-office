@@ -1,15 +1,17 @@
 // The versions an office runs. office.yaml pins OpenCode, Claude Code, Executor, mise and sfw; office.lock
-// (written only by the tool) holds what makes each verifiable; the state folder's applied.json
-// records what `office up` last applied. The tool supplies the versions a new office starts at, and
-// tested ranges for the runtimes other than Executor.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+// (written only by the tool) holds what makes each verifiable, Git packages' commits and seed
+// receipts; the state folder's applied.json records what `office up` last applied. The tool
+// supplies the versions a new office starts at, and tested ranges for the runtimes other than Executor.
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import * as v from "valibot";
-import { parse } from "yaml";
+import { Document, isMap, parse, stringify } from "yaml";
 
+import { openCheckoutLease, publicationLease } from "./checkout-lease.ts";
 import { type Office, OfficeError } from "./office.ts";
-import { check, type HostPlatform, type Lock, type PinnedTool, pinnedTools, storedLockSchema, version } from "./schema.ts";
+import { check, type HostPlatform, type Lock, type LockedPackage, type PackageLock, type Parsed, parsePackageLock, parseSeedReceipts, type PinnedTool, pinnedTools, storedLockSchema, type SeedReceipts, version } from "./schema.ts";
+import { atomicWrite } from "./secrets.ts";
 
 export type Pin = Lock[PinnedTool];
 
@@ -96,47 +98,221 @@ function withDefaults(stored: v.InferOutput<typeof storedLockSchema>): Lock {
   return { ...stored, sfw: stored.sfw ?? defaultPins.sfw, codex: stored.codex ?? defaultPins.codex };
 }
 
-/** office.lock as written, or undefined when the office has none. */
-function readStoredLock(dir: string): v.InferOutput<typeof storedLockSchema> | undefined {
-  const path = join(dir, lockFile);
+type StoredPins = v.InferOutput<typeof storedLockSchema>;
 
-  if (!existsSync(path)) return undefined;
-
-  const result = check(v.safeParse(storedLockSchema, parse(readFileSync(path, "utf8"))));
-
-  if (!result.ok) throw new OfficeError(`${lockFile} is not valid (run office pin to rewrite it):\n${result.errors.map((line) => `  ${line}`).join("\n")}`);
-
-  return result.value;
+function invalidLock(fix: string, errors: string[]): OfficeError {
+  return new OfficeError(`${lockFile} is not valid (${fix}):\n${errors.map((line) => `  ${line}`).join("\n")}`);
 }
 
-/** office.lock, or undefined when the office has none. A lock from before sfw was pinned gets the tool's default sfw. */
+/** office.lock's sections: runtime pins (undefined: none), Git packages and seed receipts. */
+export type Sections = { runtime: StoredPins | undefined; packages: PackageLock; seeds: SeedReceipts };
+
+/** Each section of office.lock as read, or why it can't be: each section is read on its own. */
+export type ReadSections = { [Key in keyof Sections]: { ok: true; value: Sections[Key] } | { ok: false; error: OfficeError } };
+
+/** The remedy each section's error names. */
+const fixes: Record<keyof Sections, string> = {
+  runtime: "run office pin to rewrite it",
+  packages: "restore it from Git, or remove its packages: section for office sync to rewrite",
+  seeds: "restore it from Git: without its seeds: section, sync would copy again every seed file the office deleted",
+};
+
+/** office.lock's text, or null when the office has none. */
+export function readLockText(dir: string): string | null {
+  const path = join(dir, lockFile);
+
+  return existsSync(path) ? readFileSync(path, "utf8") : null;
+}
+
+/** office.lock's text (null: no office.lock) read into its sections, parsing the YAML once. */
+export function lockSections(text: string | null): ReadSections {
+  const document: unknown = text === null ? {} : parse(text) ?? {};
+  const fail = (key: keyof Sections, errors: string[]) => ({ ok: false as const, error: invalidLock(fixes[key], errors) });
+
+  if (typeof document !== "object" || document === null || Array.isArray(document)) {
+    return { runtime: fail("runtime", ["the file: must be a mapping"]), packages: fail("packages", ["the file: must be a mapping"]), seeds: fail("seeds", ["the file: must be a mapping"]) };
+  }
+
+  // SAFETY: checked above to be a mapping; each section is validated below.
+  const { packages, seeds, ...pins } = document as Record<string, unknown>;
+  const runtime = Object.keys(pins).length === 0 ? { ok: true as const, value: undefined } : check(v.safeParse(storedLockSchema, pins));
+
+  const keyed = <T>(key: "packages" | "seeds", value: unknown, parsed: (value: unknown) => Parsed<Map<string, T>>) => {
+    const result = value === undefined ? { ok: true as const, value: new Map<string, T>() } : parsed(value);
+
+    return result.ok ? result : fail(key, result.errors);
+  };
+
+  return {
+    runtime: runtime.ok ? runtime : fail("runtime", runtime.errors),
+    packages: keyed("packages", packages, parsePackageLock),
+    seeds: keyed("seeds", seeds, parseSeedReceipts),
+  };
+}
+
+/** One section of office.lock in the office at `dir`; throws, naming its remedy, when it can't be read. */
+export function readLockSection<Key extends keyof Sections>(dir: string, key: Key): Sections[Key] {
+  const read = lockSections(readLockText(dir))[key];
+
+  if (!read.ok) throw read.error;
+
+  return read.value;
+}
+
+const runtimeHeader = [
+  "# Written by `office pin` from office.yaml's versions; don't edit. For each tool, the SHA-256 of",
+  "# the release file the image downloads (Executor: the image's digest), and for sfw, which a",
+  "# host-mode office also installs on its machine, that of each platform's release file.",
+];
+
+const packagesHeader = [
+  "# Written by `office sync` and `office packages update`; don't edit. For each package from a Git",
+  "# repository, the commit its ref resolved to, which sync installs on every machine while the",
+  "# package's repo, path and ref in office.yaml match.",
+];
+
+const seedsHeader = [
+  "# Written by `office sync`; don't edit. Each seed file a package handled, by its path: the",
+  "# SHA-256 of what office created (removing the package deletes the file only while it matches),",
+  "# or existing: a file that was already there. Sync never copies a file with a receipt again, so",
+  "# a seed file the office deleted stays deleted.",
+];
+
+function byKey<T>(entries: Iterable<[string, T]>): [string, T][] {
+  return [...entries].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+}
+
+/**
+ * The `seeds:` section's YAML, one line per file so a diff or a merge conflict touches only the
+ * files that changed. The library writes each path as a mapping key, so any path the reader accepts
+ * reads back as itself (`---`, `# x`, `__proto__`).
+ */
+function renderReceipts(seeds: SeedReceipts): string {
+  // Object.fromEntries defines own keys, so every path survives.
+  const document = new Document({ seeds: Object.fromEntries(byKey(seeds).map(([path, receipt]) => [path, "sha256" in receipt ? { package: receipt.package, sha256: receipt.sha256 } : { package: receipt.package, existing: true }])) });
+  const section = document.get("seeds");
+
+  if (isMap(section)) {
+    for (const pair of section.items) {
+      if (isMap(pair.value)) pair.value.flow = true;
+    }
+  }
+
+  return document.toString({ lineWidth: 0 }).trimEnd();
+}
+
+function sortedPackages(packages: PackageLock): [string, LockedPackage][] {
+  return byKey(packages).map(([name, { repo, path, ref, commit }]) => [name, { repo, path, ref, commit }]);
+}
+
+/** A canonical form of a `packages:` section, equal for equal sections however they were written. */
+export function packageSectionKey(packages: PackageLock): string {
+  return JSON.stringify(sortedPackages(packages));
+}
+
+/** office.lock's text for its sections, or null when all are empty. Entries are sorted by key. */
+function renderLock({ runtime: pins, packages, seeds }: Sections): string | null {
+  const runtime = pins === undefined ? [] : [
+    ...runtimeHeader,
+    ...pinnedTools.flatMap((tool) => {
+      const pin = pins[tool];
+
+      if (pin === undefined) return [];
+      const { version: pinned, digest, platforms } = pin;
+
+      return [`${tool}:`, `  version: ${pinned}`, `  digest: ${digest}`, ...(platforms === undefined ? [] : ["  platforms:", ...Object.entries(platforms).map(([platform, value]) => `    ${platform}: ${value}`)])];
+    }),
+  ];
+
+  // Object.fromEntries defines own keys, so every package name survives.
+  const section = packages.size === 0 ? [] : [...packagesHeader, stringify({ packages: Object.fromEntries(sortedPackages(packages)) }, { lineWidth: 0 }).trimEnd()];
+  const received = seeds.size === 0 ? [] : [...seedsHeader, renderReceipts(seeds)];
+  const parts = [runtime, section, received].filter((part) => part.length > 0);
+
+  if (parts.length === 0) return null;
+
+  return [...parts.flatMap((part, index) => (index === 0 ? part : ["", ...part])), ""].join("\n");
+}
+
+/** Why a package publication or office.lock writer can't take the publication lease. */
+export const publicationBusy = "another office command is changing packages or office.lock; retry when it finishes";
+
+/**
+ * Edits office.lock: reads its sections, lets `edit` change them in place, and replaces the file
+ * whole when they changed (removing it when all are empty), keeping each unedited section's
+ * entries. Every section must be readable, so it throws, naming the remedy, before calling `edit`;
+ * `replacing` names a section `edit` sets whole, which may be unreadable. The edit runs under the
+ * lease package publication holds, so a runtime pin writer, a seed step and a publication never
+ * put back each other's stale section; `leased` says the caller holds it already (it is exclusive
+ * and not reentrant).
+ */
+export function editLock<T>(dir: string, edit: (sections: Sections) => T, { leased = false, replacing }: { leased?: boolean; replacing?: keyof Sections } = {}): T {
+  using lease = leased ? undefined : openCheckoutLease(dir, publicationLease);
+  lease?.acquire(publicationBusy);
+
+  const read = lockSections(readLockText(dir));
+
+  // An unreadable section is refused, or starts empty when `edit` replaces it.
+  const unreadable = <Value>(key: keyof Sections, empty: Value): Value => {
+    const section = read[key];
+
+    if (key !== replacing && !section.ok) throw section.error;
+
+    return empty;
+  };
+
+  const sections: Sections = {
+    runtime: read.runtime.ok ? read.runtime.value : unreadable("runtime", undefined),
+    packages: read.packages.ok ? read.packages.value : unreadable("packages", new Map()),
+    seeds: read.seeds.ok ? read.seeds.value : unreadable("seeds", new Map()),
+  };
+
+  const before = renderLock(sections);
+  const result = edit(sections);
+  const after = renderLock(sections);
+
+  if (after !== before || (replacing !== undefined && !read[replacing].ok)) {
+    if (after === null) rmSync(join(dir, lockFile), { force: true });
+    else atomicWrite(join(dir, lockFile), after, (statSync(join(dir, lockFile), { throwIfNoEntry: false })?.mode ?? 0o644) & 0o777);
+  }
+
+  return result;
+}
+
+/** One line per package whose office.lock entry a publication adds, moves or removes. */
+export function packageLockChanges(before: PackageLock, after: PackageLock): string[] {
+  const names = [...new Set([...before.keys(), ...after.keys()])].sort();
+
+  return names.flatMap((name) => {
+    const [from, to] = [before.get(name), after.get(name)];
+
+    if (to === undefined) return [`${lockFile}: removed ${name}`];
+
+    if (from !== undefined && packageSectionKey(new Map([[name, from]])) === packageSectionKey(new Map([[name, to]]))) return [];
+
+    return [`${lockFile}: locked ${name} at ${to.commit.slice(0, 12)}`];
+  });
+}
+
+/** office.lock's runtime pins, or undefined when the office has none. A lock from before sfw was pinned gets the tool's default sfw. */
 export function readLock(dir: string): Lock | undefined {
-  const stored = readStoredLock(dir);
+  const stored = readLockSection(dir, "runtime");
 
   return stored === undefined ? undefined : withDefaults(stored);
 }
 
 /** Whether office.lock exists but was written before sfw was pinned, which `office sync` moves on. */
 export function lockLacksSfw(dir: string): boolean {
-  const stored = readStoredLock(dir);
+  const stored = readLockSection(dir, "runtime");
 
   return stored !== undefined && stored.sfw === undefined;
 }
 
+/** Writes office.lock's runtime pins, keeping its other sections; refuses, with that section's message, when one can't be read. */
 export function writeLock(dir: string, lock: Lock): void {
-  const lines = [
-    "# Written by `office pin` from office.yaml's versions; don't edit. For each tool, the SHA-256 of",
-    "# the release file the image downloads (Executor: the image's digest), and for sfw, which a",
-    "# host-mode office also installs on its machine, that of each platform's release file.",
-    ...pinnedTools.flatMap((tool) => {
-      const { version: pinned, digest, platforms } = lock[tool];
-
-      return [`${tool}:`, `  version: ${pinned}`, `  digest: ${digest}`, ...(platforms === undefined ? [] : ["  platforms:", ...Object.entries(platforms).map(([platform, value]) => `    ${platform}: ${value}`)])];
-    }),
-    "",
-  ];
-
-  writeFileSync(join(dir, lockFile), lines.join("\n"));
+  editLock(dir, (sections) => {
+    sections.runtime = lock;
+  }, { replacing: "runtime" });
 }
 
 /** This machine's platform as office.lock names it, or undefined where the office installs nothing. */
@@ -155,7 +331,7 @@ export function wantedPins(office: Office): Lock {
 
   const lock = readLock(office.dir);
 
-  if (lock === undefined) throw new OfficeError(`office.yaml pins versions but there is no ${lockFile}: run office pin`);
+  if (lock === undefined) throw new OfficeError(`office.yaml pins versions but ${existsSync(join(office.dir, lockFile)) ? `${lockFile} holds no runtime pins` : `there is no ${lockFile}`}: run office pin`);
 
   const stale = pinnedTools.filter((tool) => lock[tool].version !== wantedVersion(office, tool));
 

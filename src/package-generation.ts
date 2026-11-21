@@ -3,18 +3,24 @@ import { execFileSync } from "node:child_process";
 import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import * as v from "valibot";
-import { openCheckoutLease } from "./checkout-lease.ts";
+import { openCheckoutLease, publicationLease } from "./checkout-lease.ts";
 import { tryFileLock } from "./file-lock.ts";
 import { atomicWrite } from "./secrets.ts";
 import { OfficeError } from "./office.ts";
+import { type PackageLock, parsePackageLock } from "./schema.ts";
+import { editLock, lockFile, lockSections, packageSectionKey, publicationBusy, readLockText } from "./versions.ts";
 
 const id = v.pipe(v.string(), v.regex(/^g-[a-f0-9-]{36}$/));
 
+// office.yaml's digests before and after the switch, and those of office.lock's `packages:` section
+// with the section it switches to. Only that section belongs to the publication: other writers may
+// rewrite the rest of office.lock meanwhile. Journals written before office.lock was published lack `lock`.
 const journal = v.strictObject({
   previous: v.nullable(id),
   candidate: id,
   before: v.string(),
   after: v.string(),
+  lock: v.optional(v.strictObject({ before: v.string(), after: v.string(), packages: v.unknown() })),
 });
 
 const bridges = [
@@ -25,6 +31,24 @@ const bridges = [
 
 function digest(text: string) {
   return createHash("sha256").update(text).digest("hex");
+}
+
+function sectionDigest(packages: PackageLock) {
+  return digest(packageSectionKey(packages));
+}
+
+/** The digest of office.lock's `packages:` section in `text`, or null when it can't be read. */
+function lockedDigest(text: string | null) {
+  const packages = lockSections(text).packages;
+
+  return packages.ok ? sectionDigest(packages.value) : null;
+}
+
+/** Replaces office.lock's `packages:` section, under the lease the caller holds. */
+function writePackages(dir: string, packages: PackageLock) {
+  editLock(dir, (sections) => {
+    sections.packages = packages;
+  }, { leased: true });
 }
 
 /** Every pointer is relative: the same office can be mounted at another root. */
@@ -219,21 +243,35 @@ function adopt(dir: string) {
   return name;
 }
 
-export type Candidate = { dir: string; previous: string; name: string; original: string };
+/** `original` and `lock` are office.yaml's and office.lock's text (null: none) when the candidate was reserved. */
+export type Candidate = { dir: string; previous: string; name: string; original: string; lock: string | null };
 
-/** A process death after the pin rename rolls forward to the already admitted candidate.
- * Before that rename the old set remains authoritative. Never overwrite manual YAML edits. */
-function recover(dir: string) {
+/** A process death after the journal is written rolls forward to the already admitted candidate:
+ * office.yaml is written first, then office.lock's `packages:` section, then the pointer, so
+ * office.yaml at "after" finishes the section from the journal. Otherwise the old set remains
+ * authoritative. Never overwrite manual edits: office.yaml or a section matching neither recorded
+ * state refuses. The rest of office.lock isn't part of the publication and is kept. */
+export function recover(dir: string) {
   const path = join(dir, ".office/publishing.json");
 
   if (!existsSync(path)) return;
   const intent = v.parse(journal, JSON.parse(readFileSync(path, "utf8")));
   const current = activeGeneration(dir);
   const pins = digest(readFileSync(join(dir, "office.yaml"), "utf8"));
+  const section = intent.lock && lockedDigest(readLockText(dir));
+  const lockAt = (state: "before" | "after") => !intent.lock || section === intent.lock[state];
 
-  if (current === intent.previous && pins === intent.after) point(dir, intent.candidate);
-  else if (!(current === intent.candidate && pins === intent.after) && !(current === intent.previous && pins === intent.before)) {
-    throw new Error(`interrupted package publication: active ${current}, proposed ${intent.candidate}; office.yaml changed independently; restore the recorded pins before retrying`);
+  if (current === intent.previous && pins === intent.after && (lockAt("after") || lockAt("before"))) {
+    if (intent.lock && !lockAt("after")) {
+      const packages = parsePackageLock(intent.lock.packages);
+
+      if (!packages.ok) throw new Error(`interrupted package publication: ${path} is not valid: ${packages.errors.join("; ")}`);
+      writePackages(dir, packages.value);
+    }
+
+    point(dir, intent.candidate);
+  } else if (!(current === intent.candidate && pins === intent.after && lockAt("after")) && !(current === intent.previous && pins === intent.before && lockAt("before"))) {
+    throw new Error(`interrupted package publication: active ${current}, proposed ${intent.candidate}; office.yaml or ${lockFile}'s packages: section changed independently; restore the recorded pins before retrying`);
   }
 
   rmSync(path);
@@ -241,8 +279,8 @@ function recover(dir: string) {
 
 function locked<T>(dir: string, action: () => T) {
   checkAdoption(dir);
-  using lease = openCheckoutLease(dir, ".managed-generations");
-  lease.acquire();
+  using lease = openCheckoutLease(dir, publicationLease);
+  lease.acquire(publicationBusy);
   checkAdoption(dir);
 
   return action();
@@ -274,6 +312,7 @@ export function beginGeneration(dir: string) {
     prune(dir, previous);
     const name = createGeneration(dir);
     const original = readFileSync(join(dir, "office.yaml"), "utf8");
+    const lock = readLockText(dir);
     const ticket = join(dir, ".office/generation-ticket");
     writeAtomic(ticket, name);
 
@@ -282,12 +321,12 @@ export function beginGeneration(dir: string) {
 
     if (!writer || !source) throw new OfficeError("generation lease unavailable");
 
-    return { transaction: { dir, previous, name, original } satisfies Candidate, fd: writer.fd, [Symbol.dispose]() {
+    return { transaction: { dir, previous, name, original, lock } satisfies Candidate, fd: writer.fd, [Symbol.dispose]() {
       writer?.[Symbol.dispose]();
       source?.[Symbol.dispose]();
       // Don't finish an interrupted pin edit as a side effect of unwinding its parent.
       // A subsequent writer recovers the journal before collecting abandoned generations.
-      using sweep = openCheckoutLease(dir, ".managed-generations");
+      using sweep = openCheckoutLease(dir, publicationLease);
 
       if (!tryFileLock(sweep.fd, false) || existsSync(join(dir, ".office/publishing.json"))) return;
       checkAdoption(dir);
@@ -298,7 +337,11 @@ export function beginGeneration(dir: string) {
   });
 }
 
-export function publishGeneration({ dir, previous, name, original }: Candidate, updated: string) {
+/**
+ * Switches the active generation, office.yaml and office.lock's `packages:` section together,
+ * through the journal. Other office.lock writes since the reservation are kept.
+ */
+export function publishGeneration({ dir, previous, name, original, lock }: Candidate, updated: string, packages: PackageLock) {
   const yaml = join(dir, "office.yaml");
   const ticket = join(dir, ".office/generation-ticket");
 
@@ -306,12 +349,30 @@ export function publishGeneration({ dir, previous, name, original }: Candidate, 
     adopt(dir);
     recover(dir);
 
-    if (activeGeneration(dir) !== previous || readFileSync(ticket, "utf8") !== name || readFileSync(yaml, "utf8") !== original) throw new Error("package publication superseded; retry with the current office.yaml");
+    const reserved = lockSections(lock).packages;
+
+    if (!reserved.ok) throw reserved.error;
+    const before = sectionDigest(reserved.value);
+    const now = lockSections(readLockText(dir));
+
+    if (activeGeneration(dir) !== previous || readFileSync(ticket, "utf8") !== name || readFileSync(yaml, "utf8") !== original || !now.packages.ok || sectionDigest(now.packages.value) !== before) {
+      throw new Error(`package publication superseded; retry with the current office.yaml and ${lockFile}`);
+    }
+
+    const after = sectionDigest(packages);
+
+    // Fails here, before anything changes, when office.lock must be rewritten and can't be read.
+    if (after !== before) {
+      for (const section of Object.values(now)) if (!section.ok) throw section.error;
+    }
+
     const path = join(dir, ".office/publishing.json");
     writeAtomic(join(managedDirectory(dir, name), "previous"), previous);
-    writeAtomic(path, JSON.stringify({ previous, candidate: name, before: digest(original), after: digest(updated) }));
+    writeAtomic(path, JSON.stringify({ previous, candidate: name, before: digest(original), after: digest(updated), lock: { before, after, packages: Object.fromEntries(packages) } }));
 
     if (updated !== original) writeAtomic(yaml, updated);
+
+    if (after !== before) writePackages(dir, packages);
     point(dir, name);
     rmSync(path);
   });

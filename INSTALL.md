@@ -109,7 +109,7 @@ office check          # every line ok or warn; exit status 0
 git status --short
 ```
 
-Setup never commits. Commit everything it wrote, which includes `office.yaml`, `office.lock`, `.sops.yaml`, `secrets/*.enc.json`, `.office/` and the desks. All of it is safe to commit: the secrets are encrypted, and the private age key lives outside the repository.
+Setup never commits. Commit everything it wrote, which includes `office.yaml`, `office.lock`, `.sops.yaml`, `secrets/*.enc.json` and the desks. All of it is safe to commit: the secrets are encrypted, and the private age key lives outside the repository. `.office/` is the tool's and stays out of Git: sync keeps it out through the repository's `info/exclude`, so `git add -A` leaves it alone.
 
 ```sh
 git add -A && git commit -m "Set up the office"

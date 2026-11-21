@@ -9,8 +9,9 @@
 //
 // Built-in and remote packages are pulled into `.office/packages/<name>/` and are read-only: the
 // hash of each file is recorded in `.source.json`, `office check` reports an edit and `office
-// sync` restores the copy. Every kind is committed with the office, so a clone needs nothing fetched.
-import { createHash } from "node:crypto";
+// sync` restores the copy. Only local packages are committed with the office; `.office/` is not, so
+// a clone's first sync restores built-ins from the executable and fetches each remote package at
+// the commit office.lock locks for it.
 import { packageRoot, pulledFolder } from "./bound-paths.ts";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
@@ -30,7 +31,8 @@ import { readSnapshot } from "./reference-snapshot.ts";
 import { collectJobs } from "../standard/cron/jobs.ts";
 import { composeProblems, packageComposeFile, settingsEnv } from "./package-services.ts";
 import { systemSection } from "./package-system.ts";
-import { check, type PackageManifest, type Parsed, scalarSetting, type SettingValue, settingVariable } from "./schema.ts";
+import { check, officeRelativePath, type PackageManifest, type Parsed, scalarSetting, type SettingValue, settingVariable } from "./schema.ts";
+import { copySeeds, settleReceipts, sha256 } from "./seeds.ts";
 import { build, buildCommit, builtinFiles, builtinPackages, toolRepository } from "./tool.ts";
 
 /** Where a pulled-in package records where it came from and the hash of each of its files. */
@@ -44,22 +46,20 @@ export const sourceFile = ".source.json";
 export const settingsFile = ".settings.json";
 
 /**
- * The template files a package has handled in the office, created or found already there, as a
- * sorted JSON list of paths: each is copied at most once, so a file the office deletes stays
- * deleted. Kept across updates like `.settings.json`, while `.source.json` describes only the
- * current copy.
- */
-export const templateFile = ".template.json";
-
-/**
  * What the office declares that any package's plugin and scripts may read, beside its settings and
  * kept apart from them, so no setting name can collide: `{ "opencode": "host" | "container" }`,
  * office.yaml's mode. `office sync` writes it, and it is committed like `.settings.json`.
  */
 export const officeFile = ".office.json";
 
+/**
+ * Where earlier releases listed the seed files a package handled. Office no longer reads it, but
+ * leaves a leftover one in place: it stays out of the content hash and across updates.
+ */
+const legacyRecord = ".template.json";
+
 /** The office's own records in a package folder, left out of its file hashes. */
-const records = [sourceFile, settingsFile, templateFile, officeFile];
+const records = [sourceFile, settingsFile, legacyRecord, officeFile];
 
 /** The built-in packages every office has, without an entry in office.yaml. */
 export const requiredPackages = ["tooling", "mise-integration", "office", "references"];
@@ -232,10 +232,6 @@ function filesIn(dir: string): string[] {
     .sort();
 }
 
-function sha256(content: string | Buffer): string {
-  return createHash("sha256").update(content).digest("hex");
-}
-
 /** The SHA-256 of each package file, leaving out the office's own records. */
 export function fileHashes(dir: string): PackageRecord["files"] {
   const hashes: PackageRecord["files"] = {};
@@ -290,14 +286,14 @@ export function describeRecord(record: PackageRecord): string {
 export const readOnlyNote = "packages in .office/packages/ are read-only: to change one, copy it into packages/<another name>/ and list that instead";
 
 /** Writes one of the office's records in a package folder. */
-function writeJson(path: string, value: PackageRecord | string[]): void {
+function writeJson(path: string, value: PackageRecord): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 /**
  * Fills a new copy of the package folder `dir` with `fill`, beside it, then swaps it in, so a
- * failed copy leaves the installed one as it was. The office's settings and template records stay:
- * sync reports the settings file only when the settings change, and never copies a template file twice.
+ * failed copy leaves the installed one as it was. The office's records stay: sync reports the
+ * settings file only when the settings change.
  */
 async function replaceFolder<Result>(dir: string, fill: (staging: string) => Result, commitPin?: () => void): Promise<Awaited<Result>> {
   mkdirSync(dirname(dir), { recursive: true });
@@ -306,7 +302,7 @@ async function replaceFolder<Result>(dir: string, fill: (staging: string) => Res
   try {
     const result = await fill(staging);
 
-    for (const kept of [settingsFile, templateFile, officeFile]) {
+    for (const kept of [settingsFile, legacyRecord, officeFile]) {
       if (existsSync(join(dir, kept))) copyFileSync(join(dir, kept), join(staging, kept));
     }
 
@@ -445,9 +441,11 @@ async function installBuiltinFiles(office: Office, entry: PackageEntry, dir: str
   return [`updated ${where} from ${describeRecord(record)} to ${thisCopy()}`];
 }
 
-const fullCommit = /^[a-f0-9]{40}$/i;
+/** A full commit SHA. */
+export const fullCommit = /^[a-f0-9]{40}$/i;
 
-function verifiedCommit(ref: string, commit: string): boolean {
+/** Whether `commit` is a full SHA, and the one `ref` names when `ref` is a full SHA itself. */
+export function verifiedCommit(ref: string, commit: string): boolean {
   return fullCommit.test(commit) && (!fullCommit.test(ref) || ref.toLowerCase() === commit.toLowerCase());
 }
 
@@ -495,7 +493,7 @@ export async function fetchPackage(office: Office, entry: PackageEntry, source: 
       if (!verifiedCommit(revision, copied)) throw new Error(`expected ${revision}, got ${copied}`);
 
       // A package shared from another office's packages/ carries that office's records; its
-      // .template.json would make this office skip template files it never received.
+      // records describe that office, not this one.
       for (const file of records) rmSync(join(staging, file), { force: true });
 
       writeJson(join(staging, sourceFile), { repo: source.repo, path: source.path, ref: source.ref, commit: copied, files: fileHashes(staging), copied: new Date().toISOString() });
@@ -534,37 +532,21 @@ export async function materializePackage(office: Office, item: ResolvedPackage, 
 }
 
 /**
- * Removes a pulled-in package whose entry left office.yaml: each template file it created that is
- * still the package's copy, the folders those deletions emptied, then the package folder. Changed
- * template files stay with the office. With an unreadable `.template.json` it changes nothing and
- * says why. Returns one line per change; a refusal starts with FAILED.
+ * Removes a pulled-in package whose entry left office.yaml: settles its seed receipts in
+ * office.lock (each file it created that still matches its receipt goes, with the folders that
+ * leaves empty; changed files and files that were already there stay), then removes the package
+ * folder. With receipts that can't be read or written it changes nothing and says why. Returns
+ * one line per change; a refusal starts with FAILED.
  */
 export function removePackage(office: Office, name: string, retained?: string): string[] {
   const dir = retained ?? pulledDir(office, name);
   const where = join(pulledFolder, name);
-  const recordPath = join(dir, templateFile);
-  const read: Parsed<string[]> = existsSync(recordPath) ? readJson(recordPath, v.array(v.string())) : { ok: true, value: [] };
+  let changes: string[];
 
-  if (!read.ok) return [`FAILED ${where}: not removed, because ${relative(office.dir, recordPath)} doesn't say which template files it created: ${read.errors.join("; ")}`];
-
-  const changes: string[] = [];
-
-  for (const file of read.value) {
-    const target = join(office.dir, file);
-    const copy = join(dir, "template", file);
-
-    if (!existsSync(target)) continue;
-
-    if (!existsSync(copy) || !readFileSync(target).equals(readFileSync(copy))) {
-      changes.push(`kept ${file}, which changed since package ${name} wrote it`);
-
-      continue;
-    }
-
-    rmSync(target);
-    changes.push(`deleted ${file}, which package ${name} created`);
-
-    for (let folder = dirname(target); relative(office.dir, folder) !== "" && readdirSync(folder).length === 0; folder = dirname(folder)) rmdirSync(folder);
+  try {
+    changes = settleReceipts(office.dir, (owner) => owner === name);
+  } catch (error) {
+    return [`FAILED ${where}: not removed, because its seed receipts can't be read or written: ${error instanceof Error ? error.message : String(error)}`];
   }
 
   if (!retained) rmSync(dir, { recursive: true });
@@ -829,13 +811,14 @@ export function writePackageSettings(office: Office, installed: InstalledPackage
 }
 
 /**
- * Writes a package's settings file and .office.json, and copies each file of its `template/` it has never handled
- * to the same path in the office, unless a file is already there: from then on the office owns
- * it. Both kinds count as handled in `.template.json`. Returns one line per change.
+ * Writes a package's settings file and .office.json, and copies each file of its `template/` (its
+ * seed files) whose path has no receipt in office.lock to the same path in the office, unless a
+ * file is already there: from then on the office owns it (src/seeds.ts). Returns one line per change.
  */
 export function installPackage(office: Office, installed: InstalledPackage): string[] {
   const changes: string[] = [];
-  const receipt = scalarReceipt(office, installed.entry.name);
+  const name = installed.entry.name;
+  const receipt = scalarReceipt(office, name);
   const usesScalars = !installed.manifest.settings_schema && Object.keys(installed.settings).some(key => !Object.hasOwn(installed.manifest.settings, key));
 
   if (usesScalars && !existsSync(receipt)) {
@@ -845,34 +828,11 @@ export function installPackage(office: Office, installed: InstalledPackage): str
 
   changes.push(...writePackageSettings(office, installed));
 
+  // A path the seeds: section couldn't hold is refused before anything is copied.
   const template = join(installed.dir, "template");
-  const recordPath = join(installed.dir, templateFile);
-  const read: Parsed<string[]> = existsSync(recordPath) ? readJson(recordPath, v.array(v.string())) : { ok: true, value: [] };
+  const files = filesIn(template);
 
-  if (!read.ok) return [...changes, `FAILED ${relative(office.dir, recordPath)}: ${read.errors.join("; ")}; restore it from the office's history, or delete it to copy every template file again`];
+  for (const file of files.filter((file) => !officeRelativePath(file))) changes.push(`FAILED package ${name}'s template/${file}: not a plain office-relative path`);
 
-  const handled = new Set(read.value);
-  const before = handled.size;
-
-  for (const file of filesIn(template)) {
-    const target = join(office.dir, file);
-
-    if (handled.has(file)) continue;
-
-    handled.add(file);
-
-    if (existsSync(target)) {
-      changes.push(`kept ${file}, which was already there, instead of package ${installed.entry.name}'s copy`);
-
-      continue;
-    }
-
-    mkdirSync(dirname(target), { recursive: true });
-    copyFileSync(join(template, file), target);
-    changes.push(`created ${file} from package ${installed.entry.name}`);
-  }
-
-  if (handled.size !== before) writeJson(recordPath, [...handled].sort());
-
-  return changes;
+  return [...changes, ...copySeeds(office.dir, name, template, files.filter(officeRelativePath))];
 }

@@ -26,6 +26,7 @@ import { cloneTarget, legacyPlugin, pluginClones, pluginLinks, pluginScope, rest
 import { cloneFolder, entry as entryAt, officeEntries } from "../../standard/opencode/ownership.ts";
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, oldMiseFiles, pulledLocalFolders, versionsLackSfw } from "../migrate.ts";
 import { oldExecutorAppDirs } from "../executor-app-layout.ts";
+import { packageLockProblems } from "../package-operation.ts";
 import { executorEnvFile, type Office, readEnvFile, skillGroups, toolsBlock } from "../office.ts";
 import { isCurrent, readSkillRecord, skillDir } from "../skill-copies.ts";
 import { appliedServices, appliedSpawns, packageComposeFile, parseCompose, serviceStatus, sharedNamespaces } from "../package-services.ts";
@@ -37,10 +38,11 @@ import { wrappedCommands } from "../sfw.ts";
 import { toolPins } from "../mise-toml.ts";
 import { destinationProblems } from "../../standard/mise-integration/projection.ts";
 import { fragmentNotes, machineBelowFloors, machineFile, oldToolFragments, orphanFragments, packagesFile, packagesFileProblems, strayFragments } from "../package-tools.ts";
-import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile, validateSetupOverrides } from "../packages.ts";
+import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, requiredPackages, resolvePackages, settingsFile, settingsText, sourceFile, validateSetupOverrides } from "../packages.ts";
 import { describeIgnoredSkills, ignoredSkills, readIgnoredFolders } from "../../packages/office/plugin/ignored-skills.ts";
 import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces, shadowing, withLoaded } from "../outside.ts";
 import { pinnedTools } from "../schema.ts";
+import { seedReceiptProblems } from "../seeds.ts";
 import { builtinFiles, builtinPackages, version } from "../tool.ts";
 import { changes, defaultPins, describeMove, executorImage, isTested, lockFile, lockLacksSfw, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
 import { appFolders, deployedFrameworks } from "./apps.ts";
@@ -174,6 +176,8 @@ async function drift(office: Office): Promise<string[]> {
 
   if (versionsLackSfw(office)) problems.push("office.yaml's versions don't pin sfw (Socket Firewall), which earlier releases didn't pin, so the tool's default applies (office sync pins it)");
   else if (office.tools.runtimes.sfw.version === defaultPins.sfw.version && lockLacksSfw(office.dir)) problems.push(`${lockFile} has no sfw entry, as earlier releases wrote it (office sync adds it)`);
+
+  problems.push(...packageLockProblems(office), ...seedReceiptProblems(office.dir, new Set([...requiredPackages, ...office.packages.map((entry) => entry.name)])));
 
   for (const { from, to } of oldMiseFiles(office)) {
     problems.push(`${relative(office.dir, from)} is where earlier releases kept it, and mise loads it there as the office's project config (office sync moves it to ${relative(office.dir, to)})`);

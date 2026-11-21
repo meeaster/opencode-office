@@ -57,9 +57,9 @@ function compare(left: number[], right: number[]): number {
   return 0;
 }
 
-async function lsRemote(repo: string, args: string[]): Promise<RemoteTag[]> {
+async function lsRemote(repo: string, args: string[], patterns: string[] = []): Promise<RemoteTag[]> {
   // These lines are data, not progress messages: a repository can list thousands of tags.
-  const { stdout } = await streamChecked("git", ["ls-remote", ...args, repo], { line: () => {}, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+  const { stdout } = await streamChecked("git", ["ls-remote", ...args, repo, ...patterns], { line: () => {}, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
 
   return stdout.split("\n").flatMap((line) => {
     const [commit, name] = line.split("\t");
@@ -101,6 +101,31 @@ export async function resolveTrack(repo: string, track: string): Promise<Resolve
   if (found === undefined) throw new Error(`no stable SemVer tag of ${repo} matches ${track} (of ${tags.length} ${tags.length === 1 ? "tag" : "tags"}; prereleases don't count)`);
 
   return { commit: found.tag.commit, via: `tag ${found.tag.name}, the highest of ${found.matched} stable ${found.matched === 1 ? "tag" : "tags"} matching ${track}` };
+}
+
+/**
+ * Where an untracked ref of `repo` points now, always as a commit (an annotated tag peeled to the
+ * commit it names). A bare name is a tag before a branch of the same name, as git fetch prefers;
+ * `tags/X` and `refs/tags/X` name only tag X, `heads/X` and `refs/heads/X` only branch X, and any
+ * other `refs/...` that ref exactly. Throws when the repository has no such ref.
+ */
+export async function resolveRef(repo: string, ref: string): Promise<Resolved> {
+  const qualified = /^(?:refs\/)?(tags|heads)\/(.+)$/.exec(ref);
+  const kind = qualified?.[1] === "tags" ? "tag" : qualified?.[1] === "heads" ? "branch" : undefined;
+  const name = qualified?.[2] ?? ref;
+  const candidates: { full: string; via: string }[] = ref.startsWith("refs/") && kind === undefined
+    ? [{ full: ref, via: ref }]
+    : [...(kind !== "branch" ? [{ full: `refs/tags/${name}`, via: `tag ${name}` }] : []), ...(kind !== "tag" ? [{ full: `refs/heads/${name}`, via: `branch ${name}` }] : [])];
+  const refs = await lsRemote(repo, [], candidates.flatMap(({ full }) => [full, `${full}^{}`]));
+  const find = (full: string) => refs.find((item) => item.name === full)?.commit;
+
+  for (const { full, via } of candidates) {
+    const commit = find(`${full}^{}`) ?? find(full);
+
+    if (commit !== undefined) return { commit, via };
+  }
+
+  throw new Error(`${repo} has no ${kind ?? (ref.startsWith("refs/") ? "ref" : "tag or branch")} ${name}`);
 }
 
 /** A commit for messages: its first twelve characters. */

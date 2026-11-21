@@ -35,6 +35,7 @@ import { syncTools } from "../package-tools.ts";
 import { type Desk, type Office, skillGroups } from "../office.ts";
 import { silentStage, type Stage } from "../report/index.ts";
 import { type InstalledPackage, installPackage, removePackage, requirePackageOwnership, resolvePackages } from "../packages.ts";
+import { settleReceipts } from "../seeds.ts";
 import { describeGroup, stageGroup } from "../skill-copies.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
 
@@ -507,7 +508,7 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
 
 /**
  * Installs, updates, restores and removes the office's packages at the refs office.yaml pins, then
- * applies them: settings and template files, their mise tools (linked machine-wide where the
+ * applies them: settings and seed files, their mise tools (linked machine-wide where the
  * office manages the machine), plugin links and desktop panels. `office sync` and `office packages
  * update` both apply packages this way. Each change goes to `changes`.
  */
@@ -555,6 +556,14 @@ export async function applyPackages(office: Office, installed: InstalledPackages
     changes.push(...result);
 
     if (!result.some(line => line.startsWith("FAILED"))) rmSync(join(withdrawals, name), { recursive: true });
+  }
+
+  // Receipts of a pulled-in package with nothing to withdraw, as on a fresh clone. A local package's
+  // stay, as its seed files do, and so do those of a withdrawal that failed, to retry.
+  try {
+    changes.push(...settleReceipts(office.dir, (name) => !installed.selected.has(name) && !installed.unread.has(name) && !existsSync(join(withdrawals, name)) && !existsSync(join(office.dir, "packages", name))));
+  } catch (error) {
+    changes.push(`FAILED seed receipts of packages office.yaml no longer lists: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   // Executable cron owners were validated with their other contributions before publication.

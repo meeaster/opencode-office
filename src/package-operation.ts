@@ -3,14 +3,15 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { bindPaths } from "./bound-paths.ts";
 import { boundRevision, collectReferences } from "./collect-references.ts";
-import { currentOffice, loadOffice, type Office, OfficeError, readOfficeFields } from "./office.ts";
+import { currentOffice, loadOffice, type Office, OfficeError, type PackageEntry, readOfficeFields } from "./office.ts";
 import { parse } from "yaml";
 import * as v from "valibot";
-import { commandBootstrapSchema, officeSchema, packageEntry } from "./schema.ts";
+import { commandBootstrapSchema, type LockedPackage, officeSchema, packageEntry, type PackageLock, parsePackageLock } from "./schema.ts";
 import { activeGeneration, beginGeneration, managedDirectory, pinActive, publishGeneration, type Candidate } from "./package-generation.ts";
 import { bindImports, coupledFailures, createImportMap, requireCoherentImports } from "./package-imports.ts";
 import { installedPackages } from "./layout.ts";
-import { embeddedPackage, materializePackage, readRecord, requiredPackages, resolvePackages, validateReplacement, writePackageSettings } from "./packages.ts";
+import { embeddedPackage, materializePackage, readRecord, requiredPackages, type ResolvedPackage, resolvePackages, validateReplacement, verifiedCommit, writePackageSettings } from "./packages.ts";
+import { lockFile, lockSections, packageLockChanges, readLockSection } from "./versions.ts";
 import { beginReferencePublication } from "./reference-publication.ts";
 import { readSnapshot, type ReferenceSnapshot } from "./reference-snapshot.ts";
 import { applyPackages } from "./commands/sync.ts";
@@ -22,6 +23,8 @@ type Admission = {
   transaction: Candidate;
   office: Office;
   yaml: string;
+  /** The candidate `packages:` section of office.lock, published with office.yaml (a Map, as an object here). */
+  packages: Record<string, LockedPackage>;
   embedded: [string, string][];
   validate: string[];
   rejected: string[];
@@ -82,7 +85,88 @@ export function bindReader(dir: string, name: string, candidate = false) {
   }
 }
 
-async function prepareSources(office: Office, selection: ReturnType<typeof resolvePackages>, folder: string, previous: string, snapshot: ReferenceSnapshot | undefined, lines: string[]) {
+/**
+ * The commit to install a Git package at: its office.lock entry's while that entry has the
+ * selected repo, path and ref (and, for a full-SHA ref, names that commit), else `published`, the
+ * commit the previous reference generation bound it to.
+ */
+export function boundCommit(lock: PackageLock, entry: PackageEntry, published: string | undefined): string | undefined {
+  const locked = entry.source && lock.get(entry.name);
+
+  if (locked && locked.repo === entry.source?.repo && locked.path === entry.source.path && locked.ref === entry.source.ref && verifiedCommit(locked.ref, locked.commit)) return locked.commit;
+
+  return published;
+}
+
+/**
+ * office.lock's `packages:` section for a candidate: each selected Git package at the commit its
+ * staged copy records. A package that failed keeps its previous entry with its previous copy;
+ * deselected packages drop out.
+ */
+export function candidatePackageLock(selected: ResolvedPackage[], staged: string, rejected: string[], previous: PackageLock): PackageLock {
+  const lock: PackageLock = new Map();
+
+  for (const { entry, kind } of selected) {
+    if (kind !== "remote" || !entry.source) continue;
+    const record = rejected.includes(entry.name) ? undefined : readRecord(join(staged, entry.name));
+    const { repo, path, ref } = entry.source;
+
+    if (record && "repo" in record && record.repo === repo && record.path === path && record.ref === ref && verifiedCommit(ref, record.commit)) {
+      lock.set(entry.name, { repo, path, ref, commit: record.commit.toLowerCase() });
+
+      continue;
+    }
+
+    const kept = previous.get(entry.name);
+
+    if (kept) lock.set(entry.name, kept);
+  }
+
+  return lock;
+}
+
+/**
+ * Each Git package whose office.lock entry is missing, doesn't match office.yaml's repo, path and
+ * ref, or names another commit than its installed copy records, and each entry for a package no
+ * longer selected; office sync fixes each.
+ */
+export function packageLockProblems(office: Office): string[] {
+  let lock: PackageLock;
+
+  try {
+    lock = readLockSection(office.dir, "packages");
+  } catch (error) {
+    return [error instanceof Error ? error.message : String(error)];
+  }
+
+  const remote = resolvePackages(office).packages.filter(({ kind, entry }) => kind === "remote" && entry.source !== undefined);
+  const selected = new Set(remote.map(({ entry }) => entry.name));
+  const stale = [...lock.keys()].sort().filter((name) => !selected.has(name)).map((name) => `${lockFile} locks package ${name}, which office.yaml no longer selects from a Git repository (office sync removes the entry)`);
+
+  return [...stale, ...remote.flatMap(({ entry, dir }) => {
+    if (entry.source === undefined) return [];
+    const locked = lock.get(entry.name);
+    const { repo, path, ref } = entry.source;
+
+    if (locked === undefined) return [`${lockFile} has no entry for package ${entry.name} (office sync locks its commit)`];
+
+    if (locked.repo !== repo || locked.path !== path || locked.ref !== ref) {
+      const differs = [locked.repo !== repo && "repo", locked.path !== path && "path", locked.ref !== ref && `ref (${locked.ref}, office.yaml ${ref})`].filter(Boolean).join(", ");
+
+      return [`${lockFile} doesn't match office.yaml for package ${entry.name}: ${differs} (office sync resolves it again and rewrites the entry)`];
+    }
+
+    const record = readRecord(dir);
+
+    if (record && "repo" in record && record.repo === repo && record.path === path && record.ref === ref && record.commit.toLowerCase() !== locked.commit) {
+      return [`package ${entry.name} is installed at ${record.commit.slice(0, 12)}, but ${lockFile} locks ${locked.commit.slice(0, 12)} (office sync installs the locked commit)`];
+    }
+
+    return [];
+  })];
+}
+
+async function prepareSources(office: Office, selection: ReturnType<typeof resolvePackages>, folder: string, previous: string, snapshot: ReferenceSnapshot | undefined, lock: PackageLock, commits: ReadonlyMap<string, string>, lines: string[]) {
   const packages = join(folder, "packages");
   mkdirSync(packages);
   const embedded: [string, string][] = [];
@@ -99,7 +183,8 @@ async function prepareSources(office: Office, selection: ReturnType<typeof resol
 
     if (lstatSync(old, { throwIfNoEntry: false })?.isSymbolicLink()) throw new OfficeError(`cannot materialize redirected package ${old}`);
 
-    const bound = boundRevision(snapshot, item.entry);
+    const published = boundRevision(snapshot, item.entry);
+    const bound = commits.get(item.entry.name) ?? boundCommit(lock, item.entry, published);
     let copiedPrevious = false;
 
     try {
@@ -118,7 +203,7 @@ async function prepareSources(office: Office, selection: ReturnType<typeof resol
       } else if (materialized.changes.length) {
         validate.push(item.entry.name);
 
-        if (bound && !existsSync(old)) {
+        if (published && published === bound && !existsSync(old)) {
           // Exact repair of a lost published Git source, independently of whether new
           // registrations are admitted. Never restore a floating tag or replace an entry.
           const record = readRecord(dir);
@@ -162,7 +247,12 @@ async function prepareSources(office: Office, selection: ReturnType<typeof resol
   return { embedded, validate, rejected };
 }
 
-export async function publishPackages(office: Office, exclude: boolean, update?: { yaml: (text: string) => string; apply: boolean; names: string[] }): Promise<Outcome> {
+/**
+ * Stages and publishes the selected packages. An update can edit office.yaml (`yaml`) and move
+ * untracked Git packages to other commits (`commits`); either way office.lock's `packages:`
+ * section is published with the package set.
+ */
+export async function publishPackages(office: Office, exclude: boolean, update?: { yaml: (text: string) => string; apply: boolean; names: string[]; commits?: ReadonlyMap<string, string> }): Promise<Outcome> {
   const lines: string[] = [];
   const selection = resolvePackages(office);
 
@@ -183,19 +273,26 @@ export async function publishPackages(office: Office, exclude: boolean, update?:
     const snapshot = readSnapshot(office.dir);
 
     if (!snapshot.ok) throw new OfficeError(`${snapshot.errors.join("; ")}; restore a readable generation, or verify installed Git pins before moving it aside and running office sync --packages`);
-    const { embedded, validate, rejected } = await prepareSources(office, selection, folder, previous, snapshot.value, lines);
+    const reserved = lockSections(transaction.lock).packages;
+
+    if (!reserved.ok) throw reserved.error;
+    const locked = reserved.value;
+    const { embedded, validate, rejected } = await prepareSources(office, selection, folder, previous, snapshot.value, locked, update?.commits ?? new Map(), lines);
 
     if (update && rejected.length) return { published: false, lines, rejected: coupled(rejected) };
+    const packages = candidatePackageLock(selection.packages, join(folder, "packages"), rejected, locked);
     createImportMap(folder, selection.packages.filter(pkg => !rejected.includes(pkg.entry.name)));
     writeFileSync(join(folder, "unavailable.json"), JSON.stringify(rejected));
     writeFileSync(join(folder, "selection.json"), JSON.stringify(office.packages.map(({ name, settings, cron, source }) => ({ name, settings, cron, ...source }))));
-    const request: Admission = { office, transaction, yaml, embedded, validate, rejected, exclude, tracked: !!update, apply: update?.apply ?? true };
+    const request: Admission = { office, transaction, yaml, packages: Object.fromEntries(packages), embedded, validate, rejected, exclude, tracked: !!update, apply: update?.apply ?? true };
     writeFileSync(join(temporary, "input"), JSON.stringify(request));
     const code = await run(["--package-admission", temporary], folder, reservation.fd);
 
     if (code !== 0) throw new OfficeError(`package evaluator exited ${code}`);
     const result: Outcome = JSON.parse(readFileSync(join(temporary, "output"), "utf8"));
     lines.push(...result.lines);
+
+    if (result.published) lines.push(...packageLockChanges(locked, packages));
 
     return { ...result, rejected: result.rejected && coupled(result.rejected), lines: result.published ? lines : lines.filter(line => line.startsWith("FAILED")) };
   } catch (error) {
@@ -212,6 +309,9 @@ export async function publishPackages(office: Office, exclude: boolean, update?:
 export async function evaluateAdmission(temporary: string) {
   const input: Admission = JSON.parse(readFileSync(join(temporary, "input"), "utf8"));
   const { transaction, office, yaml } = input;
+  const packages = parsePackageLock(input.packages);
+
+  if (!packages.ok) throw new OfficeError(`invalid candidate ${lockFile}: ${packages.errors.join("; ")}`);
   const folder = managedDirectory(office.dir, transaction.name);
   let published = false;
   let rejectedOwners: string[] | undefined;
@@ -243,7 +343,7 @@ export async function evaluateAdmission(temporary: string) {
       }
 
       writeFileSync(join(folder, "references.json"), JSON.stringify(snapshot, null, 2) + "\n");
-      publishGeneration(transaction, yaml);
+      publishGeneration(transaction, yaml, packages.value);
       published = true;
     });
 

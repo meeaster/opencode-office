@@ -69,13 +69,15 @@ const usage = `usage: office <command> [--office <dir>]
                                its branch, or of its highest stable SemVer tag matching a pattern
                                such as v2.*; recopy the whole group and record the commit as its ref.
                                A group missing a skill, or with edits the copy would lose, stays put
-  packages update              likewise for packages from other repositories with a track, then
-                               apply them as sync does. Neither command syncs anything else, and
-                               office sync applies pins without moving them
+  packages update              likewise for packages from other repositories with a track, move
+                               the office.lock commit of each untracked tag or branch ref to where
+                               it points now, then apply them as sync does. Neither command syncs
+                               anything else, and office sync applies pins without moving them
   check                        report drift from office.yaml and the tool, the running
                                containers and opted-in managed OpenCode
-  refresh [--verbose]          update tracked package and skill pins, run a full sync, start
-                               services with ordinary up, then check office health
+  refresh [--verbose]          update tracked package and skill pins and the office.lock commits
+                               of untracked package refs, run a full sync, start services with
+                               ordinary up, then check office health
   instructions [folder]        print the office guidance a session started in <folder> gets
   instructions --session <id>  print each stored instruction entry from a running OpenCode server
   opencode inspect [folder]    list office-local native config and plugin sources on disk (offline)
@@ -93,7 +95,7 @@ const usage = `usage: office <command> [--office <dir>]
   shell                        open a shell in the running opencode container, in the folder
                                matching this one
   exec -- <command...>         run one command there the same way, with its stdin and exit status
-  pin                          write office.lock for the versions office.yaml pins
+  pin                          write office.lock's runtime pins for the versions office.yaml pins
   pair [--origin <url>]        print a one-time link that connects the OpenCode app or a browser
   apps deploy [--verbose]      install missing catalog apps and deploy changed local Executor apps
   apps adopt <catalog-id>      copy an installed Executor app's source into executor-apps/<catalog-id>

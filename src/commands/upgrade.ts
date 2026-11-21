@@ -8,7 +8,7 @@
 // runtimes' versions on GitHub (and Executor's image on its registry), and only
 // recorded: `office up --upgrade` applies them. With --commit, dirty files are left for the
 // user. A failed install or lookup keeps the old pin. Never pushes.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import * as v from "valibot";
 
@@ -20,9 +20,10 @@ import { type Document, isMap, isNode, isScalar, parseDocument } from "yaml";
 
 import { type Office, OfficeError } from "../office.ts";
 import { newestRelease, pinFor } from "../releases.ts";
+import { atomicWrite } from "../secrets.ts";
 import { type Stage, stream } from "../report/index.ts";
 import { check, type PinnedTool, pinnedTools } from "../schema.ts";
-import { compareVersions as compareSemver, lockFile, wantedPins, writeLock } from "../versions.ts";
+import { compareVersions as compareSemver, editLock, lockFile, wantedPins } from "../versions.ts";
 
 /**
  * How old a release must be before the job takes it: a runtime's own age under `tools`, else the
@@ -289,16 +290,17 @@ async function upgradeVersions(office: Office, stage: Stage): Promise<{ moves: M
   if (moves.length === 0) return { ...none, failures };
 
   const path = join(office.dir, "office.yaml");
-  let text;
 
   try {
-    text = setVersions(readFileSync(path, "utf8"), moves);
+    // office.yaml is read and written under the lease office.lock's writers hold, so a package
+    // publication meanwhile isn't put back.
+    editLock(office.dir, (sections) => {
+      atomicWrite(path, setVersions(readFileSync(path, "utf8"), moves), statSync(path).mode & 0o777);
+      sections.runtime = next;
+    }, { replacing: "runtime" });
   } catch (error) {
     return { ...none, failures: [`office.yaml's versions: ${error instanceof Error ? error.message : String(error)}`] };
   }
-
-  writeFileSync(path, text);
-  writeLock(office.dir, next);
 
   return { moves, failures, changed: ["office.yaml", lockFile] };
 }

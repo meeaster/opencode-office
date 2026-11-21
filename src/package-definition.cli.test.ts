@@ -1484,7 +1484,7 @@ for (const kind of ["local", "tracked"]) {
     }
 
     cli(0, "sync", "--packages");
-    const paths = [join(dir, "office.yaml"), join(installed, ".template.json"), join(installed, "office.ts"), join(link, "index.ts"), join(dir, "arrival.md")];
+    const paths = [join(dir, "office.yaml"), join(dir, "office.lock"), join(installed, "office.ts"), join(link, "index.ts"), join(dir, "arrival.md")];
 
     if (kind === "tracked") paths.push(join(installed, ".source.json"));
     const old = paths.map(read);
@@ -1673,7 +1673,7 @@ test("tracked updates validate the consuming settings and staged assets before p
   cli(0, "sync", "--packages");
   (await preparePackageServices(loadOffice(dir), false)).apply();
   const paths = ["office.yaml", ".office/resolved/references.json", "shared.md", ".opencode/plugins/shared/index.ts", "state/packages/shared/compose.yaml", "state/packages/shared/settings.env", "state/packages/shared/include.yaml"].map(path => join(dir, path));
-  paths.push(...[".source.json", ".settings.json", ".template.json", "base.env", "compose.yaml", "office.ts"].map(file => join(installed, file)));
+  paths.push(join(dir, "office.lock"), ...[".source.json", ".settings.json", "base.env", "compose.yaml", "office.ts"].map(file => join(installed, file)));
   const before = paths.map(read);
   write(join(source, "template/extra.md"), "new seed");
   write(join(source, "plugin/index.ts"), "// rejected");
@@ -1731,7 +1731,7 @@ test("a broken embedded replacement leaves the installed package usable and fail
   select("  - name: artifact-share\n    settings: {url: https://example.org}\n");
   cli(0, "sync", "--packages");
   const pkg = join(dir, ".office/packages/artifact-share");
-  const paths = [join(dir, ".opencode/plugins/artifact-share/index.ts"), join(dir, "artifacts/README.md"), ...[".source.json", ".settings.json", ".template.json", "office.ts", "scripts/build-site.ts"].map(file => join(pkg, file))];
+  const paths = [join(dir, ".opencode/plugins/artifact-share/index.ts"), join(dir, "artifacts/README.md"), join(dir, "office.lock"), ...[".source.json", ".settings.json", "office.ts", "scripts/build-site.ts"].map(file => join(pkg, file))];
   const before = paths.map(read);
   expect(newer(1, "sync", "--packages")).toContain("missing.ts");
   expect(paths.map(read)).toEqual(before);
@@ -1855,7 +1855,7 @@ esac\n`, 0o755);
   expect(read(record)).not.toBe(oldRecord);
 }, 60_000);
 
-test("the executable installs a TS-only Git package and repairs it from the recorded commit after its tag moves", () => {
+test("the executable installs a TS-only Git package at its locked commit, repairs it there after its tag moves, and packages update moves the lock", () => {
   const { dir, cli, select } = fixture("pinned");
   const repo = join(root, "upstream");
   const dest = join(dir, ".office/packages/shared");
@@ -1875,7 +1875,10 @@ test("the executable installs a TS-only Git package and repairs it from the reco
 
   expect(JSON.parse(read(settings))).toEqual({ title: "original" });
   expect(JSON.parse(read(record))).toMatchObject({ ref: "v1", commit: first });
-  // An unchanged copy works offline, including check.
+  // An unchanged copy works offline, including check; a repair that can't fetch leaves the lock.
+  const lock = join(dir, "office.lock");
+  const lockedText = read(lock);
+
   renameSync(repo, `${repo}-offline`);
   cli(0, "sync", "--packages");
   expect(cli(0, "check")).toContain("ok   package shared:");
@@ -1883,6 +1886,7 @@ test("the executable installs a TS-only Git package and repairs it from the reco
   expect(cli(1, "check")).toContain("title.ts (edited)");
   expect(cli(1, "sync", "--packages")).toContain(first);
   expect(JSON.parse(read(settings))).toEqual({ title: "original" });
+  expect(read(lock)).toBe(lockedText);
   renameSync(`${repo}-offline`, repo);
   write(join(repo, "packages/shared/title.ts"), 'export const title = "later";');
   const second = commit(repo);
@@ -1895,25 +1899,46 @@ test("the executable installs a TS-only Git package and repairs it from the reco
   expect(JSON.parse(read(settings))).toEqual({ title: "original" });
   expect(cli(0, "check")).toContain("ok   package shared:");
 
-  // With no usable record, a moving ref cannot identify the commit to restore.
+  // A fresh clone has office.lock but no .office/: sync installs the locked commit, not the tag's.
+  expect(read(lock)).toContain(`    ref: v1\n    commit: ${first}\n`);
+  rmSync(join(dir, ".office"), { recursive: true });
+  cli(0, "sync", "--packages");
+  expect(JSON.parse(read(record))).toMatchObject({ ref: "v1", commit: first });
+  expect(read(join(dest, "title.ts"))).toBe(sibling);
+
+  // The lock names the commit to restore when the record is unreadable; without it, a moving ref can't.
   const lastGood = read(record);
 
+  write(record, "{");
+  cli(0, "sync", "--packages");
+  expect(JSON.parse(read(record))).toMatchObject({ ref: "v1", commit: first });
+  renameSync(lock, `${lock}.saved`);
   write(record, "{");
   expect(cli(1, "sync", "--packages")).toContain("cannot repair from v1 without the recorded commit");
   expect(read(join(dest, "title.ts"))).toBe(sibling);
   write(record, lastGood);
+  renameSync(`${lock}.saved`, lock);
 
-  // A bad candidate must not replace the installed copy or apply its templates/settings.
-  write(join(repo, "packages/shared/package.yaml"), "name: shared\ndescription: Ambiguous\n");
-  select(source(commit(repo)));
-  expect(cli(1, "sync", "--packages")).toContain("has both office.ts and package.yaml");
-  expect(read(record)).toBe(lastGood);
-  rmSync(join(repo, "packages/shared/package.yaml"));
+  // packages update moves the lock to where the tag points now, and leaves office.yaml.
+  const yaml = read(join(dir, "office.yaml"));
+
+  expect(cli(0, "packages", "update")).toContain(`package shared: locked ${first.slice(0, 12)} → ${second} (tag v1; office.yaml unchanged)`);
+  expect(read(join(dir, "office.yaml"))).toBe(yaml);
+  expect(read(lock)).toContain(`    ref: v1\n    commit: ${second}\n`);
+  expect(JSON.parse(read(record))).toMatchObject({ ref: "v1", commit: second });
+  expect(JSON.parse(read(settings))).toEqual({ title: "later" });
+  const updated = read(record);
+
+  // A candidate whose definition throws must not replace the installed copy, apply its settings or
+  // move the lock (an invalid one is a unit test in packages.test.ts).
+  const locked = read(lock);
+
   write(join(repo, "packages/shared/office.ts"), 'throw new Error("bad candidate");');
   select(source(commit(repo)));
   expect(cli(1, "sync", "--packages")).toContain("office.ts: bad candidate");
-  expect(read(record)).toBe(lastGood);
-  expect(JSON.parse(read(settings))).toEqual({ title: "original" });
+  expect(read(record)).toBe(updated);
+  expect(read(lock)).toBe(locked);
+  expect(JSON.parse(read(settings))).toEqual({ title: "later" });
 
   select(source(first));
   cli(0, "sync", "--packages");

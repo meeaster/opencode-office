@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { git } from "./git.ts";
-import { highestTag, resolveTrack } from "./track.ts";
+import { highestTag, resolveRef, resolveTrack } from "./track.ts";
 
 let dir: string;
 
@@ -29,7 +29,7 @@ test("a tag pattern picks the highest stable version, not the newest push, and i
   expect(highestTag("*", [{ name: "v1.0.0", commit: "b" }, { name: "1.0.0", commit: "a" }])?.tag.name).toBe("1.0.0");
 });
 
-test("a branch resolves to its commit and a pattern to the commit an annotated tag points at, through git ls-remote", async () => {
+test("a branch resolves to its commit and a pattern or untracked ref to the commit an annotated tag points at, through git ls-remote", async () => {
   const repo = join(dir, "repo");
 
   mkdirSync(repo);
@@ -49,4 +49,17 @@ test("a branch resolves to its commit and a pattern to the commit an annotated t
   expect(await resolveTrack(repo, "v1.*")).toEqual({ commit: first, via: "tag v1.2.0, the highest of 1 stable tag matching v1.*" });
   await expect(resolveTrack(repo, "v2.*")).rejects.toThrow("no stable SemVer tag");
   await expect(resolveTrack(repo, "develop")).rejects.toThrow("has no branch develop");
+
+  // An untracked ref: a tag before a branch of the same name, as git fetch prefers.
+  git(["branch", "v1.2.0"], repo);
+  expect(await resolveRef(repo, "v1.2.0")).toEqual({ commit: first, via: "tag v1.2.0" });
+  expect(await resolveRef(repo, "main")).toEqual({ commit: git(["rev-parse", "HEAD"], repo), via: "branch main" });
+  await expect(resolveRef(repo, "develop")).rejects.toThrow("has no tag or branch develop");
+
+  // A qualified ref names one kind, and an annotated tag is peeled to its commit however it's named.
+  const head = git(["rev-parse", "HEAD"], repo);
+
+  for (const ref of ["refs/tags/v1.2.0", "tags/v1.2.0"]) expect(await resolveRef(repo, ref)).toEqual({ commit: first, via: "tag v1.2.0" });
+  for (const ref of ["refs/heads/v1.2.0", "heads/v1.2.0"]) expect(await resolveRef(repo, ref)).toEqual({ commit: head, via: "branch v1.2.0" });
+  await expect(resolveRef(repo, "tags/main")).rejects.toThrow("has no tag main");
 });

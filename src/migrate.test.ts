@@ -9,6 +9,7 @@ import { officeInstructions } from "../packages/office/plugin/instructions.ts";
 import { git } from "./git.ts";
 import { editedOfficeSkill, withoutExecutorEntry } from "./migrate.ts";
 import { loadOffice, withoutItem } from "./office.ts";
+import { readLockSection } from "./versions.ts";
 
 let dir: string;
 
@@ -118,8 +119,6 @@ test("one sync moves an office from the earlier layout, a second changes nothing
   write(join(knowledge, "package.yaml"), manifest);
   write(join(knowledge, ".source.json"), JSON.stringify({ repo: "https://github.com/meeaster/opencode-office.git", path: "packages/knowledge", ref: "0123456789abcdef0123456789abcdef01234567", commit: "0123456789abcdef0123456789abcdef01234567", files }));
   write(join(knowledge, ".settings.json"), "{}\n");
-  // The template file it already handled, which the office deleted: it must stay deleted.
-  write(join(knowledge, ".template.json"), '[\n  "knowledge/README.md"\n]\n');
   mkdirSync(join(office, ".opencode/skills"), { recursive: true });
   symlinkSync("../../skills/office", join(office, ".opencode/skills/office"));
   symlinkSync("../../packages/knowledge/plugin", join(office, ".opencode/plugins/knowledge"));
@@ -145,10 +144,9 @@ test("one sync moves an office from the earlier layout, a second changes nothing
   );
   expect(readFileSync(join(office, ".opencode/opencode.jsonc"), "utf8")).toBe(config(browserEntry));
   expect(readlinkSync(join(office, ".opencode/plugins/knowledge"))).toBe("../../.office/packages/knowledge/plugin");
-  expect(JSON.parse(readFileSync(join(office, ".office/packages/knowledge/.template.json"), "utf8"))).toEqual(["knowledge/AGENTS.md", "knowledge/README.md", "knowledge/origins.md"]);
+  expect([...readLockSection(office, "seeds").keys()]).toEqual(["knowledge/AGENTS.md", "knowledge/README.md", "knowledge/origins.md"]);
   expect(readFileSync(join(office, "knowledge/AGENTS.md"), "utf8")).toContain("knowledge-base-format: 2");
   expect(existsSync(join(office, "knowledge/origins.md"))).toBe(true);
-  expect(existsSync(join(office, "knowledge/README.md"))).toBe(false);
   expect(existsSync(join(office, "skills/office/SKILL.md"))).toBe(true);
   expect(await sync(loadOffice(office))).toEqual([editedOfficeSkill]);
 });

@@ -7,6 +7,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { git } from "../git.ts";
+import { editLock, readLockSection } from "../versions.ts";
+
+/** office.lock's `packages:` section in the office at `dir`, as an object. */
+const readPackageLock = (dir: string) => Object.fromEntries(readLockSection(dir, "packages"));
 
 let dir: string;
 
@@ -239,11 +243,11 @@ test("a group missing a skill at the new tag, edited where it would be replaced,
   expect(read(join(dir, "office/office.yaml"))).toBe(config("v1.*"));
 });
 
-test("packages update advances tracked packages to a full SHA and applies them as sync does, leaving skill pins and failed packages alone", () => {
+test("packages update advances tracked packages to a full SHA and moves untracked tags in office.lock, applying them as sync does, leaving full-SHA pins, skill pins and failed packages alone", () => {
   const pkg = join(dir, "package-repo");
   const skills = join(dir, "skills-repo");
   const manifest = (text: string) => `name: demo\ndescription: ${text}\nsettings:\n  greeting:\n    description: A greeting\n    default: hi\n`;
-  const pkgOne = commit(pkg, { "demo/package.yaml": manifest("one"), "fixed/package.yaml": "name: fixed\ndescription: Fixed.\n" }, "v1.0.0");
+  const pkgOne = commit(pkg, { "demo/package.yaml": manifest("one"), "fixed/package.yaml": "name: fixed\ndescription: Fixed.\n", "tagged/package.yaml": "name: tagged\ndescription: Tagged.\n" }, "v1.0.0");
   const skillOne = commit(skills, { "alpha/SKILL.md": skill("alpha one") }, "v1.0.0");
 
   write(
@@ -264,26 +268,40 @@ packages:
     repo: ${pkg}
     path: fixed
     ref: ${pkgOne}
+  - name: tagged
+    repo: ${pkg}
+    path: tagged
+    ref: v1.0.0
 `,
   );
   expect(office("sync").status).toBe(0);
+  const locked = { demo: { repo: pkg, path: "demo", ref: pkgOne, commit: pkgOne }, fixed: { repo: pkg, path: "fixed", ref: pkgOne, commit: pkgOne }, tagged: { repo: pkg, path: "tagged", ref: "v1.0.0", commit: pkgOne } };
 
-  const pkgTwo = commit(pkg, { "demo/package.yaml": manifest("two"), "demo/template/notes/DEMO.md": "from demo\n" }, "v1.1.0");
+  expect(readPackageLock(join(dir, "office"))).toEqual(locked);
 
+  const pkgTwo = commit(pkg, { "demo/package.yaml": manifest("two"), "demo/template/notes/DEMO.md": "from demo\n", "tagged/package.yaml": "name: tagged\ndescription: Tagged two.\n" }, "v1.1.0");
+
+  // The untracked tag moves to the new commit.
+  git([...identity, "tag", "-f", "-a", "v1.0.0", "-m", "moved"], pkg);
   commit(skills, { "alpha/SKILL.md": skill("alpha two") }, "v1.1.0");
 
+  const yaml = read(join(dir, "office/office.yaml"));
   const updated = office("packages", "update");
 
   expect(updated.err).toBe("");
   expect(updated.status).toBe(0);
   expect(updated.out).toContain("packages: applying packages");
-  expect(updated.out).toContain("packages: done: 1 updated");
+  expect(updated.out).toContain("packages: done: 2 updated");
   expect(updated.out).toContain(`package demo: pinned ${pkgOne.slice(0, 12)} → ${pkgTwo} (tag v1.1.0, the highest of 2 stable tags matching v1.*)`);
+  expect(updated.out).toContain(`package tagged: locked ${pkgOne.slice(0, 12)} → ${pkgTwo} (tag v1.0.0; office.yaml unchanged)`);
   expect(updated.out).toContain("package fixed: pinned");
-  expect(read(join(dir, "office/office.yaml"))).toContain(`    ref: ${pkgTwo}\n    track: 'v1.*'`);
+  expect(read(join(dir, "office/office.yaml"))).toBe(yaml.replace(`ref: "${pkgOne}"`, `ref: ${pkgTwo}`));
+  // The tracked ref and its lock entry move together; the untracked tag moves in the lock only; a full SHA stays.
+  expect(readPackageLock(join(dir, "office"))).toEqual({ ...locked, demo: { ...locked.demo, ref: pkgTwo, commit: pkgTwo }, tagged: { ...locked.tagged, commit: pkgTwo } });
+  expect(record(".office/packages/tagged")).toMatchObject({ ref: "v1.0.0", commit: pkgTwo });
   expect(read(join(dir, "office/office.yaml"))).toContain("  # Follows the v1 line.\n");
   expect(record(".office/packages/demo")).toMatchObject({ commit: pkgTwo, ref: pkgTwo });
-  // Applied as sync applies a package: its template file is created.
+  // Applied as sync applies a package: its seed file is created.
   expect(read(join(dir, "office/notes/DEMO.md"))).toBe("from demo\n");
   expect(record(".office/packages/fixed").commit).toBe(pkgOne);
   // Skill pins and copies wait for office skills update.
@@ -300,8 +318,22 @@ packages:
   expect(failed.out).toContain("FAILED package demo: found ");
   expect(failed.out).toContain("(tag v1.2.0, the highest of 3 stable tags matching v1.*), but");
   expect(failed.out).toContain(`pin left at ${pkgTwo.slice(0, 12)}`);
+  expect(failed.out).toContain(`package tagged: v1.0.0 still at ${pkgTwo.slice(0, 12)} (tag v1.0.0)`);
   expect(read(join(dir, "office/office.yaml"))).toContain(`ref: ${pkgTwo}`);
   expect(record(".office/packages/demo").commit).toBe(pkgTwo);
+
+  // A lock entry gone while the copy is already at the tag's commit: the entry is published again, from the installed copy.
+  const { tagged: _tagged, ...untagged } = readPackageLock(join(dir, "office"));
+  const copied = record(".office/packages/tagged");
+
+  editLock(join(dir, "office"), (sections) => {
+    sections.packages = new Map(Object.entries(untagged));
+  });
+  const relocked = office("packages", "update");
+
+  expect(relocked.out).toContain(`package tagged: locked (none) → ${pkgTwo} (tag v1.0.0; office.yaml unchanged)`);
+  expect(readPackageLock(join(dir, "office")).tagged).toEqual({ ...locked.tagged, commit: pkgTwo });
+  expect(record(".office/packages/tagged")).toEqual(copied);
 });
 
 test("a pending peer setting and duplicate requirements reject the staged tree; repaired installers advance together", () => {
