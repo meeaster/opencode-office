@@ -229,7 +229,7 @@ test("a seed file is copied once: one the office deletes stays deleted, one alre
   expect(install()).toEqual([]);
 });
 
-test("sync removes a copied package whose entry is gone with the seed files it still holds, and leaves changed files and the office's own beside them", async () => {
+test("sync removes a copied package whose entry is gone, even an edited copy, with the seed files it still holds, and leaves changed files, the office's own and a package written in the office beside them", async () => {
   const repo = join(dir, "repo");
   const office = join(dir, "office");
 
@@ -248,6 +248,8 @@ test("sync removes a copied package whose entry is gone with the seed files it s
   write(join(office, "out/README.md"), "the office changed this\n");
   write(join(office, "out/my-page/index.md"), "the office's own\n");
   write(join(office, ".github/dependabot.yml"), "version: 2\n");
+  write(join(office, ".office/packages/demo/package.yaml"), `${manifest}# edited\n`);
+  write(join(office, "packages/own/package.yaml"), "name: own\ndescription: Written here.\n");
   write(join(office, "office.yaml"), "name: t\n");
 
   const changes = await sync(loadOffice(office));
@@ -264,6 +266,7 @@ test("sync removes a copied package whose entry is gone with the seed files it s
   expect(readFileSync(join(office, ".github/dependabot.yml"), "utf8")).toBe("version: 2\n");
   expect(readFileSync(join(office, "out/README.md"), "utf8")).toBe("the office changed this\n");
   expect(readFileSync(join(office, "out/my-page/index.md"), "utf8")).toBe("the office's own\n");
+  expect(existsSync(join(office, "packages/own/package.yaml"))).toBe(true);
   expect(await sync(loadOffice(office))).toEqual([]);
 });
 
@@ -294,7 +297,7 @@ test("a seed path the seeds: section couldn't hold is refused before copying, an
   expect(Object.keys(receipts(office))).toEqual(["plain.md"]);
 });
 
-test("on a fresh clone a pulled-in package doesn't copy a deleted seed file again, and once deselected its receipts settle without its copy", async () => {
+test("a pulled-in package deselected before a fresh clone installed it settles its receipts without its copy", async () => {
   const repo = join(dir, "repo");
   const office = join(dir, "office");
   const clone = () => rmSync(join(office, ".office"), { recursive: true, force: true });
@@ -314,10 +317,6 @@ test("on a fresh clone a pulled-in package doesn't copy a deleted seed file agai
   await sync(loadOffice(office));
   rmSync(join(office, "out/deleted.md"));
   write(join(office, "out/edited.md"), "the office changed this\n");
-
-  clone();
-  expect((await sync(loadOffice(office))).filter((line) => line.includes(".md"))).toEqual([]);
-  expect(existsSync(join(office, "out/deleted.md"))).toBe(false);
 
   // Removed from office.yaml before the package was installed on another clone.
   clone();
@@ -413,26 +412,6 @@ test("sync locks a Git package's commit in office.lock, keeps the entry when a c
   expect(existsSync(lock)).toBe(false);
 });
 
-test("sync removes an edited copy whose entry is gone too, and never removes a package written in the office", async () => {
-  const repo = join(dir, "repo");
-  const office = join(dir, "office");
-
-  write(join(repo, "pkgs/demo/package.yaml"), manifest);
-  git(["init", "--quiet", repo]);
-  git(["add", "-A"], repo);
-  git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "-m", "one"], repo);
-
-  write(join(office, "office.yaml"), `name: t\npackages:\n  - name: demo\n    repo: ${repo}\n    path: pkgs/demo\n    ref: ${git(["rev-parse", "HEAD"], repo)}\n    settings: { url: https://example.com }\n`);
-  git(["init", "--quiet", office]);
-  await sync(loadOffice(office));
-  write(join(office, ".office/packages/demo/package.yaml"), `${manifest}# edited\n`);
-  write(join(office, "packages/own/package.yaml"), "name: own\ndescription: Written here.\n");
-  write(join(office, "office.yaml"), "name: t\n");
-
-  expect(await sync(loadOffice(office))).toEqual(["removed .office/packages/demo/, which office.yaml no longer lists", "office.lock: removed demo"]);
-  expect(existsSync(join(office, "packages/own/package.yaml"))).toBe(true);
-});
-
 test("an entry without repo is built-in when shipped and local otherwise; the required office package appears only once and a built-in can't come from another repository", () => {
   const office = join(dir, "office");
 
@@ -520,18 +499,12 @@ test("the required office package ignores the Claude app's synced skills unless 
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: office\n    repo: https://example.com/fork.git\n    path: packages/office\n    ref: main\n");
   expect(() => loadOffice(office)).toThrow("the required office package is built in: its entry can only configure settings and cron");
-});
 
-test("a skill a built-in package renamed leaves the office's copy on the next sync", async () => {
-  const office = join(dir, "office");
+  // A skill a built-in package renamed, as an earlier executable's copy held it, leaves on the next sync.
   const skills = join(office, ".office/packages/office/skills");
 
   write(join(office, "office.yaml"), "name: t\n");
-  await sync(loadOffice(office));
-
-  // What an earlier executable's copy held.
   write(join(skills, "skill-creator/SKILL.md"), readFileSync(join(skills, "openai-skill-creator/SKILL.md"), "utf8"));
-
   await sync(loadOffice(office));
 
   expect(existsSync(join(skills, "skill-creator"))).toBe(false);

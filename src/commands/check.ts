@@ -190,7 +190,7 @@ async function drift(office: Office): Promise<string[]> {
  * Office's plumbing that Git still tracks, as earlier releases had offices commit it. Excludes
  * don't apply to tracked paths, so this names the command that untracks them; the files stay.
  */
-function trackedPlumbing(office: Office, report: Report): void {
+export function trackedPlumbing(office: Office, report: Report): void {
   if (!existsSync(join(office.dir, ".git"))) return;
   let tracked: string[];
 

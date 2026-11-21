@@ -10,8 +10,10 @@ const { root, exe, marker, write, read, commit, fixture, collector } = definitio
 
 test("a built-in's bytes and a Git contributor's resolved commit survive separate executable processes", () => {
   const { dir, env, cli, newer, probe, select } = fixture("reference-repair");
-  select("  - name: aws-emulator\n");
+  select("  - {name: aws-emulator, settings: {port: '14566', storage: hybrid}}\n");
   cli(0, "sync", "--packages");
+  const delivered = ["office.ts", ".settings.json", ".source.json", "compose.yaml"].map(path => join(dir, ".office/packages/aws-emulator", path));
+  const before = delivered.map(read);
 
   // Exercise setup's real planner with Git restricted to file transport. The only HTTPS
   // source is contributed, so it must be reported as requiring access, never push access.
@@ -26,8 +28,10 @@ test("a built-in's bytes and a Git contributor's resolved commit survive separat
     hosts: ["github.com"], private: [{ what: "reference floci", url: "https://github.com/floci-io/floci.git", pushes: false }], pushes: [], needed: true,
   });
   expect(newer(1, "sync", "--packages")).toMatch(/built-in:[a-f0-9]{64}.*changed built-in collector/);
+  // A broken replacement leaves the installed native definition and its delivered settings in place.
+  expect(delivered.map(read)).toEqual(before);
   expect(newer(1, "references", "list")).toContain("matching previous Office CLI or container image");
-  expect(cli(0, "references", "list")).toContain("floci\t");
+  expect(cli(0, "references", "list")).toMatch(/floci\t.*main\tpackage aws-emulator\n/);
   const repo = join(root, "tags");
   const installed = join(dir, ".office/packages/docs");
   git(["init", "-qb", "main", repo]);
@@ -190,22 +194,15 @@ test("the executable syncs mixed definitions and keeps applied state when a sele
 
   expect(applied).toContain('"jq" = "1.7.1" # notes');
 
-  const preserved = (reason: string) => {
-    expect(cli(1, "sync", "--packages")).toContain(reason);
-    expect(cli(1, "check")).toContain(reason);
-    expect(readlinkSync(link)).toBe("../../packages/notes/plugin");
-    expect(read(pins)).toBe(applied);
-    expect(JSON.parse(read(join(pkg, ".settings.json")))).toEqual({ count: 7 });
-    expect(read(join(dir, "notes/example"))).toBe("owner");
-  };
-
+  // Every unreadable definition fails the same way (src/package-definition.test.ts covers the kinds).
+  const reason = "packages/notes/office.ts: bad notes import";
   write(join(pkg, "office.ts"), 'throw new Error("bad notes import")');
-  preserved("packages/notes/office.ts: bad notes import");
-  write(join(pkg, "package.yaml"), "name: notes\ndescription: otherwise valid\n");
-  preserved("packages/notes has both office.ts and package.yaml");
-  rmSync(join(pkg, "package.yaml"));
-  write(join(pkg, "office.ts"), 'export default { name: "notes", description: "Notes", setup: "handler.ts" }');
-  preserved("packages/notes/office.ts: setup:");
+  expect(cli(1, "sync", "--packages")).toContain(reason);
+  expect(cli(1, "check")).toContain(reason);
+  expect(readlinkSync(link)).toBe("../../packages/notes/plugin");
+  expect(read(pins)).toBe(applied);
+  expect(JSON.parse(read(join(pkg, ".settings.json")))).toEqual({ count: 7 });
+  expect(read(join(dir, "notes/example"))).toBe("owner");
 
   select("  - name: legacy\n");
   cli(0, "sync", "--packages");

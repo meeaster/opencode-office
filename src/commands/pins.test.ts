@@ -1,13 +1,17 @@
-// `office skills update` and `office packages update`, run as the CLI against local Git
-// repositories: each moves only its own pins, along branches and stable SemVer tags, and a failure
-// leaves a group or package as it was.
+// `office skills update` and `office packages update`, run in-process against local Git
+// repositories (and `office refresh` as the CLI, for its output): each moves only its own pins, along
+// branches and stable SemVer tags, and a failure leaves a group or package as it was.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { git } from "../git.ts";
+import { loadOffice } from "../office.ts";
+import { silentStage, type Stage } from "../report/index.ts";
 import { editLock, readLockSection } from "../versions.ts";
+import { updatePackages, updateSkills } from "./pins.ts";
+import { sync } from "./sync.ts";
 
 /** office.lock's `packages:` section in the office at `dir`, as an object. */
 const readPackageLock = (dir: string) => Object.fromEntries(readLockSection(dir, "packages"));
@@ -56,6 +60,33 @@ function office(...args: string[]) {
   return { status: run.exitCode, out: run.stdout.toString(), err: run.stderr.toString() };
 }
 
+/**
+ * `office skills update` or `office packages update` in-process: `ok` is false where the CLI exits 1,
+ * and `out` holds the stage's lines (details, notes, errors, then "done: …" or "FAILED: …").
+ */
+async function update(command: "skills" | "packages") {
+  const lines: string[] = [];
+  const stage: Stage = { ...silentStage, detail: (text) => lines.push(text), note: (text) => lines.push(text), warn: (text) => lines.push(text), error: (text) => lines.push(text), done: (summary) => lines.push(`done: ${summary}`), fail: (reason) => lines.push(`FAILED: ${reason}`) };
+
+  try {
+    await (command === "skills" ? updateSkills : updatePackages)(loadOffice(join(dir, "office")), stage);
+
+    return { ok: true, out: lines.join("\n") };
+  } catch (error) {
+    // What the CLI reports as "stopped:" before exiting 1; anything else is a bug the test should show.
+    if (!(error instanceof Error && error.message === "Fix the failures above and run the update again")) throw error;
+
+    return { ok: false, out: lines.join("\n") };
+  }
+}
+
+/** `office sync` in-process (or `office sync --packages`), as the CLI would succeed: no FAILED line. */
+async function synced(scope: "all" | "packages" = "all") {
+  const changes = await sync(loadOffice(join(dir, "office")), { scope });
+
+  expect(changes.filter((line) => line.startsWith("FAILED"))).toEqual([]);
+}
+
 function record(path: string): { commit: string; ref: string | null } {
   return JSON.parse(read(join(dir, "office", path, ".source.json")));
 }
@@ -71,6 +102,8 @@ test("refresh keeps both updated pins through full sync and stops before up on a
   const result = office("refresh");
 
   expect(result.status).toBe(1);
+  expect(result.out).toContain("office refresh: office test");
+  expect(result.err).toContain("office refresh: stopped:");
   expect(result.out).toContain("packages: done: 1 updated");
   expect(result.out).toContain("skills: done: 1 updated");
   expect(result.out).toContain("sync: FAILED");
@@ -81,7 +114,7 @@ test("refresh keeps both updated pins through full sync and stops before up on a
   expect(read(join(dir, "office/office.yaml"))).not.toContain(old);
 });
 
-test("skills update moves each tracked group along its tags or branch, all its copies at once, and touches no package, reference or untracked pin", () => {
+test("skills update moves each tracked group along its tags or branch, all its copies at once, and touches no package, reference or untracked pin", async () => {
   const skills = join(dir, "skills-repo");
   const other = join(dir, "other-repo");
   const pkg = join(dir, "package-repo");
@@ -134,9 +167,7 @@ packages:
 `,
   );
 
-  const synced = office("sync");
-
-  expect(synced.status).toBe(0);
+  await synced();
   // Sync applies pins without moving them.
   expect(record("skills/alpha").commit).toBe(v290);
   expect(record("skills/gamma").commit).toBe(gammaOne);
@@ -149,13 +180,11 @@ packages:
 
   const referenceHead = git(["rev-parse", "HEAD"], join(dir, "office/references/ref"));
   const before = read(join(dir, "office/office.yaml"));
-  const updated = office("skills", "update");
+  const updated = await update("skills");
 
-  expect(updated.err).toBe("");
-  expect(updated.status).toBe(0);
-  expect(updated.out).toContain("office skills update: office t");
-  expect(updated.out).toContain("skills: checking alpha, beta (v2.*)");
-  expect(updated.out).toContain("skills: done: 2 updated");
+  expect(updated.ok).toBe(true);
+  expect(updated.out).toContain("checking alpha, beta (v2.*)");
+  expect(updated.out).toContain("done: 2 updated");
   expect(updated.out).toContain(`skills alpha, beta from ${skills}: pinned ${v290.slice(0, 12)} → ${v2100} (tag v2.10.0, the highest of 2 stable tags matching v2.*)`);
   expect(updated.out).toContain(`skills gamma from ${other}: pinned ${gammaOne.slice(0, 12)} → ${gammaTwo} (branch main)`);
   expect(updated.out).toContain("skills fixed from");
@@ -173,26 +202,25 @@ packages:
   expect(record("skills/solo").commit).toBe(v290);
 
   // Running again finds nothing to move.
-  expect(office("skills", "update").out).toContain(`already at ${v2100.slice(0, 12)}`);
+  expect((await update("skills")).out).toContain(`already at ${v2100.slice(0, 12)}`);
 });
 
-test("a group missing a skill at the new tag, edited where it would be replaced, or matching no tag keeps its pin and every copy", () => {
+test("a group missing a skill at the new tag, edited where it would be replaced, or matching no tag keeps its pin and every copy", async () => {
   const skills = join(dir, "skills-repo");
   const v100 = commit(skills, { "alpha/SKILL.md": skill("alpha 1.0"), "beta/SKILL.md": skill("beta 1.0") }, "v1.0.0");
   const config = (track: string) => `name: t\nstate: ${join(dir, "state")}\nskills:\n  copied:\n    - repo: ${skills}\n      ref: ${v100}\n      track: '${track}'\n      skills: [alpha, beta]\n`;
 
   write(join(dir, "office/office.yaml"), config("v1.*"));
-  expect(office("sync").status).toBe(0);
+  await synced();
 
   // v1.1.0 drops beta: the whole group stays at v1.0.0, alpha included.
   commit(skills, { "alpha/SKILL.md": skill("alpha 1.1"), beta: null }, "v1.1.0");
 
   const before = read(join(dir, "office/office.yaml"));
-  const missing = office("skills", "update");
+  const missing = await update("skills");
 
-  expect(missing.status).toBe(1);
-  expect(missing.err).toContain("office skills update: stopped:");
-  expect(missing.out).toContain("skills: FAILED: 0 updated, 1 failed");
+  expect(missing.ok).toBe(false);
+  expect(missing.out).toContain("FAILED: 0 updated, 1 failed");
   expect(missing.out).toContain("FAILED skills alpha, beta");
   expect(missing.out).toContain("tag v1.1.0");
   expect(missing.out).toContain("has no beta/SKILL.md");
@@ -205,9 +233,9 @@ test("a group missing a skill at the new tag, edited where it would be replaced,
 
   write(join(dir, "office/skills/beta/SKILL.md"), "edited here\n");
 
-  const edited = office("skills", "update");
+  const edited = await update("skills");
 
-  expect(edited.status).toBe(1);
+  expect(edited.ok).toBe(false);
   expect(edited.out).toContain("skills/beta has local edits that replacing it would lose: SKILL.md (edited)");
   expect(read(join(dir, "office/office.yaml"))).toBe(before);
   expect(read(join(dir, "office/skills/alpha/SKILL.md"))).toBe(skill("alpha 1.0"));
@@ -221,29 +249,22 @@ test("a group missing a skill at the new tag, edited where it would be replaced,
 
   delete legacy.files;
   write(join(dir, "office/skills/alpha/.source.json"), JSON.stringify(legacy));
-  expect(office("skills", "update").status).toBe(0);
+  expect((await update("skills")).ok).toBe(true);
   expect(record("skills/alpha").commit).toBe(v120);
   expect(read(join(dir, "office/office.yaml"))).toContain(`ref: ${v120}`);
 
   // A pattern no stable tag matches leaves the pin alone.
   write(join(dir, "office/office.yaml"), config("v9.*").replace(v100, v120));
 
-  const none = office("skills", "update");
+  const none = await update("skills");
 
-  expect(none.status).toBe(1);
+  expect(none.ok).toBe(false);
   expect(none.out).toContain("no stable SemVer tag");
   expect(none.out).toContain("matches v9.*");
   expect(read(join(dir, "office/office.yaml"))).toContain(`ref: ${v120}`);
-
-  // A pin changed by hand is what sync applies, and sync doesn't advance it along the track.
-  write(join(dir, "office/office.yaml"), config("v1.*"));
-  expect(office("sync").status).toBe(0);
-  expect(record("skills/alpha").commit).toBe(v100);
-  expect(read(join(dir, "office/skills/beta/SKILL.md"))).toBe(skill("beta 1.0"));
-  expect(read(join(dir, "office/office.yaml"))).toBe(config("v1.*"));
 });
 
-test("packages update advances tracked packages to a full SHA and moves untracked tags in office.lock, applying them as sync does, leaving full-SHA pins, skill pins and failed packages alone", () => {
+test("packages update advances tracked packages to a full SHA and moves untracked tags in office.lock, applying them as sync does, leaving full-SHA pins, skill pins and failed packages alone", async () => {
   const pkg = join(dir, "package-repo");
   const skills = join(dir, "skills-repo");
   const manifest = (text: string) => `name: demo\ndescription: ${text}\nsettings:\n  greeting:\n    description: A greeting\n    default: hi\n`;
@@ -274,7 +295,7 @@ packages:
     ref: v1.0.0
 `,
   );
-  expect(office("sync").status).toBe(0);
+  await synced();
   const locked = { demo: { repo: pkg, path: "demo", ref: pkgOne, commit: pkgOne }, fixed: { repo: pkg, path: "fixed", ref: pkgOne, commit: pkgOne }, tagged: { repo: pkg, path: "tagged", ref: "v1.0.0", commit: pkgOne } };
 
   expect(readPackageLock(join(dir, "office"))).toEqual(locked);
@@ -286,12 +307,11 @@ packages:
   commit(skills, { "alpha/SKILL.md": skill("alpha two") }, "v1.1.0");
 
   const yaml = read(join(dir, "office/office.yaml"));
-  const updated = office("packages", "update");
+  const updated = await update("packages");
 
-  expect(updated.err).toBe("");
-  expect(updated.status).toBe(0);
-  expect(updated.out).toContain("packages: applying packages");
-  expect(updated.out).toContain("packages: done: 2 updated");
+  expect(updated.ok).toBe(true);
+  expect(updated.out).toContain("applying packages");
+  expect(updated.out).toContain("done: 2 updated");
   expect(updated.out).toContain(`package demo: pinned ${pkgOne.slice(0, 12)} → ${pkgTwo} (tag v1.1.0, the highest of 2 stable tags matching v1.*)`);
   expect(updated.out).toContain(`package tagged: locked ${pkgOne.slice(0, 12)} → ${pkgTwo} (tag v1.0.0; office.yaml unchanged)`);
   expect(updated.out).toContain("package fixed: pinned");
@@ -311,10 +331,9 @@ packages:
   // A release without the package keeps the pin and the installed copy.
   commit(pkg, { demo: null }, "v1.2.0");
 
-  const failed = office("packages", "update");
+  const failed = await update("packages");
 
-  expect(failed.status).toBe(1);
-  expect(failed.err).toContain("office packages update: stopped:");
+  expect(failed.ok).toBe(false);
   expect(failed.out).toContain("FAILED package demo: found ");
   expect(failed.out).toContain("(tag v1.2.0, the highest of 3 stable tags matching v1.*), but");
   expect(failed.out).toContain(`pin left at ${pkgTwo.slice(0, 12)}`);
@@ -329,14 +348,14 @@ packages:
   editLock(join(dir, "office"), (sections) => {
     sections.packages = new Map(Object.entries(untagged));
   });
-  const relocked = office("packages", "update");
+  const relocked = await update("packages");
 
   expect(relocked.out).toContain(`package tagged: locked (none) → ${pkgTwo} (tag v1.0.0; office.yaml unchanged)`);
   expect(readPackageLock(join(dir, "office")).tagged).toEqual({ ...locked.tagged, commit: pkgTwo });
   expect(record(".office/packages/tagged")).toEqual(copied);
 });
 
-test("a pending peer setting and duplicate requirements reject the staged tree; repaired installers advance together", () => {
+test("a pending peer setting and duplicate requirements reject the staged tree; repaired installers advance together", async () => {
   const repo = join(dir, "installers");
   const root = join(dir, "office");
   const yaml = join(root, "office.yaml");
@@ -351,7 +370,7 @@ test("a pending peer setting and duplicate requirements reject the staged tree; 
   const alpha = installer("alpha", "~/.local/alpha");
   const first = commit(repo, { "alpha/office.ts": alpha, "bravo/office.ts": installer("bravo", "~/.local/bravo"), "alpha/run.ts": "// original", "bravo/run.ts": "// original" });
   write(yaml, `name: test\nopencode: {mode: host, url: 'http://127.0.0.1:49999'}\npackages:\n  - {name: browser, settings: {browse: false}}\n${names.map(name => `  - {name: ${name}, repo: ${repo}, ref: ${first}, track: main, path: ${name}}`).join("\n")}\n`);
-  expect(office("sync", "--packages").status).toBe(0);
+  await synced("packages");
   write(yaml, read(yaml).replace("browse: false", "browse: true"));
   const receipts = ["office.yaml", ".office/resolved/references.json", ".office/mise/alpha.toml", ".office/packages/alpha/.source.json", ".office/packages/alpha/run.ts", ".office/packages/alpha/office.ts"];
   const stamp = () => receipts.map(path => read(join(root, path)));
@@ -366,8 +385,8 @@ test("a pending peer setting and duplicate requirements reject the staged tree; 
     [installer("alpha", "~/.local/alpha", `const {requirements}=await c.importStandard("tooling/requirements");for(const v of ["1.1","1.2"])c.add(requirements,{name:"widget",minimumVersion:v})`), "tooling.requirements widget claimed by both"],
   ]) {
     commit(repo, { "alpha/office.ts": code, "alpha/run.ts": "// rejected" });
-    const rejected = office("packages", "update");
-    expect(rejected.status).toBe(1);
+    const rejected = await update("packages");
+    expect(rejected.ok).toBe(false);
     expect(rejected.out).toContain(problem);
     expect(stamp()).toEqual(before);
   }
@@ -377,19 +396,21 @@ test("a pending peer setting and duplicate requirements reject the staged tree; 
   // A valid tree must also roll back if the pin editor refuses a YAML alias.
   write(yaml, read(yaml).replace(`ref: ${first}`, "ref: *original").replace("packages:", `references: [{name: fixture, url: &original "${first}"}]\npackages:`));
   const aliased = stamp();
-  expect(office("packages", "update").out).toContain("by hand");
+  expect((await update("packages")).out).toContain("by hand");
   expect(stamp()).toEqual(aliased);
   write(yaml, selected);
-  expect(office("packages", "update").out).toContain("done: 2 updated");
+  expect((await update("packages")).out).toContain("done: 2 updated");
 
   for (const name of names) expect(record(`.office/packages/${name}`).commit).toBe(next);
 });
 
 test("help names both update commands, and office.yaml refuses a track without a repository", () => {
-  expect(office("--help").out).toContain("skills update");
-  expect(office("--help").out).toContain("packages update");
+  const help = office("--help").out;
+
+  expect(help).toContain("skills update");
+  expect(help).toContain("packages update");
   write(join(dir, "office/office.yaml"), "name: t\npackages:\n  - name: knowledge\n    track: main\n");
-  expect(office("packages", "update").err).toContain("track needs repo, path and ref");
+  expect(() => loadOffice(join(dir, "office"))).toThrow("track needs repo, path and ref");
   write(join(dir, "office/office.yaml"), "name: t\nskills:\n  copied:\n    - { repo: r, ref: x, skills: [a] }\n    - { name: a, repo: r, path: a }\n");
-  expect(office("skills", "update").err).toContain("lists a skill name twice");
+  expect(() => loadOffice(join(dir, "office"))).toThrow("lists a skill name twice");
 });

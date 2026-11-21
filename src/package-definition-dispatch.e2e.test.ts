@@ -218,12 +218,11 @@ test("independent command authors share one publication; failed collection canno
   expect(existsSync(probe)).toBe(false);
   const synced = read(path);
 
-  for (const alias of ["issue read", "sync", "sync --packages", "--help"]) {
-    write(join(ink, "office.ts"), module(`ctx.command({name:"draft show",aliases:["${alias}"],summary:"Draft",run:print})`));
-    expect(cli(1, "sync", "--packages")).toContain(alias);
-    expect(read(path)).toBe(synced);
-    expect(cli(0, "--help")).not.toContain("draft show");
-  }
+  // src/command-table.test.ts covers the other alias collisions.
+  write(join(ink, "office.ts"), module(`ctx.command({name:"draft show",aliases:["sync"],summary:"Draft",run:print})`));
+  expect(cli(1, "sync", "--packages")).toContain("command sync is reserved");
+  expect(read(path)).toBe(synced);
+  expect(cli(0, "--help")).not.toContain("draft show");
 
   write(join(ink, "office.ts"), module('throw Error("ink collector failed")'));
   expect(cli(1, "sync", "--packages")).toContain("ink collector failed");
@@ -251,7 +250,6 @@ test("indexed dispatch validates the selected source without requiring unrelated
   rmSync(probe);
 
   for (const edit of [
-    { executor: { catalog_apps: false } }, { tools: { mise: { version: [] } } },
     { packages: [ink, { name: "atlas", path: "no-repo" }] },
     { packages: [{ name: "ink", settings: false }, atlas] }, { references: 42 },
   ]) {

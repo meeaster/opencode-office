@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -119,34 +119,107 @@ const ok = (stdout = ""): RunResult => ({ status: 0, stdout, stderr: "" });
 
 const pendingCheck: RunResult = { status: 100, stdout: "add Google's repository\n", stderr: "" };
 
-test("with nothing pending, setup asks nothing and runs no apply", async () => {
-  makeOffice();
+// These tests share one synced office: none changes it but for the ready path, which each removes.
+describe("in a synced host-mode office whose demo system block is on", () => {
+  let shared: string;
+  let fresh: string;
+  let synced: Awaited<ReturnType<typeof prepare>>;
 
-  const { loaded, installed } = await prepare();
+  beforeAll(async () => {
+    dir = shared = mkdtempSync(join(tmpdir(), "office-system-setup-shared-"));
+    office = join(dir, "office");
+    process.env[systemPlatformVariable] = "ubuntu-24.04-amd64-wsl";
+    makeOffice();
+    synced = await prepare();
+    process.env[systemPlatformVariable] = savedPlatform;
+  });
 
-  write(ready(), "");
+  // The file's hooks give each test a folder of its own; these point it at the shared office instead.
+  beforeEach(() => {
+    fresh = dir;
+    dir = shared;
+    office = join(dir, "office");
+  });
 
-  const { run, calls } = machine({ check: ok(), plan: ok(plan({ "apt:demo-browser": "noop" })) });
-  const ask = () => Promise.reject(new Error("asked"));
+  afterEach(() => {
+    rmSync(ready(), { force: true });
+    dir = fresh;
+    office = join(dir, "office");
+  });
 
-  expect(await systemStep(loaded, installed, { mise: "mise", ask, run })).toBe("ready");
-  expect(calls.some((call) => call.command.includes("--only"))).toBe(false);
-  expect(printed).toContain("System setup: nothing to do; the 1 packages and files this office declares are in place");
-});
+  // Gone, as the other tests' offices are, so their offices can manage the machine next.
+  afterAll(() => {
+    rmSync(shared, { recursive: true, force: true });
+  });
 
-test("a hook mise lists as run is no change, but a ready path nothing accounts for is", async () => {
-  makeOffice();
+  test("with nothing pending, setup asks nothing and runs no apply", async () => {
+    const { loaded, installed } = synced;
 
-  const { loaded, installed } = await prepare();
-  const withHook = JSON.stringify({ resources: [{ id: { kind: "hook", name: "pre-packages:1" }, action: "run", current: "not run" }, { id: { kind: "package", name: "apt:demo-browser" }, action: "noop" }], summary: { unchanged: 1 } });
-  const { run } = machine({ check: ok(), plan: ok(withHook) });
+    write(ready(), "");
 
-  expect(await systemStep(loaded, installed, { mise: "mise", ask: undefined, run })).toBe("deferred");
-  expect(printed[0]).toBe(`System setup: the office's packages and machine.toml declare system packages and files this machine lacks:\n  - package demo: ${ready()} is missing, though mise has nothing left to install`);
+    const { run, calls } = machine({ check: ok(), plan: ok(plan({ "apt:demo-browser": "noop" })) });
+    const ask = () => Promise.reject(new Error("asked"));
 
-  write(ready(), "");
+    expect(await systemStep(loaded, installed, { mise: "mise", ask, run })).toBe("ready");
+    expect(calls.some((call) => call.command.includes("--only"))).toBe(false);
+    expect(printed).toContain("System setup: nothing to do; the 1 packages and files this office declares are in place");
+  });
 
-  expect(await systemStep(loaded, installed, { mise: "mise", ask: undefined, run })).toBe("ready");
+  test("a hook mise lists as run is no change, but a ready path nothing accounts for is", async () => {
+    const { loaded, installed } = synced;
+    const withHook = JSON.stringify({ resources: [{ id: { kind: "hook", name: "pre-packages:1" }, action: "run", current: "not run" }, { id: { kind: "package", name: "apt:demo-browser" }, action: "noop" }], summary: { unchanged: 1 } });
+    const { run } = machine({ check: ok(), plan: ok(withHook) });
+
+    expect(await systemStep(loaded, installed, { mise: "mise", ask: undefined, run })).toBe("deferred");
+    expect(printed[0]).toBe(`System setup: the office's packages and machine.toml declare system packages and files this machine lacks:\n  - package demo: ${ready()} is missing, though mise has nothing left to install`);
+
+    write(ready(), "");
+
+    expect(await systemStep(loaded, installed, { mise: "mise", ask: undefined, run })).toBe("ready");
+  });
+
+  test("declined, or without a terminal, setup applies nothing, even though the machine record holds unattended consent", async () => {
+    const { loaded, installed } = synced;
+    const { run, calls } = machine({ check: pendingCheck, plan: ok(plan({ "apt:demo-browser": "create" })) });
+
+    expect(await systemStep(loaded, installed, { mise: "mise", ask: () => Promise.resolve("no"), run })).toBe("deferred");
+    expect(await systemStep(loaded, installed, { mise: "mise", ask: undefined, run })).toBe("deferred");
+    expect(calls.some((call) => call.command.includes("--only"))).toBe(false);
+    expect(printed).toContain("System setup: not applied without a terminal, as it needs sudo; rerun office setup in a terminal to apply it. Tools that build against these packages can fail to install until then");
+  });
+
+  test("an apply that leaves something pending, or a check that fails, fails setup", async () => {
+    const { loaded, installed } = synced;
+    const stuck = machine({ check: ok(), plan: ok(plan({ "apt:demo-browser": "create" })) });
+
+    await expect(systemStep(loaded, installed, { mise: "mise", ask: () => Promise.resolve("yes"), run: stuck.run })).rejects.toThrow("System setup: applied, but these are still pending:");
+
+    const broken = machine({ check: { status: 1, stdout: "", stderr: "not an apt machine" }, plan: ok(plan({})) });
+
+    await expect(systemStep(loaded, installed, { mise: "mise", ask: () => Promise.resolve("yes"), run: broken.run })).rejects.toThrow("package demo's scripts/prepare.sh --check failed: not an apt machine");
+    expect(broken.calls.some((call) => call.command.includes("--only"))).toBe(false);
+  });
+
+  test("verification runs each block's verify script in a fresh shell holding only the office's environment file", async () => {
+    const { loaded, installed } = synced;
+    const { run, calls } = machine({ check: ok(), plan: ok(plan({})) });
+
+    expect(verifySystems(loaded, installed, run)).toEqual({ ok: true, lines: ["package demo: not verified, as its system setup isn't applied"] });
+
+    write(ready(), "");
+
+    expect(verifySystems(loaded, installed, run)).toEqual({ ok: true, lines: ["package demo: verified: verified it"] });
+
+    const command = calls.at(-1)?.command ?? [];
+
+    expect(command.slice(0, 2)).toEqual(["env", "-i"]);
+    expect(command).toContain("PATH=/usr/bin:/bin");
+    expect(command.slice(-5)).toEqual(["-c", '. "$1" && exec bash "$2"', "sh", envFilePath(), join(office, "packages/demo/scripts/verify.sh")]);
+
+    const failing: Run = () => ({ status: 1, stdout: "", stderr: "launched something else\n" });
+
+    expect(verifySystems(loaded, installed, failing)).toEqual({ ok: false, lines: ["package demo: FAILED: launched something else"] });
+  });
 });
 
 test("a fresh machine: setup lists what is pending, applies it in the office's scope on yes, and checks that nothing is left", async () => {
@@ -174,32 +247,6 @@ test("a fresh machine: setup lists what is pending, applies it in the office's s
   // mise read only the office's files when it planned, too.
   expect(calls.filter((call) => call.command.includes("plan")).every((call) => call.links.every((link) => link.startsWith(office)))).toBe(true);
   expect(printed.at(-1)).toBe("System setup: applied, and nothing is left to do");
-});
-
-test("declined, or without a terminal, setup applies nothing, even though the machine record holds unattended consent", async () => {
-  makeOffice();
-
-  const { loaded, installed } = await prepare();
-  const { run, calls } = machine({ check: pendingCheck, plan: ok(plan({ "apt:demo-browser": "create" })) });
-
-  expect(await systemStep(loaded, installed, { mise: "mise", ask: () => Promise.resolve("no"), run })).toBe("deferred");
-  expect(await systemStep(loaded, installed, { mise: "mise", ask: undefined, run })).toBe("deferred");
-  expect(calls.some((call) => call.command.includes("--only"))).toBe(false);
-  expect(printed).toContain("System setup: not applied without a terminal, as it needs sudo; rerun office setup in a terminal to apply it. Tools that build against these packages can fail to install until then");
-});
-
-test("an apply that leaves something pending, or a check that fails, fails setup", async () => {
-  makeOffice();
-
-  const { loaded, installed } = await prepare();
-  const stuck = machine({ check: ok(), plan: ok(plan({ "apt:demo-browser": "create" })) });
-
-  await expect(systemStep(loaded, installed, { mise: "mise", ask: () => Promise.resolve("yes"), run: stuck.run })).rejects.toThrow("System setup: applied, but these are still pending:");
-
-  const broken = machine({ check: { status: 1, stdout: "", stderr: "not an apt machine" }, plan: ok(plan({})) });
-
-  await expect(systemStep(loaded, installed, { mise: "mise", ask: () => Promise.resolve("yes"), run: broken.run })).rejects.toThrow("package demo's scripts/prepare.sh --check failed: not an apt machine");
-  expect(broken.calls.some((call) => call.command.includes("--only"))).toBe(false);
 });
 
 test("machine.toml's packages alone are offered, without any package's system block", async () => {
@@ -233,29 +280,6 @@ test("setup leaves the machine alone in a container-mode office, without consent
   expect(await systemStep(state.loaded, state.installed, { mise: "mise", ask: undefined, run })).toBe("skipped");
   expect(calls).toEqual([]);
   expect(printed).toEqual(["System setup: none here (the office runs OpenCode in its container)", "System setup: none here (this office doesn't manage this machine)", "System setup: none here (the office declares none)"]);
-});
-
-test("verification runs each block's verify script in a fresh shell holding only the office's environment file", async () => {
-  makeOffice();
-
-  const { loaded, installed } = await prepare();
-  const { run, calls } = machine({ check: ok(), plan: ok(plan({})) });
-
-  expect(verifySystems(loaded, installed, run)).toEqual({ ok: true, lines: ["package demo: not verified, as its system setup isn't applied"] });
-
-  write(ready(), "");
-
-  expect(verifySystems(loaded, installed, run)).toEqual({ ok: true, lines: ["package demo: verified: verified it"] });
-
-  const command = calls.at(-1)?.command ?? [];
-
-  expect(command.slice(0, 2)).toEqual(["env", "-i"]);
-  expect(command).toContain("PATH=/usr/bin:/bin");
-  expect(command.slice(-5)).toEqual(["-c", '. "$1" && exec bash "$2"', "sh", envFilePath(), join(office, "packages/demo/scripts/verify.sh")]);
-
-  const failing: Run = () => ({ status: 1, stdout: "", stderr: "launched something else\n" });
-
-  expect(verifySystems(loaded, installed, failing)).toEqual({ ok: false, lines: ["package demo: FAILED: launched something else"] });
 });
 
 test("a stale managed server is offered a restart: accepted outside it restarts, inside it queues, declined or unattended it keeps serving", async () => {

@@ -66,19 +66,6 @@ test("tracked updates validate the consuming settings and staged assets before p
   expect(cli(0, "references", "list")).toContain("enabled\tnew-revision\tpackage shared");
 }, 60_000);
 
-test("a broken Floci setup replacement preserves the installed native definition and delivered settings", () => {
-  const f = fixture("floci-stage");
-  f.select("  - {name: aws-emulator, settings: {port: '14566', storage: hybrid}}\n");
-  f.cli(0, "sync", "--packages");
-  const pkg = join(f.dir, ".office/packages/aws-emulator");
-  const files = ["office.ts", ".settings.json", ".source.json", "compose.yaml"].map(path => join(pkg, path));
-  const before = files.map(read);
-  expect(f.newer(1, "sync", "--packages")).toContain("changed built-in collector");
-  expect(files.map(read)).toEqual(before);
-  f.cli(0, "sync", "--packages");
-  expect(f.cli(0, "references", "list")).toContain("main\tpackage aws-emulator\n");
-});
-
 test("a broken embedded replacement leaves the installed package usable and fails a new init", () => {
   const { dir, cli, newer, select } = fixture("embedded");
   select("  - name: artifact-share\n    settings: {url: https://example.org}\n");

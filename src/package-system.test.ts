@@ -188,6 +188,12 @@ test("the system block is independent of the host block's setting, and off by de
 
 test("it applies only on the platforms the block names, in host mode, and a platform without -wsl is no WSL machine", async () => {
   demo();
+  // Sync and check decide alike (systemState), so one sync stands for each platform it doesn't name.
+  process.env[systemPlatformVariable] = "ubuntu-24.04-amd64";
+  mode("host", "    settings:\n      host: false\n      system: true\n");
+  await sync(loadOffice(office));
+
+  expect(fragment()).not.toContain("bootstrap");
 
   for (const [platform, why] of [
     ["ubuntu-24.04-amd64", "this machine is ubuntu-24.04-amd64, not ubuntu-24.04-amd64-wsl or debian-13-arm64"],
@@ -195,11 +201,8 @@ test("it applies only on the platforms the block names, in host mode, and a plat
     ["", "this machine is a platform office can't identify, not ubuntu-24.04-amd64-wsl or debian-13-arm64"],
   ]) {
     process.env[systemPlatformVariable] = platform;
-    mode("host", "    settings:\n      host: false\n      system: true\n");
-    await sync(loadOffice(office));
 
     // Opting in where it can't apply is noted, without failing check.
-    expect(fragment()).not.toContain("bootstrap");
     expect(notes()).toEqual({ ok: true, notes: ["tools jq in machine.packages.toml", `Demo Browser from the distribution isn't set up: ${why}`] });
   }
 

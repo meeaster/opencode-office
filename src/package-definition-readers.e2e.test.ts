@@ -109,6 +109,9 @@ test.each(["file", "link"])("an external reader cannot consume an old publicatio
   } else write(contract, text);
 
   expect(cli(1, "display")).toMatch(/catalog\.items:.*published contract.*sync --packages/);
+
+  // Only detecting the changed contract depends on the layout; the file variant covers recovery.
+  if (layout === "link") return;
   write(writer, author(add + add));
   expect(cli(1, "sync", "--packages")).toContain("claimed by both");
   expect(read(snapshot)).toBe(previous);

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
@@ -120,61 +120,39 @@ packages:
   }
 });
 
-for (const change of ["deselect", "condition", "reschedule", "broken-import"] as const) {
-  test(`catch-up checks the next job after a preceding job syncs: ${change}`, () => {
-    const name = `catch-up-${change}`;
-    const { dir, home, probe, cli } = fixture(name);
-    const pkg = join(dir, "packages/later");
-    const id = "package.later.tick";
-    const stamp = join(home, ".local/state/office/cron", name, `${id}.stamp`);
+// Only a fresh process sees the helper the preceding job broke; standard/cron/jobs.test.ts covers
+// a job the preceding one deselected, disabled by a setting or rescheduled.
+test("catch-up checks the next job in a fresh process after a preceding job syncs", () => {
+  const name = "catch-up";
+  const { dir, home, probe, cli } = fixture(name);
+  const pkg = join(dir, "packages/later");
+  const id = "package.later.tick";
+  const stamp = join(home, ".local/state/office/cron", name, `${id}.stamp`);
 
-    const config = (later: string) => `name: ${name}
+  write(join(dir, "office.yaml"), `name: ${name}
 cron: {first: {script: first.sh, schedule: '@daily'}}
 packages:
   - {name: office, cron: {update-references: {enabled: false}, upgrade-tools: {enabled: false}}}
   - name: unrelated
-${later}
-`;
-
-    write(join(dir, "packages/unrelated/office.ts"), `import {existsSync,appendFileSync} from "node:fs";
-      if (existsSync(new URL("../../synced", import.meta.url))) {appendFileSync(process.env.PROBE,"extra import"); throw Error("unrelated import")}
-      export default {name:"unrelated",description:"Unrelated"}`);
-    const entry = "  - name: later";
-    const hour = (new Date().getUTCHours() + 12) % 24;
-
-    const next = change === "deselect" ? "" : change === "condition" ? `${entry}\n    settings: {active: false}` :
-      change === "reschedule" ? `${entry}\n    cron: {tick: {schedule: '0 ${hour} * * *'}}` : entry;
-
-    write(join(dir, "office.yaml"), config(entry));
-    write(join(dir, "next.yaml"), config(next));
-    write(join(dir, "first.sh"), `set -eu\n/bin/cp next.yaml office.yaml\n"$OFFICE_CRON_COMMAND" sync --packages\necho ok > synced\n${change === "broken-import" ? `echo 'throw Error("broken tick helper"); export const tick = {}' > packages/later/tick.ts` : ""}`);
-    write(join(pkg, "tick.sh"), "echo stale >> ran");
-
-    if (change === "condition" || change === "broken-import") {
-      write(join(pkg, "tick.ts"), 'export const tick = {script:"tick.sh",schedule:"@hourly"}');
-      write(join(pkg, "office.ts"), `import {tick} from "./tick.ts"; export default {name:"later",description:"Later",
-        settings:{active:{description:"Enable",default:true}},registerCron(ctx){if (ctx.settings.active) ctx.cron.job("tick",tick)}}`);
-    } else {
-      write(join(pkg, "package.yaml"), "name: later\ndescription: Later\ncron: {tick: {script: tick.sh, schedule: '@hourly'}}");
-    }
-
-    const prior = `${new Date(Date.now() - 3 * 3600_000).toISOString()}\n`;
-
-    if (change === "reschedule") write(stamp, prior);
-    cli(0, "sync", "--packages");
-    const out = cli(change === "broken-import" ? 1 : 0, "cron", "catch-up");
-    expect(out).toContain("catching up office.first");
-    expect(read(join(dir, "synced"))).toBe("ok\n");
-
-    if (change === "broken-import") expect(out).toContain("broken tick helper");
-    expect(out).not.toContain(`catching up ${id}`);
-    expect(existsSync(join(dir, "ran"))).toBe(false);
-    expect(existsSync(probe)).toBe(false);
-
-    if (change === "reschedule") expect(read(stamp)).toBe(prior);
-    else expect(existsSync(stamp)).toBe(false);
-  });
-}
+  - name: later
+`);
+  write(join(dir, "packages/unrelated/office.ts"), `import {existsSync,appendFileSync} from "node:fs";
+    if (existsSync(new URL("../../synced", import.meta.url))) {appendFileSync(process.env.PROBE,"extra import"); throw Error("unrelated import")}
+    export default {name:"unrelated",description:"Unrelated"}`);
+  write(join(dir, "first.sh"), `set -eu\n"$OFFICE_CRON_COMMAND" sync --packages\necho ok > synced\necho 'throw Error("broken tick helper"); export const tick = {}' > packages/later/tick.ts`);
+  write(join(pkg, "tick.sh"), "echo stale >> ran");
+  write(join(pkg, "tick.ts"), 'export const tick = {script:"tick.sh",schedule:"@hourly"}');
+  write(join(pkg, "office.ts"), `import {tick} from "./tick.ts"; export default {name:"later",description:"Later",registerCron(ctx){ctx.cron.job("tick",tick)}}`);
+  cli(0, "sync", "--packages");
+  const out = cli(1, "cron", "catch-up");
+  expect(out).toContain("catching up office.first");
+  expect(read(join(dir, "synced"))).toBe("ok\n");
+  expect(out).toContain("broken tick helper");
+  expect(out).not.toContain(`catching up ${id}`);
+  expect(existsSync(join(dir, "ran"))).toBe(false);
+  expect(existsSync(probe)).toBe(false);
+  expect(existsSync(stamp)).toBe(false);
+});
 
 test("one author registers current-mode jobs and indexed commands without changing the command's synced inputs", () => {
   const { dir, home, probe, cli } = fixture("author-cron");
@@ -276,19 +254,11 @@ test("an invalid registration rejects the owner's batch before a valid sibling c
   select("  - name: report\n");
   const pkg = join(dir, "packages/report");
   write(join(pkg, "run.sh"), "echo bad >> started");
-  write(join(dir, "outside.sh"), "echo outside >> started");
-  symlinkSync(join(dir, "outside.sh"), join(pkg, "linked.sh"));
   const job = '{schedule:"@daily",script:"run.sh"}';
 
+  // One data conflict and one asynchronous hook end to end; standard/cron/jobs.test.ts covers the other invalid registrations.
   for (const [data, extra, reason] of [
     [`cron:{first:${job}},`, "", "duplicate cron job package.report.first"],
-    ["", `ctx.cron.job("first",false)`, "duplicate cron job package.report.first"],
-    ["", `ctx.cron.job("constructor",${job})`, "reserved job name"],
-    ["", 'ctx.cron.job("bad",{schedule:"@reboot",script:"run.sh"})', "cron schedule"],
-    ["", 'ctx.cron.job("bad",{schedule:"@daily",script:"../outside.sh"})', "relative .sh path"],
-    ["", 'ctx.cron.job("bad",{schedule:"@daily",script:"linked.sh"})', "existing regular script"],
-    ["", 'ctx.cron.job("bad",{schedule:"@daily",script:"absent.sh"})', "existing regular script"],
-    ["", `ctx.cron.job("bad",{...${job},when:"host"})`, "when"],
     ["", 'return Promise.reject(Error("async job discovery"))', "synchronously"],
   ]) {
     write(join(pkg, "office.ts"), `export default {name:"report",description:"Reports",${data}

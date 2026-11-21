@@ -166,6 +166,82 @@ test("catch-up is UTC, stamps qualified IDs on success and keeps a stamp through
   }
 });
 
+test("an invalid registration rejects its owner's whole batch, so even a valid sibling cannot run", () => {
+  fixtures();
+  write("outside.sh", "true");
+  const job = '{schedule:"@daily",script:"run.sh"}';
+
+  // Each case is its own package: Bun caches a required office.ts by path.
+  for (const [name, extra, reason] of [
+    ["withdrawn", 'ctx.cron.job("first",false)', "duplicate cron job package.withdrawn.first"],
+    ["reserved", `ctx.cron.job("constructor",${job})`, "reserved job name"],
+    ["reboot", 'ctx.cron.job("bad",{schedule:"@reboot",script:"run.sh"})', "cron schedule"],
+    ["parent", 'ctx.cron.job("bad",{schedule:"@daily",script:"../outside.sh"})', "relative .sh path"],
+    ["linked", 'ctx.cron.job("bad",{schedule:"@daily",script:"linked.sh"})', "existing regular script"],
+    ["absent", 'ctx.cron.job("bad",{schedule:"@daily",script:"absent.sh"})', "existing regular script"],
+    ["when", `ctx.cron.job("bad",{...${job},when:"host"})`, "when"],
+  ]) {
+    write(`packages/${name}/run.sh`, "true");
+    symlinkSync(join(root, "outside.sh"), join(root, `packages/${name}/linked.sh`));
+    write(`packages/${name}/office.ts`, `export default {name:"${name}",description:"Reports",registerCron(ctx){ctx.cron.job("first",${job}); ${extra}}}`);
+    config("", `  - name: ${name}\n`);
+    expect(() => namedJob(loadOffice(root), `package.${name}.first`)).toThrow(reason);
+  }
+});
+
+async function withCronState(body: () => Promise<void>): Promise<void> {
+  const oldState = process.env.XDG_STATE_HOME;
+
+  try {
+    process.env.XDG_STATE_HOME = join(root, "xdg-state");
+    await body();
+  } finally {
+    if (oldState === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = oldState;
+  }
+}
+
+// Catch-up resolves each ID in a fresh process (end to end in src/package-definition-cron.e2e.test.ts);
+// here, the office that process loads after the preceding job changed office.yaml.
+test.each(["deselect", "condition", "reschedule"] as const)("catch-up checks the next job against the office a preceding job changed: %s", change => withCronState(async () => {
+  fixtures();
+  const id = "package.later.tick";
+  const now = new Date("2026-11-17T06:10:00Z");
+  const stamp = join(root, "xdg-state/office/cron/test", `${id}.stamp`);
+  const entry = "  - name: later";
+  const yaml = (later: string) => `name: test\ncron: {first: {script: first.sh, schedule: '@daily'}}\npackages:\n${later}\n`;
+
+  const next = change === "deselect" ? "" : change === "condition" ? `${entry}\n    settings: {active: false}` :
+    `${entry}\n    cron: {tick: {schedule: '0 18 * * *'}}`;
+
+  write("office.yaml", yaml(entry));
+  write("next.yaml", yaml(next));
+  write("first.sh", "cp next.yaml office.yaml");
+  write("packages/later/tick.sh", "echo stale >> ran");
+
+  if (change === "condition") {
+    write("packages/later/office.ts", `export default {name:"later",description:"Later",settings:{active:{description:"Enable",default:true}},
+      registerCron(ctx){if (ctx.settings.active) ctx.cron.job("tick",{script:"tick.sh",schedule:"@hourly"})}}`);
+  } else {
+    write("packages/later/package.yaml", "name: later\ndescription: Later\ncron: {tick: {script: tick.sh, schedule: '@hourly'}}");
+  }
+
+  // Three hours ago: the hourly job is due, the rescheduled one (last due 18:00 yesterday) is not.
+  const prior = "2026-11-17T03:10:00.000Z\n";
+
+  if (change === "reschedule") write(`xdg-state/office/cron/test/${id}.stamp`, prior);
+  const office = loadOffice(root);
+
+  expect(requireJobs(office).map(job => job.id)).toEqual(["office.first", id]);
+  await catchUpJob(office, "office.first", now);
+  expect(readFileSync(join(root, "office.yaml"), "utf8")).toBe(yaml(next));
+  await catchUpJob(loadOffice(root), id, now);
+  expect(existsSync(join(root, "ran"))).toBe(false);
+
+  if (change === "reschedule") expect(readFileSync(stamp, "utf8")).toBe(prior);
+  else expect(existsSync(stamp)).toBe(false);
+}));
+
 test("retires legacy and removed timers before enabling new units and never modifies unrelated names", () => {
   const path = process.env.PATH;
   const units = process.env[unitDirVariable];
