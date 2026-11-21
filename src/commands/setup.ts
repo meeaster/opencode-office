@@ -198,9 +198,7 @@ export async function finishSetup(office: Office, shell: boolean, ownerEmail: st
   // Apps: the Executor apps the office deploys.
   stage = reporter.stage("Apps", { key: "apps" });
 
-  const deployed = await deploy(office);
-
-  stage.done(deployed.length === 0 ? "none to deploy" : `${deployed.length} deployed (${deployed.join(", ")})`);
+  stage.done(await deploy(office));
 
   // Checks: package system checks, the OpenCode restart offer, then office check.
   stage = reporter.stage("Checks", { key: "checks" });

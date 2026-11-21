@@ -1,26 +1,20 @@
 // `office apps deploy`: deploys the office's Executor apps from their folders through Executor's
 // HTTP API with a token, then links the OpenCode account to every app that needs one.
-import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
+import * as v from "valibot";
 
 import { installedPackages } from "../layout.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
 import type { InstalledPackage } from "../packages.ts";
 import { ports } from "./compose.ts";
 import { oldExecutorAppDirs } from "../executor-app-layout.ts";
-import { adoptionMarker, adoptCatalog, catalogPlan, installedApps, installMissing } from "./catalog-apps.ts";
+import { adoptionMarker, adoptCatalog, catalogPlan, installedApps, installMissing, parseExecutor, type ExecutorApp } from "./catalog-apps.ts";
 import { output, progress, say, streamChecked } from "../report/index.ts";
 
-/** An app as Executor's API lists it, with only the fields the office reads. */
-export type ExecutorApp = {
-  id: string;
-  slug: string;
-  copiedFrom?: { name?: string | null } | null;
-  activeVersion?: string;
-  requirements?: { accounts?: Record<string, { scope?: string; provider?: string }> };
-};
+export type { ExecutorApp } from "./catalog-apps.ts";
 
 type AccountLink = { requirement: string; account: { id: string; label: string; provider?: string } };
 
@@ -156,9 +150,14 @@ function deployedText(office: Office, folder: AppFolder, path: string, version: 
   return !folder.adopted && path === "office.ts" ? officeModule(office) : disk;
 }
 
+const inlineFile = v.object({ path: v.string(), content: v.string(), encoding: v.optional(v.literal("base64")) });
+const deployedSource = v.object({ files: v.array(v.union([inlineFile, v.object({ path: v.string(), object: v.string(), size: v.number() })])) });
+
+type UploadFile = v.InferOutput<typeof inlineFile>;
+
 function sourceFiles(office: Office, folder: AppFolder, version: string) {
   return readdirSync(folder.dir, { recursive: true, withFileTypes: true })
-    .flatMap((entry): { path: string; content: string; encoding?: "base64" }[] => {
+    .flatMap((entry): UploadFile[] => {
       const path = relative(folder.dir, join(entry.parentPath, entry.name));
 
       if (!entry.isFile() || path.split("/").some(part => part === "node_modules" || part === ".git") || path === adoptionMarker) return [];
@@ -167,6 +166,26 @@ function sourceFiles(office: Office, folder: AppFolder, version: string) {
 
       return [{ path, content: deployedText(office, folder, path, version) }];
     });
+}
+
+/** Compare the actual upload to the running files. Public assets can come back as Git blob IDs. */
+async function matchesActiveSource(call: Call, appPath: string, version: string, files: UploadFile[]) {
+  const source = parseExecutor(deployedSource, await call<v.InferInput<typeof deployedSource>>("GET", `${appPath}/source?version=${encodeURIComponent(version)}`));
+  const running = new Map(source.files.map(file => [file.path, file]));
+
+  return running.size === files.length && files.every(file => {
+    const other = running.get(file.path);
+
+    if (!other) return false;
+
+    if ("content" in other && other.encoding === file.encoding) return other.content === file.content;
+
+    const bytes = Buffer.from(file.content, file.encoding ?? "utf8");
+
+    if ("content" in other) return bytes.equals(Buffer.from(other.content, other.encoding ?? "utf8"));
+
+    return other.size === bytes.length && other.object === createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+  });
 }
 
 export type Connection = { url: string; token: string };
@@ -409,7 +428,8 @@ export async function adopt(office: Office, id: string) {
  * version Executor serves (after an Executor upgrade it moves) and every app is type-checked
  * against it, so nothing is deployed if any app would break.
  */
-export async function deploy(office: Office): Promise<string[]> {
+export async function deploy(office: Office): Promise<string> {
+  progress("connecting to Executor");
   const call = client(connection(office));
   const { organization } = await call<{ organization: string }>("GET", "/api/context");
   const { version } = await call<{ version: string }>("GET", `/api/organizations/${organization}/framework/release`);
@@ -430,7 +450,8 @@ export async function deploy(office: Office): Promise<string[]> {
   if (folders.length) await typecheck(office, folders, version);
   matchFramework(office, editable, version);
   await installMissing(call, base, plan, existing);
-  const deployed: ExecutorApp[] = [];
+  const active: ExecutorApp[] = [];
+  let deployed = 0;
 
   for (const folder of folders) {
     const manifest = readManifest(folder.dir);
@@ -442,18 +463,30 @@ export async function deploy(office: Office): Promise<string[]> {
       say(`created ${app.slug} (${app.id})`);
     }
 
-    progress(`deploying ${relative(office.dir, folder.dir)}`);
+    const appPath = `${base}/apps/${app.id}`;
+    const where = relative(office.dir, folder.dir);
 
-    const result = await call<{ app: ExecutorApp }>("POST", `/api/organizations/${organization}/apps/${app.id}/deploy`, { files });
+    progress(`checking ${where}`);
 
-    say(`deployed ${relative(office.dir, folder.dir)} → ${app.slug} (${app.id}) version ${result.app.activeVersion}`);
+    if (app.activeVersion && await matchesActiveSource(call, appPath, app.activeVersion, files)) {
+      say(`unchanged ${where} → ${app.slug} (${app.id}) version ${app.activeVersion}`);
+    } else {
+      progress(`deploying ${where}`);
+      const result = await call<{ app: ExecutorApp }>("POST", `${appPath}/deploy`, { files });
 
-    if (!folder.adopted) deployed.push(result.app);
+      app = result.app;
+      say(`deployed ${where} → ${app.slug} (${app.id}) version ${app.activeVersion}`);
+      deployed++;
+    }
+
+    if (!folder.adopted) active.push(app);
   }
 
-  for (const line of await linkOpencode(office, call, organization, deployed)) say(line);
+  progress("checking account links");
 
-  for (const line of await accountsToConnect(call, organization, deployed, folders)) say(line);
+  for (const line of await linkOpencode(office, call, organization, active)) say(line);
 
-  return folders.map((folder) => folder.slug);
+  for (const line of await accountsToConnect(call, organization, active, folders)) say(line);
+
+  return folders.length ? `${deployed} deployed, ${folders.length - deployed} unchanged` : "no local apps to deploy";
 }

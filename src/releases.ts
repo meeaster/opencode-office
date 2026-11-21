@@ -1,10 +1,14 @@
 // Looks up the releases of the five tools office.yaml pins, on GitHub and (for Executor's image)
 // its registry, without a login. Each tool's releases are filtered by tag to the line the office
 // runs, aged against the office's minimum release age, and the highest version wins.
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import * as v from "valibot";
 
 import { OfficeError } from "./office.ts";
 import { check, type HostPlatform, type PinnedTool } from "./schema.ts";
+import { atomicWrite } from "./secrets.ts";
 import { compareVersions, type Pin } from "./versions.ts";
 
 type Source = {
@@ -49,7 +53,7 @@ const releaseSchema = v.object({
 
 export type Release = v.InferOutput<typeof releaseSchema>;
 
-async function getJson(url: string, headers: Record<string, string>): Promise<{ status: number; body: string; link: string | null }> {
+async function getJson(url: string, headers: Record<string, string>) {
   let response;
 
   try {
@@ -58,7 +62,7 @@ async function getJson(url: string, headers: Record<string, string>): Promise<{ 
     throw new OfficeError(`couldn't reach ${new URL(url).host}: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  return { status: response.status, body: await response.text(), link: response.headers.get("link") };
+  return { status: response.status, body: await response.text(), link: response.headers.get("link"), etag: response.headers.get("etag") };
 }
 
 const githubHeaders = { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" };
@@ -67,9 +71,7 @@ const githubHeaders = { accept: "application/vnd.github+json", "x-github-api-ver
 type Answer<Value> = { value: Value; next: string | undefined };
 
 /** A GET on GitHub's API without a login; undefined for a 404. */
-async function github<Schema extends v.GenericSchema>(url: string, schema: Schema, what: string): Promise<Answer<v.InferOutput<Schema>> | undefined> {
-  const { status, body, link } = await getJson(url, githubHeaders);
-
+function githubAnswer<Schema extends v.GenericSchema>({ status, body, link }: Awaited<ReturnType<typeof getJson>>, schema: Schema, what: string): Answer<v.InferOutput<Schema>> | undefined {
   if (status === 404) return undefined;
 
   if (status === 403 || status === 429) throw new OfficeError(`GitHub refused the request for ${what} (HTTP ${status}, probably its rate limit for requests without a login)`);
@@ -84,23 +86,57 @@ async function github<Schema extends v.GenericSchema>(url: string, schema: Schem
 }
 
 /**
- * A repository's releases, newest first, a hundred per page. One page is enough for every line the
- * office pins; `pages` follows GitHub's next links further.
+ * A repository's newest releases, in batches of a hundred. Codex has enough assets per
+ * release that GitHub times out serving a hundred at once, so fetch each batch in smaller pages.
  */
-export async function releases(repo: string, pages = 1): Promise<Release[]> {
-  return releasePages(`https://api.github.com/repos/${repo}/releases?per_page=100`, pages, repo);
+export async function releases(repo: string, pages = 1, cacheDir?: string): Promise<Release[]> {
+  const perPage = repo === sources.codex.repo ? 10 : 100;
+
+  return releasePages(`https://api.github.com/repos/${repo}/releases?per_page=${perPage}`, pages * (100 / perPage), repo, cacheDir);
+}
+
+const pageSchema = v.array(releaseSchema);
+const cachedPage = v.object({ etag: v.string(), value: pageSchema, next: v.optional(v.string()) });
+
+function readPage(path: string) {
+  try {
+    const result = v.safeParse(cachedPage, JSON.parse(readFileSync(path, "utf8")));
+
+    if (result.success) return result.output;
+  } catch {
+    // Missing or incomplete cache: request the whole page.
+  }
+}
+
+async function releasePage(url: string, repo: string, cacheDir?: string): Promise<Answer<Release[]>> {
+  const path = cacheDir && join(cacheDir, `${createHash("sha256").update(url).digest("hex")}.json`);
+  const cached = path ? readPage(path) : undefined;
+  const response = await getJson(url, cached ? { ...githubHeaders, "if-none-match": cached.etag } : githubHeaders);
+
+  if (response.status === 304 && cached) return { value: cached.value, next: cached.next };
+
+  const answer = githubAnswer(response, pageSchema, `${repo}'s releases`);
+
+  if (answer === undefined) throw new OfficeError(`GitHub has no repository ${repo}`);
+
+  if (path && response.etag) {
+    try {
+      atomicWrite(path, JSON.stringify({ ...answer, etag: response.etag }));
+    } catch {
+      // Cache writes are optional; the release lookup succeeded.
+    }
+  }
+
+  return answer;
 }
 
 /** Up to `pages` pages of a release list, starting at `url` and following each page's next link. */
-export async function releasePages(url: string, pages: number, repo: string): Promise<Release[]> {
+export async function releasePages(url: string, pages: number, repo: string, cacheDir?: string): Promise<Release[]> {
   const found: Release[] = [];
   let next: string | undefined = url;
 
   for (let page = 0; page < pages && next !== undefined; page++) {
-    // Annotated because `next` feeds back into the call through the loop, which TypeScript can't infer.
-    const answer: Answer<Release[]> | undefined = await github(next, v.array(releaseSchema), `${repo}'s releases`);
-
-    if (answer === undefined) throw new OfficeError(`GitHub has no repository ${repo}`);
+    const answer = await releasePage(next, repo, cacheDir);
 
     found.push(...answer.value);
     next = answer.next;
@@ -111,7 +147,9 @@ export async function releasePages(url: string, pages: number, repo: string): Pr
 
 /** The release of `repo` tagged `tag`, or undefined when there is none. */
 export async function releaseByTag(repo: string, tag: string): Promise<Release | undefined> {
-  return (await github(`https://api.github.com/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, releaseSchema, `${repo}'s release ${tag}`))?.value;
+  const response = await getJson(`https://api.github.com/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, githubHeaders);
+
+  return githubAnswer(response, releaseSchema, `${repo}'s release ${tag}`)?.value;
 }
 
 /** A duration such as 36h, 1d or 2w in milliseconds. */
@@ -134,8 +172,8 @@ export type Lookup = {
 };
 
 /** The highest release of `tool`'s line that is at least `age` old. */
-export async function newestRelease(tool: PinnedTool, age: string, now = new Date()): Promise<Lookup> {
-  return selectToolRelease(tool, await releases(sources[tool].repo), age, now);
+export async function newestRelease(tool: PinnedTool, age: string, now = new Date(), cacheDir?: string): Promise<Lookup> {
+  return selectToolRelease(tool, await releases(sources[tool].repo, 1, cacheDir), age, now);
 }
 
 export function selectToolRelease(tool: PinnedTool, listed: Release[], age: string, now = new Date()): Lookup {

@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import * as v from "valibot";
 import { parse } from "yaml";
@@ -81,4 +84,45 @@ test("an office.yaml from before tools keeps its versions block, and a tool it l
 
 test("a tools block the writer can't edit safely is left for the user", () => {
   expect(() => setVersions("name: t\ntools: { opencode: 2.3.2 }\n", [{ tool: "sfw", to: "1.17.0" }])).toThrow("set tools.sfw to 1.17.0 in office.yaml by hand");
+});
+
+test("batch lookup honors the age, leaves ranges and failed installs alone, and upgrades a shadowed machine pin", () => {
+  const dir = mkdtempSync(join(tmpdir(), "office-upgrade-"));
+  const project = '[tools]\nnode = "20"\njq = "1.7.1" # required\ngh = "2.75.0"\n';
+  const machine = '[tools]\nnode = "18.0.0"\n';
+
+  try {
+    writeFileSync(join(dir, "office.yaml"), "name: test\ntools: { minimum_release_age: 5d }\n");
+    writeFileSync(join(dir, "mise.toml"), project);
+    writeFileSync(join(dir, "machine.toml"), machine);
+    writeFileSync(join(dir, "mise"), `#!/bin/sh
+case "$1" in
+  --version) echo 9999.1.0 ;;
+  outdated)
+    echo "$MISE_MINIMUM_RELEASE_AGE $*" >> batches
+    case "$*" in
+      *node@20*) echo '{"node":{"requested":"20","current":"20.5.0","latest":"24.0.0"},"jq":{"requested":"1.7.1","current":"1.7.1","latest":"1.8.0"},"gh":{"requested":"2.75.0","current":"2.75.0","latest":"2.80.0"}}' ;;
+      *) echo '{"node":{"requested":"18.0.0","current":null,"latest":"24.0.0"}}' ;;
+    esac ;;
+  latest) [ "$2" = node@18.0.0 ] && echo 18.0.0 ;;
+  install) [ "$2" != gh@2.80.0 ] ;;
+  *) exit 1 ;;
+esac
+`, { mode: 0o755 });
+
+    const result = Bun.spawnSync([process.execPath, join(import.meta.dir, "../cli.ts"), "upgrade-tools"], {
+      cwd: dir, env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, XDG_DATA_HOME: dir },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toContain("gh 2.75.0 → 2.80.0: install failed");
+    expect(readFileSync(join(dir, "batches"), "utf8").trim().split("\n")).toEqual([
+      "5d outdated --bump --json -- node@20 jq@1.7.1 gh@2.75.0",
+      "5d outdated --bump --json -- node@18.0.0",
+    ]);
+    expect(readFileSync(join(dir, "mise.toml"), "utf8")).toBe(project.replace("1.7.1", "1.8.0"));
+    expect(readFileSync(join(dir, "machine.toml"), "utf8")).toBe(machine.replace("18.0.0", "24.0.0"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -40,6 +40,11 @@ test("the maintenance script commits only successful pin/lock pairs and leaves t
     writeFileSync(join(bin, "mise"), `#!/bin/sh
 case "$1:$2" in
   --version:) echo 9999.1.0 ;;
+  outdated:--bump)
+    case "$*" in
+      *jq@1.7.1) echo '{"jq":{"requested":"1.7.1","current":"1.7.1","latest":"1.8.0"}}' ;;
+      *) echo '{}' ;;
+    esac ;;
   latest:jq@*) echo "\${2#jq@}" ;;
   latest:jq) echo 1.8.0 ;;
   install:jq@1.8.0) [ ! -f fail-install ] ;;

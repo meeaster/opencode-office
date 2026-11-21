@@ -8,20 +8,20 @@
 // runtimes' versions on GitHub (and Executor's image on its registry), and only
 // recorded: `office up --upgrade` applies them. With --commit, dirty files are left for the
 // user. A failed install or lookup keeps the old pin. Never pushes.
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import * as v from "valibot";
 
 import { git } from "../git.ts";
 import { entryPattern, toolPins } from "../mise-toml.ts";
 import { installedTool } from "../host-tools.ts";
-import { notify } from "../notify.ts";
 import { pinnedMachineFiles } from "../package-tools.ts";
 import { type Document, isMap, isNode, isScalar, parseDocument } from "yaml";
 
 import { type Office, OfficeError } from "../office.ts";
 import { newestRelease, pinFor } from "../releases.ts";
-import { type PinnedTool, pinnedTools } from "../schema.ts";
+import { type Stage, stream } from "../report/index.ts";
+import { check, type PinnedTool, pinnedTools } from "../schema.ts";
 import { compareVersions as compareSemver, lockFile, wantedPins, writeLock } from "../versions.ts";
 
 /**
@@ -44,13 +44,13 @@ function committer(office: Office) {
 /** A pin the job moved. */
 type Move = { tool: string; from: string; to: string };
 
-function mise(args: string[], cwd: string) {
-  const result = spawnSync(installedTool("mise")?.path ?? "mise", args, { cwd, encoding: "utf8", env: { ...process.env, MISE_YES: "1" } });
+async function mise(executable: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = {}) {
+  const result = await stream(executable, args, { cwd, env: { ...process.env, ...env, MISE_YES: "1" }, line: () => {} });
 
   const errors = (result.stderr ?? "").split("\n").filter((line) => line.includes("ERROR") && !line.includes("MISE_VERBOSE"));
 
   // mise ends every failure with a hint to rerun verbosely; the first error line says what failed.
-  return { ok: result.status === 0, out: (result.stdout ?? "").trim(), error: errors[0]?.replace(/^.*?ERROR\s*/, "") ?? "unknown error" };
+  return { ok: result.status === 0, out: result.stdout.trim(), stderr: result.stderr, error: errors[0]?.replace(/^.*?ERROR\s*/, "") ?? (result.stderr.trim() || `exit ${result.status}`) };
 }
 
 /** Compares dotted versions part by part, numerically where both parts are numbers. */
@@ -73,39 +73,82 @@ export function withVersion(line: string, version: string): string {
   return line.replace(entryPattern, (_, indent: string, name: string, middle: string, _version: string, rest: string) => `${indent}${name}${middle}${version}${rest}`);
 }
 
-/**
- * Upgrades one mise.toml. Returns the moves made and the failures. A pin counts as exact when
- * mise resolves it to itself, so ranges such as "26" or "latest" are left as they are.
- */
-function upgradeFile(office: Office, path: string) {
+const outdatedSchema = v.record(v.string(), v.object({ requested: v.string(), current: v.nullable(v.string()), latest: v.string() }));
+
+/** Ask about the requests in this file, including machine pins shadowed in the active config. */
+async function upgradeFile(office: Office, path: string, stage: Stage, executable: string) {
   const dir = dirname(path);
-  const lines = readFileSync(path, "utf8").split("\n");
+  const text = readFileSync(path, "utf8");
+  const lines = text.split("\n");
+  const pins = toolPins(text);
   const moves: Move[] = [];
   const failures: string[] = [];
 
-  for (const pin of toolPins(lines.join("\n"))) {
-    const exact = mise(["latest", `${pin.tool}@${pin.version}`], dir);
+  if (!pins.length) return { moves, failures };
 
-    if (!exact.ok || exact.out !== pin.version) continue;
+  stage.detail(`${relative(office.dir, path)}: checking ${pins.length} tool pins`);
+  const age = ageFor(office);
+  const batch = await mise(executable, ["outdated", "--bump", "--json", "--", ...pins.map(pin => `${pin.tool}@${pin.version}`)], dir, { MISE_MINIMUM_RELEASE_AGE: age });
 
-    const newest = mise(["latest", pin.tool, "--minimum-release-age", ageFor(office)], dir);
+  if (!batch.ok) return { moves, failures: [`mise outdated: ${batch.error}`] };
 
-    if (!newest.ok || newest.out === "") {
-      failures.push(`${pin.tool}: couldn't find the newest version (${newest.error})`);
-      continue;
+  let parsed;
+
+  try {
+    parsed = check(v.safeParse(outdatedSchema, JSON.parse(batch.out)));
+  } catch {
+    return { moves, failures: ["mise outdated returned invalid JSON"] };
+  }
+
+  if (!parsed.ok) return { moves, failures: [`mise outdated: ${parsed.errors[0]}`] };
+
+  // mise can return successful JSON for the other tools when one backend failed.
+  for (const line of batch.stderr.split("\n")) {
+    if (/could not check .* for updates/i.test(line)) failures.push(line.trim());
+  }
+
+  const outdated = parsed.value;
+  const renamed = new Set(Object.entries(outdated).flatMap(([key, row]) => pins.some(pin => pin.tool === key) ? [] : [row.requested]));
+
+  for (const pin of pins) {
+    const row = outdated[pin.tool];
+    let latest = row?.latest;
+
+    // mise keys aliases like "nodejs" by canonical name ("node"). Resolve ambiguous rows
+    // through the original name rather than applying another tool's version.
+    if (!row && renamed.has(pin.version)) {
+      const resolved = await mise(executable, ["latest", pin.tool, "--minimum-release-age", age], dir);
+
+      if (!resolved.ok) {
+        failures.push(`${pin.tool}: ${resolved.error}`);
+        continue;
+      }
+
+      latest = resolved.out;
     }
 
-    if (compareVersions(newest.out, pin.version) <= 0) continue;
+    if (!latest || (row && row.requested !== pin.version) || compareVersions(latest, pin.version) <= 0) continue;
 
-    const installed = mise(["install", `${pin.tool}@${newest.out}`], dir);
+    // An installed exact request resolves to itself. For an uninstalled candidate, ask
+    // mise to distinguish an exact pin from a range rather than guessing its syntax.
+    if (row?.current !== pin.version) {
+      if (row?.current != null) continue;
+
+      const exact = await mise(executable, ["latest", `${pin.tool}@${pin.version}`], dir);
+
+      if (!exact.ok || exact.out !== pin.version) continue;
+    }
+
+    stage.detail(`Installing ${pin.tool} ${latest}`);
+    const installed = await mise(executable, ["install", `${pin.tool}@${latest}`], dir);
 
     if (!installed.ok) {
-      failures.push(`${pin.tool} ${pin.version} → ${newest.out}: install failed: ${installed.error}`);
+      failures.push(`${pin.tool} ${pin.version} → ${latest}: install failed: ${installed.error}`);
       continue;
     }
 
-    lines[pin.index] = withVersion(lines[pin.index], newest.out);
-    moves.push({ tool: pin.tool, from: pin.version, to: newest.out });
+    lines[pin.index] = withVersion(lines[pin.index], latest);
+    moves.push({ tool: pin.tool, from: pin.version, to: latest });
   }
 
   if (moves.length > 0) writeFileSync(path, lines.join("\n"));
@@ -194,17 +237,11 @@ export function setVersions(text: string, moves: { tool: PinnedTool; to: string 
  * old, rewriting office.yaml (keeping its comments and layout) and office.lock. A lookup that
  * fails (GitHub's rate limit, no network) skips that tool and is reported.
  */
-async function upgradeVersions(office: Office, commit: boolean): Promise<{ moves: Move[]; failures: string[]; changed: string[] }> {
+async function upgradeVersions(office: Office, stage: Stage): Promise<{ moves: Move[]; failures: string[]; changed: string[] }> {
   const none = { moves: [], failures: [], changed: [] };
 
   if (!office.tools.pinsVersions) {
-    console.log("skipped the office's versions: office.yaml pins none, so the tool's defaults apply");
-
-    return none;
-  }
-
-  if (commit && git(["status", "--porcelain", "--", "office.yaml", lockFile], office.dir) !== "") {
-    console.log(`skipped office.yaml's versions: office.yaml or ${lockFile} has uncommitted changes`);
+    stage.note("office.yaml pins no runtime versions; using the defaults");
 
     return none;
   }
@@ -221,17 +258,32 @@ async function upgradeVersions(office: Office, commit: boolean): Promise<{ moves
   const failures: string[] = [];
   const next = { ...lock };
 
-  for (const tool of pinnedTools) {
-    try {
-      const { chosen } = await newestRelease(tool, ageFor(office, tool));
+  const cache = join(office.state, "release-pages");
+  const now = new Date();
 
-      if (chosen === undefined || compareSemver(chosen.version, lock[tool].version) <= 0) continue;
+  const queue = pinnedTools.values();
+  const errors = new Map<PinnedTool, string>();
 
-      next[tool] = await pinFor(tool, chosen.version, chosen.release);
-      moves.push({ tool, from: lock[tool].version, to: chosen.version });
-    } catch (error) {
-      failures.push(`${tool}: skipped, its release lookup failed (${error instanceof Error ? error.message : String(error)})`);
+  stage.detail("Checking runtime releases in office.yaml");
+  await Promise.all(Array.from({ length: 3 }, async () => {
+    for (const tool of queue) {
+      try {
+        const { chosen } = await newestRelease(tool, ageFor(office, tool), now, cache);
+
+        if (chosen && compareSemver(chosen.version, next[tool].version) > 0) {
+          next[tool] = await pinFor(tool, chosen.version, chosen.release);
+        }
+      } catch (error) {
+        errors.set(tool, `${tool}: skipped, its release lookup failed (${error instanceof Error ? error.message : String(error)})`);
+      }
     }
+  }));
+
+  for (const tool of pinnedTools) {
+    const error = errors.get(tool);
+
+    if (error !== undefined) failures.push(error);
+    else if (next[tool].version !== lock[tool].version) moves.push({ tool, from: lock[tool].version, to: next[tool].version });
   }
 
   if (moves.length === 0) return { ...none, failures };
@@ -251,7 +303,7 @@ async function upgradeVersions(office: Office, commit: boolean): Promise<{ moves
   return { moves, failures, changed: ["office.yaml", lockFile] };
 }
 
-export async function upgradeTools(office: Office, commit: boolean): Promise<boolean> {
+export async function upgradeTools(office: Office, stage: Stage, { commit }: { commit: boolean }): Promise<void> {
   // The office's own files only: never one inside a desk's repos or under references/. The
   // versions of the packages' tools are the office's too, with the same ages.
   const projects = ["mise.toml", ...office.desks.map((desk) => join(desk.name, "mise.toml"))]
@@ -261,10 +313,21 @@ export async function upgradeTools(office: Office, commit: boolean): Promise<boo
     .toArray();
 
   const files = [...projects, ...pinnedMachineFiles(office)];
+  const executable = installedTool("mise")?.path ?? "mise";
 
   const changed: string[] = [];
   const report: (Move & { file: string })[] = [];
   const failures: string[] = [];
+  let skipped = false;
+
+  function skipDirty(paths: string[]): boolean {
+    if (!commit || git(["status", "--porcelain", "--", ...paths], office.dir) === "") return false;
+
+    stage.warn(`Skipped ${paths.join(" and ")}: uncommitted changes`);
+    skipped = true;
+
+    return true;
+  }
 
   for (const path of files) {
     const name = relative(office.dir, path);
@@ -273,13 +336,10 @@ export async function upgradeTools(office: Office, commit: boolean): Promise<boo
     const lock = join(project, "mise.lock");
     const paths = projects.includes(path) ? [name, relative(office.dir, lock)] : [name];
 
-    if (commit && git(["status", "--porcelain", "--", ...paths], office.dir) !== "") {
-      console.log(`skipped ${paths.join(" and ")}: uncommitted changes`);
-      continue;
-    }
+    if (skipDirty(paths)) continue;
 
     const before = projects.includes(path) && existsSync(lock) ? { pins: readFileSync(path), lock: readFileSync(lock) } : undefined;
-    const result = upgradeFile(office, path);
+    const result = await upgradeFile(office, path, stage, executable);
 
     for (const failure of result.failures) failures.push(`${name}: ${failure}`);
 
@@ -288,7 +348,7 @@ export async function upgradeTools(office: Office, commit: boolean): Promise<boo
     // The lock file, when the office uses one, follows the pins of the mise.toml beside it. The
     // machine-wide files apply through the global conf.d, which no lock in the office covers.
     if (before) {
-      const locked = mise(["lock"], project);
+      const locked = await mise(executable, ["lock"], project);
 
       if (!locked.ok) {
         writeFileSync(path, before.pins);
@@ -304,7 +364,9 @@ export async function upgradeTools(office: Office, commit: boolean): Promise<boo
     report.push(...result.moves.map((move) => ({ ...move, file: name })));
   }
 
-  const versions = await upgradeVersions(office, commit);
+  const versions = office.tools.pinsVersions && skipDirty(["office.yaml", lockFile])
+    ? { changed: [], moves: [], failures: [] }
+    : await upgradeVersions(office, stage);
 
   for (const failure of versions.failures) failures.push(failure);
 
@@ -319,23 +381,23 @@ export async function upgradeTools(office: Office, commit: boolean): Promise<boo
     const { name, email } = committer(office);
 
     git(["-c", `user.name=${name}`, "-c", `user.email=${email}`, "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", subject, "-m", body, "--", ...changed], office.dir);
-    console.log(subject);
+    stage.note(subject);
+  } else {
+    for (const move of report) stage.note(`${move.file}: ${move.tool} ${move.from} → ${move.to}`);
   }
 
-  for (const failure of failures) console.log(`FAILED ${failure}`);
+  for (const failure of failures) stage.error(failure);
 
   if (report.length === 0 && failures.length === 0) {
-    console.log("every pin is current");
+    stage.done(skipped ? "No pins updated; some files were skipped" : "No updates needed");
 
-    return true;
+    return;
   }
 
-  const lines = [...report.map((move) => `${move.tool} ${move.from} → ${move.to} (${move.file})`), ...failures.map((failure) => `Failed: ${failure}`)];
+  if (failures.length > 0) {
+    stage.fail(`${failures.length} ${failures.length === 1 ? "upgrade failed" : "upgrades failed"}`);
+    throw new OfficeError("Some tool pins could not be upgraded");
+  }
 
-  await notify(office, {
-    title: failures.length === 0 ? "Tools upgraded" : "Tool upgrade needs attention",
-    body: `${lines.join("\n")}${commit && report.length > 0 ? `\nCommitted locally as ${committer(office).name}; revert the commit to undo.` : ""}${versions.moves.length > 0 ? "\n`office up --upgrade` applies the new versions in office.yaml." : ""}`,
-  });
-
-  return failures.length === 0;
+  stage.done(`${report.length} ${report.length === 1 ? "pin" : "pins"} updated${commit ? " and committed" : "; changes left uncommitted"}`);
 }

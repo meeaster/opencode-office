@@ -95,7 +95,7 @@ const usage = `usage: office <command> [--office <dir>]
   exec -- <command...>         run one command there the same way, with its stdin and exit status
   pin                          write office.lock for the versions office.yaml pins
   pair [--origin <url>]        print a one-time link that connects the OpenCode app or a browser
-  apps deploy                  install declared catalog apps and deploy local Executor app sources
+  apps deploy [--verbose]      install missing catalog apps and deploy changed local Executor apps
   apps adopt <catalog-id>      copy an installed Executor app's source into executor-apps/<catalog-id>
   gui dev <package>            install a local package's panel on the desktop app's machine each
                                time its build writes the bundle
@@ -383,23 +383,20 @@ async function main(): Promise<void> {
       }, { verbose });
     } else if (!(await check(office))) process.exitCode = 1;
   } else if (command === "up" || command === "upgrade-tools") {
-    if (command === "upgrade-tools") {
-      if (!(await upgradeTools(currentOffice(flags), flags.commit === true))) {
-        process.exitCode = 1;
-
-        return;
-      }
-
-      if (!flags.apply) return;
-    }
-
-    // Read the office after bumping so up sees the newly written pins.
     const office = currentOffice(flags);
 
-    await reported("up", officeContext(office), async (reporter) => {
-      const stage = reporter.stage("Services", { key: "services" });
+    await reported(command, officeContext(office), async (reporter) => {
+      if (command === "upgrade-tools") {
+        await upgradeTools(office, reporter.stage("Tool pins", { key: "tools" }), { commit: flags.commit === true });
+      }
 
-      stage.done(await up(office, { upgrade: command === "upgrade-tools" || flags.upgrade === true, refresh: command === "up" && flags.refresh === true }));
+      if (command === "up" || flags.apply) {
+        const stage = reporter.stage("Services", { key: "services" });
+        const updated = command === "up" ? office : currentOffice(flags);
+
+        stage.done(await up(updated, { upgrade: command === "upgrade-tools" || flags.upgrade === true, refresh: command === "up" && flags.refresh === true }));
+      }
+
       reporter.finish([]);
     }, { verbose: flags.verbose === true });
   } else if (command === "setup") {
@@ -454,7 +451,14 @@ async function main(): Promise<void> {
   } else if (command === "apps" && rest[0] === "adopt" && rest.length === 2) {
     await adopt(currentOffice(flags), rest[1]);
   } else if (command === "apps" && rest[0] === "deploy" && rest.length === 1) {
-    await deploy(currentOffice(flags));
+    const office = currentOffice(flags);
+
+    await reported("apps deploy", officeContext(office), async reporter => {
+      const stage = reporter.stage("Apps", { key: "apps" });
+
+      stage.done(await deploy(office));
+      reporter.finish([]);
+    }, { verbose: flags.verbose === true });
   } else if (command === "gui" && rest[0] === "dev") {
     if (rest[1] === undefined) throw new OfficeError("usage: office gui dev <package>");
 

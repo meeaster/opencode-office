@@ -181,3 +181,43 @@ test("follows GitHub's next links, so an old enough release on a later page is f
     pages.stop(true);
   }
 });
+
+test("revalidates every cached release page and still finds a changed release behind an unchanged first page", async () => {
+  let later = t1;
+  let unavailable = false;
+  const responses: number[] = [];
+
+  const pages = Bun.serve({
+    port: 0,
+    fetch(request) {
+      const first = new URL(request.url).pathname === "/first";
+      const tag = first ? t3 : later;
+      const etag = `"${tag}"`;
+      const status = unavailable ? 504 : request.headers.get("if-none-match") === etag ? 304 : 200;
+
+      responses.push(status);
+
+      if (status !== 200) return new Response(null, { status });
+
+      const headers = new Headers({ etag });
+
+      if (first) headers.set("link", `<${new URL("/second", request.url)}>; rel="next"`);
+
+      return Response.json([release(tag, first ? 2 : 48)], { headers });
+    },
+  });
+
+  const read = () => releasePages(`${pages.url}first`, 2, "test/office", dir);
+
+  try {
+    expect((await read()).map(r => r.tag_name)).toEqual([t3, t1]);
+    later = t2;
+    expect((await read()).map(r => r.tag_name)).toEqual([t3, t2]);
+    expect((await read()).map(r => r.tag_name)).toEqual([t3, t2]);
+    unavailable = true;
+    await expect(read()).rejects.toThrow("HTTP 504");
+    expect(responses).toEqual([200, 200, 304, 200, 304, 304, 504]);
+  } finally {
+    pages.stop(true);
+  }
+});
