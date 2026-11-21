@@ -91,7 +91,7 @@ skills:
 plugins: []
 
 # Optional capabilities. Each package's plugin loads in every session and gives it the package's
-# skills, tools and MCP servers, and each file of its template/ is copied once into the office (a
+# skills, tools and MCP servers, and each file of its seed/ is copied once into the office (a
 # file you delete stays deleted). A package is one of three kinds:
 # - built-in, listed by name alone: shipped inside the office executable (knowledge, browser,
 #   artifact-share, design, aws-emulator), installed in .office/packages/<name>/ and updated along
@@ -105,7 +105,7 @@ plugins: []
 # them to the package's .settings.json, which is committed. Packages' mise tools go in
 # machine.packages.toml, whose versions are this office's to change (sync only raises one below
 # what a package needs). Commit what sync writes.
-# Removing an entry and syncing uninstalls a built-in or copied package, keeping template files you changed.
+# Removing an entry and syncing uninstalls a built-in or copied package, keeping seed files you changed.
 packages:
   # Lists the articles in knowledge/ in every session.
   - name: knowledge

@@ -20,7 +20,7 @@ test("tracked updates validate the consuming settings and staged assets before p
   write(join(source, "compose.yaml"), "services:\n  shared:\n    image: example/shared\n    env_file: ./base.env\n");
   write(join(source, "base.env"), "FEATURE=original\n");
   write(join(source, "plugin/index.ts"), "// original");
-  write(join(source, "template/shared.md"), "seed");
+  write(join(source, "seed/shared.md"), "seed");
   const first = commit(repo);
   select(`  - {name: shared, repo: ${repo}, ref: ${first}, path: shared, track: main, settings: {title: Mine}}\nstate: ./state\n`);
   cli(0, "sync", "--packages");
@@ -28,7 +28,7 @@ test("tracked updates validate the consuming settings and staged assets before p
   const paths = ["office.yaml", ".office/resolved/references.json", "shared.md", ".opencode/plugins/shared/index.ts", "state/packages/shared/compose.yaml", "state/packages/shared/settings.env", "state/packages/shared/include.yaml"].map(path => join(dir, path));
   paths.push(join(dir, "office.lock"), ...[".source.json", ".settings.json", "base.env", "compose.yaml", "office.ts"].map(file => join(installed, file)));
   const before = paths.map(read);
-  write(join(source, "template/extra.md"), "new seed");
+  write(join(source, "seed/extra.md"), "new seed");
   write(join(source, "plugin/index.ts"), "// rejected");
   rmSync(join(source, "base.env"));
 

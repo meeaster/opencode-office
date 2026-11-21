@@ -15,7 +15,7 @@ for (const kind of ["local", "tracked"]) {
     const link = join(dir, ".opencode/plugins/arrival");
     write(join(pkg, "office.ts"), `${marker} export default {name:"arrival",description:"Original"}`);
     write(join(pkg, "plugin/index.ts"), "// original plugin");
-    write(join(pkg, "template/arrival.md"), "seed");
+    write(join(pkg, "seed/arrival.md"), "seed");
     let identity = "packages/arrival";
 
     if (kind === "local") select("  - name: arrival\n");

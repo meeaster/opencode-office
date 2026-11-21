@@ -1,5 +1,5 @@
 // Packages: capabilities an office opts into, each a folder with a definition, an OpenCode
-// plugin, skills the plugin registers, package-owned scripts, a template copied once into the
+// plugin, skills the plugin registers, package-owned scripts, seed files copied once into the
 // office and a desktop app panel (src/desktop.ts). There are three kinds, by where a package comes from:
 //
 // - built-in: shipped inside the `office` executable (the tool's packages/), listed by name alone,
@@ -9,7 +9,7 @@
 //
 // Built-in and remote packages are pulled into `.office/packages/<name>/` and are read-only: the
 // hash of each file is recorded in `.source.json`, `office check` reports an edit and `office
-// sync` restores the copy. Only local packages are committed with the office; `.office/` is not, so
+// sync` restores the copy. Only local packages are committed with the office; `.office/packages/` is not, so
 // a clone's first sync restores built-ins from the executable and fetches each remote package at
 // the commit office.lock locks for it.
 import { packageRoot, pulledFolder } from "./bound-paths.ts";
@@ -32,7 +32,7 @@ import { collectJobs } from "../standard/cron/jobs.ts";
 import { composeProblems, packageComposeFile, settingsEnv } from "./package-services.ts";
 import { systemSection } from "./package-system.ts";
 import { check, officeRelativePath, type PackageManifest, type Parsed, scalarSetting, type SettingValue, settingVariable } from "./schema.ts";
-import { copySeeds, settleReceipts, sha256 } from "./seeds.ts";
+import { copySeeds, seedFolder, settleReceipts, sha256 } from "./seeds.ts";
 import { build, buildCommit, builtinFiles, builtinPackages, toolRepository } from "./tool.ts";
 
 /** Where a pulled-in package records where it came from and the hash of each of its files. */
@@ -811,9 +811,10 @@ export function writePackageSettings(office: Office, installed: InstalledPackage
 }
 
 /**
- * Writes a package's settings file and .office.json, and copies each file of its `template/` (its
- * seed files) whose path has no receipt in office.lock to the same path in the office, unless a
- * file is already there: from then on the office owns it (src/seeds.ts). Returns one line per change.
+ * Writes a package's settings file and .office.json, and copies each file of its `seed/` (its seed
+ * files) whose path has no receipt in office.lock to the same path in the office, unless a file is
+ * already there: from then on the office owns it (src/seeds.ts). A `template/` folder, which earlier
+ * releases read, is not read; a line says so. Returns one line per change.
  */
 export function installPackage(office: Office, installed: InstalledPackage): string[] {
   const changes: string[] = [];
@@ -828,11 +829,13 @@ export function installPackage(office: Office, installed: InstalledPackage): str
 
   changes.push(...writePackageSettings(office, installed));
 
+  if (existsSync(join(installed.dir, "template"))) changes.push(`package ${name} has a template/ folder, which office no longer reads; rename it ${seedFolder}/ to seed its files`);
+
+  const folder = join(installed.dir, seedFolder);
+  const files = filesIn(folder);
+
   // A path the seeds: section couldn't hold is refused before anything is copied.
-  const template = join(installed.dir, "template");
-  const files = filesIn(template);
+  for (const file of files.filter((file) => !officeRelativePath(file))) changes.push(`FAILED package ${name}'s ${seedFolder}/${file}: not a plain office-relative path`);
 
-  for (const file of files.filter((file) => !officeRelativePath(file))) changes.push(`FAILED package ${name}'s template/${file}: not a plain office-relative path`);
-
-  return [...changes, ...copySeeds(office.dir, name, template, files.filter(officeRelativePath))];
+  return [...changes, ...copySeeds(office.dir, name, folder, files.filter(officeRelativePath))];
 }

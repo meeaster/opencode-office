@@ -11,7 +11,7 @@ packages:
   - name: knowledge
 ```
 
-Run `office sync`. The package in `.office/packages/knowledge/` follows the executable and is read-only. Sync copies new template files only when the office has not handled them before, and preserves files already there. The office owns `knowledge/`. The package has no settings.
+Run `office sync`. The package in `.office/packages/knowledge/` follows the executable and is read-only. Sync copies new seed files (`seed/`) only when the office has not handled them before, and preserves files already there. The office owns `knowledge/`. The package has no settings.
 
 ## Plain-file knowledge
 

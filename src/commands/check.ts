@@ -10,7 +10,7 @@ import { join, relative } from "node:path";
 import * as v from "valibot";
 
 import { claudeFiles } from "../claude.ts";
-import { appliedReferenceProblem, git, referenceOriginProblem } from "../git.ts";
+import { appliedReferenceProblem, referenceOriginProblem } from "../git.ts";
 import { resolvedReferences } from "../reference-snapshot.ts";
 import { cronRevision } from "../../standard/cron/container.ts";
 import { cronTimers, refreshTimer, staleTimerUnits, timerStates } from "../../standard/cron/host.ts";
@@ -23,7 +23,7 @@ import { planServer, serverReport } from "../host-server.ts";
 import { officeCommands, officePins, officeTool, officeToolNamed, required } from "../host-tools.ts";
 import { clones, installedPackages, library, skillSelections } from "../layout.ts";
 import { cloneTarget, legacyPlugin, pluginClones, pluginLinks, pluginScope, restartNotice, withPluginPlan } from "../../standard/opencode/delivery.ts";
-import { cloneFolder, entry as entryAt, officeEntries } from "../../standard/opencode/ownership.ts";
+import { cloneFolder, entry as entryAt } from "../../standard/opencode/ownership.ts";
 import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, oldMiseFiles, pulledLocalFolders, versionsLackSfw } from "../migrate.ts";
 import { oldExecutorAppDirs } from "../executor-app-layout.ts";
 import { packageLockProblems } from "../package-operation.ts";
@@ -42,7 +42,7 @@ import { describeRecord, fileHashes, localEdits, localFolders, officeFile, offic
 import { describeIgnoredSkills, ignoredSkills, readIgnoredFolders } from "../../packages/office/plugin/ignored-skills.ts";
 import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces, shadowing, withLoaded } from "../outside.ts";
 import { pinnedTools } from "../schema.ts";
-import { seedReceiptProblems } from "../seeds.ts";
+import { seedReceiptProblems, storedSeedProblems } from "../seeds.ts";
 import { builtinFiles, builtinPackages, version } from "../tool.ts";
 import { changes, defaultPins, describeMove, executorImage, isTested, lockFile, lockLacksSfw, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
 import { appFolders, deployedFrameworks } from "./apps.ts";
@@ -186,25 +186,9 @@ async function drift(office: Office): Promise<string[]> {
   return problems;
 }
 
-/**
- * Office's plumbing that Git still tracks, as earlier releases had offices commit it. Excludes
- * don't apply to tracked paths, so this names the command that untracks them; the files stay.
- */
-export function trackedPlumbing(office: Office, report: Report): void {
-  if (!existsSync(join(office.dir, ".git"))) return;
-  let tracked: string[];
-
-  try {
-    tracked = git(["ls-files", "-z", "--", ".office", ...officeEntries(office)], office.dir).split("\0").filter(Boolean);
-  } catch {
-    return;
-  }
-
-  if (tracked.length === 0) return;
-  const links = officeEntries(office).filter((path) => tracked.includes(path));
-  const paths = [...(tracked.some((path) => path.startsWith(".office/")) ? [".office"] : []), ...links];
-
-  report("warn", "git", `Office's plumbing is still committed (${tracked.length} tracked ${tracked.length === 1 ? "path" : "paths"}); office sync excludes it, but Git keeps tracking it. To untrack it and keep the files: git rm -r --cached --quiet -- ${paths.join(" ")}, then commit`);
+/** A warning for each receipt whose stored seed is missing or corrupt. Reads only. */
+export function seedChecks(office: Office, report: Report): void {
+  for (const problem of storedSeedProblems(office.dir)) report("warn", "seeds", problem);
 }
 
 /**
@@ -1154,7 +1138,7 @@ export async function check(office: Office, stage?: Stage, verbose = false): Pro
   }
 
   await packageChecks(office, report);
-  trackedPlumbing(office, report);
+  seedChecks(office, report);
   withdrawnClones(office, report);
   spawnChecks(office, report);
 

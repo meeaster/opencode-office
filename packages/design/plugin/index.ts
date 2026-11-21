@@ -6,7 +6,7 @@
 // Without the app, sessions authenticate with a Doop agent key, which acts as the account that minted it on every
 // request. OAuth can't work from the office's container: Doop names its BETTER_AUTH_URL, the
 // browser's localhost address, as the authorization server, which the container can't reach. The
-// key lives in the office's `.opencode/doop/agent-key`, which the package's template keeps out of
+// key lives in the office's `.opencode/doop/agent-key`, which the package's seed keeps out of
 // git; the office folder is the one place both a container session and a host session can read.
 //
 // It imports only Node's built-ins, so it runs with nothing installed.
@@ -134,7 +134,7 @@ export default {
     });
 
     // OpenCode doesn't load its MCP servers again by itself when the key is saved, replaced or
-    // deleted, so sessions would wait for a restart. The folder comes from the package's template.
+    // deleted, so sessions would wait for a restart. The folder comes from the package's seed.
     if (!existsSync(keyDir)) return () => settingsWatcher.close();
 
     const watcher = watch(keyDir, (_event, file) => {

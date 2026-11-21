@@ -15,11 +15,11 @@ packages:
       url: https://<owner>.github.io/<repository>
 ```
 
-Then run `office sync` and commit the template files below. The package itself is in `.office/packages/artifact-share/`, which updates with `office`, is read-only there and, like the rest of `.office/`, is kept out of Git by sync. Set the repository's Pages source to "GitHub Actions" once (Settings → Pages).
+Then run `office sync` and commit the seed files below, with `office.lock` and `.office/seeds/`. The package itself is in `.office/packages/artifact-share/`, which updates with `office`, is read-only there and, like the rest of `.office/` but the seed store, is kept out of Git by sync. Set the repository's Pages source to "GitHub Actions" once (Settings → Pages).
 
 **Pin the renderer in CI.** Set repository variables `ARTIFACT_OFFICE_RELEASE` (the exact Office release) and `ARTIFACT_OFFICE_SHA256` (its verified `office-linux-x64` digest). The seeded workflow restores packages from this binary before rendering. Review the selected packages and their pinned Git sources: their definitions run during package sync. Keep the build job read-only; only the separate deployment job needs Pages permissions.
 
-**Migrating a workflow that commits the renderer:** Git cannot track files beneath the new `.office/packages` discovery symlink. The office owner updates the existing workflow to restore the pinned renderer, as in the [current build job](template/.github/workflows/publish-artifacts.yml). Verify the build in a disposable clean clone: remove the old managed files from *that clone's* index and working tree, restore with the pinned binary, render to an empty output directory, and inspect the resulting site. Once that passes, explicitly untrack the old files in the real checkout (`git rm -r --cached -- .office/packages/artifact-share`), review and commit the workflow and index changes, and retry `office sync --packages`. Office neither untracks files nor rewrites previously seeded workflows.
+**Migrating a workflow that commits the renderer:** Git cannot track files beneath the new `.office/packages` discovery symlink. The office owner updates the existing workflow to restore the pinned renderer, as in the [current build job](seed/.github/workflows/publish-artifacts.yml). Verify the build in a disposable clean clone: remove the old managed files from *that clone's* index and working tree, restore with the pinned binary, render to an empty output directory, and inspect the resulting site. Once that passes, explicitly untrack the old files in the real checkout (`git rm -r --cached -- .office/packages/artifact-share`), review and commit the workflow and index changes, and retry `office sync --packages`. Office neither untracks files nor rewrites previously seeded workflows.
 
 | Setting | |
 |---|---|
@@ -40,7 +40,7 @@ Then run `office sync` and commit the template files below. The package itself i
 | `scripts/site.js` | The site's one script: the theme picker and light, dark or system switch on every page, saved in the browser and shared across the site, and the index's search, sort and copy link. Without JavaScript the site shows the default theme in the reader's system scheme and hides these controls |
 | `scripts/style.css` | The look of the index and of rendered Markdown pages: system fonts only, nothing loaded from other sites. An office's own `artifacts/style.css` replaces it |
 | `test/` | Tests of the theme mapping, the link filter and the code blocks, run by this repository's `pnpm test` |
-| `template/` | Copied once into the office: `artifacts/AGENTS.md` (what agents may put there), `artifacts/README.md` and `.github/workflows/publish-artifacts.yml`. The office owns these copies |
+| `seed/` | Copied once into the office: `artifacts/AGENTS.md` (what agents may put there), `artifacts/README.md` and `.github/workflows/publish-artifacts.yml`. The office owns these copies |
 
 ## Markdown blocks
 

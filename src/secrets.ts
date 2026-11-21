@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import * as v from "valibot";
 
@@ -72,10 +72,15 @@ export function source(office: Office, file: string): string {
   return path;
 }
 
-export function atomicWrite(path: string, content: string, mode = 0o600): void {
+/**
+ * Replaces `path` whole by rename. The temporary is written beside it, or in `staging`, a folder on
+ * the same filesystem, when a leftover beside it would be in the way (as in a committed folder).
+ */
+export function atomicWrite(path: string, content: string | Buffer, mode = 0o600, staging = dirname(path)): void {
   mkdirSync(dirname(path), { recursive: true });
+  mkdirSync(staging, { recursive: true });
 
-  const temporary = `${path}.${randomBytes(8).toString("hex")}.new`;
+  const temporary = join(staging, `${basename(path)}.${randomBytes(8).toString("hex")}.new`);
 
   try {
     writeFileSync(temporary, content, { mode, flag: "wx" });

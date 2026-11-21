@@ -228,7 +228,7 @@ async function prepareSources(office: Office, selection: ReturnType<typeof resol
   }
 
   // Keep outstanding removal receipts with the candidate. After a crash or a deferred
-  // apply, the previous generation need not stay pinned just to finish a template withdrawal.
+  // apply, the previous generation need not stay pinned just to finish a seed withdrawal.
   const withdrawals = join(folder, "withdrawals");
   mkdirSync(withdrawals);
   const selected = new Set(selection.packages.map(pkg => pkg.entry.name));

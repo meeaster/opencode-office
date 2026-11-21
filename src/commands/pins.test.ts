@@ -300,7 +300,7 @@ packages:
 
   expect(readPackageLock(join(dir, "office"))).toEqual(locked);
 
-  const pkgTwo = commit(pkg, { "demo/package.yaml": manifest("two"), "demo/template/notes/DEMO.md": "from demo\n", "tagged/package.yaml": "name: tagged\ndescription: Tagged two.\n" }, "v1.1.0");
+  const pkgTwo = commit(pkg, { "demo/package.yaml": manifest("two"), "demo/seed/notes/DEMO.md": "from demo\n", "tagged/package.yaml": "name: tagged\ndescription: Tagged two.\n" }, "v1.1.0");
 
   // The untracked tag moves to the new commit.
   git([...identity, "tag", "-f", "-a", "v1.0.0", "-m", "moved"], pkg);

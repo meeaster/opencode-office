@@ -8,7 +8,7 @@
 // removes the links earlier releases made. Office's links are recognized by their target
 // (standard/opencode/ownership.ts) and kept out of commits through the repository's info/exclude.
 // It never rewrites AGENTS.md, other hand-written content, an existing app or a file a package's
-// template created; it deletes such a file only with its package, and only while unchanged.
+// seed created; it deletes such a file only with its package, and only while unchanged.
 import { readdirSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
@@ -35,7 +35,7 @@ import { syncTools } from "../package-tools.ts";
 import { type Desk, type Office, skillGroups } from "../office.ts";
 import { silentStage, type Stage } from "../report/index.ts";
 import { type InstalledPackage, installPackage, removePackage, requirePackageOwnership, resolvePackages } from "../packages.ts";
-import { settleReceipts } from "../seeds.ts";
+import { keepSeedAttributes, seedStore, settleReceipts } from "../seeds.ts";
 import { describeGroup, stageGroup } from "../skill-copies.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
 
@@ -572,6 +572,7 @@ export async function applyPackages(office: Office, installed: InstalledPackages
   if (!cron.ok) changes.push(...cron.errors.map((error) => `FAILED ${error}`));
 
   for (const item of installed.installed) changes.push(...installPackage(office, item));
+  changes.push(...keepSeedAttributes(office.dir));
 
   const unknown = unresolvedMachineOwner(office, installed, previous);
 
@@ -622,10 +623,11 @@ export const excludeEnd = "# end of office sync";
 
 /**
  * Keeps Office's plumbing out of commits without touching the owner's .gitignore: one block in the
- * repository's info/exclude naming `.office/` (packages, clones, staging and generated state) and
- * each Office link, with a leading slash and no trailing one so a link matches. Lines outside the
- * block are the owner's and stay, byte for byte, CRLF endings included. An office that isn't a Git
- * repository's root gets nothing.
+ * repository's info/exclude naming every entry of `.office/` (packages, clones, staging and
+ * generated state) but the seed store, `.office/seeds/`, which is committed, and each Office link,
+ * with a leading slash and no trailing one so a link matches. Lines outside the block are the
+ * owner's and stay, byte for byte, CRLF endings included. An office that isn't a Git repository's
+ * root gets nothing.
  *
  * A file whose markers don't form exactly one block is left alone and reported: guessing where an
  * unterminated block ends could delete the owner's lines. The file is replaced whole by rename, from
@@ -645,7 +647,7 @@ export function excludePlumbing(office: Office): string[] {
     return ["could not locate the office repository's info/exclude; Office's plumbing is not excluded from commits"];
   }
 
-  const wanted = ["/.office/", ...officeEntries(office).map((path) => `/${path}`)];
+  const wanted = ["/.office/*", `!/${seedStore}/`, ...officeEntries(office).map((path) => `/${path}`)];
   // Lines earlier releases wrote one by one: a declared clone in `.opencode/plugins/<name>/` and first-clone staging.
   const legacy = new Set(["/.office-plugin-*/", ...office.plugins.map((plugin) => `/${pluginFolder}/${plugin.name}/`)]);
 
@@ -679,9 +681,12 @@ export function excludePlumbing(office: Office): string[] {
   const added = wanted.filter((line) => !block.includes(line));
   const removed = block.filter((line) => !wanted.includes(line));
 
+  // A `!` line takes a path back out of the exclusions, so adding one stops excluding the path.
+  const describe = (line: string, adding: boolean) => `${adding !== line.startsWith("!") ? "excluded" : "stopped excluding"} ${line.replace(/^!/, "")} from commits (info/exclude)`;
+
   return [
-    ...added.map((line) => `excluded ${line} from commits (info/exclude)`),
-    ...removed.map((line) => `stopped excluding ${line} from commits (info/exclude)`),
+    ...added.map((line) => describe(line, true)),
+    ...removed.map((line) => describe(line, false)),
     ...(dropped > 0 ? [`replaced ${dropped} plugin exclude ${dropped === 1 ? "line" : "lines"} earlier releases wrote with the office sync block (info/exclude)`] : []),
   ];
 }

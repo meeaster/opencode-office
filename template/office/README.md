@@ -19,12 +19,13 @@ Portable owner credentials are SOPS-encrypted in `secrets/executor-owner.enc.jso
 | Path | Holds |
 |---|---|
 | `office.yaml` | Under `tools`: the versions the containers run (and Socket Firewall's, and whether package downloads go through it), and how old a release must be before package managers, mise or the daily job take it. Also the desks, references, desk repositories, enabled skills, copied skills and cloned plugins |
-| `office.lock` | The checksum of each version in `office.yaml`, written by `office pin`, the commit of each package from a Git repository, and a receipt for each file a package's `template/` folder created or found (a seed), written by `office sync`; don't edit it |
+| `office.lock` | The checksum of each version in `office.yaml`, written by `office pin`, the commit of each package from a Git repository, and a receipt for each file a package's `seed/` folder created or found (a seed), written by `office sync`; don't edit it |
+| `.office/seeds/` | The bytes of each seed a receipt in `office.lock` names, by its SHA-256, written by `office sync` and never deleted by it. Committed: commit it with `office.lock` |
 | `AGENTS.md`, `.opencode/opencode.jsonc` | Your instructions and config for every session. No tool writes to `AGENTS.md` |
 | `skills/<id>/` | The skill library. Only skills `office.yaml` enables are linked into a `.opencode/skills/`; a real folder there is a skill of your own, committed and left alone |
 | `.opencode/plugins/` | OpenCode plugins every session loads: your own, committed, and `office sync`'s links to each package's plugin and each `plugins:` clone, which it keeps out of Git |
 | `.office/packages/` | Packages pulled into the office, rebuilt by `office sync` and kept out of Git: built-in ones from the `office` executable, such as `office` (the guidance for a session's folder, which `office instructions` prints, the `office` skill and the `office-executor` MCP server) and `knowledge` (lists the articles in `knowledge/` in every session), and ones copied from another repository. They are read-only: `office check` reports an edit and `office sync` restores the copy. To change one, copy it into `packages/` under a name of your own |
-| `.office/mise/` | Packages' mise setup (a host install, a system setup), one file per package, written by `office sync`; don't edit them. `.office/` is the tool's and stays out of Git (sync excludes it, and its links, in `.git/info/exclude`): what you edit is at the root |
+| `.office/mise/` | Packages' mise setup (a host install, a system setup), one file per package, written by `office sync`; don't edit them. `.office/` is the tool's and, but for `.office/seeds/`, stays out of Git (sync excludes it, and its links, in `.git/info/exclude`): what you edit is at the root |
 | `packages/` | Packages written in this office |
 | `knowledge/` | Articles every session sees listed, through the `knowledge` package |
 | `mise.toml` | Tools every desk gets; a desk's own `mise.toml` adds more |

@@ -181,7 +181,7 @@ test("the executable syncs mixed definitions and keeps applied state when a sele
   write(join(pkg, "defaults.ts"), "export const count: number = 3;");
   write(join(pkg, "plugin/index.ts"), 'export default { id: "notes", setup() {} }');
   write(join(pkg, "compose.yaml"), "services:\n  notes:\n    image: example/notes\n");
-  write(join(pkg, "template/notes/example"), "seed");
+  write(join(pkg, "seed/notes/example"), "seed");
   cli(0, "sync");
   expect(read(join(dir, "notes/example"))).toBe("seed");
   expect(JSON.parse(read(join(dir, "packages/legacy/.settings.json")))).toEqual({ label: "old" });
