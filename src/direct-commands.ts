@@ -6,7 +6,7 @@ import * as v from "valibot";
 import { claimsInspect, commandRegistration, type RegisteredCommand } from "./command-table.ts";
 import { findOffice, loadOffice, type Office, OfficeError, readOfficeFields } from "./office.ts";
 import { builtinSource, collectionContract, embeddedPackage, filesDigest, gitSelection, installedDefinition, type PackageRecord, providerFiles, resolvePackages, type ResolvedPackage, verifyInstalledCopy } from "./packages.ts";
-import { publishedCollection, publishedInputs, readSnapshot, referenceInputs, type ReferenceSnapshot } from "./reference-snapshot.ts";
+import { publishedCollection, publishedInputs, readSnapshot, referenceInputs, selectedContributions, type ReferenceSnapshot } from "./reference-snapshot.ts";
 import type { CommandInputs } from "../packages/office/package-context.ts";
 import { check, commandBootstrapSchema, packageEntry, referenceInputSchema } from "./schema.ts";
 import { shippedReferences } from "./v3-reference-owner.ts";
@@ -77,6 +77,10 @@ function verifyBinding(item: ResolvedPackage, owner: Owner, record: PackageRecor
 
   if (item.kind === "built-in" && record && !("repo" in record) && builtinSource(record.files) === owner.source && embedded === owner.source) return;
 
+  if (item.kind === "built-in" && record && !("repo" in record) && builtinSource(record.files) === owner.source) {
+    throw new OfficeError(`changed source/revision: retained built-in ${owner.name} belongs to a different executable; run this command with the matching previous Office CLI or container image, or fix the rejected update and run office sync --packages with this executable`);
+  }
+
   throw new OfficeError(`missing owner or changed source/revision of package ${owner.name}`);
 }
 
@@ -119,9 +123,8 @@ async function handler(office: Selections, owner: Owner, canonical: string, requ
   }
 }
 
-function selection(dir: string, name: string, withSettings = false) {
+function selection(dir: string, name: string, document: v.InferOutput<typeof commandBootstrapSchema>, withSettings = false) {
   try {
-    const document = readOfficeFields(dir, commandBootstrapSchema);
     const matches = document.packages.filter(entry => entry.name === name);
 
     if (matches.length > 1) throw new OfficeError("ambiguous owner selection");
@@ -145,7 +148,7 @@ function selection(dir: string, name: string, withSettings = false) {
 /** Compare only the provider of a requested collection. Inspect bytes and selection, never
  * import its definition. A provider reading its own rows already passed handler's binding
  * check and runs with the settings saved alongside that same publication. */
-function readerBinding(dir: string, snapshot: ReferenceSnapshot, commandOwner: string, id: string) {
+function readerBinding(dir: string, snapshot: ReferenceSnapshot, commandOwner: string, id: string, document: v.InferOutput<typeof commandBootstrapSchema>) {
   const name = id.split(".")[0];
 
   if (name === commandOwner) return;
@@ -154,7 +157,7 @@ function readerBinding(dir: string, snapshot: ReferenceSnapshot, commandOwner: s
   const mismatch = `provider ${name} no longer matches the published contract`;
 
   try {
-    const { office } = selection(dir, name, true);
+    const { office } = selection(dir, name, document, true);
     const item = selectedOwner(office, name);
     const record = verifyInstalledCopy(item);
     const files = record ? filesDigest(record.files) : providerFiles(item);
@@ -173,8 +176,8 @@ function readerBinding(dir: string, snapshot: ReferenceSnapshot, commandOwner: s
   }
 }
 
-function indexedInputs(dir: string, snapshot: ReferenceSnapshot, name: string) {
-  const { office, document } = selection(dir, name);
+function indexedInputs(dir: string, snapshot: ReferenceSnapshot, name: string, document: v.InferOutput<typeof commandBootstrapSchema>) {
+  const { office } = selection(dir, name, document);
   const current = v.safeParse(referenceInputSchema, document);
 
   return { office, inputs: publishedInputs(snapshot, current.success ? current.output : undefined) };
@@ -199,18 +202,24 @@ export async function dispatchCommand(start: string, words: string[]): Promise<b
   const bootstrap = (!snapshot || snapshot.version === 2) && requested === listing.name;
 
   if (!bootstrap && !indexed) return false;
-  const { office, inputs } = indexed && snapshot ? indexedInputs(dir, snapshot, indexed.owner.name) : bootstrapInputs(dir, snapshot);
+  let document;
+
+  try { document = readOfficeFields(dir, commandBootstrapSchema); }
+  catch (error) { throw new OfficeError(`${error instanceof Error ? error.message : String(error)}; repair office.yaml and run office sync --packages`); }
+
+  const { office, inputs } = indexed && snapshot ? indexedInputs(dir, snapshot, indexed.owner.name, document) : bootstrapInputs(dir, snapshot);
 
   if (!inputs.ok) throw new OfficeError(inputs.errors.join("; "));
   const { entries, notes } = inputs.value;
 
   for (const note of notes) console.error(note);
 
-  const publication = snapshot ?? { owner: entries.map(({ owner, stale, ...value }) => value), contributors: [] };
+  const current = v.safeParse(referenceInputSchema, document);
+  const publication = snapshot ? selectedContributions(snapshot, current.success ? current.output : undefined) : { owner: entries.map(({ owner, stale, ...value }) => value), contributors: [] };
 
   // Keep the runtime input of already-indexed pre-collection commands through the upgrade.
   const commandInputs = { references: entries, read: (collection) => publishedCollection(publication, collection,
-    indexed && snapshot ? readerBinding(dir, snapshot, indexed.owner.name, collection.id) : undefined) } satisfies CommandInputs & { references: typeof entries };
+    indexed && snapshot ? readerBinding(dir, snapshot, indexed.owner.name, collection.id, document) : undefined) } satisfies CommandInputs & { references: typeof entries };
 
   if (indexed && snapshot) {
     const run = await handler(office, indexed.owner, indexed.canonical, requested, snapshot.version);

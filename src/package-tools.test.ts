@@ -573,7 +573,7 @@ test("a rejected publication cannot retain host consent or a deselected plugin",
 
   for (const name of ["first", "second"]) {
     write(join(office, `packages/${name}/office.ts`), `export default {name:"${name}",description:"Reference",async setup(c){
-      const {repositories}=await import("../../.office/packages/references/repositories.ts");
+      const {repositories}=await import("@office/references/repositories");
       c.add(repositories,{name:"guide",url:"https://example.invalid/guide"})
     }}`);
   }

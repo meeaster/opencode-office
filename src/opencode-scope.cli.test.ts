@@ -1025,7 +1025,7 @@ test("sync keeps Office's plumbing out of Git in one info/exclude block, leaving
   expect(readFileSync(exclude, "utf8")).toBe(`# the owner's\n*.log\n${block(["/.opencode/plugins/imported", "/.opencode/plugins/office"])}\n/scratch-notes/\n`);
 
   // Plumbing committed by an earlier release stays tracked until the owner untracks it.
-  git("add", "-f", ".office/packages/office", ".opencode/plugins/office");
+  git("add", "-f", ".office/packages", ".opencode/plugins/office");
   git("commit", "-qm", "plumbing as earlier releases committed it");
   const untrack = "git rm -r --cached --quiet -- .office .opencode/plugins/office";
   const health = await f.run(["check"], 1);

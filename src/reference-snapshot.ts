@@ -44,6 +44,25 @@ export type ReferenceSnapshot = v.InferOutput<typeof schema>;
 
 type Inputs = Pick<OfficeConfig, "references" | "packages">;
 
+export function gitSelection(source: NonNullable<OfficeConfig["packages"][number]["source"]>) {
+  return `git:${createHash("sha256").update(JSON.stringify([source.repo, source.path, source.ref])).digest("hex")}`;
+}
+
+/** A changed YAML pin is not authority to apply its predecessor's data. Preserve the
+ * publication itself: restoring the matching selection immediately restores its rows. */
+export function selectedContributions(snapshot: ReferenceSnapshot, config?: Inputs) {
+  if (!config || snapshot.inputs === inputHash(config)) return snapshot;
+
+  return { ...snapshot, contributors: snapshot.contributors.map(group => {
+    if (!group.source.startsWith("git:")) return group;
+    const selected = config.packages.find(entry => entry.name === group.name);
+
+    if (selected?.source && gitSelection(selected.source) === group.source) return group;
+
+    return { ...group, stale: true, entries: [] };
+  }) };
+}
+
 export function inputHash(config: Inputs): string {
   const packages = config.packages.toSorted((a, b) => a.name.localeCompare(b.name));
 
@@ -157,6 +176,7 @@ export function referenceInputs(snapshot: ReferenceSnapshot | undefined, config:
 }
 
 export function publishedInputs(snapshot: ReferenceSnapshot, current?: Inputs): Parsed<{ entries: ClaimedReference[]; notes: string[]; legacy: boolean }> {
+  snapshot = selectedContributions(snapshot, current);
   const entries = claims(snapshot);
 
   if (!entries.ok) return entries;

@@ -21,6 +21,8 @@ import { check } from "./check.ts";
 import { installingMise, ports, startExecutor, up } from "./compose.ts";
 import { bootstrapExecutor } from "./executor.ts";
 import { summarize, sync } from "./sync.ts";
+import { runReader } from "../package-operation.ts";
+import { checkAdoption } from "../package-generation.ts";
 
 type SetupOptions = {
   ownerEmail?: string;
@@ -45,6 +47,7 @@ async function question(ask: Ask | undefined, text: string): Promise<string> {
  * its stages reports through `reporter`; a stage that fails stops setup there.
  */
 export async function setup(initial: Office, options: SetupOptions, reporter: Reporter): Promise<void> {
+  checkAdoption(initial.dir);
   let office = initial;
   const ask = terminalAsk();
 
@@ -158,8 +161,18 @@ export async function setup(initial: Office, options: SetupOptions, reporter: Re
 
   stage.done(summarize(changes));
 
+  const status = await runReader(office.dir, ["--finish-setup", office.dir, shell ? "shell" : "", options.ownerEmail ?? "", options.verbose ? "verbose" : ""]);
+
+  if (status !== 0) throw new OfficeError("setup did not complete with the published package generation");
+}
+
+export async function finishSetup(office: Office, shell: boolean, ownerEmail: string | undefined, reporter: Reporter) {
+  const ask = terminalAsk();
+  const hasToken = readEnvFile(executorEnvFile(office)).EXECUTOR_TOKEN;
+  const ownerFile = office.secrets?.executor_owner;
+
   // System packages: before office up installs tools, some of which build against them.
-  stage = reporter.stage("System packages", { key: "system" });
+  let stage = reporter.stage("System packages", { key: "system" });
 
   const outcome = await systemStep(office, installedPackages(office).installed, { mise: office.opencode.mode === "host" ? hostTool("mise") : "mise", ask });
 
@@ -168,7 +181,7 @@ export async function setup(initial: Office, options: SetupOptions, reporter: Re
   // Services: Executor, then OpenCode (an image in container mode, the host server otherwise).
   stage = reporter.stage("Services", { key: "services" });
 
-  let email = options.ownerEmail;
+  let email = ownerEmail;
 
   if (!hasToken && ownerFile !== undefined && !existsSync(join(office.dir, ownerFile)) && email === undefined) {
     if (!reporter.interactive) throw new OfficeError("Executor owner email: Rerun interactively or supply the documented setup options; no prompt was opened");

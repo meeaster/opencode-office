@@ -34,7 +34,8 @@ type Settings = { port: number; url: string; executorApp: boolean; oauth: boolea
 
 // OpenCode loads the plugin through the link `.opencode/plugins/design`; the real folder is the
 // package's, beside its skills/ and .settings.json.
-const packageDir = dirname(realpathSync(dirname(fileURLToPath(import.meta.url))));
+const sourceDir = dirname(realpathSync(dirname(fileURLToPath(import.meta.url))));
+const packageDir = sourceDir.replace(/\/\.office\/generations\/g-[a-f0-9-]+\/packages\/([^/]+)$/, "/.office/packages/$1");
 
 const skillFile = join(packageDir, "skills/doop/SKILL.md");
 
@@ -111,8 +112,8 @@ export default {
     await ctx.skill.transform((editor) => editor.add(doopSkill(readSettings())));
 
     // Watch the directory so sync replacing the settings file doesn't detach the watcher.
-    const settingsWatcher = watch(packageDir, (_event, file) => {
-      if (file === ".settings.json") {
+    const settingsWatcher = watch(sourceDir === packageDir ? packageDir : dirname(dirname(packageDir)), (_event, file) => {
+      if (file === "current" || file === ".settings.json") {
         void ctx.skill.reload().catch(console.error);
         void ctx.mcp.reload().catch(console.error);
       }

@@ -50,6 +50,68 @@ export function createImportMap(folder: string, packages: ResolvedPackage[]) {
   return nodePath;
 }
 
+/** Which changed packages must advance together? Walk the static imports of each definition
+ * and its public modules, including relative helpers. Sharing an unchanged standard provider
+ * doesn't couple two independent consumers. An unreadable graph is not evidence of independence. */
+export function packageDependencies(packages: ResolvedPackage[]) {
+  const roots = packages.flatMap(pkg => statSync(pkg.dir, { throwIfNoEntry: false })?.isDirectory() ? [{ name: pkg.entry.name, root: realpathSync(pkg.dir) }] : []);
+  const deps = new Map<string, Set<string>>();
+
+  for (const { name, root } of roots) {
+    const seen = new Set<string>();
+    const imports = new Set<string>();
+
+    const visit = (path: string) => {
+      if (seen.has(path) || !/\.(?:[mc]?[jt]s|[jt]sx)$/.test(path)) return;
+      seen.add(path);
+
+      for (const { path: spec } of (extname(path).includes("ts") ? typescript : javascript).scanImports(readFileSync(path, "utf8"))) {
+        if (spec.startsWith(namespace)) imports.add(spec.split("/")[1]);
+        else if (spec.startsWith(".") || isAbsolute(spec)) {
+          const dep = realpathSync(Bun.resolveSync(spec, dirname(path)));
+          const owner = roots.find(pkg => inside(pkg.root, dep));
+
+          if (owner && owner.name !== name) imports.add(owner.name);
+          else if (inside(root, dep)) visit(dep);
+        }
+      }
+    };
+
+    if (existsSync(join(root, "office.ts"))) visit(join(root, "office.ts"));
+    const exports = join(root, "exports");
+
+    if (existsSync(exports)) for (const file of readdirSync(exports)) if (moduleName.test(file)) visit(join(exports, file));
+    deps.set(name, imports);
+  }
+
+  return deps;
+}
+
+export function coupledFailures(rejected: string[], pending: string[], views: ResolvedPackage[][]) {
+  try {
+    const graphs = views.map(packageDependencies);
+    const failed = new Set(rejected.filter(name => pending.includes(name)));
+
+    const reachable = (from: string) => {
+      const seen = new Set([from]);
+
+      for (const name of seen) for (const graph of graphs) for (const dependency of graph.get(name) ?? []) seen.add(dependency);
+
+      return seen;
+    };
+
+    const paths = new Map(pending.map(name => [name, reachable(name)]));
+
+    for (const name of failed) {
+      for (const [peer, imports] of paths) if (imports.has(name) || paths.get(name)?.has(peer)) failed.add(peer);
+    }
+
+    return [...failed];
+  } catch {
+    return pending;
+  }
+}
+
 /** One native module cache per evaluating process. The scan also catches an owner dependency
  * shadowing NODE_PATH; the reserved import must resolve to exactly the selected source. */
 export function importGuard(dir: string, packages: ResolvedPackage[]) {
@@ -94,7 +156,10 @@ export function importGuard(dir: string, packages: ResolvedPackage[]) {
           const sameManagedSet = selected.includes(root) && selected.some(dir => inside(dir, resolved));
 
           if (!inside(root, resolved) && inside(managed, resolved) && !sameManagedSet) {
-            throw new Error(`${path}: ${spec} crosses into ${resolved}; import the selected public module as @office/<package>/<export>`);
+            const target = resolved.match(/\/packages\/([^/]+)\/(?:exports\/)?([^/]+)\.ts$/);
+            const alias = target && `${namespace}${target[1]}/${target[2]}`;
+            const suggestion = alias && modules.has(alias) ? alias : "@office/<package>/<export>";
+            throw new Error(`${path}: ${spec} crosses into ${resolved}; import the selected public module as ${suggestion}`);
           }
 
           if (existsSync(resolved)) visit(resolved, root);

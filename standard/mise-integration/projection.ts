@@ -98,7 +98,7 @@ function allowsChild(parent: PathClaim, child: PathClaim) {
 }
 
 /** Install roots own their subtree; native directories manage the directory itself. */
-export function destinationProblems(office: Office, items: InstalledPackage[]): string[] {
+export function destinationProblems(office: Office, items: InstalledPackage[], conflict?: (...owners: string[]) => void): string[] {
   const owners = new Map<string, PathClaim>();
   const packages = new Map<string, { owner: string; spec: SettingValue }>();
   const problems: string[] = [];
@@ -110,7 +110,10 @@ export function destinationProblems(office: Office, items: InstalledPackage[]): 
     if (key === "/") problems.push(`package ${owner} cannot manage the filesystem root`);
 
     for (const [other, first] of owners) {
-      if (key === other || (key.startsWith(`${other}/`) && !allowsChild(first, next)) || (other.startsWith(`${key}/`) && !allowsChild(next, first))) problems.push(`${path} claimed by both package ${first.owner} and package ${owner}`);
+      if (key === other || (key.startsWith(`${other}/`) && !allowsChild(first, next)) || (other.startsWith(`${key}/`) && !allowsChild(next, first))) {
+        conflict?.(first.owner, owner);
+        problems.push(`${path} claimed by both package ${first.owner} and package ${owner}`);
+      }
     }
 
     owners.set(key, next);

@@ -14,7 +14,9 @@ type Context = {
 
 // OpenCode loads the plugin through the link `.opencode/plugins/artifact-share`; the real folder
 // is the one beside the package's skills/.
-const file = join(dirname(realpathSync(dirname(fileURLToPath(import.meta.url)))), "skills/share-artifact/SKILL.md");
+const sourceDir = dirname(realpathSync(dirname(fileURLToPath(import.meta.url))));
+const packageDir = sourceDir.replace(/\/\.office\/generations\/g-[a-f0-9-]+\/packages\/([^/]+)$/, "/.office/packages/$1");
+const file = join(packageDir, "skills/share-artifact/SKILL.md");
 
 /** The skill as OpenCode registers it: the description from its front matter and the body after it. */
 function shareArtifact(): Skill {

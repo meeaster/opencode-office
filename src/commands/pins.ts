@@ -140,8 +140,10 @@ export async function updatePackages(loaded: Office, stage: Stage, { apply = tru
     pending.push({ index, commit: found.commit, via: found.via, name: entry.name, previous: source.ref });
   }
 
-  if (pending.length) {
-    const pins = new Map(pending.map(pin => [pin.name, pin.commit]));
+  let batch = pending;
+
+  while (batch.length) {
+    const pins = new Map(batch.map(pin => [pin.name, pin.commit]));
 
     const packages = office.packages.map(entry => {
       const ref = pins.get(entry.name);
@@ -152,15 +154,19 @@ export async function updatePackages(loaded: Office, stage: Stage, { apply = tru
     stage.detail("applying packages");
 
     const result = await publishPackages({ ...office, packages }, true, {
-      apply, yaml: text => pending.reduce((yaml, pin) => withScalar(yaml, ["packages", pin.index, "ref"], pin.commit), text),
+      apply, names: [...pins.keys()], yaml: text => batch.reduce((yaml, pin) => withScalar(yaml, ["packages", pin.index, "ref"], pin.commit), text),
     });
 
     if (result.published) {
-      lines.updated = pending.length;
-      lines.push(...pending.map(pin => `package ${pin.name}: pinned ${short(pin.previous)} → ${pin.commit} (${pin.via})`), ...result.lines);
+      lines.updated = batch.length;
+      lines.push(...batch.map(pin => `package ${pin.name}: pinned ${short(pin.previous)} → ${pin.commit} (${pin.via})`), ...result.lines);
+      break;
     } else {
       const reason = result.lines.filter(line => line.startsWith("FAILED")).join("; ");
-      lines.push(...pending.map(pin => `FAILED package ${pin.name}: found ${short(pin.commit)} (${pin.via}), but ${reason}; pin left at ${short(pin.previous)}`));
+      const implicated = batch.filter(pin => result.rejected?.includes(pin.name));
+      const refused = implicated.length ? implicated : batch;
+      lines.push(...refused.map(pin => `FAILED package ${pin.name}: found ${short(pin.commit)} (${pin.via}), but ${reason}; pin left at ${short(pin.previous)}`));
+      batch = batch.filter(pin => !refused.includes(pin));
     }
   }
 

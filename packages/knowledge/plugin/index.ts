@@ -77,7 +77,7 @@ export default {
     const knowledge = join(office, "knowledge");
 
     await ctx.skill.transform((editor) => {
-      const path = join(packageDir, "skills/knowledge-base/SKILL.md");
+      const path = join(office, ".office/packages/knowledge/skills/knowledge-base/SKILL.md");
       const text = readFileSync(path, "utf8");
       const frontMatter = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(text);
       const about = description(text);

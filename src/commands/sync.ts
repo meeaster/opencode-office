@@ -17,6 +17,7 @@ import { claudeFiles } from "../claude.ts";
 import { unresolvedMachineOwner } from "../collect-references.ts";
 import { planReferenceApply } from "../reference-publication.ts";
 import { publishPackages } from "../package-operation.ts";
+import { checkAdoption } from "../package-generation.ts";
 import type { ReferenceSnapshot } from "../reference-snapshot.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { collectJobs } from "../../standard/cron/jobs.ts";
@@ -467,7 +468,10 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
     },
   };
 
-  if (scope !== "references") requirePackageOwnership(office);
+  if (scope !== "references") {
+    checkAdoption(office.dir);
+    requirePackageOwnership(office);
+  }
 
   if (scope === "packages") {
     await syncPackages(office, changes, stage);
@@ -511,6 +515,8 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   if (office.opencode.mode === "container") changes.push(...syncMachine(office));
   requirePluginDestination(office);
   const result = await publishPackages(office, exclude);
+
+  if (result.generation) stage.detail(`active package generation: ${result.generation}`);
   changes.push(...result.lines);
 
   if (!result.published) {
@@ -522,7 +528,7 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   return result.published;
 }
 
-export async function applyPackages(office: Office, installed: InstalledPackages, previous: ReferenceSnapshot | undefined, changes: string[], exclude: boolean, prior: string) {
+export async function applyPackages(office: Office, installed: InstalledPackages, previous: ReferenceSnapshot | undefined, changes: string[], exclude: boolean, withdrawals: string) {
   if (!installed.unread.has("knowledge") && legacyPlugin(office, "knowledge")) changes.push(...removeOldKnowledgePlugin(office));
 
   if (needsEnvironmentOwners(office, installed)) {
@@ -536,16 +542,19 @@ export async function applyPackages(office: Office, installed: InstalledPackages
   const removedPanels: string[] = [];
   let declarations: Map<string, Declaration> | undefined;
 
-  for (const name of readdirSync(join(prior, "packages"), { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name)) {
+  for (const name of readdirSync(withdrawals)) {
     if (installed.unread.has(name) || installed.selected.has(name)) continue;
 
     // The last synced authored registration names the bundle; without one, the convention does.
     const claim = (declarations ??= readDeclarations(office)).get(name);
     const bundle = claim?.state === "declared" ? claim.paths.panel : panelBundle;
 
-    if (bundle !== undefined && existsSync(join(prior, "packages", name, bundle))) removedPanels.push(name);
+    if (bundle !== undefined && existsSync(join(withdrawals, name, bundle))) removedPanels.push(name);
 
-    changes.push(...removePackage(office, name, join(prior, "packages", name)));
+    const result = removePackage(office, name, join(withdrawals, name));
+    changes.push(...result);
+
+    if (!result.some(line => line.startsWith("FAILED"))) rmSync(join(withdrawals, name), { recursive: true });
   }
 
   // Executable cron owners were validated with their other contributions before publication.

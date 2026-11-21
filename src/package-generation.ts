@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import * as v from "valibot";
-import { openCheckoutLease } from "./checkout-lease.ts";
+import { openCheckoutLease, tryFileLock } from "./checkout-lease.ts";
 import { atomicWrite } from "./secrets.ts";
 import { OfficeError } from "./office.ts";
 
@@ -61,8 +61,73 @@ function createGeneration(dir: string) {
   return name;
 }
 
-/** Never unlink an unexpected link or discard a second copy. Repeating after any rename
- * completes the interrupted adoption. Caller holds the publication lock. */
+/** flock the directory itself. No per-generation lockfiles survive pruning. */
+function holdGeneration(dir: string, name: string, shared = true) {
+  const fd = openSync(managedDirectory(dir, name), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+
+  if (tryFileLock(fd, shared)) return { fd, [Symbol.dispose]: () => closeSync(fd) };
+  closeSync(fd);
+
+  if (shared) throw new OfficeError(`generation ${name} is being retired; retry`);
+}
+
+export function pinActive(dir: string) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const name = activeGeneration(dir);
+
+    if (!name) return;
+
+    try {
+      const lease = holdGeneration(dir, name);
+
+      if (lease) {
+        if (activeGeneration(dir) === name) return { name, ...lease };
+        lease[Symbol.dispose]();
+      }
+    } catch (error) {
+      if (activeGeneration(dir) === name) throw error;
+    }
+  }
+
+  throw new OfficeError("managed package selection is changing; retry");
+}
+
+function prune(dir: string, current: string) {
+  const parent = join(dir, ".office/generations");
+  const record = join(managedDirectory(dir, current), "previous");
+  const previous = existsSync(record) && readFileSync(record, "utf8");
+
+  for (const item of readdirSync(parent, { withFileTypes: true })) {
+    if (!item.isDirectory() || !v.is(id, item.name) || item.name === current || item.name === previous) continue;
+    using retired = holdGeneration(dir, item.name, false);
+
+    if (retired) rmSync(join(parent, item.name), { recursive: true });
+  }
+}
+
+export function checkAdoption(dir: string) {
+  for (const member of [".office", ".office/generations", ".office/resolved"]) {
+    const file = join(dir, member);
+    const entry = lstatSync(file, { throwIfNoEntry: false });
+
+    if (entry && !entry.isDirectory()) throw new OfficeError(`cannot adopt redirected or non-directory ${member}`);
+  }
+
+  if (activeGeneration(dir)) return;
+
+  for (let parent = dir; ; parent = dirname(parent)) {
+    if (existsSync(join(parent, ".git"))) break;
+
+    if (parent === dirname(parent)) return;
+  }
+
+  const tracked = execFileSync("git", ["ls-files", "-z", "--", ...bridges.map(([legacy]) => `.office/${legacy}`)], { cwd: dir, encoding: "utf8" }).split("\0").find(Boolean);
+
+  if (tracked) throw new OfficeError(`cannot adopt managed generations: ${tracked} is tracked in Git. Migrate any CI consumer to restore the pinned renderer, verify its build in a clean clone, then explicitly untrack the managed files and retry. No tracked files were moved`);
+}
+
+/** Preflight every legacy member before moving the first. The marker makes the
+ * remaining renames restartable if the writer dies part-way through adoption. */
 function adopt(dir: string) {
   const root = join(dir, ".office");
   const marker = join(root, "adopting");
@@ -70,10 +135,16 @@ function adopt(dir: string) {
 
   if (current && !existsSync(marker)) return current;
 
-  if (!current && existsSync(join(dir, ".git"))) {
-    const tracked = execFileSync("git", ["ls-files", "-z", "--", ...bridges.map(([legacy]) => `.office/${legacy}`)], { cwd: dir, encoding: "utf8" }).split("\0").find(Boolean);
+  checkAdoption(dir);
 
-    if (tracked) throw new OfficeError(`cannot adopt managed generations: ${tracked} is tracked in Git. The packages discovery link cannot contain tracked descendants. Check CI consumers before untracking any files; no tracked files were moved`);
+  for (const [legacy, member] of bridges) {
+    const path = join(root, legacy);
+    const entry = lstatSync(path, { throwIfNoEntry: false });
+
+    if (entry && !(member === "packages" ? entry.isDirectory() : entry.isFile())) {
+      if (existsSync(marker) && entry.isSymbolicLink() && readlinkSync(path) === relative(dirname(path), join(root, "current", member))) continue;
+      throw new OfficeError(`cannot adopt unexpected ${legacy}; preserve it and resolve the conflict before retrying`);
+    }
   }
 
   const name = existsSync(marker) ? v.parse(id, readFileSync(marker, "utf8")) : createGeneration(dir);
@@ -139,17 +210,34 @@ function locked<T>(dir: string, action: () => T) {
   return action();
 }
 
-/** A candidate keeps its final name from materialization through publication. Retain
- * published directories: external plugin runtimes cannot signal that they released one. */
+/** Reserve the final path and protect both the source and candidate during materialization. */
 export function beginGeneration(dir: string) {
+  checkAdoption(dir);
   return locked(dir, () => {
     const previous = adopt(dir);
+    prune(dir, previous);
     const name = createGeneration(dir);
     const original = readFileSync(join(dir, "office.yaml"), "utf8");
     const ticket = join(dir, ".office/generation-ticket");
     writeAtomic(ticket, name);
 
-    return { dir, previous, name, original } satisfies Candidate;
+    const writer = holdGeneration(dir, name);
+    const source = holdGeneration(dir, previous);
+
+    if (!writer || !source) throw new OfficeError("generation lease unavailable");
+
+    return { transaction: { dir, previous, name, original } satisfies Candidate, fd: writer.fd, [Symbol.dispose]() {
+      writer?.[Symbol.dispose]();
+      source?.[Symbol.dispose]();
+      // Don't finish an interrupted pin edit as a side effect of unwinding its parent.
+      // A subsequent writer recovers the journal before collecting abandoned generations.
+      using sweep = openCheckoutLease(dir, ".managed-generations");
+
+      if (!tryFileLock(sweep.fd, false) || existsSync(join(dir, ".office/publishing.json"))) return;
+      const current = activeGeneration(dir);
+
+      if (current) prune(dir, current);
+    } };
   });
 }
 
@@ -160,6 +248,10 @@ export function publishGeneration({ dir, previous, name, original }: Candidate, 
   return locked(dir, () => {
     if (activeGeneration(dir) !== previous || readFileSync(ticket, "utf8") !== name || readFileSync(yaml, "utf8") !== original) throw new Error("package publication superseded; retry with the current office.yaml");
     const path = join(dir, ".office/publishing.json");
+    const snapshot = join(dir, ".office/resolved/references.json");
+
+    if (!lstatSync(snapshot, { throwIfNoEntry: false })) symlinkSync("../current/references.json", snapshot);
+    writeAtomic(join(managedDirectory(dir, name), "previous"), previous);
     writeAtomic(path, JSON.stringify({ previous, candidate: name, before: digest(original), after: digest(updated) }));
 
     if (updated !== original) writeAtomic(yaml, updated);

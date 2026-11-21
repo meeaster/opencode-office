@@ -401,9 +401,7 @@ export function providerFiles(item: ResolvedPackage): string {
   return filesDigest(hashes);
 }
 
-export function gitSelection(source: NonNullable<PackageEntry["source"]>): string {
-  return `git:${sha256(JSON.stringify([source.repo, source.path, source.ref]))}`;
-}
+export { gitSelection } from "./reference-snapshot.ts";
 
 // The package bytes determine defaults and setup declarations; overrides are the remaining
 // selected input. Independent readers can establish this identity without executing setup.
@@ -784,7 +782,7 @@ async function resolveSetupSettings(office: Office, item: InstalledPackage, vali
   if (!item.manifest.setup) return;
   const rows: { id: string; value: CollectionEntry }[] = [];
 
-  const { scalars } = await runPackageSetup(item.manifest, overrides, { ...standardImports(join(office.dir, pulledFolder)), settings: structuredClone(item.settings), command() {}, collection() {}, add(handle, value) {
+  const { scalars } = await runPackageSetup(item.manifest, overrides, { ...standardImports(packageRoot(office.dir)), settings: structuredClone(item.settings), command() {}, collection() {}, add(handle, value) {
     if (validateMachine) rows.push({ id: handle.id, value });
   } });
 
@@ -812,22 +810,10 @@ export function settingsText(installed: InstalledPackage): string {
   return `${JSON.stringify(installed.settings, null, 2)}\n`;
 }
 
-/**
- * Writes a package's settings file and .office.json, and copies each file of its `template/` it has never handled
- * to the same path in the office, unless a file is already there: from then on the office owns
- * it. Both kinds count as handled in `.template.json`. Returns one line per change.
- */
-export function installPackage(office: Office, installed: InstalledPackage): string[] {
+export function writePackageSettings(office: Office, installed: InstalledPackage): string[] {
   const changes: string[] = [];
   const settingsPath = join(installed.dir, settingsFile);
   const settings = settingsText(installed);
-  const receipt = scalarReceipt(office, installed.entry.name);
-  const usesScalars = !installed.manifest.settings_schema && Object.keys(installed.settings).some(key => !Object.hasOwn(installed.manifest.settings, key));
-
-  if (usesScalars && !existsSync(receipt)) {
-    mkdirSync(dirname(receipt), { recursive: true });
-    writeFileSync(receipt, "setup supplies scalar settings\n");
-  } else if (!usesScalars && existsSync(receipt)) rmSync(receipt);
 
   if (!existsSync(settingsPath) || readFileSync(settingsPath, "utf8") !== settings) {
     writeFileSync(settingsPath, settings);
@@ -841,6 +827,26 @@ export function installPackage(office: Office, installed: InstalledPackage): str
     writeFileSync(officePath, declared);
     changes.push(`wrote ${relative(office.dir, officePath)} (opencode: ${office.opencode.mode})`);
   }
+
+  return changes;
+}
+
+/**
+ * Writes a package's settings file and .office.json, and copies each file of its `template/` it has never handled
+ * to the same path in the office, unless a file is already there: from then on the office owns
+ * it. Both kinds count as handled in `.template.json`. Returns one line per change.
+ */
+export function installPackage(office: Office, installed: InstalledPackage): string[] {
+  const changes: string[] = [];
+  const receipt = scalarReceipt(office, installed.entry.name);
+  const usesScalars = !installed.manifest.settings_schema && Object.keys(installed.settings).some(key => !Object.hasOwn(installed.manifest.settings, key));
+
+  if (usesScalars && !existsSync(receipt)) {
+    mkdirSync(dirname(receipt), { recursive: true });
+    writeFileSync(receipt, "setup supplies scalar settings\n");
+  } else if (!usesScalars && existsSync(receipt)) rmSync(receipt);
+
+  changes.push(...writePackageSettings(office, installed));
 
   const template = join(installed.dir, "template");
   const recordPath = join(installed.dir, templateFile);

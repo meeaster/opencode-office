@@ -65,6 +65,14 @@ function fixture(): void {
   copyFileSync(join(import.meta.dir, "../../packages/office/office.ts"), join(pkg, "office.ts"));
   copyFileSync(join(import.meta.dir, "../../packages/office/floors.ts"), join(pkg, "floors.ts"));
   cpSync(join(import.meta.dir, "../../packages/office/scripts"), join(pkg, "scripts"), { recursive: true });
+  // This fixture copies the real Office definition but doesn't run package sync.
+  // Give it the actual selected module in the same resolver layout as an installation.
+  const exports = join(dirname(pkg), "tooling/exports");
+  mkdirSync(exports, { recursive: true });
+  copyFileSync(join(import.meta.dir, "../../packages/tooling/requirements.ts"), join(dirname(exports), "requirements.ts"));
+  copyFileSync(join(import.meta.dir, "../../packages/tooling/exports/requirements.ts"), join(exports, "requirements.ts"));
+  mkdirSync(join(root, ".office/node_modules/@office"), { recursive: true });
+  symlinkSync(exports, join(root, ".office/node_modules/@office/tooling"));
   recordRequiredFixtures(pkg);
 
   const place = shellQuote(root);

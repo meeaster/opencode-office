@@ -734,14 +734,25 @@ test.skipIf(process.getuid?.() === 0)("a failed materialization matches only the
   f.select("  - name: aws-emulator\n");
   f.cli(0, "sync", "--packages");
   const folder = join(f.dir, ".office/packages");
-  rmSync(join(folder, "aws-emulator"), { recursive: true });
-  chmodSync(folder, 0o555);
+
+  // A read-only *prior* package directory no longer prevents writing a generation.
+  // Fail the actual copy into each candidate instead, for the same and a newer CLI.
+  const block = (name: string) => {
+    const file = join(folder, name, "unreadable");
+    write(file, "uncopyable");
+    chmodSync(file, 0);
+  };
+
+  block("aws-emulator");
 
   try {
     expect(f.cli(1, "sync", "--packages")).toContain("EACCES");
     expect(f.cli(0, "references", "list")).toContain("main\tpackage aws-emulator (stale)");
     expect(f.cli(1, "sync", "--references")).toContain("stale contribution cannot authorize a new clone");
     expect(existsSync(join(f.dir, "references/floci"))).toBe(false);
+    mkdirSync(join(folder, "aws-emulator"), { recursive: true });
+    block("aws-emulator");
+    block("references");
     expect(f.newer(1, "sync", "--packages")).toContain("EACCES");
     // The variant's references handler also changed and could not be installed.
     // There is no fallback; the independent data reader still sees the correct generation.
@@ -749,7 +760,7 @@ test.skipIf(process.getuid?.() === 0)("a failed materialization matches only the
     expect(f.newer(2, "references", "list")).toContain("office sync --packages");
     expect(f.newer(0, "instructions", f.dir)).not.toContain("references/floci/");
   } finally {
-    chmodSync(folder, 0o755);
+    for (const name of ["aws-emulator", "references"]) rmSync(join(folder, name, "unreadable"), { force: true });
   }
 
   f.cli(0, "sync", "--packages");
@@ -1102,7 +1113,8 @@ test("a built-in's bytes and a Git contributor's resolved commit survive separat
     hosts: ["github.com"], private: [{ what: "reference floci", url: "https://github.com/floci-io/floci.git", pushes: false }], pushes: [], needed: true,
   });
   expect(newer(1, "sync", "--packages")).toMatch(/built-in:[a-f0-9]{64}.*changed built-in collector/);
-  expect(newer(0, "references", "list")).not.toContain("floci\t");
+  expect(newer(1, "references", "list")).toContain("matching previous Office CLI or container image");
+  expect(cli(0, "references", "list")).toContain("floci\t");
   const repo = join(root, "tags");
   const installed = join(dir, ".office/packages/docs");
   git(["init", "-qb", "main", repo]);
@@ -1400,12 +1412,22 @@ for (const order of [["alpha", "catalog"], ["catalog", "alpha"]]) {
     const { dir, cli, select } = fixture(`pair-${order[0]}`);
     const repo = join(root, `source-${order[0]}`);
     git(["init", "-qb", "main", repo]);
-    const contract = (unit: string) => write(join(repo, "catalog/items.ts"), `export const items={id:"catalog.items",parse:i=>({...i,unit:"${unit}"})}`);
+
+    const contract = (unit: string) => {
+      write(join(repo, "catalog/exports/items.ts"), `import {readFileSync} from "node:fs";export const unit=readFileSync(new URL("../unit.txt",import.meta.url),"utf8");export const items={id:"catalog.items",parse:i=>({...i,unit})}`);
+      write(join(repo, "catalog/unit.txt"), unit);
+    };
+
     const consumer = join(repo, "alpha/office.ts");
     write(join(repo, "alpha/compose.yaml"), "services: {alpha: {image: example/alpha}}\n");
-    write(consumer, `export default {name:"alpha",description:"author",async setup(c){if(c.booleanSetting("enabled",{default:false,description:"use catalog"})){
-      const {items}=await import("../catalog/items.ts");c.add(items,{name:"sample"});}}}`);
-    write(join(repo, "catalog/office.ts"), `import {items} from "./items.ts";export default {name:"catalog",description:"provider",setup(c){
+    write(join(repo, "alpha/exports/expected.ts"), `export const expected="metres"`);
+    write(consumer, `import {items,unit} from "@office/catalog/items";import {expected} from "./exports/expected.ts";
+      if(unit!==expected)throw Error("incompatible revisions");
+      export default {name:"alpha",description:"author",setup(c){if(c.booleanSetting("enabled",{default:false,description:"use catalog"})){
+      c.add(items,{name:"sample"});}}}`);
+    write(join(repo, "catalog/office.ts"), `import {items,unit} from "./exports/items.ts";import {expected} from "@office/alpha/expected";
+      if(expected!==unit)throw Error("incompatible revisions");
+      export default {name:"catalog",description:"provider",setup(c){
       c.collection(items);c.command({name:"measure",summary:"measure",run(i){console.log(i.read(items)[0].value.unit)}})}}`);
     contract("metres");
     const first = commit(repo);
@@ -1413,7 +1435,7 @@ for (const order of [["alpha", "catalog"], ["catalog", "alpha"]]) {
     cli(0, "sync", "--packages");
     expect(cli(0, "measure")).toContain("metres");
     contract("seconds");
-    write(consumer, read(consumer) + "\n// second revision");
+    write(join(repo, "alpha/exports/expected.ts"), `export const expected="seconds"`);
     commit(repo);
     cli(0, "packages", "update");
     expect(cli(0, "measure")).toContain("seconds");

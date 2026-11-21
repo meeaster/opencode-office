@@ -41,7 +41,8 @@ type Context = {
 
 // OpenCode loads the plugin through the link `.opencode/plugins/office`; the real folder is the
 // one beside the package's skills/ and .settings.json.
-const packageDir = dirname(realpathSync(dirname(fileURLToPath(import.meta.url))));
+const sourceDir = dirname(realpathSync(dirname(fileURLToPath(import.meta.url))));
+const packageDir = sourceDir.replace(/\/\.office\/generations\/g-[a-f0-9-]+\/packages\/([^/]+)$/, "/.office/packages/$1");
 const skillsDir = join(packageDir, "skills");
 
 /** A skill as OpenCode registers it: the description from its front matter and the body after it. */
@@ -105,7 +106,7 @@ export default {
 
       const provided = packageSkills(office);
 
-      return skills.filter((skill) => !provided.has(skill.id) && inFolders(folders, skill.path)).map((skill) => skill.id);
+      return skills.flatMap(skill => !provided.has(skill.id) && inFolders(folders, skill.path) ? [skill.id] : []);
     };
 
     // OpenCode applies skill transforms in the order they were registered, on every load of the
@@ -134,7 +135,7 @@ export default {
       if (stopped || office === undefined) return;
 
       clearTimeout(check);
-      check = setTimeout(() => void removeIgnored().catch((error: unknown) => console.error("office plugin: skills in ignored folders may still be listed:", error)), 0);
+      check = setTimeout(() => void removeIgnored().catch(console.error.bind(console, "office plugin: skills in ignored folders may still be listed:")), 0);
     };
 
     // Read on each load of the skills, so a restored copy's text arrives without a restart.
@@ -151,8 +152,8 @@ export default {
 
     // The setting as the next `office sync` writes it applies at once, a folder taken out of it
     // included. The directory is watched, since sync replaces the file.
-    const watcher = watch(packageDir, (_event, file) => {
-      if (file === ".settings.json") void ctx.skill.reload().catch(console.error);
+    const watcher = watch(sourceDir === packageDir ? packageDir : dirname(dirname(packageDir)), (_event, file) => {
+      if (file === "current" || file === ".settings.json") void ctx.skill.reload().catch(console.error);
     });
 
     // Read on each load of the MCP servers. Without an address there is nothing to connect to

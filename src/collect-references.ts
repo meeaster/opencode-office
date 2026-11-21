@@ -103,7 +103,7 @@ function provenance(item: ResolvedPackage, previous: ReferenceSnapshot | undefin
 }
 
 /** A throwing collector can publish a degraded generation. Conflicting claims cannot publish at all. */
-export async function collectReferences(office: Office, selected: ResolvedPackage[], installed: InstalledPackages, changes: { push(...lines: string[]): void }, { previous, publish }: ReferencePublication, rejected: ReadonlySet<string>, embedded: ReadonlyMap<string, string>): Promise<boolean> {
+export async function collectReferences(office: Office, selected: ResolvedPackage[], installed: InstalledPackages, changes: { push(...lines: string[]): void }, { previous, publish }: ReferencePublication, rejected: ReadonlySet<string>, embedded: ReadonlyMap<string, string>, conflict?: (...owners: string[]) => void): Promise<boolean> {
   const candidate: ReferenceSnapshot = { version: 4, inputs: inputHash(office), owner: office.references, contributors: [] };
   const available = new Map(installed.installed.map(item => [item.entry.name, item]));
   const errors: string[] = [];
@@ -273,7 +273,11 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
       const key = JSON.stringify([id, scoped ? group.name : null, value.name]);
       const first = keys.get(key);
 
-      if (first) errors.push(`${id} ${value.name} claimed by both package ${first} and package ${group.name}`);
+      if (first) {
+        conflict?.(first, group.name);
+        errors.push(`${id} ${value.name} claimed by both package ${first} and package ${group.name}`);
+      }
+
       keys.set(key, group.name);
     }
   }
@@ -297,11 +301,12 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
     try {
       project(item, group.entries, true);
     } catch (error) {
+      conflict?.(group.name);
       errors.push(`package ${group.name}: ${String(error)}`);
     }
   }
 
-  errors.push(...destinationProblems(office, installed.installed));
+  errors.push(...destinationProblems(office, installed.installed, conflict));
 
   const combined = claims(candidate);
 

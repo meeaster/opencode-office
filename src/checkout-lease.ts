@@ -20,6 +20,12 @@ function loadLibc() {
 
 let libc: ReturnType<typeof loadLibc> | undefined;
 
+export function tryFileLock(fd: number, shared: boolean) {
+  libc ??= loadLibc();
+
+  return libc.symbols.flock(fd, (shared ? 1 : 2) | 4) === 0;
+}
+
 /** Open first so the caller's `using` covers failed admission as well as a completed checkout. */
 export function openCheckoutLease(dir: string, name: string) {
   const folder = join(dir, dirname(referenceFile), "checkout-leases");
@@ -29,9 +35,7 @@ export function openCheckoutLease(dir: string, name: string) {
   return {
     fd,
     acquire() {
-      libc ??= loadLibc();
-
-      if (libc.symbols.flock(fd, 2 | 4) !== 0) { // LOCK_EX | LOCK_NB
+      if (!tryFileLock(fd, false)) {
         throw new OfficeError(`reference ${name}: checkout lease unavailable; retry after the active Git checkout finishes (the filesystem must support flock)`);
       }
     },

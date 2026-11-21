@@ -44,7 +44,8 @@ type Mode = "host" | "container" | undefined;
 
 // OpenCode loads the plugin through the link `.opencode/plugins/browser`; the real folder is the
 // package's, beside its skills/ and .settings.json.
-const packageDir = dirname(realpathSync(dirname(fileURLToPath(import.meta.url))));
+const sourceDir = dirname(realpathSync(dirname(fileURLToPath(import.meta.url))));
+const packageDir = sourceDir.replace(/\/\.office\/generations\/g-[a-f0-9-]+\/packages\/([^/]+)$/, "/.office/packages/$1");
 
 const skillFile = join(packageDir, "skills/browser-automation/SKILL.md");
 
@@ -193,8 +194,8 @@ export default {
     });
 
     // Watch the directory so sync replacing the settings or mode file doesn't detach the watcher.
-    const watcher = watch(packageDir, (_event, file) => {
-      if (file === ".settings.json" || file === ".office.json") {
+    const watcher = watch(sourceDir === packageDir ? packageDir : dirname(dirname(packageDir)), (_event, file) => {
+      if (file === "current" || file === ".settings.json" || file === ".office.json") {
         void ctx.skill.reload().catch(console.error);
         void ctx.mcp.reload().catch(console.error);
       }

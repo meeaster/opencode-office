@@ -8,8 +8,7 @@ on:
     branches: [main]
     paths:
       - "artifacts/**"
-      - ".office/packages/artifact-share/scripts/**"
-      - ".office/packages/artifact-share/.settings.json"
+      - "office.yaml"
       - ".github/workflows/publish-artifacts.yml"
   workflow_dispatch:
 
@@ -35,6 +34,21 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
+      # Pin the release and independently verified asset digest under repository variables.
+      - name: Restore the pinned renderer
+        env:
+          OFFICE_RELEASE: ${{ vars.ARTIFACT_OFFICE_RELEASE }}
+          OFFICE_SHA256: ${{ vars.ARTIFACT_OFFICE_SHA256 }}
+        run: |
+          set -eu
+          [[ "$OFFICE_RELEASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9]{8}T[0-9]{6}Z$ ]]
+          [[ "$OFFICE_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          curl --fail --silent --show-error --location --proto '=https' \
+            "https://github.com/meeaster/opencode-office/releases/download/$OFFICE_RELEASE/office-linux-x64" \
+            -o "$RUNNER_TEMP/office"
+          echo "$OFFICE_SHA256  $RUNNER_TEMP/office" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/office"
+          "$RUNNER_TEMP/office" sync --packages
       - run: bun .office/packages/artifact-share/scripts/build-site.ts "$RUNNER_TEMP/site"
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:

@@ -20,7 +20,7 @@ import { init, nextSteps } from "./commands/init.ts";
 import { pair } from "./commands/pair.ts";
 import { pin } from "./commands/pin.ts";
 import { updatePackages, updateSkills } from "./commands/pins.ts";
-import { setup } from "./commands/setup.ts";
+import { finishSetup, setup } from "./commands/setup.ts";
 import { sessionInstructions } from "./commands/session-instructions.ts";
 import { runInContainer } from "./commands/shell.ts";
 import { summarize, sync } from "./commands/sync.ts";
@@ -201,6 +201,24 @@ async function main(): Promise<void> {
   if (reader) {
     const [, dir, name] = args.splice(0, 3);
     bindReader(dir, name);
+
+    if (args[0] === "--finish-setup" && args[1] === dir) {
+      const office = currentOffice({ office: dir });
+
+      return reported("setup", officeContext(office), reporter => finishSetup(office, args[2] === "shell", args[3] || undefined, reporter), { verbose: args[4] === "verbose" });
+    }
+
+    if (args[0] === "--finish-refresh" && args[1] === dir) {
+      const office = currentOffice({ office: dir });
+      const verbose = args[2] === "verbose";
+
+      return reported("refresh", officeContext(office), async reporter => {
+        const services = reporter.stage("Services", { key: "services" });
+        services.done(await up(office));
+        await checkStage(office, reporter, verbose);
+        reporter.finish([]);
+      }, { verbose });
+    }
   }
 
   if (args[0] === "update") {
@@ -221,7 +239,7 @@ async function main(): Promise<void> {
   const { values: flags, positionals } = parsed;
   const [command, ...rest] = positionals;
 
-  if (!reader && command && !flags.version && !flags.help && !["init", "sync", "setup", "refresh", "packages", "sfw-wrappers", "migrate-home", "env"].includes(command)) {
+  if (!reader && command && !flags.version && !flags.help && !["init", "sync", "refresh", "packages", "sfw-wrappers", "migrate-home", "env"].includes(command)) {
     let dir;
 
     try { dir = findOffice(flags.office ?? process.cwd()); } catch { /* bootstrap handles offices not found */ }
@@ -347,12 +365,9 @@ async function main(): Promise<void> {
       const stage = reporter.stage("Repositories and packages", { key: "sync" });
 
       finishSync(stage, await sync(currentOffice(flags), { stage, verbose }));
-      const synced = currentOffice(flags);
-      const services = reporter.stage("Services", { key: "services" });
+      const status = await runReader(office.dir, ["--finish-refresh", office.dir, verbose ? "verbose" : ""]);
 
-      services.done(await up(synced));
-      await checkStage(synced, reporter, verbose);
-      reporter.finish([]);
+      if (status !== 0) throw new OfficeError("refresh did not complete with the published package generation");
     }, { verbose });
   } else if (command === "check") {
     const office = currentOffice(flags);
