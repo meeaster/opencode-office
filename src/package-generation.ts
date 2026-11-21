@@ -3,7 +3,8 @@ import { execFileSync } from "node:child_process";
 import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import * as v from "valibot";
-import { openCheckoutLease, tryFileLock } from "./checkout-lease.ts";
+import { openCheckoutLease } from "./checkout-lease.ts";
+import { tryFileLock } from "./file-lock.ts";
 import { atomicWrite } from "./secrets.ts";
 import { OfficeError } from "./office.ts";
 

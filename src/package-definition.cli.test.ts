@@ -1470,13 +1470,15 @@ test("a suspended indexed reader retains its generation beyond the previous set"
   try {
     const output = process.stdout.getReader();
     expect(new TextDecoder().decode((await output.read()).value)).toContain("ready");
-    output.releaseLock();
 
     for (const value of ["two", "three", "four"]) pin(value);
     expect(existsSync(old)).toBe(true);
     expect(cli(0, "read", "edition").trim()).toBe("four");
     process.stdin.end();
-    expect((await new Response(process.stdout).text()).trim()).toBe("old");
+    let resumed = "";
+
+    for (let next = await output.read(); !next.done; next = await output.read()) resumed += new TextDecoder().decode(next.value);
+    expect(resumed.trim()).toBe("old");
     expect(await process.exited).toBe(0);
     cli(0, "sync", "--packages");
     expect(existsSync(old)).toBe(false);
