@@ -274,4 +274,4 @@ test.skipIf(process.platform !== "linux")("overlapping manual runs share one OS 
 
   expect((await first).code).toBe(0);
   expect(calls()).toEqual(["claude update", "codex update", "screened", "opencode upgrade"]);
-}, 10_000);
+});

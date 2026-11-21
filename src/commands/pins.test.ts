@@ -383,7 +383,7 @@ test("a pending peer setting and duplicate requirements reject the staged tree; 
   expect(office("packages", "update").out).toContain("done: 2 updated");
 
   for (const name of names) expect(record(`.office/packages/${name}`).commit).toBe(next);
-}, 30_000);
+});
 
 test("help names both update commands, and office.yaml refuses a track without a repository", () => {
   expect(office("--help").out).toContain("skills update");

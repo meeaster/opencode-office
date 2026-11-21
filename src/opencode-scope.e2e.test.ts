@@ -1,10 +1,13 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import * as v from "valibot";
 import { compile } from "./build.ts";
 import { excludeEnd, excludeStart } from "./commands/sync.ts";
+
+// An end-to-end test spawns the compiled office many times; under a parallel run it gets 30s, not Bun's 5s.
+setDefaultTimeout(30_000);
 
 const sandbox = mkdtempSync(join(tmpdir(), "office-opencode-scope-"));
 const office = join(sandbox, "bin/office");

@@ -27,10 +27,10 @@ export function toolPath(path: string): string {
 }
 
 /**
- * The asset folders and files `src/build.ts` embeds, each a path relative to the repository root.
- * `target/packages` is `packages/` as offices get the built-in packages, which embeds as `packages`.
+ * The asset folders and files `src/build.ts` embeds as they are, each a path relative to the
+ * repository root. It also embeds `packages/` as offices get the built-in packages, staged per build.
  */
-export const assets = ["template", "target/packages", "LICENSE", "image", "compose.yaml"];
+export const assets = ["template", "LICENSE", "image", "compose.yaml"];
 
 /**
  * The built-in packages whose `plugin/` an office gets as one bundled `index.js`, because the

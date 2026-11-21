@@ -1,8 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compile } from "./build.ts";
+
+// An end-to-end test spawns the compiled office many times; under a parallel run it gets 30s, not Bun's 5s.
+setDefaultTimeout(30_000);
 
 // The emitted unit quotes each argument separately; decode the subset emitted by argument()
 // without interpreting its shell script in the test runner.

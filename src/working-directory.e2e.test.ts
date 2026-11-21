@@ -1,8 +1,11 @@
-import { beforeAll, expect, test } from "bun:test";
+import { beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compile, runtime } from "./build.ts";
+
+// An end-to-end test spawns the compiled office many times; under a parallel run it gets 30s, not Bun's 5s.
+setDefaultTimeout(30_000);
 
 // A compiled executable reads bunfig.toml and .env from the folder it runs in unless the build turns
 // that off. Neither may run code or set variables before office's own code does.

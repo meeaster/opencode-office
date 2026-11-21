@@ -91,7 +91,7 @@ From the CLI checkout on Linux with a clean temporary-file hierarchy and no syst
 ```sh
 OFFICE_TEST_OPENCODE="$(command -v opencode)" \
 OFFICE_TEST_PRE_INSPECT=/path/to/compiled-ee0bbc2/office \
-bun test ./src/opencode-scope.cli.test.ts
+bun test ./src/opencode-scope.e2e.test.ts
 ```
 
 The tests compile the production CLI, create their own homes, offices, app and machine paths, and use a local request trap for inspect. The optional old binary publishes real pre-inspect generations, exercises the author commands, then upgrades with a moved tag and missing package copy. The independent native case starts only the supplied V2 binary on an ephemeral loopback port, with its own password, no inherited account environment and model fetching disabled. It reads `/api/command` at the root, both desks, a nested Git repo, and a fresh location after withdrawal. It also declares a Git-cloned plugin and checks that its command, loaded through the link into `.office/plugins/`, is listed at the root, both desks and the nested repo. Without either variable the offline ownership, exclude, inventory and checkout tests still run.

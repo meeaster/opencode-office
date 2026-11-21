@@ -2,7 +2,7 @@
 // and the base compose file. `bun src/build.ts` writes target/office; with --install it also
 // installs it as ~/.local/bin/office. With --prerelease <id> the version becomes <version>-<id>,
 // as the release workflow builds it.
-import { copyFileSync, cpSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
@@ -21,26 +21,32 @@ export const runtime = { execArgv: ["--no-install"], autoloadBunfig: false, auto
 
 /** Compiles the CLI from this checkout into `outfile`, stamped with `version` and the checkout's commit. */
 export async function compile(outfile: string, version = manifest.version): Promise<void> {
-  // The built-in packages as offices hold them, staged in target/packages/ to be embedded: a
-  // bundled plugin replaces its package's plugin/ sources with the one built index.js.
-  const staged = join(root, "target/packages");
+  // The built-in packages as offices hold them, staged to be embedded as `packages`: a bundled
+  // plugin replaces its package's plugin/ sources with the one built index.js. Each build stages in
+  // its own folder, so builds running at once (parallel test files) never share one.
+  mkdirSync(join(root, "target"), { recursive: true });
+  const stage = mkdtempSync(join(root, "target/stage-"));
+  const staged = join(stage, "packages");
 
-  rmSync(staged, { recursive: true, force: true });
-  cpSync(join(root, "packages"), staged, { recursive: true, filter: (path) => !`${relative(join(root, "packages"), path).split(sep).slice(1).join("/")}/`.startsWith(packageTests) });
+  try {
+    cpSync(join(root, "packages"), staged, { recursive: true, filter: (path) => !`${relative(join(root, "packages"), path).split(sep).slice(1).join("/")}/`.startsWith(packageTests) });
 
-  for (const name of bundledPlugins) {
-    rmSync(join(staged, name, "plugin"), { recursive: true });
-    mkdirSync(join(staged, name, "plugin"));
-    writeFileSync(join(staged, name, "plugin/index.js"), await bundlePlugin(name));
+    for (const name of bundledPlugins) {
+      rmSync(join(staged, name, "plugin"), { recursive: true });
+      mkdirSync(join(staged, name, "plugin"));
+      writeFileSync(join(staged, name, "plugin/index.js"), await bundlePlugin(name));
+    }
+
+    const result = await Bun.build({
+      entrypoints: [join(root, "src/cli.ts"), join(root, "src/validate-replacement.ts")],
+      compile: { outfile, ...runtime, assets: [...assets.map((path) => join(root, path)), staged] },
+      define: { OFFICE_COMMIT: JSON.stringify(checkoutCommit()), OFFICE_VERSION: JSON.stringify(version) },
+    });
+
+    if (!result.success) throw new AggregateError(result.logs, "bun build failed");
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
   }
-
-  const result = await Bun.build({
-    entrypoints: [join(root, "src/cli.ts"), join(root, "src/validate-replacement.ts")],
-    compile: { outfile, ...runtime, assets: assets.map((path) => join(root, path)) },
-    define: { OFFICE_COMMIT: JSON.stringify(checkoutCommit()), OFFICE_VERSION: JSON.stringify(version) },
-  });
-
-  if (!result.success) throw new AggregateError(result.logs, "bun build failed");
 }
 
 if (import.meta.main) {

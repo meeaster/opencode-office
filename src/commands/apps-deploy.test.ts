@@ -101,4 +101,4 @@ test("apps deploy keeps the active version on a repeat run and still checks its 
     await server.stop(true);
     rmSync(dir, { recursive: true, force: true });
   }
-}, 30_000);
+});
