@@ -2,11 +2,16 @@
 
 ## Design decisions
 
+- Before design or architecture work, read [VISION.md](VISION.md): what the project is for and where it is going.
 - A brainstorm is a design session: explain the user-visible tradeoff and recommend an option. Wait for the user to choose before building; delegation needs approval for that piece of work.
 - Build office-specific integrations in the consuming office. Offices can share packages without making them built-ins. The required `office` package owns workspace guidance and OpenCode tooling; other capabilities are opt-in. A desk need not have a repo or Executor app.
 - `template/` is copied once. Put guidance every office should receive on update in the required package’s plugin; put owner-selected settings in `office.yaml`. If an existing office needs a template change, call out the adoption step.
 - Only OpenCode has a host/container mode. Host mode uses an existing server that `office` never starts or stops; container mode adds a server without precluding work from the host. Executor and office services run in containers in either mode. Agents are deliberately unrestricted: the container or the host server's own configuration supplies the boundary. Add agent permission rules only on request.
 - Bind published ports to loopback. The office's services share its Executor key; keep other service credentials in Executor. This is a public repository: use portable examples without personal paths, identities or credentials.
+
+## Documentation
+
+- `docs/` describes the tool as it is now, for someone learning it: how to use it and its features, and how it is built. Update a doc in the same change as the behavior it describes. Designs, plans, handoffs and research live outside the repository; carry a lasting rule they produce into the nearest `AGENTS.md`, as `src/AGENTS.md` does for terminal rendering.
 
 ## Verification and adoption
 
