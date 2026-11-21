@@ -32,7 +32,7 @@ import { collectJobs } from "../standard/cron/jobs.ts";
 import { composeProblems, packageComposeFile, settingsEnv } from "./package-services.ts";
 import { systemSection } from "./package-system.ts";
 import { check, officeRelativePath, type PackageManifest, type Parsed, scalarSetting, type SettingValue, settingVariable } from "./schema.ts";
-import { copySeeds, seedFolder, settleReceipts, sha256 } from "./seeds.ts";
+import { applySeeds, seedFolder, settleReceipts, sha256 } from "./seeds.ts";
 import { build, buildCommit, builtinFiles, builtinPackages, toolRepository } from "./tool.ts";
 
 /** Where a pulled-in package records where it came from and the hash of each of its files. */
@@ -811,9 +811,10 @@ export function writePackageSettings(office: Office, installed: InstalledPackage
 }
 
 /**
- * Writes a package's settings file and .office.json, and copies each file of its `seed/` (its seed
- * files) whose path has no receipt in office.lock to the same path in the office, unless a file is
- * already there: from then on the office owns it (src/seeds.ts). A `template/` folder, which earlier
+ * Writes a package's settings file and .office.json, and applies its `seed/` (its seed files): each
+ * path with no receipt in office.lock is copied to the same path in the office, unless a file is
+ * already there, and from then on the office owns it; a file still unchanged is replaced when the
+ * package's seed changes (src/seeds.ts). A `template/` folder, which earlier
  * releases read, is not read; a line says so. Returns one line per change.
  */
 export function installPackage(office: Office, installed: InstalledPackage): string[] {
@@ -837,5 +838,5 @@ export function installPackage(office: Office, installed: InstalledPackage): str
   // A path the seeds: section couldn't hold is refused before anything is copied.
   for (const file of files.filter((file) => !officeRelativePath(file))) changes.push(`FAILED package ${name}'s ${seedFolder}/${file}: not a plain office-relative path`);
 
-  return [...changes, ...copySeeds(office.dir, name, folder, files.filter(officeRelativePath))];
+  return [...changes, ...applySeeds(office.dir, name, folder, files.filter(officeRelativePath))];
 }

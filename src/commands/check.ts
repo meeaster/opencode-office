@@ -44,10 +44,11 @@ import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces
 import { pinnedTools } from "../schema.ts";
 import { seedReceiptProblems, storedSeedProblems } from "../seeds.ts";
 import { builtinFiles, builtinPackages, version } from "../tool.ts";
-import { changes, defaultPins, describeMove, executorImage, isTested, lockFile, lockLacksSfw, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
+import { changes, defaultPins, describeMove, executorImage, isTested, lockFile, lockLacksSfw, readApplied, readLockSection, tested, toolsFor, wantedPins } from "../versions.ts";
 import { appFolders, deployedFrameworks } from "./apps.ts";
 import { compose, officeImage, ports, runningPins } from "./compose.ts";
 import { keyOrganization } from "./executor.ts";
+import { seededPaths } from "./seeds.ts";
 import type { Stage } from "../report/index.ts";
 
 /** Prints one check; "warn" is shown but doesn't fail `office check`. */
@@ -186,9 +187,24 @@ async function drift(office: Office): Promise<string[]> {
   return problems;
 }
 
-/** A warning for each receipt whose stored seed is missing or corrupt. Reads only. */
+/** A warning for each receipt whose stored seed is missing or corrupt, and one for any pending seeds. Reads only. */
 export function seedChecks(office: Office, report: Report): void {
   for (const problem of storedSeedProblems(office.dir)) report("warn", "seeds", problem);
+
+  // An unreadable seeds: section is drift, which seedReceiptProblems reports.
+  try {
+    readLockSection(office.dir, "seeds");
+  } catch {
+    return;
+  }
+
+  try {
+    const pending = seededPaths(office).filter((item) => item.state === "pending").length;
+
+    if (pending > 0) report("warn", "seeds", `${pending} ${pending === 1 ? "seed" : "seeds"} pending; office seeds diff`);
+  } catch (error) {
+    report("warn", "seeds", `can't tell which seeds are pending: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 /**

@@ -209,7 +209,7 @@ test("a package plugin is linked while declared, gives way to a plugins: entry o
   expect(existsSync(link)).toBe(false);
 });
 
-test("a seed file is copied once: one the office deletes stays deleted, one already there is kept, and one the package adds later is created", () => {
+test("a seed file is created once: one the office deletes stays deleted, also on a fresh clone, one already there is kept, and one the package adds later is created", () => {
   const office = join(dir, "office");
 
   const install = () => {
@@ -280,6 +280,35 @@ test("sync removes a copied package whose entry is gone, even an edited copy, wi
   expect(readFileSync(join(office, "out/my-page/index.md"), "utf8")).toBe("the office's own\n");
   expect(existsSync(join(office, "packages/own/package.yaml"))).toBe(true);
   expect(await sync(loadOffice(office))).toEqual([]);
+});
+
+test("sync changes no seeded file or receipt of a package it can't read, even one whose seed changed or went", async () => {
+  const office = join(dir, "office");
+
+  write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
+  write(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  write(join(office, "packages/demo/seed/changed.md"), "v1\n");
+  write(join(office, "packages/demo/seed/gone.md"), "v1\n");
+  git(["init", "--quiet", office]);
+  expect(await sync(loadOffice(office))).toContain("created changed.md from package demo");
+
+  const lock = readFileSync(join(office, "office.lock"), "utf8");
+
+  write(join(office, "packages/demo/package.yaml"), "name: demo\n  description: [not, valid\n");
+  write(join(office, "packages/demo/seed/changed.md"), "v2\n");
+  rmSync(join(office, "packages/demo/seed/gone.md"));
+
+  const changes = await sync(loadOffice(office));
+
+  expect(changes.some((line) => line.startsWith("FAILED") && line.includes("demo"))).toBe(true);
+  expect(changes.filter((line) => line.includes(".md"))).toEqual([]);
+  expect(readFileSync(join(office, "changed.md"), "utf8")).toBe("v1\n");
+  expect(readFileSync(join(office, "gone.md"), "utf8")).toBe("v1\n");
+  expect(readFileSync(join(office, "office.lock"), "utf8")).toBe(lock);
+
+  // Read again, the package's changes apply.
+  write(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  expect((await sync(loadOffice(office))).filter((line) => line.includes(".md"))).toEqual(["updated changed.md to package demo's new seed, as the file was unchanged", "kept gone.md, which package demo no longer seeds, and dropped its receipt"]);
 });
 
 test("a seed path the seeds: section couldn't hold is refused before copying, and the other files go ahead; an unreadable lock refuses before any copy", () => {

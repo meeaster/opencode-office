@@ -21,6 +21,7 @@ test("tracked updates validate the consuming settings and staged assets before p
   write(join(source, "base.env"), "FEATURE=original\n");
   write(join(source, "plugin/index.ts"), "// original");
   write(join(source, "seed/shared.md"), "seed");
+  write(join(source, "seed/edited.md"), "seed\n");
   const first = commit(repo);
   select(`  - {name: shared, repo: ${repo}, ref: ${first}, path: shared, track: main, settings: {title: Mine}}\nstate: ./state\n`);
   cli(0, "sync", "--packages");
@@ -59,11 +60,26 @@ test("tracked updates validate the consuming settings and staged assets before p
       c.add(repositories,{name:"enabled",url:"new-revision"});
     }
   }}`);
+  // The new revision also changes both seeds: the unchanged file is replaced, the edited one offered.
+  write(join(source, "seed/shared.md"), "updated seed");
+  write(join(source, "seed/edited.md"), "updated seed\n");
+  write(join(dir, "edited.md"), "the owner's edit\n");
   const next = commit(repo);
   select(`  - {name: shared, repo: ${repo}, ref: ${first}, path: shared, track: main, settings: {enabled: true}}\nstate: ./state\n`);
-  cli(0, "packages", "update");
+  expect(cli(0, "packages", "update")).toContain("pending edited.md: package shared changed its seed");
   expect(read(paths[0])).toContain(next);
   expect(cli(0, "references", "list")).toContain("enabled\tnew-revision\tpackage shared");
+  expect(read(join(dir, "shared.md"))).toBe("updated seed");
+  expect(read(join(dir, "edited.md"))).toBe("the owner's edit\n");
+  const shown = cli(0, "seeds", "diff", "edited.md");
+  expect(shown).toContain("+updated seed");
+  expect(shown).toContain("+the owner's edit");
+  expect(shown).toContain("Keep owner deletions deleted, including package rewrites of deleted rules or sections.");
+  expect(shown).toContain("office seeds settle edited.md");
+  expect(cli(0, "seeds", "settle", "edited.md")).toContain("settled edited.md");
+  expect(cli(0, "seeds", "diff")).toContain("No seeds are pending.");
+  expect(read(join(dir, "edited.md"))).toBe("the owner's edit\n");
+  expect(cli(0, "--help")).toContain("seeds settle <path>");
 }, 60_000);
 
 test("a broken embedded replacement leaves the installed package usable and fails a new init", () => {

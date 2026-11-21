@@ -1,8 +1,14 @@
-// Seed files: the files under a package's `seed/` folder, copied once into the office. Each path a
-// package handles gets a receipt in office.lock's `seeds:` section, which is committed: the
-// SHA-256 of the bytes office created, or `existing: true` for a file that was already there. Sync
-// never copies a path with a receipt again, so a seed file the office deletes stays deleted on
-// every clone, and removing a package deletes a file it created only while it matches the receipt.
+// Seed files: the files under a package's `seed/` folder, laid down once in the office and the
+// owner's from then on. Each path a package handles gets a receipt in office.lock's `seeds:`
+// section, which is committed: the SHA-256 of the bytes office created, or `existing: true` for a
+// file that was already there. Sync never creates a file for a path with a receipt again, so a seed
+// file the office deletes stays deleted on every clone, and removing a package deletes a file it
+// created only while it matches the receipt.
+//
+// When a package's seed changes, `classifySeed` compares the receipt, the stored seed, the
+// package's seed and the office's file: sync replaces only a file whose bytes equal the stored
+// seed, and a file with other bytes is pending until `office seeds settle` records the new seed.
+// Nothing about pending is stored; it is worked out on each run.
 //
 // The seed store, `.office/seeds/<sha256>`, keeps the bytes of every seed a receipt's hash names,
 // written before the copy and the receipt, and is committed (sync's exclude block leaves it out).
@@ -13,6 +19,7 @@ import { dirname, join, relative } from "node:path";
 
 import { officeRelativePath, type SeedReceipt } from "./schema.ts";
 import { atomicWrite } from "./secrets.ts";
+import { shellQuote } from "./sfw.ts";
 import { editLock, lockFile, readLockSection } from "./versions.ts";
 
 /** A package's folder of seed files. An earlier release read `template/`, which is no longer read. */
@@ -30,6 +37,21 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** `path` as one shell word in a printed command: as it is when plain, single-quoted otherwise. */
+export function shellWord(path: string): string {
+  return /^[\w./@%+=:,-]+$/.test(path) ? path : shellQuote(path);
+}
+
+/**
+ * How to repair stored seed `hash` when it is missing or doesn't hash to its name; sync, check and
+ * the `office seeds` commands all give it.
+ */
+export function restoreAdvice(hash: string): string {
+  const stored = `${seedStore}/${hash}`;
+
+  return `restore it from Git (git checkout -- ${stored}) or, if it was never committed, copy the file as office laid it down (for an unchanged file, the office's file) to ${stored}`;
+}
+
 /** Where the store's files are staged before their rename: excluded from commits, unlike the store. */
 const staging = ".office";
 
@@ -38,7 +60,7 @@ const staging = ".office";
  * rename. A seed already stored is left as it is; when its bytes don't hash to its name it throws,
  * as it does when the store can't be written, naming the seed's place in the store.
  */
-function storeSeed(dir: string, hash: string, bytes: Buffer): void {
+export function storeSeed(dir: string, hash: string, bytes: Buffer): void {
   const stored = `${seedStore}/${hash}`;
   let existing: Buffer | undefined;
 
@@ -50,7 +72,7 @@ function storeSeed(dir: string, hash: string, bytes: Buffer): void {
     throw new Error(`could not store it as ${stored}, so it isn't copied: ${message(error)}`);
   }
 
-  if (existing !== undefined && sha256(existing) !== hash) throw new Error(`${stored} doesn't hash to its name, so it isn't copied; restore it from Git (git checkout -- ${stored})`);
+  if (existing !== undefined && sha256(existing) !== hash) throw new Error(`${stored} doesn't hash to its name, so it isn't copied; ${restoreAdvice(hash)}`);
 }
 
 /**
@@ -99,45 +121,176 @@ function seedPathProblem(dir: string, file: string): string | undefined {
 }
 
 /**
- * Copies each of package `name`'s seed `files` (paths under its seed folder, `folder`) that has no
- * receipt to the same path in the office at `dir`, unless a file is already there, and records a
- * receipt for each. Each copied seed is stored first (`storeSeed`), so a receipt never names a seed
- * that isn't stored, or one stored with other bytes. A path the section couldn't hold, one in `.office/` and one through a link
- * are refused and get no receipt. A store write, stored seed or copy that fails is reported and the other files
- * go ahead, so the receipts of the files copied are saved. Returns one line per change; a failure
- * starts with FAILED.
+ * What to do with a seeded path, from `classifySeed`:
+ * - `current`: the package's seed is the one the receipt names; nothing to do, whatever the file holds.
+ * - `replace`: the seed changed and the file still has the stored seed's bytes; sync replaces it.
+ * - `advance`: the seed changed and the file is deleted or already has the new seed's bytes; sync records the new seed.
+ * - `pending`: the seed changed and the file has other bytes; left to the owner (`office seeds diff`, `office seeds settle`).
+ * - `dropped`: the package no longer has a seed for the path; sync leaves the file and drops the receipt.
+ * - `blocked`: the seed changed and the stored seed is missing or doesn't hash to its name; nothing changes until Git restores it.
+ * - `unowned`: the receipt marks a file that was already there, which has no stored seed; never offered.
  */
-export function copySeeds(dir: string, name: string, folder: string, files: string[]): string[] {
+export type SeedClass = "current" | "replace" | "advance" | "pending" | "dropped" | "blocked" | "unowned";
+
+/** The office's file at a seeded path: its bytes, `missing`, or `other` for anything office won't read as the file (a folder, a link, a path through a link). */
+export type OfficeFile = Buffer | "missing" | "other";
+
+/**
+ * Classifies a seeded path from its receipt, the stored seed's bytes (undefined when not stored),
+ * the package's current seed (undefined when the package has none for the path) and the office's
+ * file. Pure: sync, check and the `office seeds` commands all decide through it.
+ */
+export function classifySeed(receipt: SeedReceipt, stored: Buffer | undefined, seed: Buffer | undefined, file: OfficeFile): SeedClass {
+  if (seed === undefined) return "dropped";
+
+  if (!("sha256" in receipt)) return "unowned";
+  const wanted = sha256(seed);
+
+  if (wanted === receipt.sha256) return "current";
+
+  // Without the seed office laid down, nothing can show the file is untouched or what changed in it.
+  if (stored === undefined || sha256(stored) !== receipt.sha256) return "blocked";
+
+  if (file === "missing") return "advance";
+
+  if (file === "other") return "pending";
+  const has = sha256(file);
+
+  if (has === wanted) return "advance";
+
+  return has === receipt.sha256 ? "replace" : "pending";
+}
+
+function readStoredSeed(dir: string, hash: string): Buffer | undefined {
+  return existsSync(join(dir, seedStore, hash)) ? readFileSync(join(dir, seedStore, hash)) : undefined;
+}
+
+function readPackageSeed(folder: string, file: string): Buffer | undefined {
+  return lstatSync(join(folder, file), { throwIfNoEntry: false })?.isFile() ? readFileSync(join(folder, file)) : undefined;
+}
+
+/** The office's file at seeded path `file` (`OfficeFile`). A path office won't handle (`seedPathProblem`) is `other`. */
+function readOfficeFile(dir: string, file: string): OfficeFile {
+  if (seedPathProblem(dir, file) !== undefined) return "other";
+  const info = lstatSync(join(dir, file), { throwIfNoEntry: false });
+
+  if (info === undefined) return "missing";
+
+  return info.isFile() ? readFileSync(join(dir, file)) : "other";
+}
+
+/** A seeded path's class, with the package's seed (undefined when it has none) and the office's file it was decided from. */
+export type SeedState = { state: SeedClass; seed: Buffer | undefined; has: OfficeFile };
+
+/** Reads a receipt's inputs in the office at `dir` and classifies it; `folder` is its package's seed folder. */
+export function inspectSeed(dir: string, file: string, receipt: SeedReceipt, folder: string): SeedState {
+  const stored = "sha256" in receipt ? readStoredSeed(dir, receipt.sha256) : undefined;
+  const seed = readPackageSeed(folder, file);
+  const has = readOfficeFile(dir, file);
+
+  return { state: classifySeed(receipt, stored, seed, has), seed, has };
+}
+
+/** Why a `blocked` path's stored seed can't be used, with how to repair it (`restoreAdvice`). */
+export function blockedReason(dir: string, receipt: SeedReceipt): string {
+  // Only a receipt with a hash is ever blocked (classifySeed).
+  if (!("sha256" in receipt)) return "its stored seed can't be read";
+  const stored = `${seedStore}/${receipt.sha256}`;
+  const problem = existsSync(join(dir, stored)) ? "doesn't hash to its name" : "is missing";
+
+  return `the seed office laid down, ${stored}, ${problem}; ${restoreAdvice(receipt.sha256)}`;
+}
+
+/**
+ * Lays down package `name`'s seed `file` from its seed folder `folder` at a path with no receipt in
+ * the office at `dir`, unless a file is already there, and records its receipt in `seeds`. The seed
+ * is stored first (`storeSeed`), so a receipt never names a seed that isn't stored.
+ */
+function createSeed(dir: string, name: string, folder: string, file: string, seeds: Map<string, SeedReceipt>): string[] {
+  const problem = seedPathProblem(dir, file);
+
+  if (problem !== undefined) return [`FAILED package ${name}'s ${seedFolder}/${file}: ${problem}`];
+  const target = join(dir, file);
+
+  if (lstatSync(target, { throwIfNoEntry: false })) {
+    seeds.set(file, { package: name, existing: true });
+
+    return [`kept ${file}, which was already there, instead of package ${name}'s copy`];
+  }
+
+  // The receipt holds the hash of the bytes stored and written, read once from the package's copy.
+  const source = join(folder, file);
+  const bytes = readFileSync(source);
+  const hash = sha256(bytes);
+
+  storeSeed(dir, hash, bytes);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, bytes, { flag: "wx", mode: statSync(source).mode & 0o777 });
+  seeds.set(file, { package: name, sha256: hash });
+
+  return [`created ${file} from package ${name}`];
+}
+
+/**
+ * Acts on package `name`'s receipt for `file` in the office at `dir`, whose seed folder is
+ * `folder`, editing `seeds` (the lock's section, under the lease) as `SeedClass` says. The new
+ * seed is stored before the file is replaced and before its receipt is recorded.
+ */
+function updateSeed(dir: string, name: string, folder: string, file: string, receipt: SeedReceipt, seeds: Map<string, SeedReceipt>): string[] {
+  const { state, seed, has } = inspectSeed(dir, file, receipt, folder);
+
+  if (state === "pending") return [`pending ${file}: package ${name} changed its seed, and the file differs from the seed office laid down; office seeds diff ${shellWord(file)}`];
+
+  if (state === "blocked") return [`kept ${file}: package ${name} changed its seed, but ${blockedReason(dir, receipt)}`];
+
+  if ((state !== "replace" && state !== "advance") || seed === undefined) return [];
+  const hash = sha256(seed);
+
+  storeSeed(dir, hash, seed);
+
+  if (state === "replace") atomicWrite(join(dir, file), seed, statSync(join(folder, file)).mode & 0o777, join(dir, staging));
+  seeds.set(file, { package: name, sha256: hash });
+
+  if (state === "replace") return [`updated ${file} to package ${name}'s new seed, as the file was unchanged`];
+
+  return [`recorded package ${name}'s new seed for ${file}, ${has === "missing" ? "which stays deleted" : "which already has it"}`];
+}
+
+/**
+ * Applies package `name`'s seed `files` (paths under its seed folder, `folder`) to the office at
+ * `dir`. A path with no receipt is created (`createSeed`); a path with the package's receipt is
+ * updated as `classifySeed` says (`updateSeed`): an unchanged file is replaced, a deleted one or
+ * one already equal to the new seed gets the new receipt, and a pending or blocked one is reported
+ * and left. A receipt of the package for a path it no longer seeds is dropped and its file left. A
+ * path the section couldn't hold, one in `.office/` and one through a link are refused and get no
+ * receipt. A path that fails is reported and the others go ahead, so the receipts of the files
+ * handled are saved. Returns one line per change or report; a failure starts with FAILED.
+ */
+export function applySeeds(dir: string, name: string, folder: string, files: string[]): string[] {
   try {
-    return editLock(dir, ({ seeds }) => files.flatMap((file) => {
-      if (seeds.has(file)) return [];
-      const problem = seedPathProblem(dir, file);
+    return editLock(dir, ({ seeds }) => {
+      const lines = files.flatMap((file) => {
+        const receipt = seeds.get(file);
 
-      if (problem !== undefined) return [`FAILED package ${name}'s ${seedFolder}/${file}: ${problem}`];
-      const target = join(dir, file);
+        // A path another package seeded stays with it: two packages may not seed one path.
+        if (receipt !== undefined && receipt.package !== name) return [];
 
-      if (lstatSync(target, { throwIfNoEntry: false })) {
-        seeds.set(file, { package: name, existing: true });
+        try {
+          return receipt === undefined ? createSeed(dir, name, folder, file, seeds) : updateSeed(dir, name, folder, file, receipt, seeds);
+        } catch (error) {
+          return [`FAILED package ${name}'s ${seedFolder}/${file}: ${message(error)}`];
+        }
+      });
+      const shipped = new Set(files);
 
-        return [`kept ${file}, which was already there, instead of package ${name}'s copy`];
+      for (const file of [...seeds.keys()].sort()) {
+        if (seeds.get(file)?.package !== name || shipped.has(file)) continue;
+        seeds.delete(file);
+        lines.push(`kept ${file}, which package ${name} no longer seeds, and dropped its receipt`);
       }
 
-      try {
-        // The receipt holds the hash of the bytes stored and written, read once from the package's copy.
-        const source = join(folder, file);
-        const bytes = readFileSync(source);
-        const hash = sha256(bytes);
-
-        storeSeed(dir, hash, bytes);
-        mkdirSync(dirname(target), { recursive: true });
-        writeFileSync(target, bytes, { flag: "wx", mode: statSync(source).mode & 0o777 });
-        seeds.set(file, { package: name, sha256: hash });
-      } catch (error) {
-        return [`FAILED package ${name}'s ${seedFolder}/${file}: ${message(error)}`];
-      }
-
-      return [`created ${file} from package ${name}`];
-    }));
+      return lines;
+    });
   } catch (error) {
     return [`FAILED package ${name}'s seed files: ${message(error)}`];
   }
@@ -228,9 +381,9 @@ export function storedSeedProblems(dir: string): string[] {
     try {
       bytes = readFileSync(join(dir, stored));
     } catch {
-      return [`${file}: its seed ${stored} is missing; restore it from Git (commit ${seedStore}/ with ${lockFile})`];
+      return [`${file}: its seed ${stored} is missing; ${restoreAdvice(receipt.sha256)}`];
     }
 
-    return sha256(bytes) === receipt.sha256 ? [] : [`${file}: its seed ${stored} doesn't hash to its name; restore it from Git`];
+    return sha256(bytes) === receipt.sha256 ? [] : [`${file}: its seed ${stored} doesn't hash to its name; ${restoreAdvice(receipt.sha256)}`];
   });
 }

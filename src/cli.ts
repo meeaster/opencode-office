@@ -21,6 +21,7 @@ import { pair } from "./commands/pair.ts";
 import { pin } from "./commands/pin.ts";
 import { updatePackages, updateSkills } from "./commands/pins.ts";
 import { finishSetup, setup } from "./commands/setup.ts";
+import { seedsDiff, settleSeed } from "./commands/seeds.ts";
 import { sessionInstructions } from "./commands/session-instructions.ts";
 import { runInContainer } from "./commands/shell.ts";
 import { summarize, sync } from "./commands/sync.ts";
@@ -73,6 +74,12 @@ const usage = `usage: office <command> [--office <dir>]
                                the office.lock commit of each untracked tag or branch ref to where
                                it points now, then apply them as sync does. Neither command syncs
                                anything else, and office sync applies pins without moving them
+  seeds diff [path]            for a seeded file whose package changed its seed after you edited it
+                               (pending), show what the package changed and what you changed, then
+                               the settle command; without a path, list the pending files. Paths
+                               are relative to the office's folder
+  seeds settle <path>          record the package's current seed for <path> as dealt with, whether
+                               or not the file took its changes; the file is left as it is
   check                        report drift from office.yaml and the tool, the running
                                containers and opted-in managed OpenCode
   refresh [--verbose]          update tracked package and skill pins and the office.lock commits
@@ -359,6 +366,14 @@ async function main(): Promise<void> {
 
       reporter.finish([]);
     }, { verbose: flags.verbose === true });
+  } else if (command === "seeds") {
+    const seedsUsage = "usage: office seeds diff [path] | office seeds settle <path> [--office <dir>]";
+
+    if (Object.keys(flags).some(key => key !== "office")) throw new OfficeError(seedsUsage);
+
+    if (rest[0] === "diff" && rest.length <= 2) console.log(seedsDiff(currentOffice(flags), rest[1]));
+    else if (rest[0] === "settle" && rest.length === 2) console.log(settleSeed(currentOffice(flags), rest[1]));
+    else throw new OfficeError(seedsUsage);
   } else if (command === "refresh") {
     if (rest.length || Object.keys(flags).some(key => !["office", "verbose"].includes(key))) throw new OfficeError("usage: office refresh [--office <dir>] [--verbose]");
     const verbose = flags.verbose === true;

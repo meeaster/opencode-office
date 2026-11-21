@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { git } from "../git.ts";
 import { loadOffice } from "../office.ts";
-import { sha256 } from "../seeds.ts";
+import { applySeeds, restoreAdvice, sha256 } from "../seeds.ts";
 import { defaultPins, writeApplied, writeLock } from "../versions.ts";
 import { seedChecks, toolsNotes, versionChecks } from "./check.ts";
 
@@ -102,8 +102,42 @@ test("a committed receipt whose seed is missing or corrupt is a warning naming t
 
   seedChecks(loadOffice(dir), report);
   expect(report.mock.calls).toEqual([
-    ["warn", "seeds", `b.md: its seed .office/seeds/${b} doesn't hash to its name; restore it from Git`],
-    ["warn", "seeds", `c.md: its seed .office/seeds/${c} is missing; restore it from Git (commit .office/seeds/ with office.lock)`],
+    ["warn", "seeds", `b.md: its seed .office/seeds/${b} doesn't hash to its name; ${restoreAdvice(b)}`],
+    ["warn", "seeds", `c.md: its seed .office/seeds/${c} is missing; ${restoreAdvice(c)}`],
   ]);
+  expect(files()).toEqual(before);
+});
+
+test("pending seeds are one warning with their count, never a failure, and check changes no file", () => {
+  const seed = join(dir, "packages/demo/seed");
+  const store = join(dir, ".office/seeds");
+
+  writeFileSync(join(dir, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
+  mkdirSync(seed, { recursive: true });
+  writeFileSync(join(dir, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+
+  for (const file of ["a.md", "b.md", "c.md"]) writeFileSync(join(seed, file), "laid down\n");
+  expect(applySeeds(dir, "demo", seed, ["a.md", "b.md", "c.md"])).toHaveLength(3);
+
+  const run = () => {
+    const report = mock();
+
+    seedChecks(loadOffice(dir), report);
+
+    return report.mock.calls;
+  };
+
+  expect(run()).toEqual([]);
+
+  // a.md and b.md were edited and c.md wasn't; then the package changed all three.
+  writeFileSync(join(dir, "a.md"), "the owner's a\n");
+  writeFileSync(join(dir, "b.md"), "the owner's b\n");
+
+  for (const file of ["a.md", "b.md", "c.md"]) writeFileSync(join(seed, file), "the package's new seed\n");
+
+  const files = () => [readFileSync(join(dir, "office.lock"), "utf8"), ...["a.md", "b.md", "c.md"].map((file) => readFileSync(join(dir, file), "utf8")), ...readdirSync(store).sort().map((name) => [name, readFileSync(join(store, name), "utf8")])];
+  const before = files();
+
+  expect(run()).toEqual([["warn", "seeds", "2 seeds pending; office seeds diff"]]);
   expect(files()).toEqual(before);
 });
