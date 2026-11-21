@@ -72,7 +72,7 @@ export function planReferenceApply(office: Office) {
 /** Only the short admission and publication steps take a kernel-backed SQLite writer lock.
  * The ticket orders attempts (including empty/no-op syncs); JSON remains the portable reader input.
  * A collector may pause or die without holding a lock or preventing the next sync. */
-export function beginReferencePublication(office: Office): Parsed<ReferencePublication> {
+export function beginReferencePublication(office: Office, switchGeneration?: (snapshot: ReferenceSnapshot) => void): Parsed<ReferencePublication> {
   const path = join(office.dir, referenceFile);
   const ticket = randomUUID();
   const inputs = inputHash(office);
@@ -98,7 +98,7 @@ export function beginReferencePublication(office: Office): Parsed<ReferencePubli
   const publish = (candidate: ReferenceSnapshot) => withInputs(db => {
     if (!db.query("SELECT 1 FROM publisher WHERE id = 1 AND ticket = ?").get(ticket)) throw new OfficeError("reference publication superseded by a newer sync; candidate discarded");
 
-    if (Bun.deepEquals(previous, candidate)) return false;
+    if (!switchGeneration && Bun.deepEquals(previous, candidate)) return false;
 
     // Every admitted mutator has a committed checkout row. No new lease can
     // start while this SQLite writer owns admission. Probe before replacing
@@ -111,8 +111,12 @@ export function beginReferencePublication(office: Office): Parsed<ReferencePubli
     const staging = `${path}.${ticket}.tmp`;
 
     try {
-      writeFileSync(staging, `${JSON.stringify(candidate, null, 2)}\n`);
-      renameSync(staging, path);
+      if (switchGeneration) switchGeneration(candidate);
+      else {
+        writeFileSync(staging, `${JSON.stringify(candidate, null, 2)}\n`);
+        renameSync(staging, path);
+      }
+
       db.exec("DELETE FROM checkout");
     } finally {
       rmSync(staging, { force: true });

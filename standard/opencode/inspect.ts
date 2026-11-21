@@ -165,7 +165,7 @@ function requireFreeRoute(dir: string) {
   try {
     const file = lstatSync(join(dir, referenceFile), { throwIfNoEntry: false });
 
-    if (file && !file.isFile()) throw new Error();
+    if (file && !file.isFile() && !(file.isSymbolicLink() && readlinkSync(join(dir, referenceFile)) === "../current/references.json")) throw new Error();
     read = readSnapshot(dir);
   } catch {
     throw new OfficeError("cannot check ownership of opencode inspect: unreadable command generation");

@@ -4,13 +4,16 @@ import * as v from "valibot";
 import { parse } from "yaml";
 import type { PackageContext, SettingValue } from "../packages/office/package-context.ts";
 import { toolPath } from "./tool.ts";
+import { verifyImports } from "./package-imports.ts";
 import { check, type PackageManifest, packageManifestSchema, type Parsed, scalarSetting, settingVariable } from "./schema.ts";
 
 const names = ["office.ts", "package.yaml"] as const;
 
 export function standardImports(packages: string): Pick<PackageContext, "importStandard"> {
   return { importStandard(module) {
-    if (module !== "tooling/requirements" && module !== "mise-integration/claims") throw new Error(`unknown standard contract ${module}`);
+    // Compatibility for offices upgrading their executable before changing their definitions.
+    // This legacy surface does not participate in resolving static @office imports.
+    if (module !== "tooling/requirements" && module !== "mise-integration/claims") throw new Error(`unknown legacy standard contract ${module}`);
 
     const path = join(packages, `${module}.ts`);
 
@@ -89,6 +92,8 @@ export function readDefinition(dir: string, where: string, verifyCopy?: (file: s
 
     file = `${where}/${name}`;
     verifyCopy?.(name);
+
+    if (name === "office.ts") verifyImports(path);
 
     // Bun loads external TypeScript synchronously in both the launcher and the executable.
     const document = name === "office.ts" ? require(path).default : parse(readFileSync(path, "utf8"), { stringKeys: true });

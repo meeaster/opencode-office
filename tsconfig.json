@@ -3,6 +3,12 @@
     "target": "esnext",
     "module": "preserve",
     "moduleResolution": "bundler",
+    "paths": {
+      "@office/office/*": ["./packages/office/exports/*"],
+      "@office/references/*": ["./packages/references/exports/*"],
+      "@office/tooling/*": ["./packages/tooling/exports/*"],
+      "@office/mise-integration/*": ["./packages/mise-integration/exports/*"]
+    },
     "lib": ["esnext"],
     "types": ["bun"],
     "strict": true,

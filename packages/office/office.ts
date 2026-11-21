@@ -1,3 +1,4 @@
+import { requirements } from "@office/tooling/requirements";
 import { floors } from "./floors.ts";
 import type { CronContext, PackageContext } from "./package-context.ts";
 
@@ -22,9 +23,7 @@ export default {
       },
     },
   },
-  async setup(ctx: PackageContext) {
-    const { requirements } = await ctx.importStandard("tooling/requirements");
-
+  setup(ctx: PackageContext) {
     for (const [name, minimumVersion] of Object.entries(floors)) ctx.add(requirements, { name, minimumVersion });
   },
   registerCron(ctx: CronContext): undefined {

@@ -11,6 +11,7 @@
 // hash of each file is recorded in `.source.json`, `office check` reports an edit and `office
 // sync` restores the copy. Every kind is committed with the office, so a clone needs nothing fetched.
 import { createHash } from "node:crypto";
+import { packageRoot } from "./bound-paths.ts";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { Worker } from "node:worker_threads";
@@ -106,7 +107,7 @@ export type InstalledPackage = ResolvedPackage & {
 
 /** The folder of a built-in or remote package. */
 export function pulledDir(office: Pick<Office, "dir">, name: string): string {
-  return join(office.dir, pulledFolder, name);
+  return join(packageRoot(office.dir), name);
 }
 
 /** The folder of a package written in the office. */
@@ -417,7 +418,7 @@ export async function embeddedPackage(name: string) {
   return { wanted, hashes, source: builtinSource(hashes) };
 }
 
-async function installBuiltinFiles(office: Office, entry: PackageEntry, dir: string, wanted: Map<string, string>, hashes: PackageRecord["files"]) {
+async function installBuiltinFiles(office: Office, entry: PackageEntry, dir: string, wanted: Map<string, string>, hashes: PackageRecord["files"], evaluate = true) {
   const where = relative(office.dir, dir);
   const record = readRecord(dir);
 
@@ -438,7 +439,8 @@ async function installBuiltinFiles(office: Office, entry: PackageEntry, dir: str
     }
 
     writeJson(join(staging, sourceFile), builtinRecordFor(hashes));
-    await validateStaged(office, { entry, dir: staging, kind: "built-in" }, existsSync(dir));
+
+    if (evaluate) await validateStaged(office, { entry, dir: staging, kind: "built-in" }, existsSync(dir));
   });
 
   if (record === undefined) return [`installed ${where}, the built-in ${entry.name} package`];
@@ -460,9 +462,9 @@ function verifiedCommit(ref: string, commit: string): boolean {
  * ref, and restores one whose files were edited. Returns one line per change; a failure starts
  * with FAILED.
  */
-export async function fetchPackage(office: Office, entry: PackageEntry, source: NonNullable<PackageEntry["source"]>, boundCommit?: string, commitPin?: () => void): Promise<string[]> {
+export async function fetchPackage(office: Office, entry: PackageEntry, source: NonNullable<PackageEntry["source"]>, boundCommit?: string, commitPin?: () => void, destination?: string): Promise<string[]> {
   const { name } = entry;
-  const dir = pulledDir(office, name);
+  const dir = destination ?? pulledDir(office, name);
   const where = relative(office.dir, dir);
   const record = readRecord(dir);
   const current = record !== undefined && "repo" in record && record.repo === source.repo && record.path === source.path && record.ref === source.ref;
@@ -502,7 +504,8 @@ export async function fetchPackage(office: Office, entry: PackageEntry, source: 
       for (const file of records) rmSync(join(staging, file), { force: true });
 
       writeJson(join(staging, sourceFile), { repo: source.repo, path: source.path, ref: source.ref, commit: copied, files: fileHashes(staging), copied: new Date().toISOString() });
-      await validate(staging);
+
+      if (!destination) await validate(staging);
 
       return copied;
     }, commitPin);
@@ -519,15 +522,31 @@ export async function fetchPackage(office: Office, entry: PackageEntry, source: 
   }
 }
 
+/** Materialization does no evaluation. All managed peers live at their final paths
+ * before a fresh process loads the first definition. */
+export async function materializePackage(office: Office, item: ResolvedPackage, folder: string, bound?: string) {
+  const dir = join(folder, item.entry.name);
+
+  if (item.kind === "built-in") {
+    const { wanted, hashes, source } = await embeddedPackage(item.entry.name);
+
+    return { source, changes: await installBuiltinFiles(office, item.entry, dir, wanted, hashes, false) };
+  }
+
+  if (!item.entry.source) throw new Error(`missing source for ${item.entry.name}`);
+
+  return { changes: await fetchPackage(office, item.entry, item.entry.source, bound, undefined, dir) };
+}
+
 /**
  * Removes a pulled-in package whose entry left office.yaml: each template file it created that is
  * still the package's copy, the folders those deletions emptied, then the package folder. Changed
  * template files stay with the office. With an unreadable `.template.json` it changes nothing and
  * says why. Returns one line per change; a refusal starts with FAILED.
  */
-export function removePackage(office: Office, name: string): string[] {
-  const dir = pulledDir(office, name);
-  const where = relative(office.dir, dir);
+export function removePackage(office: Office, name: string, retained?: string): string[] {
+  const dir = retained ?? pulledDir(office, name);
+  const where = join(pulledFolder, name);
   const recordPath = join(dir, templateFile);
   const read: Parsed<string[]> = existsSync(recordPath) ? readJson(recordPath, v.array(v.string())) : { ok: true, value: [] };
 
@@ -553,7 +572,7 @@ export function removePackage(office: Office, name: string): string[] {
     for (let folder = dirname(target); relative(office.dir, folder) !== "" && readdirSync(folder).length === 0; folder = dirname(folder)) rmdirSync(folder);
   }
 
-  rmSync(dir, { recursive: true });
+  if (!retained) rmSync(dir, { recursive: true });
   rmSync(scalarReceipt(office, name), { force: true });
 
   return [...changes, `removed ${where}/, which office.yaml no longer lists`];

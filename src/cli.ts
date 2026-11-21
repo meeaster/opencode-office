@@ -30,7 +30,8 @@ import { cronCommand } from "../standard/cron/command.ts";
 import { namedJob } from "../standard/cron/discovery.ts";
 import { migrateHome } from "./home-migration.ts";
 import { releaseMachine, serviceEnvironment } from "./machine.ts";
-import { currentOffice, type Office, OfficeError } from "./office.ts";
+import { currentOffice, findOffice, type Office, OfficeError } from "./office.ts";
+import { bindReader, evaluateAdmission, runReader } from "./package-operation.ts";
 import { packageSecret } from "./package-services.ts";
 import { decrypt } from "./secrets.ts";
 import { onTerminal, reported, type Reporter, type Stage } from "./report/index.ts";
@@ -194,6 +195,14 @@ function commandArgs(args: string[]) {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
+  if (args[0] === "--package-admission") return evaluateAdmission(args[1]);
+  const reader = args[0] === "--package-reader";
+
+  if (reader) {
+    const [, dir, name] = args.splice(0, 3);
+    bindReader(dir, name);
+  }
+
   if (args[0] === "update") {
     await updateCommand(args.slice(1));
 
@@ -211,6 +220,22 @@ async function main(): Promise<void> {
 
   const { values: flags, positionals } = parsed;
   const [command, ...rest] = positionals;
+
+  if (!reader && command && !flags.version && !flags.help && !["init", "sync", "setup", "refresh", "packages", "sfw-wrappers", "migrate-home", "env"].includes(command)) {
+    let dir;
+
+    try { dir = findOffice(flags.office ?? process.cwd()); } catch { /* bootstrap handles offices not found */ }
+
+    if (dir) {
+      const status = await runReader(dir, args);
+
+      if (status !== undefined) {
+        process.exitCode = status;
+
+        return;
+      }
+    }
+  }
 
   if (flags.version) {
     console.log(version());

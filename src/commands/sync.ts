@@ -9,19 +9,20 @@
 // (standard/opencode/ownership.ts) and kept out of commits through the repository's info/exclude.
 // It never rewrites AGENTS.md, other hand-written content, an existing app or a file a package's
 // template created; it deletes such a file only with its package, and only while unchanged.
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { readdirSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 import { prepareReferenceRefresh } from "../../packages/references/tasks/refresh.ts";
 import { claudeFiles } from "../claude.ts";
-import { boundRevision, collectReferences, unresolvedMachineOwner } from "../collect-references.ts";
-import { beginReferencePublication, planReferenceApply } from "../reference-publication.ts";
-import { preserveV3Owner } from "../v3-reference-owner.ts";
+import { unresolvedMachineOwner } from "../collect-references.ts";
+import { planReferenceApply } from "../reference-publication.ts";
+import { publishPackages } from "../package-operation.ts";
+import type { ReferenceSnapshot } from "../reference-snapshot.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { collectJobs } from "../../standard/cron/jobs.ts";
 import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
 import { cloneOrFetchStreamed, clonePluginStreamed, existingPluginDestination, git, isClone, PluginCheckoutProblem, referenceGit, referenceOriginProblem, refreshCloneStreamed, verifiedHead } from "../git.ts";
-import { type Clone, clones, installedPackages, skillSelections } from "../layout.ts";
+import { type Clone, clones, type InstalledPackages, skillSelections } from "../layout.ts";
 import { cloneTarget, legacyPlugin, linkPlugins, placeLink, pluginFolder, pluginScope, requirePluginDestination, stagingFolder, withdrawDeselectedPlugins, withPluginPlan } from "../../standard/opencode/delivery.ts";
 import { validateAssets } from "../../standard/opencode/assets.ts";
 import { type Declaration, readDeclarations } from "../../standard/opencode/declarations.ts";
@@ -29,12 +30,10 @@ import { cloneFolder, entry as entryAt, officeEntries, requireFolder } from "../
 import { RenameError, renameNoReplace } from "../no-replace.ts";
 import { migrate } from "../migrate.ts";
 import { atomicWrite } from "../secrets.ts";
-import { definitionFiles } from "../package-definition.ts";
-import { packageComposeFile } from "../package-services.ts";
 import { syncTools } from "../package-tools.ts";
 import { type Desk, type Office, skillGroups } from "../office.ts";
 import { silentStage, type Stage } from "../report/index.ts";
-import { fetchPackage, installBuiltin, type InstalledPackage, installPackage, pulledDir, pulledFolders, removePackage, requirePackageOwnership, resolvePackages } from "../packages.ts";
+import { type InstalledPackage, installPackage, removePackage, requirePackageOwnership, resolvePackages } from "../packages.ts";
 import { describeGroup, stageGroup } from "../skill-copies.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
 
@@ -511,78 +510,25 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
 export async function syncPackages(office: Office, changes: { push: (...lines: string[]) => void }, stage: Stage = silentStage, exclude = true): Promise<boolean> {
   if (office.opencode.mode === "container") changes.push(...syncMachine(office));
   requirePluginDestination(office);
-  const { packages, problems } = resolvePackages(office);
+  const result = await publishPackages(office, exclude);
+  changes.push(...result.lines);
 
-  if (problems.length) {
-    changes.push(...problems.map(problem => `FAILED ${problem.message}`));
+  if (!result.published) {
+    const selection = resolvePackages(office);
 
-    return false;
+    if (!selection.problems.length) changes.push(...withdrawDeselectedPlugins(office, new Set(selection.packages.map(pkg => pkg.entry.name))));
   }
 
-  const publication = beginReferencePublication(office);
+  return result.published;
+}
 
-  if (!publication.ok) {
-    changes.push(...publication.errors.map(error => `FAILED ${error}; restore a readable generation, or verify installed Git pins before moving it aside and running office sync --packages`));
-
-    return false;
-  }
-
-  const rejected = new Set<string>();
-  const embedded = new Map<string, string>();
-  using migration = preserveV3Owner(office, publication.value.previous);
-
-  for (const item of packages) {
-    const services = join(item.dir, packageComposeFile);
-    const before = existsSync(services) ? readFileSync(services, "utf8") : undefined;
-
-    if (item.kind !== "local" && definitionFiles(item.dir).length > 1) {
-      changes.push(`${relative(office.dir, item.dir)} has both office.ts and package.yaml; restoring from the selected ${item.kind} source`);
-    }
-
-    let copied: string[] = [];
-
-    if (item.kind === "built-in") {
-      const result = await installBuiltin(office, item.entry);
-      embedded.set(item.entry.name, result.source);
-      copied = result.changes;
-    } else if (item.entry.source) {
-      copied = await fetchPackage(office, item.entry, item.entry.source, boundRevision(publication.value.previous, item.entry));
-    }
-
-    changes.push(...copied);
-
-    if (copied.some(line => line.startsWith("FAILED"))) rejected.add(item.entry.name);
-
-    // A pulled-in package's services run on this machine's Docker, so a new or changed file is worth seeing.
-    const after = existsSync(services) ? readFileSync(services, "utf8") : undefined;
-
-    if (after !== undefined && after !== before) {
-      changes.push(`package ${item.entry.name} ${before === undefined ? "adds" : "changes"} ${relative(office.dir, services)}, services that run on this machine's Docker; review it, then office up${before === undefined ? "" : " --upgrade"} applies it`);
-    }
-  }
-
-  let installed = installedPackages(office, rejected, false);
-
-  if (!installed.unread.has("knowledge") && legacyPlugin(office, "knowledge")) {
-    changes.push(...removeOldKnowledgePlugin(office));
-    installed = installedPackages(office, rejected, false);
-  }
-
-  changes.push(...installed.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
-  const published = await collectReferences(office, packages, installed, changes, publication.value, rejected, embedded);
-
-  if (!published) {
-    if (!migration) changes.push(...withdrawDeselectedPlugins(office, installed.selected));
-
-    return false;
-  }
-
-  migration?.commit();
+export async function applyPackages(office: Office, installed: InstalledPackages, previous: ReferenceSnapshot | undefined, changes: string[], exclude: boolean, prior: string) {
+  if (!installed.unread.has("knowledge") && legacyPlugin(office, "knowledge")) changes.push(...removeOldKnowledgePlugin(office));
 
   if (needsEnvironmentOwners(office, installed)) {
     changes.push("FAILED the existing machine environment predates package ownership records; repair the unread packages and sync again before withdrawing packages or rewriting their machine setup");
 
-    return published;
+    return;
   }
 
   // .office/packages/ holds only what sync pulled in, so a folder no package wants goes. Its panel
@@ -590,16 +536,16 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   const removedPanels: string[] = [];
   let declarations: Map<string, Declaration> | undefined;
 
-  for (const name of pulledFolders(office)) {
-    if (installed.unread.has(name) || packages.some((item) => item.kind !== "local" && item.entry.name === name)) continue;
+  for (const name of readdirSync(join(prior, "packages"), { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name)) {
+    if (installed.unread.has(name) || installed.selected.has(name)) continue;
 
     // The last synced authored registration names the bundle; without one, the convention does.
     const claim = (declarations ??= readDeclarations(office)).get(name);
     const bundle = claim?.state === "declared" ? claim.paths.panel : panelBundle;
 
-    if (bundle !== undefined && existsSync(join(pulledDir(office, name), bundle))) removedPanels.push(name);
+    if (bundle !== undefined && existsSync(join(prior, "packages", name, bundle))) removedPanels.push(name);
 
-    changes.push(...removePackage(office, name));
+    changes.push(...removePackage(office, name, join(prior, "packages", name)));
   }
 
   // Executable cron owners were validated with their other contributions before publication.
@@ -609,8 +555,7 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
 
   for (const item of installed.installed) changes.push(...installPackage(office, item));
 
-  stage.detail("writing the packages' tools and linking skills and plugins");
-  const unknown = unresolvedMachineOwner(office, installed, publication.value.previous);
+  const unknown = unresolvedMachineOwner(office, installed, previous);
 
   if (unknown) changes.push(`FAILED package ${unknown}: machine claims unresolved; keeping last-good tools, fragments and links`);
   else {
@@ -626,7 +571,6 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
 
   if (exclude) changes.push(...excludePlumbing(office));
 
-  return published;
 }
 
 /**

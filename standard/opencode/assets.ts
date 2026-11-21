@@ -1,5 +1,5 @@
 import { lstatSync, realpathSync } from "node:fs";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import * as v from "valibot";
 import type { InstalledPackage } from "../../src/packages.ts";
 
@@ -16,7 +16,10 @@ export function validateAssets(root: string, dir: string, paths: AssetPaths) {
     const inside = relative(root, dest);
     const info = lstatSync(dest, { throwIfNoEntry: false });
 
-    if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside) || !(part === "server" ? info?.isDirectory() : info?.isFile()) || realpathSync(dest) !== join(realpathSync(root), inside)) {
+    const managed = join(root, ".office/packages");
+    const expected = dirname(dir) === managed ? join(realpathSync(managed), basename(dir), path) : join(realpathSync(root), inside);
+
+    if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside) || !(part === "server" ? info?.isDirectory() : info?.isFile()) || realpathSync(dest) !== expected) {
       throw new Error(`OpenCode ${part} asset must be an existing ${part === "server" ? "directory" : "regular file"} inside the package, without redirected paths`);
     }
   }

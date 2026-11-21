@@ -1,6 +1,7 @@
 // Shared by the CLI and the installed office plugin. Reading desired data never loads package code.
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, statSync } from "node:fs";
+import { snapshotPath } from "./bound-paths.ts";
+import { lstatSync, readFileSync, readlinkSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as v from "valibot";
 import { check, type OfficeConfig, type Parsed, repository, settingValue } from "./schema.ts";
@@ -50,7 +51,7 @@ export function inputHash(config: Inputs): string {
 }
 
 export function readSnapshot(dir: string): Parsed<ReferenceSnapshot | undefined> {
-  const path = join(dir, referenceFile);
+  const path = snapshotPath(dir);
 
   try {
     let document = JSON.parse(readFileSync(path, "utf8"));
@@ -75,6 +76,8 @@ export function readSnapshot(dir: string): Parsed<ReferenceSnapshot | undefined>
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       for (const part of [path, dirname(path), join(dir, ".office")]) {
         if (lstatSync(part, { throwIfNoEntry: false })?.isSymbolicLink() && !statSync(part, { throwIfNoEntry: false })) {
+          if (part === path && readlinkSync(path) === "../current/references.json" && statSync(join(dir, ".office/current"), { throwIfNoEntry: false })?.isDirectory()) continue;
+
           return { ok: false, errors: [`${referenceFile}: dangling link at ${part}`] };
         }
       }

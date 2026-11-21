@@ -514,13 +514,13 @@ Indexed commands need readable YAML and an identifiable owner selection, not a v
 To contribute a reference from `packages/notes/office.ts`:
 
 ```ts
-import type { PackageContext } from "../../.office/packages/office/package-context.ts";
+import type { PackageContext } from "@office/office/context";
+import { repositories } from "@office/references/repositories";
 
 export default {
   name: "notes",
   description: "Notes format and examples",
-  async setup(ctx: PackageContext) {
-    const { repositories } = await import("../../.office/packages/references/repositories.ts");
+  setup(ctx: PackageContext) {
     ctx.add(repositories, {
       name: "notes-manual", url: "https://example.org/notes.git", ref: "main",
       description: "Notes format and examples.",
@@ -535,7 +535,9 @@ A command in a different package can import that same handle. On `inputs.read`, 
 
 In a local collection provider, symlinks may point to files or directories inside the package. Their resolved package-relative targets are part of the contract: switching the public handle to a different file requires a new sync even if both files were already present. Dangling links, loops, and links outside the package or to office-managed records cannot establish a provider contract. This check covers the provider tree, not arbitrary imports or other runtime inputs outside it.
 
-Use the actual **installed** module path. Local packages are under `packages/`; Git and built-in packages are under `.office/packages/`. From either managed consumer, import `../references/repositories.ts` **inside setup**: managed definitions are first checked in a staging directory without their installed neighbors. Package selection does not install npm dependencies. A local provider and local consumer can use sibling relative imports.
+An Office definition imports another selected package's `exports/<module>.ts` as `@office/<package>/<module>`. A provider can use ordinary relative imports and read assets beside its own modules. Importing an optional provider does not select it. `office init` configures TypeScript navigation through `.office/tsconfig.contracts.json`. Existing projects can extend that file; if the project defines its own `paths`, TypeScript replaces inherited mappings. Preserve owner mappings and include the generated aliases in the owner's project, or use a separate editor project for definitions.
+
+Managed packages and the command index are published under `.office/generations/`; `.office/current` selects them together and `.office/packages` follows it. Local `packages/` stay editable. After an interrupted tracked update, run `office sync --packages` to finish the recorded switch and reconcile external files. A running plugin that resolved its own directory before a switch can stay on that generation until its runtime reloads it.
 
 For a setup-only boolean, call `ctx.booleanSetting("source_reference", { default: true, description: "Include the Floci source checkout in references/" })`. To deliver a setting to plugins and native Compose, use `ctx.scalarSetting("port", { default: 4566, description: "AWS endpoint port" })`. It accepts the same string, finite number or boolean as a static scalar setting, without coercion. Sync writes the resolved value to `.settings.json`; `office up` resolves the office's selections before applying the package service environment (here `FLOCI_PORT`). Use the return value inside setup. Indexed command registration replays the published values.
 
@@ -671,7 +673,7 @@ One case is left alone: a skill in an ignored folder with the ID of a skill one 
 
 mise loads none of `machine.toml`, `machine.packages.toml` or `.office/mise/` where they are (it reads `mise.toml`, `mise.<env>.toml` and a few other names in a folder, not these), so the machine-wide files apply only through links in mise's global conf.d: in a host-mode office `office sync` makes them, once you agreed in `office setup` (see "Machine"), and the container makes them inside itself at start. Without the links the files apply nowhere, so `office check` fails in a host-mode office without consent. Through the links they are global config, in every folder alike, the office's included: `machine.toml` wins over `machine.packages.toml` everywhere, and a `mise.toml` (the office's, a desk's, a project's) wins over both in its folder, as project config wins over global. mise does load `mise/config.toml` and `mise.toml` in place below `.office/`, so `config` and `mise`, like `machine`, are reserved package names.
 
-A package that needs a CLI registers it in `setup(ctx)` with `const { requirements } = await ctx.importStandard("tooling/requirements")` and `ctx.add(requirements, { name, minimumVersion })`, by the name a `mise.toml` gives it, at the exact version it was tested with (never a range or `latest`). That version is where an office starts and a floor it shouldn't go below; newer versions are the office's choice. `office sync` writes every package's tools into one file, `machine.packages.toml` at the office root, which the office commits: a `[tools]` table with one line per tool, each with a comment naming the packages that declare it:
+A package that needs a CLI registers it in `setup(ctx)` with `import { requirements } from "@office/tooling/requirements"` at module scope and `ctx.add(requirements, { name, minimumVersion })`, by the name a `mise.toml` gives it, at the exact version it was tested with (never a range or `latest`). That version is where an office starts and a floor it shouldn't go below; newer versions are the office's choice. `office sync` writes every package's tools into one file, `machine.packages.toml` at the office root, which the office commits: a `[tools]` table with one line per tool, each with a comment naming the packages that declare it:
 
 ```toml
 [tools]
@@ -691,7 +693,7 @@ To hold a tool back below a package's version, pin it in `machine.toml`, which w
 
 A package's mise setup, when it has one, goes in its own fragment, `.office/mise/<name>.toml`, which stays out of Git and which the office never edits: sync writes it whole and rewrites it on every sync, and deletes it when the package has no setup in this office or leaves `office.yaml`. The file's first line names the package; sync never touches a file in that folder whose first line doesn't name one of its packages, refuses to write a package's setup over such a file, and links only its own (`office check` reports any other file there: move its tools to `machine.toml`).
 
-The required `mise-integration` package exports tasks, install-once hooks and native bootstrap recipes. In `setup`, import the typed handles with `await ctx.importStandard("mise-integration/claims")`. The import resolves from the office, including for local and pinned Git packages. See `packages/browser/office.ts` for a settings-gated install and independent Chrome recipe. A task-only package can register `ctx.add(tasks, {name: "audit", description: "Run audit", script: "scripts/audit.sh"})` without a tool requirement. Each task runs as `<package>:<name>`. Installs claim the `destination` they manage, independently of their readiness marker. Native `bootstrap.files` entries also claim their paths. Conflicting destinations stop publication; Office does not infer what a shell script writes.
+The required `mise-integration` package exports tasks, install-once hooks and native bootstrap recipes. Import its handles at module scope, for example `import { installs } from "@office/mise-integration/claims"`. The import resolves from the office, including for local and pinned Git packages. See `packages/browser/office.ts` for a settings-gated install and independent Chrome recipe. A task-only package can register `ctx.add(tasks, {name: "audit", description: "Run audit", script: "scripts/audit.sh"})` without a tool requirement. Each task runs as `<package>:<name>`. Installs claim the `destination` they manage, independently of their readiness marker. Native `bootstrap.files` entries also claim their paths. Conflicting destinations stop publication; Office does not infer what a shell script writes.
 
 External packages using the earlier YAML or TypeScript manifest fields still participate in the same policy. For example, the legacy host form is:
 

@@ -102,7 +102,7 @@ export function withPluginPlan(office: Office, installed: InstalledPackages, mod
     projected.push({ ...item, plugin: !!paths.server, panel: paths.panel && join(dir, paths.panel) });
 
     if (!paths.server) continue;
-    const plugin = join(dir, paths.server);
+    const plugin = join(item.kind === "local" ? dir : join(office.dir, ".office/packages", entry.name), paths.server);
     const at = `${pluginFolder}/${entry.name}`;
     const existing = entryAt(destination, entry.name);
     const taken = existing !== undefined && !existing.office;

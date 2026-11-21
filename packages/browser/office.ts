@@ -1,4 +1,6 @@
-import type { PackageContext } from "../office/package-context.ts";
+import { installs, recipes } from "@office/mise-integration/claims";
+import type { PackageContext } from "@office/office/context";
+import { requirements } from "@office/tooling/requirements";
 
 const chrome = "/usr/bin/google-chrome-stable";
 
@@ -19,9 +21,7 @@ export default {
       default: false
     }
   },
-  async setup(ctx: PackageContext) {
-    const { requirements } = await ctx.importStandard("tooling/requirements");
-    const { installs, recipes } = await ctx.importStandard("mise-integration/claims");
+  setup(ctx: PackageContext) {
     ctx.add(requirements, { name: "npm:agent-browser", minimumVersion: "0.43.0" });
 
     if (String(ctx.settings.browse) === "true") {

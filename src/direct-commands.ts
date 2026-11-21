@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { packageRoot } from "./bound-paths.ts";
 import { listing } from "../packages/references/commands/list.ts";
 import { setupContext, standardImports } from "./package-definition.ts";
 import * as v from "valibot";
@@ -98,7 +99,7 @@ async function handler(office: Selections, owner: Owner, canonical: string, requ
     const delivered = owner.commands.settings;
     const staticSettings = manifest.settings_schema ? delivered : Object.fromEntries(Object.entries(delivered).filter(([key]) => Object.hasOwn(manifest.settings, key)));
     await manifest.setup?.(setupContext({
-      ...standardImports(join(office.dir, ".office/packages")),
+      ...standardImports(packageRoot(office.dir)),
       settings: structuredClone(staticSettings), add() {}, collection() {},
       command(input) {
         const read = commandRegistration(input);

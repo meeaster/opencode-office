@@ -1,0 +1,12 @@
+{
+  "extends": "./.office/tsconfig.contracts.json",
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "strict": true,
+    "noEmit": true
+  }
+}

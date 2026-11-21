@@ -4,6 +4,7 @@ import { project, destinationProblems, machineCollection } from "../standard/mis
 import { repositories } from "../packages/references/repositories.ts";
 import { collectJobs } from "../standard/cron/jobs.ts";
 import { existsSync } from "node:fs";
+import { packageRoot } from "./bound-paths.ts";
 import { join } from "node:path";
 import { changesSetup, fragmentPath } from "./package-tools.ts";
 import { runPackageSetup, standardImports } from "./package-definition.ts";
@@ -146,7 +147,7 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
         const settings = item.entry.settings ?? {};
 
         const { booleans, scalars } = await runPackageSetup(pkg.manifest, settings, {
-          ...standardImports(join(office.dir, ".office/packages")),
+          ...standardImports(packageRoot(office.dir)),
           settings: structuredClone(pkg.settings),
           collection(handle) {
             if (!handle.id.startsWith(`${name}.`) || !/^[a-z0-9-]+\.[a-z0-9-]+$/.test(handle.id) || !v.is(v.function(), handle.parse) || provided.has(handle.id)) throw new Error(`invalid or duplicate collection ${handle.id}`);
