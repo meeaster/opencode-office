@@ -93,9 +93,11 @@ async function prompt(dir: string, folder: string) {
         expect(entry.key).toBe("office");
         text = entry.value;
       } } },
+      compact: async () => ({}),
     },
     skill: { transform: async () => registration, list: async () => ({ data: [] }), reload: async () => {} },
     mcp: { transform: async () => registration },
+    tool: { transform: async () => registration },
   });
 
   try {

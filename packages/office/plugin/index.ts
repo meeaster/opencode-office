@@ -5,6 +5,7 @@
 //   each prompt, so it follows office.yaml and reaches every provider (claude-agent included);
 // - every skill in this package's skills/ directory;
 // - the `office-executor` MCP server, the office's Executor;
+// - the `compact_session` tool, from compact-session.ts, which compacts the session calling it;
 // - none of the skills in the folders the office's `ignore_claude_synced_skills` and `ignore_skill_folders` settings name.
 //
 // The office package is built into the `office` tool, which bundles this plugin with what it
@@ -14,6 +15,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { compactSessionTool } from "./compact-session.ts";
 import { expandFolder, inFolders, packageSkills, readIgnoredFolders } from "./ignored-skills.ts";
 import { findOffice, officeInstructions } from "./instructions.ts";
 import { tryFileLock } from "../../../src/file-lock.ts";
@@ -31,7 +33,9 @@ type Context = {
   session: {
     hook(kind: "prompt", handler: (event: { sessionID: string }) => Promise<void>): Promise<Registration>;
     instructions: { entry: { put(input: { sessionID: string; key: string; value: string }): Promise<void> } };
+    compact(input: { sessionID: string; delivery: "queue" }): Promise<unknown>;
   };
+  tool: { transform(callback: (editor: { add(tool: ReturnType<typeof compactSessionTool>): void }) => void): Promise<Registration> };
   skill: {
     transform(callback: (editor: SkillEditor) => void): Promise<Registration>;
     list(): Promise<{ data: readonly { id: string; path: string }[] }>;
@@ -143,6 +147,8 @@ async function register(ctx: Context) {
 
     checkAfterLoad();
   });
+
+  await ctx.tool.transform((editor) => editor.add(compactSessionTool((input) => ctx.session.compact(input))));
 
   if (office === undefined) return;
 
