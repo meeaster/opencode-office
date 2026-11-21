@@ -12,6 +12,13 @@ import { assets, bundledPlugins, bundlePlugin, checkoutCommit, packageTests } fr
 
 const root = resolve(import.meta.dir, "..");
 
+/**
+ * How the compiled office runs. It installs nothing on import, and it ignores the bunfig.toml and
+ * .env of the folder it runs in, which a compiled executable otherwise reads: a folder's preload
+ * script would run, and its variables apply, before office's own code.
+ */
+export const runtime = { execArgv: ["--no-install"], autoloadBunfig: false, autoloadDotenv: false };
+
 /** Compiles the CLI from this checkout into `outfile`, stamped with `version` and the checkout's commit. */
 export async function compile(outfile: string, version = manifest.version): Promise<void> {
   // The built-in packages as offices hold them, staged in target/packages/ to be embedded: a
@@ -29,7 +36,7 @@ export async function compile(outfile: string, version = manifest.version): Prom
 
   const result = await Bun.build({
     entrypoints: [join(root, "src/cli.ts"), join(root, "src/validate-replacement.ts")],
-    compile: { outfile, execArgv: ["--no-install"], assets: assets.map((path) => join(root, path)) },
+    compile: { outfile, ...runtime, assets: assets.map((path) => join(root, path)) },
     define: { OFFICE_COMMIT: JSON.stringify(checkoutCommit()), OFFICE_VERSION: JSON.stringify(version) },
   });
 
