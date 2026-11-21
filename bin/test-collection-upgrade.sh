@@ -89,9 +89,9 @@ if "$new" sync --packages >"$base/log" 2>&1; then exit 1; fi
 grep 'floci claimed by both' "$base/log"
 cmp "$base/good" "$snapshot"
 config
-mkdir -p packages/{catalog,author} "$base/git/pkg"
-cat >packages/catalog/items.ts <<'EOF'
-import type { Collection } from "../../.office/packages/office/package-context.ts";
+mkdir -p packages/catalog/exports packages/author "$base/git/pkg"
+cat >packages/catalog/exports/items.ts <<'EOF'
+import type { Collection } from "@office/office/context";
 type Item = { name: string; count: number };
 export const items = {
   id: "catalog.items",
@@ -103,7 +103,7 @@ export const items = {
 } satisfies Collection<Item>;
 EOF
 cat >packages/catalog/office.ts <<'EOF'
-import { items } from "./items.ts";
+import { items } from "./exports/items.ts";
 export default {name:"catalog",description:"Catalog",setup(ctx){
   ctx.collection(items);
   ctx.command({name:"catalog list",summary:"List items",run(inputs){
@@ -112,16 +112,16 @@ export default {name:"catalog",description:"Catalog",setup(ctx){
 }};
 EOF
 cat >packages/author/office.ts <<'EOF'
-import { items } from "../catalog/items.ts";
-import { repositories } from "../../.office/packages/references/repositories.ts";
+import { items } from "@office/catalog/items";
+import { repositories } from "@office/references/repositories";
 export default {name:"author",description:"Author",setup(ctx){
   ctx.add(items,{name:"pens",count:3});
   ctx.add(repositories,{name:"local-guide",url:"local"});
 }};
 EOF
 cat >"$base/git/pkg/office.ts" <<'EOF'
-export default {name:"writer",description:"Pinned",async setup(ctx){
-  const {repositories}=await import("../references/repositories.ts");
+import { repositories } from "@office/references/repositories";
+export default {name:"writer",description:"Pinned",setup(ctx){
   ctx.add(repositories,{name:"guide",url:"pinned"});
 }};
 EOF

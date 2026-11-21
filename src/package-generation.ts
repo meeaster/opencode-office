@@ -213,6 +213,7 @@ function locked<T>(dir: string, action: () => T) {
 /** Reserve the final path and protect both the source and candidate during materialization. */
 export function beginGeneration(dir: string) {
   checkAdoption(dir);
+
   return locked(dir, () => {
     const previous = adopt(dir);
     prune(dir, previous);

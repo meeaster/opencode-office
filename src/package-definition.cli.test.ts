@@ -1446,6 +1446,44 @@ for (const order of [["alpha", "catalog"], ["catalog", "alpha"]]) {
   }, 60_000);
 }
 
+test("a suspended indexed reader retains its generation beyond the previous set", async () => {
+  const { dir, cli, env, select } = fixture("leased-reader");
+  const repo = join(root, "leased-reader-source");
+  git(["init", "-qb", "main", repo]);
+  write(join(repo, "pkg/office.ts"), `import {readFileSync} from "node:fs";
+    export default {name:"leased",description:"Reader",setup(c){c.command({name:"read edition",summary:"Edition",async run(){
+      if(process.env.WAIT_FOR_FLIPS){console.log("ready");await Bun.stdin.text()}
+      console.log(readFileSync(new URL("./edition",import.meta.url),"utf8"))
+    }})}}`);
+
+  const pin = (value: string) => {
+    write(join(repo, "pkg/edition"), value);
+    select(`  - {name: leased, path: pkg, repo: ${repo}, ref: ${commit(repo)}}\n`);
+    cli(0, "sync", "--packages");
+  };
+
+  pin("old");
+  const active = join(dir, ".office/current");
+  const old = join(dir, ".office", readlinkSync(active));
+  const process = Bun.spawn([exe, "--office", dir, "read", "edition"], { env: { ...env, WAIT_FOR_FLIPS: "1" }, stdin: "pipe", stdout: "pipe", stderr: "inherit" });
+
+  try {
+    const output = process.stdout.getReader();
+    expect(new TextDecoder().decode((await output.read()).value)).toContain("ready");
+    output.releaseLock();
+
+    for (const value of ["two", "three", "four"]) pin(value);
+    expect(existsSync(old)).toBe(true);
+    expect(cli(0, "read", "edition").trim()).toBe("four");
+    process.stdin.end();
+    expect((await new Response(process.stdout).text()).trim()).toBe("old");
+    expect(await process.exited).toBe(0);
+    cli(0, "sync", "--packages");
+    expect(existsSync(old)).toBe(false);
+    expect(readdirSync(join(dir, ".office/generations"))).toHaveLength(2);
+  } finally { process.kill(); }
+}, 60_000);
+
 test("tracked updates validate the consuming settings and staged assets before publishing", async () => {
   const { dir, cli, select } = fixture("tracked");
   const repo = join(root, "tracked-source");

@@ -3,14 +3,14 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { bindPaths } from "./bound-paths.ts";
 import { boundRevision, collectReferences } from "./collect-references.ts";
-import { currentOffice, loadOffice, type Office, OfficeError } from "./office.ts";
+import { currentOffice, loadOffice, type Office, OfficeError, readOfficeFields } from "./office.ts";
 import { parse } from "yaml";
 import * as v from "valibot";
-import { officeSchema, packageEntry } from "./schema.ts";
+import { commandBootstrapSchema, officeSchema, packageEntry } from "./schema.ts";
 import { activeGeneration, beginGeneration, managedDirectory, pinActive, publishGeneration, type Candidate } from "./package-generation.ts";
 import { bindImports, coupledFailures, createImportMap, requireCoherentImports } from "./package-imports.ts";
 import { installedPackages } from "./layout.ts";
-import { embeddedPackage, materializePackage, readRecord, resolvePackages, validateReplacement, writePackageSettings } from "./packages.ts";
+import { embeddedPackage, materializePackage, readRecord, requiredPackages, resolvePackages, validateReplacement, writePackageSettings } from "./packages.ts";
 import { beginReferencePublication } from "./reference-publication.ts";
 import { readSnapshot, type ReferenceSnapshot } from "./reference-snapshot.ts";
 import { applyPackages } from "./commands/sync.ts";
@@ -64,7 +64,21 @@ export function bindReader(dir: string, name: string, candidate = false) {
 
   if (existsSync(selection)) {
     const packages = v.parse(v.array(packageEntry), JSON.parse(readFileSync(selection, "utf8")));
-    bindImports(dir, resolvePackages({ dir, packages }).packages);
+    const unavailable = join(folder, "unavailable.json");
+    const rejected = new Set(existsSync(unavailable) ? v.parse(v.array(v.string()), JSON.parse(readFileSync(unavailable, "utf8"))) : []);
+    let live: v.InferOutput<typeof commandBootstrapSchema> | undefined;
+    bindImports(dir, resolvePackages({ dir, packages }).packages.filter(pkg => !rejected.has(pkg.entry.name)), pkg => {
+      if (candidate) return;
+      live ??= readOfficeFields(dir, commandBootstrapSchema);
+      const matches = live.packages.filter(entry => entry.name === pkg.entry.name);
+
+      if (!matches.length && requiredPackages.includes(pkg.entry.name)) return;
+      const entry = matches[0];
+
+      if (matches.length !== 1 || entry.repo !== pkg.entry.source?.repo || entry.ref !== pkg.entry.source?.ref || entry.path !== pkg.entry.source?.path) {
+        throw new OfficeError(`selection of imported package ${pkg.entry.name} differs from the active package set; run office sync --packages`);
+      }
+    });
   }
 }
 
@@ -86,9 +100,14 @@ async function prepareSources(office: Office, selection: ReturnType<typeof resol
     if (lstatSync(old, { throwIfNoEntry: false })?.isSymbolicLink()) throw new OfficeError(`cannot materialize redirected package ${old}`);
 
     const bound = boundRevision(snapshot, item.entry);
+    let copiedPrevious = false;
 
     try {
-      if (existsSync(old)) cpSync(old, dir, { recursive: true, verbatimSymlinks: true });
+      if (existsSync(old)) {
+        cpSync(old, dir, { recursive: true, verbatimSymlinks: true });
+        copiedPrevious = true;
+      }
+
       const materialized = await materializePackage(office, item, packages, bound);
 
       if (materialized.source) embedded.push([item.entry.name, materialized.source]);
@@ -116,7 +135,8 @@ async function prepareSources(office: Office, selection: ReturnType<typeof resol
 
       if (item.kind === "built-in") embedded.push([item.entry.name, (await embeddedPackage(item.entry.name)).source]);
       lines.push(`FAILED package ${item.entry.name}: ${String(error)}`);
-      rmSync(dir, { force: true, recursive: true });
+
+      if (!copiedPrevious) rmSync(dir, { force: true, recursive: true });
     }
 
     item.dir = dir;
@@ -166,7 +186,8 @@ export async function publishPackages(office: Office, exclude: boolean, update?:
     const { embedded, validate, rejected } = await prepareSources(office, selection, folder, previous, snapshot.value, lines);
 
     if (update && rejected.length) return { published: false, lines, rejected: coupled(rejected) };
-    createImportMap(folder, selection.packages);
+    createImportMap(folder, selection.packages.filter(pkg => !rejected.includes(pkg.entry.name)));
+    writeFileSync(join(folder, "unavailable.json"), JSON.stringify(rejected));
     writeFileSync(join(folder, "selection.json"), JSON.stringify(office.packages.map(({ name, settings, cron, source }) => ({ name, settings, cron, ...source }))));
     const request: Admission = { office, transaction, yaml, embedded, validate, rejected, exclude, tracked: !!update, apply: update?.apply ?? true };
     writeFileSync(join(temporary, "input"), JSON.stringify(request));

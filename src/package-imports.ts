@@ -114,12 +114,31 @@ export function coupledFailures(rejected: string[], pending: string[], views: Re
 
 /** One native module cache per evaluating process. The scan also catches an owner dependency
  * shadowing NODE_PATH; the reserved import must resolve to exactly the selected source. */
-export function importGuard(dir: string, packages: ResolvedPackage[]) {
-  const modules = publicModules(packages);
-  const selected = packages.flatMap(pkg => pkg.kind === "local" ? [] : [pkg.dir]);
+export function importGuard(dir: string, packages: ResolvedPackage[], checkSelection?: (pkg: ResolvedPackage) => void) {
+  const selected = packages.filter(pkg => pkg.kind !== "local");
   const managed = join(dir, ".office");
   const seen = new Set<string>();
   const verified = new Set<string>();
+
+  function targetOf(spec: string) {
+    const [, name, member, ...extra] = spec.split("/");
+    const pkg = packages.find(item => item.entry.name === name);
+
+    if (!pkg || extra.length || !member || !moduleName.test(`${member}.ts`)) return;
+    const file = join(pkg.dir, "exports", `${member}.ts`);
+
+    if (!statSync(file, { throwIfNoEntry: false })?.isFile()) return;
+    const path = realpathSync(file);
+
+    if (inside(realpathSync(pkg.dir), path)) return { pkg, path };
+  }
+
+  function verify(pkg: ResolvedPackage) {
+    if (verified.has(pkg.dir)) return;
+    checkSelection?.(pkg);
+    verifyInstalledCopy(pkg);
+    verified.add(pkg.dir);
+  }
 
   function visit(path: string, root: string) {
     if (seen.has(path)) return;
@@ -134,18 +153,14 @@ export function importGuard(dir: string, packages: ResolvedPackage[]) {
         const spec = edge.path;
 
         if (spec.startsWith(namespace)) {
-          const target = modules.get(spec);
+          const target = targetOf(spec);
 
           if (!target) throw new Error(`${path}: ${spec} is not a public export of a selected package`);
           const actual = realpathSync(Bun.resolveSync(spec, dirname(path)));
 
           if (actual !== target.path) throw new Error(`${path}: ${spec} resolves to ${actual}, expected ${target.path}`);
 
-          if (!verified.has(target.pkg.dir)) {
-            verifyInstalledCopy(target.pkg);
-            verified.add(target.pkg.dir);
-          }
-
+          verify(target.pkg);
           visit(target.path, realpathSync(target.pkg.dir));
         } else if (spec.startsWith(".") || isAbsolute(spec)) {
           let resolved;
@@ -153,12 +168,18 @@ export function importGuard(dir: string, packages: ResolvedPackage[]) {
           try { resolved = realpathSync(Bun.resolveSync(spec, dirname(path))); }
           catch { resolved = resolve(dirname(path), spec); }
 
-          const sameManagedSet = selected.includes(root) && selected.some(dir => inside(dir, resolved));
+          if (!inside(root, resolved) && inside(managed, resolved)) {
+            const peer = selected.some(pkg => pkg.dir === root) && selected.find(pkg => inside(pkg.dir, resolved));
 
-          if (!inside(root, resolved) && inside(managed, resolved) && !sameManagedSet) {
+            if (peer) {
+              verify(peer);
+              visit(resolved, peer.dir);
+              continue;
+            }
+
             const target = resolved.match(/\/packages\/([^/]+)\/(?:exports\/)?([^/]+)\.ts$/);
             const alias = target && `${namespace}${target[1]}/${target[2]}`;
-            const suggestion = alias && modules.has(alias) ? alias : "@office/<package>/<export>";
+            const suggestion = alias && targetOf(alias) ? alias : "@office/<package>/<export>";
             throw new Error(`${path}: ${spec} crosses into ${resolved}; import the selected public module as ${suggestion}`);
           }
 
@@ -181,8 +202,8 @@ export function requireCoherentImports() {
   if (rejected) throw rejected;
 }
 
-export function bindImports(dir: string, packages: ResolvedPackage[]) {
-  guard = importGuard(dir, packages);
+export function bindImports(dir: string, packages: ResolvedPackage[], checkSelection?: (pkg: ResolvedPackage) => void) {
+  guard = importGuard(dir, packages, checkSelection);
 }
 
 export function verifyImports(path: string) {
