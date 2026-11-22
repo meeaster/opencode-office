@@ -39,7 +39,7 @@ test("inspect lists a desktop panel only by this office's own record, and a bund
 
   if (where.kind !== "app") throw new Error("the app machine variables should locate a local app machine");
   installPanel(where.machine, { name: "sample", dir: office }, { name: "common", bundle });
-  const desktop = () => inspect(office, undefined, undefined).filter(line => line.startsWith("desktop: "));
+  const desktop = () => inspect(office, undefined).filter(line => line.startsWith("desktop: "));
   expect(desktop()).toEqual(["desktop: common (bundle present; listed in app-machine opencode.json)"]);
 
   // A record that is a link, or another office's record, is not this office's panel.

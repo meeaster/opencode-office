@@ -11,8 +11,6 @@ import { compile } from "./build.ts";
 export const launcher = process.env.OFFICE_TEST_OPENCODE;
 /** Opt-in: the compiled CLI from before authored registration, as a control. */
 export const groundwork = process.env.OFFICE_TEST_PRE_ASSETS;
-/** Opt-in: the compiled CLI from before opencode inspect, for the upgrade test. */
-export const previous = process.env.OFFICE_TEST_PRE_INSPECT;
 /** Opt-in control: the compiled CLI from before plugin delivery refused owner folders (567252f). */
 export const control = process.env.OFFICE_TEST_PLUGIN_CONTROL;
 

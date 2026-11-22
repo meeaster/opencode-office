@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readdirSync, readFileSync, readlinkSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
 
@@ -49,10 +49,12 @@ for (const kind of ["local", "tracked"]) {
   }, 60_000);
 }
 
-test("published values survive repeated reads; failed registrations cannot admit dependent batches", () => {
+test("reads return the provider's parsed values, a copy each; sync admits no batch whose registration failed", () => {
   const { dir, cli, select } = fixture("collections");
   const path = (name: string) => join(dir, "packages", name, "office.ts");
   const contract = join(dir, "packages/catalog/items.ts");
+  const saved = join(dir, ".office/resolved/references.json");
+  const rows = () => JSON.stringify(JSON.parse(read(saved)).contributors.find((group: { name: string }) => group.name === "alpha"));
   const author = 'import {items} from "../catalog/items.ts";export default {name:"alpha",description:"author",setup(c){c.add(items,{name:"first",count:1})}}';
   const provider = 'import {items} from "./items.ts";export default {name:"catalog",description:"provider",setup(c){c.collection(items);}}';
   select("  - {name: alpha}\n  - {name: beta}\n  - {name: catalog}\n");
@@ -64,36 +66,34 @@ test("published values survive repeated reads; failed registrations cannot admit
     const first=i.read(handle); if(first.length)first[0].value.count=99;console.log(JSON.stringify(i.read(handle)));
   }})}}`);
   cli(0, "sync", "--packages");
+  // Normalized once by the provider, not by the reader's handle; changing one read leaves the next alone.
   expect(cli(0, "items")).toContain('"count":2');
+  const synced = rows();
+  expect(synced).toContain('"count":2');
+
   write(path("alpha"), 'throw Error("failed author")');
   cli(1, "sync", "--packages");
-  expect(cli(0, "items")).toContain('"count":2');
+  expect(rows()).toBe(synced.replace('"stale":false', '"stale":true'));
+  expect(cli(1, "items")).toContain("package alpha: packages/alpha/office.ts: failed author");
   write(contract, 'export const items={id:"catalog.items",parse(i){if(typeof i.count!=="string")throw Error("expected text");return i}}');
   expect(cli(1, "sync", "--packages")).toContain("provider contract changed");
-  expect(cli(0, "items")).toContain("[]");
+  expect(rows()).toContain('"entries":[]');
   write(path("alpha"), author.replace("count:1", 'count:"valid"'));
   write(path("catalog"), provider.replace("c.collection(items);", 'c.collection(items);c.add(items,{name:"bad",count:1});'));
   expect(cli(1, "sync", "--packages")).toContain("provider of catalog.items failed");
-  expect(cli(0, "items")).toContain("[]");
+  expect(rows()).toContain('"entries":[]');
+  expect(cli(1, "items")).toContain("package catalog: expected text");
 });
 
-test.each(["file", "link"])("an external reader cannot consume an old publication through a changed provider %s", layout => {
-  const { dir, cli, select } = fixture(`reader-contract-${layout}`);
+test("a reader uses the provider as it is now; sync keeps a changed provider's last-good rows out", () => {
+  const { dir, cli, select } = fixture("reader-contract");
   const packages = join(dir, "packages");
   const contract = join(packages, "catalog/items.ts");
   const writer = join(packages, "alpha/office.ts");
   const add = 'c.add(items,{name:"x",value:12});';
   const author = (body: string) => `import {items} from "../catalog/items.ts";export default {name:"alpha",description:"author",setup(c){${body}}}`;
   select("  - name: alpha\n  - name: catalog\n  - name: beta\n");
-  const numeric = 'export const items={id:"catalog.items",parse:i=>i};export const display=i=>i.value.toFixed(0)';
-  const text = 'export const items={id:"catalog.items",parse:i=>({...i,value:"v"+i.value})};export const display=i=>i.value.toUpperCase()';
-
-  if (layout === "link") {
-    write(join(dirname(contract), "numeric.ts"), numeric);
-    write(join(dirname(contract), "text.ts"), text);
-    symlinkSync("numeric.ts", contract);
-  } else write(contract, numeric);
-
+  write(contract, 'export const items={id:"catalog.items",parse:i=>i};export const display=i=>i.value.toFixed(0)');
   write(join(packages, "catalog/office.ts"), 'import {items} from "./items.ts";export default {name:"catalog",description:"provider",setup(c){c.collection(items)}}');
   write(join(packages, "beta/office.ts"), `import {items,display} from "../catalog/items.ts";export default {name:"beta",description:"reader",
     setup(c){c.command({name:"display",summary:"display",run(i){console.log(i.read(items).map(row=>display(row.value)).join(",") || "empty")}})}}`);
@@ -103,22 +103,16 @@ test.each(["file", "link"])("an external reader cannot consume an old publicatio
   const snapshot = join(dir, ".office/resolved/references.json");
   const previous = read(snapshot);
 
-  if (layout === "link") {
-    rmSync(contract);
-    symlinkSync("text.ts", contract);
-  } else write(contract, text);
-
-  expect(cli(1, "display")).toMatch(/catalog\.items:.*published contract.*sync --packages/);
-
-  // Only detecting the changed contract depends on the layout; the file variant covers recovery.
-  if (layout === "link") return;
+  // An unsynced provider edit parses this run's additions: no old row meets the new reader.
+  write(contract, 'export const items={id:"catalog.items",parse:i=>({...i,value:"v"+i.value})};export const display=i=>i.value.toUpperCase()');
+  expect(cli(0, "display")).toContain("V12");
   write(writer, author(add + add));
   expect(cli(1, "sync", "--packages")).toContain("claimed by both");
   expect(read(snapshot)).toBe(previous);
-  expect(cli(1, "display")).toMatch(/catalog\.items:.*published contract.*sync --packages/);
+  expect(cli(1, "display")).toContain("catalog.items x claimed by both package alpha and package alpha");
   write(writer, 'throw Error("writer unavailable")');
   expect(cli(1, "sync", "--packages")).toContain("omitting last-good catalog.items/x");
-  expect(cli(0, "display")).toContain("empty");
+  expect(cli(1, "display")).toContain("writer unavailable");
   write(writer, author(add));
   cli(0, "sync", "--packages");
   expect(cli(0, "display")).toContain("V12");
@@ -163,7 +157,7 @@ for (const order of [["alpha", "catalog"], ["catalog", "alpha"]]) {
   }, 60_000);
 }
 
-test("a suspended indexed reader retains its generation beyond the previous set", async () => {
+test("a suspended reader retains its generation beyond the previous set", async () => {
   const { dir, cli, env, select } = fixture("leased-reader");
   const repo = join(root, "leased-reader-source");
   git(["init", "-qb", "main", repo]);

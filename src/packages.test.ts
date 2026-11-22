@@ -9,6 +9,7 @@ import { git } from "./git.ts";
 import { loadOffice } from "./office.ts";
 import { settingsEnv } from "./package-services.ts";
 import { fetchPackage, installPackage, readPackage, resolvePackages } from "./packages.ts";
+import { toolRepository } from "./tool.ts";
 import { readLockSection } from "./versions.ts";
 
 let dir: string;
@@ -498,6 +499,22 @@ test("an entry without repo is built-in when shipped and local otherwise; the re
     ["shared", "remote", ".office/packages/shared"],
   ]);
   expect(problems).toEqual([]);
+});
+
+test("a live load takes an entry naming the built-in's historical source as a note, not a problem; its copy is still checked", () => {
+  const office = join(dir, "office");
+
+  write(join(office, "office.yaml"), `name: t\npackages:\n  - name: knowledge\n    repo: https://github.com/${toolRepository}.git\n    path: packages/knowledge\n    ref: main\n`);
+  write(join(office, ".office/packages/knowledge/package.yaml"), "name: knowledge\ndescription: Not the tool's copy.\n");
+  const loaded = loadOffice(office);
+  const live = resolvePackages(loaded, undefined, true);
+  const knowledge = live.packages.find(item => item.entry.name === "knowledge");
+
+  expect(live.problems).toEqual([]);
+  expect(knowledge?.kind).toBe("built-in");
+  expect(resolvePackages(loaded).problems.map(problem => problem.message)).toEqual([expect.stringContaining("takes the built-in package knowledge from the tool's repository")]);
+  // A copy without its record still fails its source check when it loads.
+  expect(knowledge && readPackage(loaded, knowledge).ok).toBe(false);
 });
 
 test("sync installs the built-in packages from the tool and restores an edited copy, keeping the office's records", async () => {

@@ -29,9 +29,8 @@ type Registrations = Omit<PackageContext, "booleanSetting" | "scalarSetting">;
  * only after that revision's setup has finished, including any conditional declarations. */
 export async function runPackageSetup(manifest: PackageManifest, overrides: Readonly<Record<string, SettingValue>>, context: Registrations) {
   const declared = new Set(Object.keys(manifest.settings));
-  const booleans: Record<string, boolean> = {};
   const scalars: Record<string, string | number | boolean> = {};
-  await manifest.setup?.(setupContext(context, overrides, declared, booleans, scalars));
+  await manifest.setup?.(setupContext(context, overrides, declared, scalars));
 
   for (const key of Object.keys(scalars)) {
     if (manifest.secrets[settingVariable(manifest.namespace, key)] || manifest.settings_schema) throw new Error(`settings.${key}: conflicts with a secret or settings_schema`);
@@ -41,17 +40,16 @@ export async function runPackageSetup(manifest: PackageManifest, overrides: Read
     for (const key of Object.keys(overrides)) if (!declared.has(key)) throw new Error(`settings.${key}: ${manifest.name} has no such setting`);
   }
 
-  return { booleans, scalars };
+  return { scalars };
 }
 
-export function setupContext(context: Registrations, settings: Readonly<Record<string, SettingValue>>, declared: Set<string>, booleans: Record<string, boolean> = {}, scalars: Record<string, string | number | boolean> = {}): PackageContext {
+function setupContext(context: Registrations, settings: Readonly<Record<string, SettingValue>>, declared: Set<string>, scalars: Record<string, string | number | boolean>): PackageContext {
   const booleanSetting: PackageContext["booleanSetting"] = (name, definition) => {
     if (!/^[a-z][a-z0-9_]*$/.test(name) || !v.is(v.pipe(v.string(), v.nonEmpty()), definition.description) || !v.is(v.boolean(), definition.default) || declared.has(name)) throw new Error(`invalid or duplicate boolean setting ${name}`);
     const value = Object.hasOwn(settings, name) ? settings[name] : definition.default;
 
     if (!v.is(v.boolean(), value)) throw new Error(`settings.${name}: must be true or false`);
     declared.add(name);
-    booleans[name] = value;
 
     return value;
   };

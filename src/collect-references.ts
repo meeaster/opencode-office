@@ -1,14 +1,12 @@
 import * as v from "valibot";
 import type { Collection, CollectionEntry } from "../packages/office/package-context.ts";
 import { project, destinationProblems, machineCollection } from "../standard/mise-integration/projection.ts";
-import { repositories } from "../packages/references/repositories.ts";
 import { collectJobs } from "../standard/cron/jobs.ts";
 import { existsSync } from "node:fs";
-import { packageRoot } from "./bound-paths.ts";
 import { join } from "node:path";
 import { changesSetup, fragmentPath } from "./package-tools.ts";
-import { runPackageSetup, standardImports } from "./package-definition.ts";
-import { commandConflicts, commandRegistration, type CommandMetadata } from "./command-table.ts";
+import { registerPackage } from "./package-setup.ts";
+import { nameProblems, type RegisteredCommand } from "./command-table.ts";
 import { installedPackages, type InstalledPackages } from "./layout.ts";
 import type { Office, PackageEntry } from "./office.ts";
 import { applyScalarSettings, builtinSource, collectionContract, gitSelection, providerFiles, readRecord, resolvePackages, type InstalledPackage, type ResolvedPackage } from "./packages.ts";
@@ -109,13 +107,15 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
   const errors: string[] = [];
   const definitions = new Map<string, { handle: Collection<CollectionEntry>; owner: string; contract: string }>();
   const pending = new Map<string, { id: string; value: CollectionEntry }[]>();
+  const commands = new Map<string, RegisteredCommand[]>();
 
   function fail(group: ReferenceSnapshot["contributors"][number], message?: string) {
     if (message) changes.push(`FAILED package ${group.name}: collecting references (${group.source}): ${message}`);
     const last = previous?.contributors.find(item => item.name === group.name && item.source === group.source && item.commit === group.commit);
     group.stale = true;
-    delete group.commands;
     group.entries = last?.entries ?? [];
+    // A contributor that failed collection provides no commands.
+    commands.delete(group.name);
   }
 
   for (const item of selected.toSorted((a, b) => a.entry.name.localeCompare(b.entry.name))) {
@@ -125,7 +125,6 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
     if (pkg && !pkg.manifest.setup && !pkg.manifest.registerCron && !pkg.manifest.opencode) continue;
 
     const source = provenance(item, previous, rejected.has(name), embedded);
-    const values: { id: string; value: CollectionEntry }[] = [];
 
     if (pkg && !pkg.manifest.setup && !pkg.manifest.registerCron) {
       // Bind an OpenCode-only Git contributor's immutable revision for repair too.
@@ -141,58 +140,25 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
           if (!cron.ok) throw new Error(cron.errors.join("; "));
         }
 
-        const routes: CommandMetadata[] = [];
-        const invalid: string[] = [];
-        const provided = new Map<string, Collection<CollectionEntry>>();
-        const settings = item.entry.settings ?? {};
-
-        const { booleans, scalars } = await runPackageSetup(pkg.manifest, settings, {
-          ...standardImports(packageRoot(office.dir)),
-          settings: structuredClone(pkg.settings),
-          collection(handle) {
-            if (!handle.id.startsWith(`${name}.`) || !/^[a-z0-9-]+\.[a-z0-9-]+$/.test(handle.id) || !v.is(v.function(), handle.parse) || provided.has(handle.id)) throw new Error(`invalid or duplicate collection ${handle.id}`);
-            provided.set(handle.id, handle);
-          },
-          command(input) {
-            const read = commandRegistration(input);
-
-            if (!read.ok) invalid.push(`package ${name}: command: ${read.errors.join("; ")}`);
-            else {
-              const { name, aliases, summary } = read.value;
-              routes.push({ name, aliases, summary });
-            }
-          },
-          add(handle, value) {
-            // Accept shipped one-argument registrations from existing package definitions.
-            if (arguments.length === 1 && "registry" in handle && v.is(v.string(), handle.registry) && "value" in handle) {
-              if (!v.is(namedEntry, handle.value)) throw new Error("expected a named collection entry");
-              values.push({ id: handle.registry, value: structuredClone(handle.value) });
-            } else {
-              if (!v.is(namedEntry, value)) throw new Error("expected a named collection entry");
-              values.push({ id: handle.id, value: structuredClone(value) });
-            }
-          },
+        const { collections: provided, additions, commands: registered, invalid, scalars } = await registerPackage({
+          dir: office.dir, name, manifest: pkg.manifest, overrides: item.entry.settings ?? {}, settings: pkg.settings,
         });
-
-        const files = provided.size || (routes.length && item.kind === "remote") ? providerFiles(item) : undefined;
 
         applyScalarSettings(pkg, scalars);
 
-        const commands = routes.length ? {
-          routes: [...routes], settings: pkg.settings, booleans: Object.keys(booleans).length ? booleans : undefined,
-          files: item.kind !== "built-in" ? files : undefined,
-        } : undefined;
-
         if (provided.size) {
+          const files = providerFiles(item);
+
           // A local provider has no immutable revision: bind its package bytes too. Setup
           // settings can change the meaning of an otherwise identical parser.
-          const contract = collectionContract(source, files!, item.entry);
+          const contract = collectionContract(source, files, item.entry);
 
           for (const [id, handle] of provided) definitions.set(id, { owner: name, handle, contract });
         }
 
-        pending.set(name, [...values]);
-        candidate.contributors.push({ name, ...source, stale: false, entries: [], commands });
+        pending.set(name, additions);
+        commands.set(name, registered);
+        candidate.contributors.push({ name, ...source, stale: false, entries: [] });
         errors.push(...invalid);
         continue;
       } catch (error) {
@@ -251,18 +217,6 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
 
       if (provider && provider.contract === row.contract) return [row];
 
-      // V2/V3 had exactly one host-validated repository type. readSnapshot already
-      // checked these rows. Admit that historical input once through its built-in successor.
-      if (provider && previous && previous.version < 4 && row.id === repositories.id && embedded.has(provider.owner)) {
-        try {
-          const value = provider.handle.parse(row.value);
-
-          if (v.is(namedEntry, value)) return [{ id: row.id, value, contract: provider.contract }];
-        } catch (error) {
-          changes.push(`package ${group.name}: cannot migrate ${row.id}/${row.value.name}: ${String(error)}`);
-        }
-      }
-
       changes.push(`package ${group.name}: omitting last-good ${row.id}/${row.value.name}: provider contract changed or unavailable; repair the contributor and sync`);
 
       return [];
@@ -310,7 +264,7 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
 
   const combined = claims(candidate);
 
-  errors.push(...commandConflicts(candidate.contributors, "publish"));
+  errors.push(...nameProblems([...commands].flatMap(([owner, registered]) => registered.map(command => ({ owner, command })))).map(problem => problem.message));
 
   if (!combined.ok) errors.push(...combined.errors);
 

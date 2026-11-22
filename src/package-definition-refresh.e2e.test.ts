@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
 
-const { root, bin, exe, variant, marker, write, read, commit, prompt, fixture, collector, pausedRefresh } = definitionFixture();
+const { root, bin, exe, variant, marker, write, read, commit, prompt, fixture, collector, pausedRefresh, published } = definitionFixture();
 
 test("a compiled office collects independent references and scopes the last published generation to every reader", async () => {
   const { dir, home, probe, cli } = fixture("references");
@@ -32,7 +32,7 @@ packages: [${packages.join(", ")}]
   const definition = (body: string) => write(local, `${marker} export default {name:"manual",description:"Manual",async setup({add}) {${body}}}`);
   const add = (name: string, url = wanted) => `add({registry:"references.repository",value:{name:"${name}",url:"${url}"}});`;
   const broken = () => definition(`${add("partial")} await Promise.resolve(); throw Error("collector interrupted");`);
-  const list = () => cli(0, "references", "list");
+  const list = () => published(dir);
   const head = (repo: string) => git(["rev-parse", "HEAD"], repo);
 
   const verifyPrompt = async (folder: string) => {
@@ -45,9 +45,11 @@ packages: [${packages.join(", ")}]
   rmSync(realpathSync(snapshot));
   configure([manual, aws]);
   broken();
-  expect(list()).toContain("z-owner\t../../origin\toffice.yaml");
-  expect(list()).not.toContain("floci");
-  expect(existsSync(probe)).toBe(false);
+  // The command loads every selected package: one failed, one not synced yet.
+  const unsynced = cli(1, "references", "list");
+  expect(unsynced).toContain("package manual: ");
+  expect(unsynced).toContain("collector interrupted");
+  expect(unsynced).toContain("package aws-emulator: not synced yet; run office sync");
   expect(cli(1, "sync", "--packages")).toContain("collector interrupted");
   expect(list()).toContain(`${floci} @ main\tpackage aws-emulator`);
   expect(list()).not.toContain("partial");
@@ -71,7 +73,6 @@ packages: [${packages.join(", ")}]
   write(join(moved.dir, ".office/resolved/references.json"), generation);
   cpSync(upstream, join(moved.dir, "origin"), { recursive: true });
   write(join(moved.home, ".gitconfig"), `[url "${moved.dir}/origin"]\n\tinsteadOf = ${floci}\n`);
-  expect(moved.cli(0, "references", "list")).toBe(expected);
   moved.cli(0, "sync", "--references");
   expect(head(join(moved.dir, "references/manual"))).toBe(first);
   expect(existsSync(join(moved.dir, "packages/manual"))).toBe(false);
@@ -86,7 +87,6 @@ packages: [${packages.join(", ")}]
   expect(head(join(dir, ".opencode/plugins/fixture"))).toBe(first);
   expect(read(snapshot)).toBe(generation);
   expect(read(join(checkout, "document"))).toBe("keep through rejection");
-  expect(list()).toContain("reference inputs changed");
   configure(["{name: aws-emulator, settings: {source_reference: false}}", manual], "floci");
   cli(0, "sync", "--packages");
   expect(list()).toContain("floci\t../../origin\toffice.yaml");
@@ -99,9 +99,10 @@ packages: [${packages.join(", ")}]
   expect(head(checkout)).toBe(second);
   expect(list()).toContain("manual\t../../origin\tpackage manual (stale)");
   expect(list()).not.toContain("partial");
-  rmSync(probe);
   write(local, `${marker} throw Error("never import on read");`);
-  expect(cli(0, "--help")).toContain("references list");
+  // Help loads packages too, and names the one that failed.
+  expect(cli(0, "--help")).toMatch(/references list[\s\S]*package manual: .*never import on read/);
+  rmSync(probe);
   expect(cli(0, "sync", "--references")).toContain("last-good");
   const nested = join(dir, "work/repos/nested");
   mkdirSync(nested, { recursive: true });
@@ -157,7 +158,6 @@ packages: [${packages.join(", ")}]
   expect(head(join(dir, "references/floci"))).toBe(second);
 
   write(snapshot, read(snapshot).replace('"version": 4', '"version": 9'));
-  expect(cli(1, "references", "list")).toContain("unsupported references snapshot version");
   expect(cli(1, "sync", "--references")).toContain("unsupported references snapshot version");
   expect(await verifyPrompt(nested)).toContain("unsupported references snapshot version");
   expect(cli(1, "sync", "--packages")).toContain("restore a readable generation");
@@ -182,13 +182,16 @@ test("a different pin of a Git contributor cannot inherit the old pin's claims",
   expect(cli(0, "references", "list")).toContain("remote-docs");
   publish(`${setup} throw Error("bad new pin");`);
   expect(cli(1, "sync", "--packages")).toContain("bad new pin");
-  const list = cli(0, "references", "list");
-  expect(list).toContain("package docs: reference collection failed");
-  expect(list).not.toContain("remote-docs");
+  // Readers of the saved file (here the office guidance) drop the old pin's rows.
+  expect(cli(0, "instructions", dir)).toContain("package docs: reference collection failed");
+  expect(cli(0, "instructions", dir)).not.toContain("remote-docs");
+  // The installed copy is still the old pin's: the command doesn't load it under the new pin.
+  expect(cli(1, "references", "list")).toContain("package docs: ");
   expect(existsSync(join(dir, "node_modules"))).toBe(false);
   publish('add({registry:"references.repository",value:{name:"../outside",url:"../../local"}});');
   expect(cli(1, "sync", "--packages")).toContain("value.name:");
-  expect(cli(0, "references", "list")).not.toContain("../outside");
+  expect(published(dir)).not.toContain("../outside");
+  expect(cli(0, "instructions", dir)).not.toContain("../outside");
 }, 60_000);
 
 test("only a current refresh may apply its fetched commit; withdrawal protects later edits", async () => {
@@ -331,7 +334,6 @@ exec /bin/cat
       write(yaml, original);
       expect(f.cli(1, "sync", "--packages")).toContain("retry after the active Git checkout finishes");
       expect(read(generation)).toBe(before);
-      expect(f.cli(0, "references", "list")).toContain("docs\t");
     } finally {
       write(go, "");
 
@@ -413,17 +415,18 @@ test.skipIf(process.getuid?.() === 0)("a failed materialization matches only the
 
   try {
     expect(f.cli(1, "sync", "--packages")).toContain("EACCES");
-    expect(f.cli(0, "references", "list")).toContain("main\tpackage aws-emulator (stale)");
+    expect(published(f.dir)).toContain("main\tpackage aws-emulator (stale)");
+    expect(f.cli(1, "references", "list")).toContain("package aws-emulator: rejected by the last sync; run office sync");
     expect(f.cli(1, "sync", "--references")).toContain("stale contribution cannot authorize a new clone");
     expect(existsSync(join(f.dir, "references/floci"))).toBe(false);
     mkdirSync(join(folder, "aws-emulator"), { recursive: true });
     block("aws-emulator");
     block("references");
     expect(f.newer(1, "sync", "--packages")).toContain("EACCES");
-    // The variant's references handler also changed and could not be installed.
-    // There is no fallback; the independent data reader still sees the correct generation.
-    expect(f.newer(0, "--help")).toContain("package references: collection failed");
-    expect(f.newer(2, "references", "list")).toContain("office sync --packages");
+    // The variant's references package also changed and could not be installed: it doesn't
+    // load, so its command is unknown. The independent data reader still sees the correct generation.
+    expect(f.newer(0, "--help")).toContain("package references: rejected by the last sync; run office sync");
+    expect(f.newer(2, "references", "list")).toContain("package references: rejected by the last sync; run office sync");
     expect(f.newer(0, "instructions", f.dir)).not.toContain("references/floci/");
   } finally {
     for (const name of ["aws-emulator", "references"]) rmSync(join(folder, name, "unreadable"), { force: true });

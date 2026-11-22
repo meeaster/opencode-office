@@ -154,7 +154,7 @@ packages:
   expect(existsSync(stamp)).toBe(false);
 });
 
-test("one author registers current-mode jobs and indexed commands without changing the command's synced inputs", () => {
+test("one author registers current-mode jobs and commands; a command reads current settings and never collects jobs", () => {
   const { dir, home, probe, cli } = fixture("author-cron");
   const run = "package.report.daily";
   const stamp = join(home, `.local/state/office/cron/author-cron/${run}.stamp`);
@@ -216,7 +216,8 @@ packages:
   expect(cli(1, "cron", "run", run)).toContain("not enabled");
   configure("{mode: host, url: 'http://127.0.0.1:1'}", "two");
   expect(cli(0, "cron", "list")).toBe("package.other.weekly\n");
-  expect(cli(0, "report", "edition")).toContain("one");
+  // A package command runs setup with office.yaml's settings as they are now.
+  expect(cli(0, "report", "edition")).toContain("two");
   configure("{mode: host, managed: true, url: 'http://127.0.0.1:1'}", "two");
   expect(cli(0, "cron", "list")).toContain(`package.office.update-agent-clis\n${run}\n`);
   expect(read(stamp)).toBe(success);
@@ -226,15 +227,19 @@ packages:
   cli(0, "cron", "run", run);
   expect(read(join(dir, "unsynced"))).toBe("two\n");
   expect(read(probe)).toBe("cron:two\n");
-  expect(cli(0, "report", "edition")).toContain("one");
-  expect(cli(0, "references", "list")).toContain("edition\tone");
-  expect(read(probe)).toBe("cron:two\nsetup:one\n");
+  // A package command loads every selected package: an unrelated broken one fails it.
+  expect(cli(1, "report", "edition")).toContain("package spare: packages/spare/office.ts: unrelated module");
   write(spare, 'export default {name:"spare",description:"Unrelated"}');
+  rmSync(probe);
+  expect(cli(0, "references", "list")).toContain("edition\ttwo");
+  // Commands run setup, never registerCron.
+  expect(read(probe)).toBe("setup:two\n");
 
   // A failed collector is not a successful empty list, even after making a valid registration.
   write(module, definition('throw Error("incomplete cron batch")'));
   expect(cli(1, "sync", "--packages")).toContain("incomplete cron batch");
-  expect(cli(0, "--help")).not.toContain("report edition");
+  // Help doesn't collect cron jobs either: the command's setup still registers it.
+  expect(cli(0, "--help")).toContain("report edition");
   expect(cli(1, "cron", "run", run)).toContain("incomplete cron batch");
   expect(cli(1, "up")).toContain("incomplete cron batch");
   expect(read(join(dir, "runs"))).toBe("ran\nran\n");

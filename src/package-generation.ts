@@ -68,6 +68,13 @@ export function activeGeneration(dir: string) {
   return generation;
 }
 
+/** Whether the office has a published package set: an active generation holding its selection. */
+export function hasPublishedSet(dir: string) {
+  const name = activeGeneration(dir);
+
+  return name !== null && existsSync(join(managedDirectory(dir, name), "selection.json"));
+}
+
 function point(dir: string, generation: string) {
   const current = join(dir, ".office/current");
   const temp = `${current}.${randomUUID()}`;

@@ -2,12 +2,13 @@
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { commandHelp, dispatchCommand } from "./direct-commands.ts";
+import { commandHelp, dispatchCommand, type Reader } from "./direct-commands.ts";
+import { reservedWord } from "./command-table.ts";
 
 import * as v from "valibot";
 
 import { officeInstructions } from "../packages/office/plugin/instructions.ts";
-import { inspect, inspectInvocation } from "../standard/opencode/inspect.ts";
+import { inspect } from "../standard/opencode/inspect.ts";
 import { agentUpdateJob, updateAgentClis } from "./commands/agent-cli-update.ts";
 import { adopt, deploy } from "./commands/apps.ts";
 import { check } from "./commands/check.ts";
@@ -32,7 +33,7 @@ import { namedJob } from "../standard/cron/discovery.ts";
 import { migrateHome } from "./home-migration.ts";
 import { releaseMachine, serviceEnvironment } from "./machine.ts";
 import { currentOffice, findOffice, type Office, OfficeError } from "./office.ts";
-import { ensureDiscovery } from "./package-generation.ts";
+import { ensureDiscovery, hasPublishedSet } from "./package-generation.ts";
 import { bindReader, evaluateAdmission, runReader } from "./package-operation.ts";
 import { packageSecret } from "./package-services.ts";
 import { decrypt } from "./secrets.ts";
@@ -207,10 +208,12 @@ async function main(): Promise<void> {
 
   if (args[0] === "--package-admission") return evaluateAdmission(args[1]);
   const reader = args[0] === "--package-reader";
+  // Only a reader, bound to a published package set, loads packages for commands and help.
+  let bound: Reader | undefined;
 
   if (reader) {
     const [, dir, name] = args.splice(0, 3);
-    bindReader(dir, name);
+    bound = { dir, unavailable: bindReader(dir, name) };
 
     if (args[0] === "--finish-setup" && args[1] === dir) {
       const office = currentOffice({ office: dir });
@@ -249,14 +252,16 @@ async function main(): Promise<void> {
   const { values: flags, positionals } = parsed;
   const [command, ...rest] = positionals;
 
-  if (!reader && !flags.version && command !== "init") {
-    let dir;
+  // The office this first process found; unset in a reader.
+  let dir: string | undefined;
 
+  if (!reader && !flags.version && command !== "init") {
     try { dir = findOffice(flags.office ?? process.cwd()); } catch { /* bootstrap handles offices not found */ }
 
     if (dir) ensureDiscovery(dir);
 
-    if (dir && command && !flags.help && !["sync", "refresh", "packages", "sfw-wrappers", "migrate-home", "env"].includes(command)) {
+    // Help and bare `office` list package commands, so they load packages in the reader too.
+    if (dir && (flags.help || command === undefined || !["sync", "refresh", "packages", "sfw-wrappers", "migrate-home", "env"].includes(command))) {
       const status = await runReader(dir, args);
 
       if (status !== undefined) {
@@ -274,8 +279,6 @@ async function main(): Promise<void> {
   }
 
   if (command === "opencode" && rest[0] === "inspect") {
-    const invocation = inspectInvocation(flags.office ?? process.cwd());
-
     if (flags.help) {
       console.log(inspectUsage);
 
@@ -283,14 +286,16 @@ async function main(): Promise<void> {
     }
 
     if (rest.length > 2 || Object.keys(flags).some(key => key !== "office")) throw new OfficeError(inspectUsage);
-    console.log(inspect(resolve(flags.office ?? ".", rest[1] ?? "."), flags.office, invocation).join("\n"));
+    console.log(inspect(resolve(flags.office ?? ".", rest[1] ?? "."), flags.office).join("\n"));
 
     return;
   }
 
   if (flags.help || command === undefined) {
     console.log(usage);
-    console.log(commandHelp(flags.office ?? process.cwd()).join("\n"));
+    const lines = bound ? await commandHelp(bound) : [];
+
+    if (lines.length) console.log(lines.join("\n"));
 
     return;
   }
@@ -480,9 +485,15 @@ async function main(): Promise<void> {
     if (rest[1] === undefined) throw new OfficeError("usage: office gui dev <package>");
 
     await guiDev(currentOffice(flags), rest[1]);
-  } else if (!(Object.keys(flags).every(key => key === "office") && await dispatchCommand(flags.office ?? process.cwd(), positionals))) {
-    console.error(`Unknown command or options: ${positionals.join(" ")}; see office --help or run office sync --packages to index package commands`);
-    process.exitCode = 2;
+  } else {
+    const dispatched = Object.keys(flags).every(key => key === "office") && bound ? await dispatchCommand(bound, positionals) : { found: false as const, failures: [] };
+
+    if (!dispatched.found) {
+      const unpublished = dir !== undefined && positionals[0] !== undefined && !reservedWord(positionals[0]) && !hasPublishedSet(dir);
+      const failures = dispatched.failures.length ? `; packages that failed to load, one of which may provide it: ${dispatched.failures.join("; ")}` : "";
+      console.error(`Unknown command or options: ${positionals.join(" ")}; see office --help${unpublished ? ". Package commands load once office sync publishes a package set: run office sync" : ""}${failures}`);
+      process.exitCode = 2;
+    }
   }
 }
 

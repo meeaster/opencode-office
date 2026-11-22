@@ -362,8 +362,9 @@ const packageEntries = v.pipe(v.nullish(v.array(packageEntry, "must be a list"),
 
 export const referenceInputSchema = v.object({ references: repositories, packages: packageEntries });
 
-// Names establish whether an indexed owner is selected exactly once. Other entries'
-// sources and settings may be invalid; keep them only for a best-effort fingerprint.
+// The reader's import guard reads this to check that a package another imports is selected
+// exactly once, with the source it was bound to. Other entries' sources and settings may be
+// invalid, so they are not checked here.
 export const commandBootstrapSchema = v.object({
   name, references: v.optional(v.unknown()), packages: v.nullish(v.array(v.looseObject({ name: v.string() })), []),
 });

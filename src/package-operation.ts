@@ -51,38 +51,56 @@ async function run(args: string[], folder: string, fd: number) {
   try { return await child.exited; } finally { process.off("SIGINT", stop); }
 }
 
+/** Runs `args` in a reader bound to the published package set; undefined when the office has none. */
 export async function runReader(dir: string, args: string[]) {
   using active = pinActive(dir);
 
   if (!active) return;
   const folder = managedDirectory(dir, active.name);
 
+  // An adopted set holds no selection until the first candidate publishes.
+  if (!existsSync(join(folder, "selection.json"))) return;
+
   return run(["--package-reader", dir, active.name, ...args], folder, active.fd);
 }
 
-export function bindReader(dir: string, name: string, candidate = false) {
-  const folder = managedDirectory(dir, name);
-  bindPaths(dir, folder);
+/**
+ * The packages a reader of the generation in `folder` may import from: its published selection,
+ * less the packages its last sync rejected. A candidate (sync) resolves as sync does; any other
+ * reader resolves live, so the saved references file is never read and an ownership problem
+ * leaves out only the packages it names.
+ */
+export function readerPackages(dir: string, folder: string, candidate: boolean): { packages: ResolvedPackage[]; rejected: ReadonlySet<string> } {
   const selection = join(folder, "selection.json");
 
-  if (existsSync(selection)) {
-    const packages = v.parse(v.array(packageEntry), JSON.parse(readFileSync(selection, "utf8")));
-    const unavailable = join(folder, "unavailable.json");
-    const rejected = new Set(existsSync(unavailable) ? v.parse(v.array(v.string()), JSON.parse(readFileSync(unavailable, "utf8"))) : []);
-    let live: v.InferOutput<typeof commandBootstrapSchema> | undefined;
-    bindImports(dir, resolvePackages({ dir, packages }).packages.filter(pkg => !rejected.has(pkg.entry.name)), pkg => {
-      if (candidate) return;
-      live ??= readOfficeFields(dir, commandBootstrapSchema);
-      const matches = live.packages.filter(entry => entry.name === pkg.entry.name);
+  if (!existsSync(selection)) return { packages: [], rejected: new Set() };
+  const packages = v.parse(v.array(packageEntry), JSON.parse(readFileSync(selection, "utf8")));
+  const unavailable = join(folder, "unavailable.json");
+  const rejected = new Set(existsSync(unavailable) ? v.parse(v.array(v.string()), JSON.parse(readFileSync(unavailable, "utf8"))) : []);
 
-      if (!matches.length && requiredPackages.includes(pkg.entry.name)) return;
-      const entry = matches[0];
+  return { packages: resolvePackages({ dir, packages }, undefined, !candidate).packages.filter(pkg => !rejected.has(pkg.entry.name)), rejected };
+}
 
-      if (matches.length !== 1 || entry.repo !== pkg.entry.source?.repo || entry.ref !== pkg.entry.source?.ref || entry.path !== pkg.entry.source?.path) {
-        throw new OfficeError(`selection of imported package ${pkg.entry.name} differs from the active package set; run office sync --packages`);
-      }
-    });
-  }
+/** Binds this process to generation `name`; returns the packages its last sync rejected, whose copies don't load. */
+export function bindReader(dir: string, name: string, candidate = false): ReadonlySet<string> {
+  const folder = managedDirectory(dir, name);
+  bindPaths(dir, folder);
+  const { packages, rejected } = readerPackages(dir, folder, candidate);
+  let live: v.InferOutput<typeof commandBootstrapSchema> | undefined;
+  bindImports(dir, packages, pkg => {
+    if (candidate) return;
+    live ??= readOfficeFields(dir, commandBootstrapSchema);
+    const matches = live.packages.filter(entry => entry.name === pkg.entry.name);
+
+    if (!matches.length && requiredPackages.includes(pkg.entry.name)) return;
+    const entry = matches[0];
+
+    if (matches.length !== 1 || entry.repo !== pkg.entry.source?.repo || entry.ref !== pkg.entry.source?.ref || entry.path !== pkg.entry.source?.path) {
+      throw new OfficeError(`selection of imported package ${pkg.entry.name} differs from the active package set; run office sync --packages`);
+    }
+  });
+
+  return rejected;
 }
 
 /**

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as v from "valibot";
-import { command, deskConfig, gitAt, launcher, previous, rootConfig, scopeFixture, write } from "./opencode-scope.fixture.ts";
+import { command, deskConfig, gitAt, launcher, rootConfig, scopeFixture, write } from "./opencode-scope.fixture.ts";
 
 const { sandbox, fixture } = scopeFixture();
 
@@ -213,61 +213,6 @@ test("a package plugin that changes location is relinked with a restart notice, 
   expect(await f.run(["sync", "--packages"])).toContain("relinked .opencode/plugins/press to ../../packages/press/plugin; restart OpenCode to pick up press");
   expect(readlinkSync(link)).toBe("../../packages/press/plugin");
   expect(await f.run(["sync", "--packages"])).not.toContain("restart OpenCode");
-}, 60_000);
-
-// A real previous release is the control: no synthetic generation and no rewriting a digest.
-test.skipIf(!previous)("upgrade refuses previously indexed inspect names, aliases and descendants while preserving unrelated routes and pinned repair", async () => {
-  if (!previous) throw new Error("set OFFICE_TEST_PRE_INSPECT to the compiled pre-inspect Office CLI");
-
-  for (const [kind, name, alias] of [["name", "opencode inspect", "folio"], ["alias", "folio", "opencode inspect"], ["descendant", "opencode inspect drawer show", "folio"]]) {
-    const f = fixture(`upgrade-${kind}`, "http://127.0.0.1:1");
-    const remote = join(f.home, "press-remote");
-    const author = join(f.dir, "packages/author/office.ts");
-    const snapshot = join(f.dir, ".office/resolved/references.json");
-    const pinned = join(f.dir, ".office/packages/press/plugin/index.js");
-    const commandModule = (route: string, alternate: string) => `import {writeFileSync} from "node:fs"; writeFileSync(process.env.SCOPE_IMPORTS,"imported"); export default { name:"author",description:"fixture",setup(ctx){ctx.command({name:${JSON.stringify(route)},aliases:[${JSON.stringify(alternate)}],summary:"fixture",run(){console.log("previous author command")}})}}`;
-    const git = (...args: string[]) => gitAt(remote, f.env, ...args);
-    write(author, commandModule(name, alias));
-    write(join(remote, "pkg/office.ts"), 'export default {name:"press",description:"fixture",setup(ctx){ctx.add({registry:"references.repository",value:{name:"bound-reference",url:"local"}});ctx.command({name:"edition",summary:"fixture",run(){console.log("edition")}})}}');
-    write(join(remote, "pkg/plugin/index.js"), command("edition-a"));
-    git("init", "-q");
-    git("add", ".");
-    git("commit", "-qm", "first");
-    git("tag", "stable");
-    const selection = `packages:\n  - {name: press, repo: ${remote}, path: pkg, ref: stable}\n`;
-    f.select(`${selection}  - name: author\n`);
-    await f.run(["sync", "--packages"], 0, previous);
-    const oldRoute = kind === "alias" ? alias : name;
-    expect(await f.run(oldRoute.split(" "), 0, previous)).toContain("previous author command");
-    rmSync(f.imports);
-    const original = readFileSync(snapshot, "utf8");
-    expect(await f.run(oldRoute.split(" "), 1)).toContain("previously indexed package command or alias");
-    expect(await f.run(["--help"])).toContain("indexed route of package author");
-    expect(await f.run(["references", "list"])).toContain("bound-reference");
-    expect(existsSync(f.imports)).toBe(false);
-    write(join(remote, "pkg/plugin/index.js"), command("edition-b"));
-    git("commit", "-qam", "moved tag");
-    git("tag", "-f", "stable");
-    rmSync(dirname(dirname(pinned)), { recursive: true });
-    expect(await f.run(["sync", "--packages"], 1)).toContain("is reserved");
-    expect(readFileSync(snapshot, "utf8")).toBe(original);
-    expect(readFileSync(pinned, "utf8")).toBe(command("edition-a"));
-    expect(await f.run(["references", "list"])).toContain("bound-reference");
-
-    if (kind === "alias") f.select(selection);
-    else write(author, commandModule("folio read", "folio"));
-    await f.run(["sync", "--packages"]);
-    const report = await f.run(["opencode", "inspect"]);
-    expect(report).toContain("selected pinned Git package");
-    expect(report).not.toContain(remote);
-    expect(report).not.toContain("stable");
-    // The earlier release's link is Office's by its target, and goes with its package.
-    expect(report).toContain("Office package link (selected pinned Git package): .opencode/plugins/press");
-    f.select("");
-    expect(await f.run(["sync", "--packages"])).toContain("unlinked .opencode/plugins/press");
-    expect(existsSync(join(f.dir, ".opencode/plugins/press"))).toBe(false);
-    await f.run(["references", "list"]);
-  }
 }, 60_000);
 
 // Opt-in: a real v2 launcher, isolated HOME and server on a kernel-assigned loopback port.

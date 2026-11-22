@@ -1,11 +1,9 @@
 import { existsSync, lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, sep } from "node:path";
-import { claimsInspect } from "../../src/command-table.ts";
 import { configFile, installedPanelNames, isRegistered, locate, panelDir, readPanelRecord } from "../../src/desktop.ts";
 import { findOffice, loadOffice, OfficeError, readOfficeFields, type Office } from "../../src/office.ts";
 import { requiredPackages, resolvePackages } from "../../src/packages.ts";
 import { officeSchema } from "../../src/schema.ts";
-import { readSnapshot, referenceFile } from "../../src/reference-snapshot.ts";
 import { cloneTarget, declarationBinding, pluginClones, pluginFolder } from "./delivery.ts";
 import { configSources, conventionSources, projectDirectories, type Source } from "./native.ts";
 import { readDeclarations } from "./declarations.ts";
@@ -159,38 +157,7 @@ function inventory(office: Office, folder: string) {
   return [...lines, ...desktopSources(office, selected, withheld)];
 }
 
-function requireFreeRoute(dir: string) {
-  let read;
-
-  try {
-    const file = lstatSync(join(dir, referenceFile), { throwIfNoEntry: false });
-
-    if (file && !file.isFile() && !(file.isSymbolicLink() && readlinkSync(join(dir, referenceFile)) === "../current/references.json")) throw new Error();
-    read = readSnapshot(dir);
-  } catch {
-    throw new OfficeError("cannot check ownership of opencode inspect: unreadable command generation");
-  }
-
-  if (!read.ok) throw new OfficeError("cannot check ownership of opencode inspect: unreadable command generation");
-
-  if (read.value?.contributors.some(claimsInspect)) {
-    throw new OfficeError("opencode inspect conflicts with a previously indexed package command or alias. See office --help for the claimant. Rename the package route or deselect its owner, then run office sync --packages; keep the generation for pinned repair");
-  }
-}
-
-export function inspectInvocation(start: string) {
-  let dir: string;
-
-  try {
-    dir = findOffice(start);
-  } catch { return undefined; } // Inspecting an office by path from outside.
-
-  requireFreeRoute(dir);
-
-  return dir;
-}
-
-export function inspect(folder: string, officeDir: string | undefined, invocation: string | undefined) {
+export function inspect(folder: string, officeDir: string | undefined) {
   let root: string;
 
   try {
@@ -199,7 +166,6 @@ export function inspect(folder: string, officeDir: string | undefined, invocatio
     throw new OfficeError("cannot inspect: no readable office at the requested location");
   }
 
-  if (invocation !== root) requireFreeRoute(root);
   let office: Office;
 
   try {

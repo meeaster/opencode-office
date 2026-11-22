@@ -145,7 +145,7 @@ export function legacyBuiltin(entry: PackageEntry): boolean {
   return entry.source !== undefined && entry.source.track === undefined && historicalSource(entry.name, entry.source);
 }
 
-function ownershipProblems(office: Pick<Office, "dir" | "packages">, builtins: string[], only?: string): PackageProblem[] {
+function ownershipProblems(office: Pick<Office, "dir" | "packages">, builtins: string[], only?: string, live = false): PackageProblem[] {
   const problems: PackageProblem[] = [];
 
   for (const name of new Set([...requiredPackages, ...office.packages.map(entry => entry.name)])) {
@@ -167,7 +167,8 @@ function ownershipProblems(office: Pick<Office, "dir" | "packages">, builtins: s
 
       if (installed && "repo" in installed && !historicalSource(name, installed)) problems.push({ packages: [name], message: `built-in package ${name} conflicts with installed ${installed.repo}@${installed.ref}:${installed.path}; move the existing copy before syncing` });
 
-      if (requiredPackages.includes(name) && name !== "office" && !installed && existsSync(pulledDir(office, name))) {
+      // A live load never reads the saved file: such a copy then fails its own source check.
+      if (!live && requiredPackages.includes(name) && name !== "office" && !installed && existsSync(pulledDir(office, name))) {
         const snapshot = readSnapshot(office.dir);
 
         if (!snapshot.ok || !snapshot.value?.contributors.some(group => group.name === name && group.source.startsWith("built-in:"))) {
@@ -190,14 +191,17 @@ export function requirePackageOwnership(office: Office): void {
  * The packages the office has: the required built-ins, then each entry of office.yaml, with its
  * kind. An entry without `repo` is built-in when the tool ships a package of its name, so those
  * names are reserved. A required built-in's entry configures it without installing it twice.
+ * Ownership problems leave no packages, unless `live` (package commands and help): then only the
+ * packages they name are left out, and the saved references file is not read.
  */
-export function resolvePackages(office: Pick<Office, "dir" | "packages">, only?: string): ResolvedPackages {
+export function resolvePackages(office: Pick<Office, "dir" | "packages">, only?: string, live = false): ResolvedPackages {
   const builtins = builtinPackages();
-  const problems = ownershipProblems(office, builtins, only);
+  const problems = ownershipProblems(office, builtins, only, live);
+  const excluded = new Set(problems.flatMap(problem => problem.packages));
 
-  if (problems.length) return { packages: [], problems };
+  if (problems.length && !live) return { packages: [], problems };
 
-  const packages: ResolvedPackage[] = requiredPackages.flatMap((name) => only !== undefined && name !== only ? [] : [{
+  const packages: ResolvedPackage[] = requiredPackages.flatMap((name) => (only !== undefined && name !== only) || excluded.has(name) ? [] : [{
     entry: office.packages.find((entry) => entry.name === name) ?? { name, settings: {}, cron: {}, source: undefined },
     kind: "built-in",
     dir: pulledDir(office, name),
@@ -206,7 +210,7 @@ export function resolvePackages(office: Pick<Office, "dir" | "packages">, only?:
   for (const entry of office.packages) {
     const problem = (message: string) => problems.push({ packages: [entry.name], message });
 
-    if ((only !== undefined && entry.name !== only) || requiredPackages.includes(entry.name)) continue;
+    if ((only !== undefined && entry.name !== only) || requiredPackages.includes(entry.name) || excluded.has(entry.name)) continue;
 
     if (!builtins.includes(entry.name)) {
       packages.push({ entry, kind: entry.source === undefined ? "local" : "remote", dir: entry.source === undefined ? localDir(office, entry.name) : pulledDir(office, entry.name) });
@@ -214,7 +218,8 @@ export function resolvePackages(office: Pick<Office, "dir" | "packages">, only?:
       continue;
     }
 
-    if (entry.source !== undefined) problem(`the entry takes the built-in package ${entry.name} from the tool's repository; office sync drops its repo, path and ref, so it follows this office executable`);
+    // A note, not a failure, for a live load: the package still loads, and check and sync handle the entry.
+    if (entry.source !== undefined && !live) problem(`the entry takes the built-in package ${entry.name} from the tool's repository; office sync drops its repo, path and ref, so it follows this office executable`);
 
     packages.push({ entry, kind: "built-in", dir: pulledDir(office, entry.name) });
   }
@@ -555,17 +560,14 @@ export function removePackage(office: Office, name: string, retained?: string): 
   return [...changes, `removed ${where}/, which office.yaml no longer lists`];
 }
 
-/** Check the installed source (plus its command binding when dispatching) before importing any code. */
-export function installedDefinition(office: Pick<Office, "dir">, resolved: ResolvedPackage, verifyBinding?: (record?: PackageRecord) => void) {
-  return readDefinition(resolved.dir, relative(office.dir, resolved.dir), () => verifyInstalledCopy(resolved, verifyBinding));
+/** Check the installed source before importing any code. */
+export function installedDefinition(office: Pick<Office, "dir">, resolved: ResolvedPackage) {
+  return readDefinition(resolved.dir, relative(office.dir, resolved.dir), () => verifyInstalledCopy(resolved));
 }
 
-export function verifyInstalledCopy({ kind, entry, dir }: ResolvedPackage, verifyBinding?: (record?: PackageRecord) => void) {
-  if (kind === "local") {
-    verifyBinding?.();
-
-    return;
-  }
+/** A pulled-in copy must match its record; a local package isn't checked. */
+export function verifyInstalledCopy({ kind, entry, dir }: ResolvedPackage) {
+  if (kind === "local") return;
 
   const record = readRecord(dir);
 
@@ -579,7 +581,6 @@ export function verifyInstalledCopy({ kind, entry, dir }: ResolvedPackage, verif
 
   if ("repo" in record && !verifiedCommit(record.ref, record.commit)) throw new Error(`invalid recorded commit ${record.commit} for ${record.ref}; run office sync`);
 
-  verifyBinding?.(record);
   const edits = localEdits(dir, record);
 
   if (edits.length > 0) throw new Error(`package files edited: ${edits.join(", ")}; office sync restores them`);
@@ -770,7 +771,7 @@ async function resolveSetupSettings(office: Office, item: InstalledPackage, vali
 }
 
 // Inventory must know whether setup supplies defaults independently of the delivery
-// it is checking. Keep this receipt outside package bytes and the v4 command index.
+// it is checking. Keep this receipt outside package bytes and the saved references file.
 function scalarReceipt(office: Office, name: string) {
   return join(office.dir, ".office/resolved/scalar-settings", name);
 }

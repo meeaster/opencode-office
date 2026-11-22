@@ -7,14 +7,12 @@ import * as v from "valibot";
 import { check, type OfficeConfig, type Parsed, repository, settingValue } from "./schema.ts";
 import { isRepository, repositories } from "../packages/references/repositories.ts";
 import type { Collection, CollectionEntry } from "../packages/office/package-context.ts";
-import { commandConflicts, commandTable } from "./command-table.ts";
 
 export const referenceFile = ".office/resolved/references.json";
 
 const binding = {
   name: v.string(), source: v.pipe(v.string(), v.regex(/^(?:local|unverified built-in|(?:git|built-in):[0-9a-f]{64})$/)),
   commit: v.optional(v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/))), stale: v.boolean(),
-  commands: v.optional(commandTable),
 };
 
 export const namedEntry = v.objectWithRest({ name: v.string() }, settingValue);
@@ -22,23 +20,18 @@ export const namedEntry = v.objectWithRest({ name: v.string() }, settingValue);
 const entry = v.pipe(v.strictObject({ id: v.string(), value: namedEntry, contract: v.optional(v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/))) }),
   v.check(row => row.id !== repositories.id || isRepository(row.value), "invalid published reference"));
 
-const contributor = v.pipe(v.strictObject({ ...binding, entries: v.array(entry) }),
-v.check(group => !group.source.startsWith("git:") || group.commit !== undefined || (group.stale && !group.entries.length), "a Git contribution needs its resolved commit"),
-v.check(group => !group.commands || !group.source.startsWith("git:") || group.commands.files !== undefined, issue => `Git command owner ${issue.input.name} is missing its commands.files digest`),
-v.check(group => !group.commands || !group.stale, "a failed collector cannot own commands"));
+// Earlier releases saved each command owner's routes and settings under `commands`. Package
+// commands now load the packages on every run, so the key is accepted with any content and
+// dropped unread; it goes when this file does.
+const contributor = v.pipe(v.strictObject({ ...binding, commands: v.optional(v.unknown()), entries: v.array(entry) }),
+  v.check(group => !group.source.startsWith("git:") || group.commit !== undefined || (group.stale && !group.entries.length), "a Git contribution needs its resolved commit"),
+  v.transform(({ commands, ...group }) => group));
 
-const legacy = v.pipe(v.strictObject({
-  version: v.union([v.literal(2), v.literal(3)]),
-  inputs: v.string(), owner: v.array(repository),
-  contributors: v.array(v.strictObject({ ...binding, references: v.array(repository) })),
-}), v.transform(snapshot => ({ ...snapshot, contributors: snapshot.contributors.map(({ references, ...group }) =>
-  ({ ...group, entries: references.map(value => ({ id: repositories.id, value })) })) })));
-
-const schema = v.pipe(v.strictObject({
-  version: v.union([v.literal(2), v.literal(3), v.literal(4)], "unsupported references snapshot version (expected 2, 3 or 4)"),
+const schema = v.strictObject({
+  version: v.literal(4, "unsupported references snapshot version (expected 4)"),
   inputs: v.string(), owner: v.array(repository),
   contributors: v.pipe(v.array(contributor), v.check(groups => new Set(groups.map(group => group.name)).size === groups.length, "ambiguous contributor identity")),
-}), v.check(s => s.version !== 2 || !s.contributors.some(group => group.commands), "legacy references snapshot cannot contain commands"));
+});
 
 export type ReferenceSnapshot = v.InferOutput<typeof schema>;
 
@@ -73,22 +66,9 @@ export function readSnapshot(dir: string): Parsed<ReferenceSnapshot | undefined>
   const path = snapshotPath(dir);
 
   try {
-    let document = JSON.parse(readFileSync(path, "utf8"));
+    const result = check(v.safeParse(schema, JSON.parse(readFileSync(path, "utf8"))));
 
-    if (document?.version === 2 || document?.version === 3) {
-      const migrated = check(v.safeParse(legacy, document));
-
-      if (!migrated.ok) return { ok: false, errors: migrated.errors.map(message => `${referenceFile}: ${message}`) };
-      document = migrated.value;
-    }
-
-    const result = check(v.safeParse(schema, document));
-
-    if (result.ok) {
-      const errors = commandConflicts(result.value.contributors, "v3");
-
-      return errors.length ? { ok: false, errors } : result;
-    }
+    if (result.ok) return result;
 
     return { ok: false, errors: result.errors.map(message => `${referenceFile}: ${message}`) };
   } catch (error) {
@@ -158,7 +138,7 @@ export function claims(snapshot: Pick<ReferenceSnapshot, "owner" | "contributors
   return errors.length ? { ok: false, errors } : { ok: true, value: entries };
 }
 
-export function resolvedReferences(dir: string, config: Inputs): Parsed<{ entries: ClaimedReference[]; notes: string[]; legacy: boolean }> {
+export function resolvedReferences(dir: string, config: Inputs): Parsed<{ entries: ClaimedReference[]; notes: string[]; fromYaml: boolean }> {
   const read = readSnapshot(dir);
 
   if (!read.ok) return read;
@@ -166,16 +146,16 @@ export function resolvedReferences(dir: string, config: Inputs): Parsed<{ entrie
   return referenceInputs(read.value, config);
 }
 
-/** Dispatch takes both its route and its data from the same atomic read. */
-export function referenceInputs(snapshot: ReferenceSnapshot | undefined, config: Inputs): Parsed<{ entries: ClaimedReference[]; notes: string[]; legacy: boolean }> {
+/** The desired references: from the saved file, or from office.yaml alone (`fromYaml`) when there is none yet. */
+export function referenceInputs(snapshot: ReferenceSnapshot | undefined, config: Inputs): Parsed<{ entries: ClaimedReference[]; notes: string[]; fromYaml: boolean }> {
   if (snapshot) return publishedInputs(snapshot, config);
 
   const entries = claims({ owner: config.references, contributors: [] });
 
-  return entries.ok ? { ok: true, value: { entries: entries.value, notes: [], legacy: true } } : entries;
+  return entries.ok ? { ok: true, value: { entries: entries.value, notes: [], fromYaml: true } } : entries;
 }
 
-export function publishedInputs(snapshot: ReferenceSnapshot, current?: Inputs): Parsed<{ entries: ClaimedReference[]; notes: string[]; legacy: boolean }> {
+export function publishedInputs(snapshot: ReferenceSnapshot, current?: Inputs): Parsed<{ entries: ClaimedReference[]; notes: string[]; fromYaml: boolean }> {
   snapshot = selectedContributions(snapshot, current);
   const entries = claims(snapshot);
 
@@ -189,5 +169,5 @@ export function publishedInputs(snapshot: ReferenceSnapshot, current?: Inputs): 
   if (!current) notes.push("current reference/package inputs cannot be compared; using last-synced inputs. Repair office.yaml and run office sync --packages");
   else if (snapshot.inputs !== inputHash(current)) notes.push("reference inputs changed since collection; run office sync --packages");
 
-  return { ok: true, value: { entries: entries.value, notes, legacy: false } };
+  return { ok: true, value: { entries: entries.value, notes, fromYaml: false } };
 }

@@ -15,7 +15,7 @@ export type Collection<T extends CollectionEntry> = {
   readonly id: string;
   /** Package-local names permit independent contributors to register the same name. */
   readonly identity?: "package";
-  /** Validate and normalize each incoming addition during sync. Reads copy the published result. */
+  /** Validate and normalize each incoming addition whenever packages load (sync, and every package command). Each read returns a copy of the result. */
   parse(input: CollectionEntry): T;
 };
 

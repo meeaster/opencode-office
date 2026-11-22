@@ -6,7 +6,7 @@ import { sources } from "./github.ts";
 import { loadOffice } from "./office.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
 
-const { root, exe, marker, write, read, commit, fixture, collector } = definitionFixture();
+const { root, exe, marker, write, read, commit, fixture, collector, published } = definitionFixture();
 
 test("a built-in's bytes and a Git contributor's resolved commit survive separate executable processes", () => {
   const { dir, env, cli, newer, probe, select } = fixture("reference-repair");
@@ -30,7 +30,8 @@ test("a built-in's bytes and a Git contributor's resolved commit survive separat
   expect(newer(1, "sync", "--packages")).toMatch(/built-in:[a-f0-9]{64}.*changed built-in collector/);
   // A broken replacement leaves the installed native definition and its delivered settings in place.
   expect(delivered.map(read)).toEqual(before);
-  expect(newer(1, "references", "list")).toContain("matching previous Office CLI or container image");
+  // The set's built-in copies came from the other executable; each matches its own record, so it loads.
+  expect(newer(0, "references", "list")).toMatch(/floci\t.*main\tpackage aws-emulator\n/);
   expect(cli(0, "references", "list")).toMatch(/floci\t.*main\tpackage aws-emulator\n/);
   const repo = join(root, "tags");
   const installed = join(dir, ".office/packages/docs");
@@ -53,7 +54,8 @@ test("a built-in's bytes and a Git contributor's resolved commit survive separat
   rmSync(installed, { recursive: true });
   renameSync(repo, repo + "-offline");
   expect(cli(1, "sync", "--packages")).toContain(`${repo}:pkg @ ${first} (revision ${first})`);
-  expect(cli(0, "references", "list")).toContain("approved:A @ main\tpackage docs (stale)");
+  expect(published(dir)).toContain("approved:A @ main\tpackage docs (stale)");
+  expect(cli(1, "references", "list")).toContain("package docs: rejected by the last sync; run office sync");
   expect(existsSync(installed)).toBe(false);
 }, 60_000);
 
@@ -139,7 +141,7 @@ test("an overlapping or interrupted collector cannot republish an explicitly wit
   }
 }, 60_000);
 
-test.skipIf(process.getuid?.() === 0)("inaccessible generation fails closed; genuine absence reads legacy YAML", () => {
+test.skipIf(process.getuid?.() === 0)("an inaccessible saved file fails its readers closed; genuine absence reads office.yaml", () => {
   const { dir, cli } = fixture("read-errors");
   const folder = join(dir, ".office/resolved");
   const repo = join(root, "legacy-origin");
@@ -158,12 +160,15 @@ test.skipIf(process.getuid?.() === 0)("inaccessible generation fails closed; gen
     chmodSync(folder, 0o700);
   }
 
+  // Package commands never read the saved file: replacing it with text that isn't JSON changes nothing.
+  const listing = cli(0, "references", "list");
+  expect(listing).toContain(`legacy\t${repo}\toffice.yaml`);
   write(join(folder, "references.json"), "{");
-  expect(cli(1, "references", "list")).toContain(".office/resolved/references.json");
+  expect(cli(0, "references", "list")).toBe(listing);
   cli(1, "sync", "--references");
   expect(existsSync(join(dir, "references/legacy"))).toBe(false);
   rmSync(realpathSync(join(folder, "references.json")));
-  expect(cli(0, "references", "list")).toContain("listing office.yaml only");
+  expect(cli(0, "references", "list")).toBe(listing);
   cli(0, "sync", "--references");
   expect(read(join(dir, "references/legacy/document"))).toBe("legacy");
 }, 60_000);

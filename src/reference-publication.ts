@@ -36,7 +36,7 @@ export function planReferenceApply(office: Office) {
       const read = resolvedReferences(office.dir, readConfig(office.dir));
 
       if (!read.ok) return read;
-      const { entries, legacy } = read.value;
+      const { entries, fromYaml } = read.value;
       const planned = new Map(entries.map(entry => [entry.name, entry]));
       const reserve = db.query("REPLACE INTO checkout VALUES (?, ?)");
 
@@ -46,11 +46,11 @@ export function planReferenceApply(office: Office) {
         using lease = openCheckoutLease(office.dir, name);
         locked(office.dir, current => {
           if (!current.query("SELECT 1 FROM checkout WHERE name=? AND ticket=?").get(name, ticket)) throw new OfficeError(`reference ${name}: refresh superseded; checkout left unchanged`);
-          const latest = resolvedReferences(office.dir, legacy ? readConfig(office.dir) : office);
+          const latest = resolvedReferences(office.dir, fromYaml ? readConfig(office.dir) : office);
 
           if (!latest.ok) throw new OfficeError(latest.errors.join("\n"));
 
-          if (latest.value.legacy !== legacy || !Bun.deepEquals(planned.get(name), latest.value.entries.find(entry => entry.name === name))) throw new OfficeError(`reference ${name}: claim changed; checkout left unchanged`);
+          if (latest.value.fromYaml !== fromYaml || !Bun.deepEquals(planned.get(name), latest.value.entries.find(entry => entry.name === name))) throw new OfficeError(`reference ${name}: claim changed; checkout left unchanged`);
 
           lease.acquire();
         });

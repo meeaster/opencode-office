@@ -145,6 +145,22 @@ export function definitionFixture() {
     return { dir, home, env, probe, cli, newer, run, select: (entries: string) => write(config, initial + entries) };
   }
 
+  /**
+   * What sync last published in .office/current/references.json, one reference per line as
+   * `office references list` prints it. That command loads packages live, so tests of sync's
+   * publication read the saved file.
+   */
+  function published(dir: string) {
+    type Row = { name: string; url: string; ref?: string };
+    const saved: { owner: Row[]; contributors: { name: string; stale: boolean; entries: { id: string; value: Row }[] }[] } = JSON.parse(read(join(dir, ".office/resolved/references.json")));
+    const line = (row: Row, owner: string) => `${row.name}\t${row.url}${row.ref ? ` @ ${row.ref}` : ""}\t${owner}`;
+
+    return [
+      ...saved.owner.map(row => line(row, "office.yaml")),
+      ...saved.contributors.flatMap(group => group.entries.filter(entry => entry.id === "references.repository").map(entry => line(entry.value, `package ${group.name}${group.stale ? " (stale)" : ""}`))),
+    ].map(row => `${row}\n`).join("");
+  }
+
   function collector(url: string, ref = "main", after = "") {
     const value = JSON.stringify({ name: "docs", url, ref });
 
@@ -190,7 +206,7 @@ export function definitionFixture() {
   }
 
 
-  return { root, bin, exe, variant, marker, write, read, commit, prompt, fixture, collector, pausedRefresh };
+  return { root, bin, exe, variant, marker, write, read, commit, prompt, fixture, collector, pausedRefresh, published };
 }
 
 export type DefinitionFixture = ReturnType<ReturnType<typeof definitionFixture>["fixture"]>;

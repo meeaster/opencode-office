@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
 
-const { root, bin, exe, variant, marker, write, read, commit, fixture, collector } = definitionFixture();
+const { root, exe, variant, marker, write, read, commit, fixture, collector } = definitionFixture();
 
 test("consenting host sync and bound check agree on Browser's stable mise fragment", () => {
   const { dir, home, env, cli } = fixture("browser-mise");
@@ -47,7 +47,7 @@ test("consenting host sync and bound check agree on Browser's stable mise fragme
   expect(browserLine(cli(1, "check"))).toMatch(/^ok\s+package browser:.*mise setup in \.office\/mise\/browser\.toml/);
 });
 
-test("a legacy writer replacing the references bridge cannot publish or serve a stale index", () => {
+test("sync doesn't publish while the references bridge is replaced, and sets it back only once the owner's file is moved aside", () => {
   const { dir, cli, select } = fixture("legacy-writer");
   const bridge = join(dir, ".office/resolved/references.json");
   const current = join(dir, ".office/current");
@@ -154,176 +154,189 @@ test("a symlinked office publishes relocatable public imports and rejects privat
   run(exe, 0, "--office", dir, "sync", "--packages");
   const show = (path: string, status = 0) => run(exe, status, "--office", path, "consumer", "show");
   expect(show(dir)).toContain("tooling.requirements source-relative");
+  // Help runs in the reader too, so a package that imports another's public export is listed.
+  expect(run(exe, 0, "--office", dir, "--help")).toContain("consumer show    show");
+  expect(run(exe, 0, "--office", dir)).toContain("consumer show    show");
   const office = join(dir, ".office");
   const map = JSON.parse(read(join(office, "tsconfig.contracts.json")));
   expect(realpathSync(join(office, map.compilerOptions.paths["@office/provider/token"][0]))).toBe(join(nested, "packages/provider/exports/token.ts"));
 
   for (const include of map.include) expect(existsSync(join(office, include))).toBe(true);
   const source = join(dir, "packages/consumer/office.ts");
+  // The consumer fails to load, so its command is unknown and the failure is named.
   write(source, definition.replace("@office/tooling/requirements", "../../.office/packages/tooling/exports/requirements.ts"));
-  expect(show(dir, 1)).toContain("import the selected public module as @office/tooling/requirements");
+  expect(show(dir, 2)).toContain("import the selected public module as @office/tooling/requirements");
   write(source, definition.replace("@office/tooling/requirements", "@office/tooling/private"));
-  expect(show(dir, 1)).toContain("not a public export");
+  expect(show(dir, 2)).toContain("not a public export");
+  expect(run(exe, 0, "--office", dir, "--help")).toMatch(/package consumer: .*not a public export/);
   write(source, definition);
   select("  - name: consumer\n");
-  expect(show(dir, 1)).toContain("selection of imported package provider differs");
+  expect(show(dir, 2)).toContain("selection of imported package provider differs");
   select("  - name: consumer\n  - name: provider\n");
   rmSync(dir);
   renameSync(nested, dir);
   expect(show(dir)).toContain("tooling.requirements source-relative");
 });
 
-test("indexed references execute the installed author's registration; legacy listing only bootstraps", () => {
-  const f = fixture("command-upgrade");
-  const path = join(f.dir, ".office/resolved/references.json");
-  const installed = join(f.dir, ".office/packages/references");
-  write(path, JSON.stringify({ version: 2, inputs: "", owner: [{ name: "previous", url: "old" }], contributors: [] }));
-  rmSync(installed, { recursive: true });
-  expect(f.newer(0, "references", "list")).toContain("previous\told\toffice.yaml");
+// src/reference-snapshot.test.ts covers reading and rewriting the previous release's saved file.
+test("a new CLI runs a set whose built-in copies another executable wrote, until its own sync replaces them", () => {
+  const f = fixture("executable-skew");
   f.newer(0, "sync", "--packages");
-  expect(f.newer(0, "references", "list")).toContain("variant package handler");
-  expect(f.cli(1, "references", "list")).toContain("changed source/revision");
-  rmSync(installed, { recursive: true });
-  expect(f.newer(0, "--help")).toContain("references list");
-  expect(f.newer(1, "references", "list")).toContain("office sync --packages");
-  f.newer(0, "sync", "--packages");
-  expect(f.newer(0, "references", "list")).toContain("variant package handler");
+  // Each copy matches its own record, so the other executable's references package runs.
+  expect(f.cli(0, "references", "list")).toContain("variant package handler");
+  expect(f.cli(0, "--help")).toContain("references list");
+  f.cli(0, "sync", "--packages");
+  expect(f.cli(0, "references", "list")).not.toContain("variant package handler");
 }, 60_000);
 
-test("independent command authors share one publication; failed collection cannot lend a stale callable", () => {
-  const { dir, probe, cli, select } = fixture("direct");
+test("a package command runs from the packages as they are now: edits, settings, renames and aliases show without a sync", () => {
+  const { dir, cli, select } = fixture("live");
   const ink = join(dir, "packages/ink");
   const repo = join(root, "press-source");
-  const path = join(dir, ".office/resolved/references.json");
-  const route = `ctx.command({name:"folio show", aliases:["folio read"], summary:"Print edition", run:() => print(ctx.settings.label)});`;
+  const saved = join(dir, ".office/resolved/references.json");
+  const route = (name: string, aliases: string[]) => `ctx.command({name:${JSON.stringify(name)}, aliases:${JSON.stringify(aliases)}, summary:"Print edition", run:() => print(ctx.settings.label)});`;
 
-  const module = (extra = "") => `import {print} from "./edition.ts"; export default {
+  const module = (body: string) => `import {print} from "./edition.ts"; export default {
     name:"ink",description:"Ink",settings:{label:{description:"Label",default:"old"}},
-    setup(ctx) {ctx.add({registry:"references.repository",value:{name:"paper",url:"local"}}); ${route} ${extra}}}`;
+    setup(ctx) {if (ctx.booleanSetting("paper",{description:"Add paper",default:true})) ctx.add({registry:"references.repository",value:{name:"paper",url:"local"}}); ${body}}}`;
 
-  write(join(ink, "office.ts"), module());
+  write(join(ink, "office.ts"), module(route("folio show", ["folio read"])));
   write(join(ink, "edition.ts"), 'export function print(label: string) { console.log("first:" + label) }');
   git(["init", "-q", repo]);
-  write(join(repo, "pkg/office.ts"), `${marker} import {edition} from "./edition.ts"; export default {name:"press",description:"Press",setup({command}){command({name:"issue read",summary:"Print issue",run:edition})}}`);
+  write(join(repo, "pkg/office.ts"), 'import {edition} from "./edition.ts"; export default {name:"press",description:"Press",setup({command}){command({name:"issue read",summary:"Print issue",run:edition})}}');
   write(join(repo, "pkg/edition.ts"), 'export function edition(){console.log("from Git")}');
   const press = `  - {name: press, repo: ${repo}, ref: ${commit(repo)}, path: pkg}\n`;
   select(`${press}  - name: ink\n`);
   cli(0, "sync", "--packages");
   expect(cli(0, "issue", "read")).toContain("from Git");
-  rmSync(probe);
-  expect(cli(0, "--help")).toContain("folio read");
-  select(`${press}  - {name: ink, settings: {label: new}}\n`);
+  expect(cli(0, "--help")).toContain("folio show | folio read    Print edition");
+  expect(cli(0, "references", "list")).toContain("paper\tlocal\tpackage ink");
+
+  // Settings as office.yaml has them now, and the handler as edited.
+  select(`${press}  - {name: ink, settings: {label: new, paper: false}}\n`);
   write(join(ink, "edition.ts"), 'export function print(label: string){console.log("edited:" + label)}');
-  expect(cli(0, "folio", "read")).toContain("edited:old");
-  expect(existsSync(probe)).toBe(false);
-  const synced = read(path);
-
-  // src/command-table.test.ts covers the other alias collisions.
-  write(join(ink, "office.ts"), module(`ctx.command({name:"draft show",aliases:["sync"],summary:"Draft",run:print})`));
-  expect(cli(1, "sync", "--packages")).toContain("command sync is reserved");
-  expect(read(path)).toBe(synced);
-  expect(cli(0, "--help")).not.toContain("draft show");
-
-  write(join(ink, "office.ts"), module('throw Error("ink collector failed")'));
-  expect(cli(1, "sync", "--packages")).toContain("ink collector failed");
-  write(join(ink, "office.ts"), module());
-  expect(cli(0, "references", "list")).toContain("package ink (stale)");
-  expect(cli(0, "--help")).not.toContain("folio read");
-  expect(cli(2, "folio", "read")).not.toContain("edited:");
-  cli(0, "sync", "--packages");
   expect(cli(0, "folio", "read")).toContain("edited:new");
+  expect(cli(0, "references", "list")).not.toContain("paper");
+
+  // A renamed command, a new alias and a new entry; the old name is gone.
+  select(`${press}  - {name: ink, settings: {label: new}}\n`);
+  write(join(ink, "office.ts"), module(`${route("folio print", ["folio out"])} ctx.add({registry:"references.repository",value:{name:"ink-new",url:"added"}});`));
+  expect(cli(0, "references", "list")).toContain("ink-new\tadded\tpackage ink");
+  expect(cli(0, "folio", "print")).toContain("edited:new");
+  expect(cli(0, "folio", "out")).toContain("edited:new");
+  expect(cli(2, "folio", "show")).toContain("Unknown command or options: folio show; see office --help\n");
+  // A word with whitespace is never dispatched.
+  expect(cli(2, "folio print")).toContain("Unknown command or options: folio print");
+
+  // The saved file holds no command input: text that isn't JSON changes neither help nor a command.
+  const listing = cli(0, "references", "list");
+  const help = cli(0, "--help");
+  const synced = read(saved);
+  write(saved, "not json");
+  expect(cli(0, "references", "list")).toBe(listing);
+  expect(cli(0, "--help")).toBe(help);
+  expect(cli(0)).toBe(help);
+  write(saved, synced);
+
+  // A failed package fails every command and is named; an unknown command names it too.
+  write(join(ink, "office.ts"), module('throw Error("ink setup failed")'));
+  const failed = cli(1, "issue", "read");
+  expect(failed).toMatch(/package ink: .*ink setup failed/);
+  expect(failed).not.toContain("from Git");
+  expect(cli(2, "folio", "print")).toMatch(/Unknown command or options: folio print; .*package ink: .*ink setup failed/);
+  expect(cli(0, "--help")).toMatch(/issue read    Print issue\n[\s\S]*package ink: .*ink setup failed/);
+
+  // A package that isn't always selected: deselected, its command is unknown at once.
+  write(join(ink, "office.ts"), module(route("folio print", [])));
+  select("  - name: ink\n");
+  expect(cli(2, "issue", "read")).toContain("Unknown command or options: issue read");
 }, 60_000);
 
-test("indexed dispatch validates the selected source without requiring unrelated live config", () => {
-  const { dir, cli, probe } = fixture("dispatch-selection");
-  const yaml = join(dir, "office.yaml");
-  const ink = { name: "ink", settings: { label: "saved" } };
-  const atlas = { name: "atlas" };
-  const config = { name: "paper", packages: [ink, atlas], references: [{ name: "old", url: "old-url" }] };
-  write(yaml, JSON.stringify(config));
-  write(join(dir, "packages/ink/office.ts"), `${marker} export default {name:"ink",description:"Ink",
-    settings:{label:{description:"Label",required:true}},setup(ctx){ctx.command({name:"folio show",summary:"Show",run:()=>console.log("label="+ctx.settings.label)})}}`);
-  const other = join(dir, "packages/atlas/office.ts");
-  write(other, `export default {name:"atlas",description:"Atlas"}`);
+test("an edited pulled-in copy, or a file it imports, is refused before any of its code runs", () => {
+  const { dir, cli, select, probe } = fixture("edited-copies");
+  const repo = join(root, "edited-source");
+  git(["init", "-q", repo]);
+  write(join(repo, "pkg/office.ts"), 'import {edition} from "./edition.ts"; export default {name:"press",description:"Press",setup(ctx){ctx.command({name:"press show",summary:"Show",run:edition})}}');
+  write(join(repo, "pkg/edition.ts"), 'export function edition(){console.log("edition A")}');
+  select(`  - {name: press, repo: ${repo}, ref: ${commit(repo)}, path: pkg}\n`);
   cli(0, "sync", "--packages");
-  write(other, `${marker} throw Error("unrelated author imported")`);
-  rmSync(probe);
+  expect(cli(0, "press", "show")).toContain("edition A");
 
-  for (const edit of [
-    { packages: [ink, { name: "atlas", path: "no-repo" }] },
-    { packages: [{ name: "ink", settings: false }, atlas] }, { references: 42 },
-  ]) {
-    write(yaml, JSON.stringify({ ...config, references: [{ name: "changed", url: "unsynced" }], ...edit }));
-    expect(cli(1, "sync", "--packages")).toContain("office.yaml is not valid");
-    expect(cli(0, "--help")).toContain("folio show");
-    const listing = cli(0, "references", "list");
-    expect(listing).toContain("old\told-url\toffice.yaml");
-    expect(listing).not.toContain("unsynced");
-    expect(listing).toMatch(/cannot be compared|changed since collection/);
+  const builtin = join(dir, ".office/packages/knowledge/office.ts");
+  const imported = join(dir, ".office/packages/press/edition.ts");
+
+  for (const [file, name, edited] of [[builtin, "knowledge", "office.ts (edited)"], [imported, "press", "edition.ts (edited)"]]) {
+    const original = read(file);
+    write(file, `${marker} ${original}`);
+    const refused = cli(1, "references", "list");
+    expect(refused).toContain(`package ${name}: `);
+    expect(refused).toContain(`package files edited: ${edited}; office sync restores them`);
     expect(existsSync(probe)).toBe(false);
-    expect(cli(0, "folio", "show")).toContain("label=saved");
-    expect(read(probe)).toBe("imported\n");
+    write(file, original);
+  }
+
+  expect(cli(0, "press", "show")).toContain("edition A");
+}, 60_000);
+
+test("a name is the CLI's own or has one owner, on every run: such a command never runs", () => {
+  const { dir, cli, select, probe } = fixture("names");
+  const pkg = (name: string, route: string) => write(join(dir, "packages", name, "office.ts"), `import {appendFileSync} from "node:fs";
+    export default {name:"${name}",description:"d",setup(ctx){ctx.command({name:"${route}",summary:"Run",run(){appendFileSync(process.env.PROBE,"ran ${name}\\n")}})}}`);
+  select("  - name: alpha\n  - name: beta\n");
+  pkg("alpha", "demo run");
+  pkg("beta", "beta run");
+  cli(0, "sync", "--packages");
+  const saved = join(dir, ".office/resolved/references.json");
+
+  // Edited after the last sync to take a built-in's first word, which the CLI would otherwise pass on.
+  pkg("beta", "apps extra");
+  expect(cli(1, "apps", "extra")).toContain("package beta: command apps extra is reserved");
+  // Help lists the command as the package provides it, then its problem.
+  expect(cli(0, "--help")).toMatch(/ {2}apps extra {4}Run\n[\s\S]* {2}package beta: command apps extra is reserved/);
+  pkg("beta", "demo run");
+  expect(cli(1, "demo", "run")).toContain("command demo run claimed by both package alpha and package beta");
+  expect(existsSync(probe)).toBe(false);
+
+  // opencode inspect is the CLI's: a package's claim doesn't run, and an unreadable saved file doesn't matter.
+  pkg("beta", "opencode inspect");
+  write(saved, "not json");
+  expect(cli(0, "opencode", "inspect")).toContain("OpenCode sources for");
+  expect(cli(0, "--help")).toContain("package beta: command opencode inspect is reserved");
+  expect(existsSync(probe)).toBe(false);
+
+  // Help still prints the usage when office.yaml is invalid, then names the error and fails.
+  write(join(dir, "office.yaml"), "name: names\npackages: 3\n");
+  const help = cli(1, "--help");
+  expect(help).toStartWith("usage: office <command>");
+  expect(help).toContain("office: office.yaml is not valid:\n  packages: must be a list");
+}, 60_000);
+
+test("nothing loads without a published package set: a fresh clone, or a first sync that stopped before publishing", () => {
+  const { dir, cli, select, probe, run } = fixture("unpublished");
+  select("  - name: notes\n");
+  const definition = join(dir, "packages/notes/office.ts");
+  write(definition, `${marker} export default {name:"notes",description:"d",setup(ctx){ctx.command({name:"notes show",summary:"Show",run(){}})}}`);
+  rmSync(join(dir, ".office"), { recursive: true });
+  const builtins = cli(0, "--help");
+
+  for (const stage of ["fresh clone", "unpublished first sync"]) {
+    expect(cli(0, "--help"), stage).toBe(builtins);
+    expect(cli(0), stage).toBe(builtins);
+    expect(builtins).not.toContain("notes show");
+    expect(builtins).not.toContain("references list");
+    expect(cli(2, "references", "list")).toContain("Package commands load once office sync publishes a package set: run office sync");
+    // A reserved first word can never be a package command, so syncing wouldn't help.
+    expect(cli(2, "packages", "bogus"), stage).toBe("Unknown command or options: packages bogus; see office --help\n");
+    expect(existsSync(probe), stage).toBe(false);
+
+    // A first sync that refuses its candidate leaves an adopted, empty set.
+    write(definition, `${marker} export default {name:"notes",description:"d",setup(ctx){ctx.command({name:"sync extra",summary:"Show",run(){}})}}`);
+    expect(cli(1, "sync", "--packages")).toContain("command sync extra is reserved");
+    expect(existsSync(join(dir, ".office/current"))).toBe(true);
     rmSync(probe);
   }
 
-  for (const packages of [[atlas], [ink, ink], [atlas, { name: "ink", path: "partial" }],
-    [atlas, { name: "ink", repo: "elsewhere", ref: "other", path: "pkg" }], {}, [ink, {}]]) {
-    write(yaml, JSON.stringify({ ...config, packages }));
-    expect(cli(1, "folio", "show")).toContain("office sync --packages");
-    expect(existsSync(probe)).toBe(false);
-  }
-}, 60_000);
-
-test("all readers reject a Git command owner missing its files binding before fetching or importing", () => {
-  const { dir, home, cli, probe } = fixture("command-digest");
-  const repo = join(root, "digest-origin");
-  git(["init", "-qb", "main", repo]);
-
-  const module = `export default {name:"press",description:"Press", setup(ctx){
-    ctx.add({registry:"references.repository",value:{name:"manual",url:${JSON.stringify(repo)}}});
-    ctx.command({name:"press show",summary:"Show",run:()=>console.log("edition A")})}}`;
-
-  write(join(repo, "pkg/office.ts"), `${marker} ${module}`);
-  write(join(dir, "office.yaml"), JSON.stringify({ name: "paper", packages: [{ name: "press", repo, ref: commit(repo), path: "pkg" }] }));
-  cli(0, "sync", "--packages");
-  const path = join(dir, ".office/resolved/references.json");
-  const generation = JSON.parse(read(path));
-  const checkout = join(dir, "references/manual");
-  const transfers = join(home, "git-transfers");
-  write(join(home, "bin/git"), `#!/bin/sh\ncase "$1" in clone|fetch|ls-remote) echo "$1" >> "$HOME/git-transfers";; esac\nexec "${bin}/git" "$@"\n`, 0o755);
-  const bad = JSON.stringify(generation, (key, value) => key === "files" ? undefined : value);
-  write(path, bad);
-  rmSync(probe);
-  const error = "Git command owner press is missing its commands.files digest";
-  const help = cli(0, "--help");
-  expect(help).toContain(error);
-  expect(help).not.toContain("press show");
-
-  for (const args of [["press", "show"], ["references", "list"], ["sync", "--references"], ["sync", "--packages"]]) {
-    expect(cli(1, ...args)).toContain(error);
-  }
-
-  expect(read(path)).toBe(bad);
-  expect(existsSync(probe)).toBe(false);
-  expect(existsSync(checkout)).toBe(false);
-  expect(existsSync(transfers)).toBe(false);
-
-  // Only Git owners of commands need this binding. Both data-only formats remain usable.
-  for (const version of [2, 3]) {
-    const contributors = generation.contributors.map(({ entries, ...group }: { entries: { id: string; value: { name: string; url: string } }[] }) =>
-      ({ ...group, references: entries.flatMap(entry => entry.id === "references.repository" ? [entry.value] : []) }));
-
-    write(path, JSON.stringify({ ...generation, contributors, version }, (key, value) =>
-      key === "commands" && (version === 2 || value.files) ? undefined : value));
-    expect(cli(0, "references", "list")).toContain(`manual\t${repo}\tpackage press`);
-  }
-
-  cli(0, "sync", "--references");
-  expect(read(transfers)).toMatch(/fetch|clone/);
-  expect(existsSync(join(checkout, ".git"))).toBe(true);
-  write(path, JSON.stringify(generation));
-  write(join(dir, ".office/packages/press/office.ts"), `${marker} throw Error("changed copy imported");`);
-  expect(cli(0, "--help")).toContain("press show");
-  expect(cli(1, "press", "show")).toContain("package files edited");
-  expect(existsSync(probe)).toBe(false);
+  // Outside any office: the built-in commands, and the plain unknown-command message.
+  expect(run(exe, 0, "--help")).toBe(builtins);
+  expect(run(exe, 2, "folio", "show")).toBe("Unknown command or options: folio show; see office --help\n");
 }, 60_000);

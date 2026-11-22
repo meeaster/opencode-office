@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadOffice, type PackageEntry } from "./office.ts";
-import { boundCommit, candidatePackageLock, packageLockProblems } from "./package-operation.ts";
+import { boundCommit, candidatePackageLock, packageLockProblems, readerPackages } from "./package-operation.ts";
 import { editLock } from "./versions.ts";
 import { fetchPackage, fileHashes, type ResolvedPackage } from "./packages.ts";
 
@@ -122,4 +122,24 @@ test("check reports a Git package's missing or mismatched office.lock entry, a c
   // An entry for a package office.yaml no longer selects, such as one removed by hand.
   setPackages({ notes: { repo, path: "notes", ref: "v2", commit: installed }, constructor: { repo, path: "gone", ref: "v1", commit: locked } });
   expect(packageLockProblems(office)).toEqual(["office.lock locks package constructor, which office.yaml no longer selects from a Git repository (office sync removes the entry)"]);
+});
+
+test("a reader binds imports without the saved references file: an ownership problem leaves out only its packages", () => {
+  const folder = join(dir, ".office/generations/g1");
+
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, "selection.json"), JSON.stringify([{ name: entry.name, settings: {}, cron: {}, repo: source.repo, path: source.path, ref: source.ref }]));
+  // A required built-in's copy without its source record, and a saved file that doesn't parse.
+  mkdirSync(join(dir, ".office/packages/tooling"), { recursive: true });
+  mkdirSync(join(dir, ".office/resolved"), { recursive: true });
+  writeFileSync(join(dir, ".office/resolved/references.json"), "{");
+  // A local folder that collides with a built-in.
+  mkdirSync(join(dir, "packages/office"), { recursive: true });
+
+  const names = (candidate: boolean) => readerPackages(dir, folder, candidate).packages.map(pkg => pkg.entry.name);
+
+  // The record-less copy stays listed: its own source check refuses it when something imports it.
+  expect(names(false)).toEqual(["tooling", "mise-integration", "references", "notes"]);
+  // Sync's candidate still establishes ownership from the saved file, and stops on the problem.
+  expect(names(true)).toEqual([]);
 });

@@ -3,7 +3,7 @@ import { type Office, OfficeError } from "../../src/office.ts";
 import { readPackage, resolvePackages } from "../../src/packages.ts";
 import { collectJobs, type CronJob } from "./jobs.ts";
 
-/** An installed timer reads only its job's owner, without consulting a command index. */
+/** An installed timer reads only its job's owner, without loading the other packages. */
 export function enabledJob(office: Office, id: string): CronJob | undefined {
   const [kind, owner] = id.split(".");
   const installed: InstalledPackages["installed"] = [];
