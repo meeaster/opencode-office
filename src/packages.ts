@@ -12,7 +12,7 @@
 // sync` restores the copy. Only local packages are committed with the office; `.office/packages/` is not, so
 // a clone's first sync restores built-ins from the executable and fetches each remote package at
 // the commit office.lock locks for it.
-import { packageRoot, pulledFolder } from "./bound-paths.ts";
+import { boundUnavailable, definitionRoot, linkProblem, packageRoot, pulledFolder } from "./bound-paths.ts";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { Worker } from "node:worker_threads";
@@ -26,7 +26,8 @@ import { panelBundle } from "./desktop.ts";
 import { collectAssets } from "../standard/opencode/assets.ts";
 import { copyFromRepository } from "./git.ts";
 import { type Office, OfficeError, type PackageEntry } from "./office.ts";
-import { readDefinition, runPackageSetup, standardImports } from "./package-definition.ts";
+import { readDefinition, runPackageSetup } from "./package-definition.ts";
+import { readPackageJson, scope } from "./package-manifest.ts";
 import { readSnapshot } from "./reference-snapshot.ts";
 import { collectJobs } from "../standard/cron/jobs.ts";
 import { composeProblems, packageComposeFile, settingsEnv } from "./package-services.ts";
@@ -125,9 +126,9 @@ export function pulledFolders(office: Office): string[] {
   return folders(join(office.dir, pulledFolder));
 }
 
-/** The package folders in `packages/`, declared or not. */
+/** The package folders in `packages/`, declared or not; `node_modules/` holds sync's editor link. */
 export function localFolders(office: Office): string[] {
-  return folders(join(office.dir, "packages"));
+  return folders(join(office.dir, "packages")).filter((name) => name !== "node_modules");
 }
 
 /** Whether `repo` is this tool's own repository, which publishes the built-in packages. */
@@ -562,7 +563,7 @@ export function removePackage(office: Office, name: string, retained?: string): 
 
 /** Check the installed source before importing any code. */
 export function installedDefinition(office: Pick<Office, "dir">, resolved: ResolvedPackage) {
-  return readDefinition(resolved.dir, relative(office.dir, resolved.dir), () => verifyInstalledCopy(resolved));
+  return readDefinition(resolved.dir, resolved.entry.name, relative(office.dir, resolved.dir), { verifyCopy: () => verifyInstalledCopy(resolved), root: definitionRoot(office.dir, resolved) });
 }
 
 /** A pulled-in copy must match its record; a local package isn't checked. */
@@ -586,6 +587,91 @@ export function verifyInstalledCopy({ kind, entry, dir }: ResolvedPackage) {
   if (edits.length > 0) throw new Error(`package files edited: ${edits.join(", ")}; office sync restores them`);
 
   return record;
+}
+
+/** The pulled-in packages among `packages` that the set's sync `rejected`: they stay selected, get no link and don't load. */
+export function rejectedPackages(packages: ResolvedPackage[], rejected: ReadonlySet<string>) {
+  return packages.filter(pkg => pkg.kind !== "local" && rejected.has(pkg.entry.name));
+}
+
+/**
+ * Every problem in `packages` found without importing anything: a pulled-in package not copied
+ * yet, a copy that differs from its record, a package.json that can't be read, and a declared
+ * dependency that office.yaml doesn't select (the required built-ins always are). A package in
+ * `skip` isn't checked. Each problem names its package; messages don't repeat the name.
+ */
+export function selectionProblems(office: Pick<Office, "packages">, packages: ResolvedPackage[], skip: ReadonlySet<string> = new Set()): PackageProblem[] {
+  const selected = new Set([...requiredPackages, ...office.packages.map(entry => entry.name)]);
+  const problems: PackageProblem[] = [];
+
+  for (const pkg of packages) {
+    const { name } = pkg.entry;
+
+    if (skip.has(name)) continue;
+    const fail = (message: string) => problems.push({ packages: [name], message });
+
+    if (pkg.kind !== "local") {
+      if (!existsSync(pkg.dir)) {
+        fail("not synced yet; run office sync");
+        continue;
+      }
+
+      try {
+        verifyInstalledCopy(pkg);
+      } catch (error) {
+        fail(error instanceof Error ? error.message : String(error));
+        continue;
+      }
+    }
+
+    const json = readPackageJson(pkg.dir, name, pkg.kind);
+
+    if (!json.ok) {
+      for (const error of json.errors) fail(error);
+      continue;
+    }
+
+    for (const dependency of json.value.dependencies) {
+      if (!selected.has(dependency)) fail(`depends on ${scope}${dependency}, which isn't selected; add it to office.yaml`);
+    }
+  }
+
+  return problems;
+}
+
+/**
+ * The check every reader of definitions runs before its first import: the packages the bound
+ * set's sync rejected, `selectionProblems`, and, in a process bound to a set, a package the set
+ * has no link (or a wrong link) for. With any problem, the reader imports nothing. A package in
+ * `skip` (admission's own rejections, already reported) isn't checked.
+ */
+export function definitionGate(office: Pick<Office, "dir" | "packages">, packages: ResolvedPackage[], skip: ReadonlySet<string> = new Set()): PackageProblem[] {
+  const rejected = rejectedPackages(packages, boundUnavailable(office.dir)).filter(pkg => !skip.has(pkg.entry.name));
+  const unchecked = new Set([...skip, ...rejected.map(pkg => pkg.entry.name)]);
+
+  const links = packages.flatMap(pkg => {
+    const problem = unchecked.has(pkg.entry.name) ? undefined : linkProblem(office.dir, pkg);
+
+    return problem ? [{ packages: [pkg.entry.name], message: problem }] : [];
+  });
+
+  return [
+    ...rejected.map(pkg => ({ packages: [pkg.entry.name], message: "rejected by the last sync; run office sync" })),
+    ...selectionProblems(office, packages, unchecked),
+    ...links,
+  ];
+}
+
+/** One line for a package problem: `package <name>: <message>`. */
+export function problemLine(problem: PackageProblem) {
+  return `package ${problem.packages.join(", ")}: ${problem.message}`;
+}
+
+/** For a reader of one package's definition (cron, the GUI): fails, naming every problem, unless the whole selection passes `definitionGate`. */
+export function requireLoadable(office: Office) {
+  const problems = definitionGate(office, resolvePackages(office, undefined, true).packages);
+
+  if (problems.length) throw new OfficeError(`no package loaded: ${problems.map(problemLine).join("; ")}`);
 }
 
 /** Validate this office's current entry settings against the installed definition. */
@@ -762,7 +848,7 @@ async function resolveSetupSettings(office: Office, item: InstalledPackage, vali
   if (!item.manifest.setup) return;
   const rows: { id: string; value: CollectionEntry }[] = [];
 
-  const { scalars } = await runPackageSetup(item.manifest, overrides, { ...standardImports(packageRoot(office.dir)), settings: structuredClone(item.settings), command() {}, collection() {}, add(handle, value) {
+  const { scalars } = await runPackageSetup(item.manifest, overrides, { settings: structuredClone(item.settings), command() {}, collection() {}, add(handle, value) {
     if (validateMachine) rows.push({ id: handle.id, value });
   } });
 

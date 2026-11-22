@@ -14,6 +14,7 @@ import { catchUpJob, supercronicInput } from "./container.ts";
 import { namedJob, requireJobs } from "./discovery.ts";
 import { cronTimers, installTimers, removeTimers, staleTimerUnits } from "./host.ts";
 import { executeJob } from "./jobs.ts";
+import { writePackage } from "../../src/test-package.ts";
 
 let root: string;
 
@@ -21,9 +22,11 @@ beforeEach(() => { root = mkdtempSync(join(tmpdir(), "office-cron-test-")); });
 
 afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
+/** Writes `relative` in the office; a package's definition gets its package.json too. */
 function write(relative: string, text: string): void {
   const path = join(root, relative);
 
+  if (/(?:^|\/)packages\/[^/]+\/(?:office\.ts|package\.yaml)$/.test(relative)) return writePackage(path, text);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, text);
 }

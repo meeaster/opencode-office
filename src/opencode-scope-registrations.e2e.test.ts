@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { command, gitAt, groundwork, scopeFixture, write } from "./opencode-scope.fixture.ts";
+import { writePackage } from "./test-package.ts";
 
 const { office, fixture } = scopeFixture();
 
@@ -16,7 +17,7 @@ test("typed registrations replace both conventions: one owned link, isolated pan
   write(join(pkg, "desktop/built.cjs"), "// custom panel");
   write(join(pkg, "gui/dist/gui-experimental.cjs"), "// convention must not win");
   rmSync(join(pkg, "package.yaml"));
-  write(join(pkg, "office.ts"), `import type {OpenCodeContext} from "../../.office/packages/office/package-context.ts";
+  writePackage(join(pkg, "office.ts"), `import type {OpenCodeContext} from "@office/office/context";
     import {appendFileSync} from "node:fs";
     export default {name:"common",description:"fixture",settings:{edition:{description:"edition",default:"both"}},
       setup(ctx) { appendFileSync(process.env.SCOPE_IMPORTS,"setup\\n"); ctx.command({name:"folio edition",summary:"fixture",run(){console.log("fiction")}}); },
@@ -153,7 +154,7 @@ test("a convention package with a symlinked gui/dist keeps its link and panel; a
   }
 
   rmSync(join(pkg, "package.yaml"));
-  write(join(pkg, "office.ts"), `export default {name:"common",description:"fixture",opencode(ctx){ctx.serverPlugin("plugin"); ctx.desktopPanel("gui/dist/gui-experimental.cjs")}};`);
+  writePackage(join(pkg, "office.ts"), `export default {name:"common",description:"fixture",opencode(ctx){ctx.serverPlugin("plugin"); ctx.desktopPanel("gui/dist/gui-experimental.cjs")}};`);
   expect(await f.run(["sync", "--packages"], 1)).toContain("without redirected paths");
   expect(readlinkSync(join(f.dir, ".opencode/plugins/common"))).toBe(link);
   expect(readFileSync(join(f.env.OFFICE_APP_PANELS_DIR, "common/gui-experimental.cjs"), "utf8")).toBe(panel);
@@ -167,7 +168,7 @@ test("check and inspect report authored registrations as declared: no deletion a
   write(join(pkg, "skills/helper/SKILL.md"), "---\nname: helper\ndescription: fixture\n---\nHelper.\n");
   write(join(pkg, "desktop/built.cjs"), "// authored panel");
   rmSync(join(pkg, "package.yaml"));
-  write(join(pkg, "office.ts"), `export default {name:"common",description:"fixture",settings:{edition:{description:"edition",default:"both"}},
+  writePackage(join(pkg, "office.ts"), `export default {name:"common",description:"fixture",settings:{edition:{description:"edition",default:"both"}},
     opencode(ctx) {
       if (ctx.settings.edition === "throw") throw Error("fixture failure");
       if (ctx.settings.edition !== "panel") ctx.serverPlugin("plugin");
@@ -209,7 +210,7 @@ test("an authored-only pinned package repairs the bound revision and rejects an 
   const git = (...args: string[]) => gitAt(upstream, f.env, ...args);
   const select = (ref: string) => f.select(`packages: [{name: folio, repo: ${upstream}, path: pkg, ref: '${ref}'}]\n`);
   const definition = `export default {name:"folio", description:"fixture", opencode(ctx){ctx.serverPlugin("src/server"); ctx.desktopPanel("dist/panel.cjs")}};`;
-  write(join(pkg, "office.ts"), definition);
+  writePackage(join(pkg, "office.ts"), definition, { name: "folio" });
   write(join(pkg, "src/server/index.js"), command("bound-asset"));
   write(join(pkg, "dist/panel.cjs"), "// edition A");
   git("init", "-q");
@@ -221,7 +222,7 @@ test("an authored-only pinned package repairs the bound revision and rejects an 
   const link = join(f.dir, ".opencode/plugins/folio");
   expect(readlinkSync(link)).toBe("../../.office/packages/folio/src/server");
   expect(await f.run(["opencode", "inspect"])).toContain("Office package link (selected pinned Git package)");
-  write(join(pkg, "office.ts"), definition.replace("dist/panel.cjs", "missing.cjs"));
+  writePackage(join(pkg, "office.ts"), definition.replace("dist/panel.cjs", "missing.cjs"), { name: "folio" });
   git("commit", "-qam", "invalid edition B");
   git("tag", "-f", "stable");
   rmSync(pulled, { recursive: true });
@@ -238,7 +239,7 @@ test("deselecting a pulled authored package notes its retained panel at the auth
   const f = fixture("authored-deselect", "http://127.0.0.1:1");
   const upstream = join(f.home, "upstream");
   const git = (...args: string[]) => gitAt(upstream, f.env, ...args);
-  write(join(upstream, "pkg/office.ts"), `export default {name:"folio", description:"fixture", opencode(ctx){ctx.desktopPanel("dist/panel.cjs")}};`);
+  writePackage(join(upstream, "pkg/office.ts"), `export default {name:"folio", description:"fixture", opencode(ctx){ctx.desktopPanel("dist/panel.cjs")}};`, { name: "folio" });
   write(join(upstream, "pkg/dist/panel.cjs"), "// authored only");
   git("init", "-q");
   git("add", ".");

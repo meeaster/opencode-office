@@ -1,6 +1,6 @@
-import type { PackageContext } from "../office/package-context.ts";
+import type { PackageContext } from "@office/office/context";
 import { listing } from "./commands/list.ts";
-import { repositories } from "./exports/repositories.ts";
+import { repositories } from "./repositories.ts";
 
 export default {
   name: "references",

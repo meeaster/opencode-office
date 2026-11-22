@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 
 import { configDirVariable, installPanel, locate, panelsDirVariable } from "./desktop.ts";
 import { inspect } from "../standard/opencode/inspect.ts";
+import { packageJsonText, writePackage } from "./test-package.ts";
 
 let root: string;
 const saved = { config: process.env[configDirVariable], panels: process.env[panelsDirVariable] };
@@ -33,7 +34,7 @@ test("inspect lists a desktop panel only by this office's own record, and a bund
   const office = join(root, "office");
   const bundle = join(office, "packages/common/gui/dist/gui-experimental.cjs");
   write(join(office, "office.yaml"), "name: sample\npackages: [{name: common}]\n");
-  write(join(office, "packages/common/package.yaml"), "name: common\ndescription: Inspect fixture\n");
+  writePackage(join(office, "packages/common/package.yaml"), "name: common\ndescription: Inspect fixture\n");
   write(bundle, "module.exports = {}");
   const where = locate();
 
@@ -57,4 +58,14 @@ test("inspect lists a desktop panel only by this office's own record, and a bund
   rmSync(installed);
   mkdirSync(installed);
   expect(desktop()).toEqual(["desktop: common (bundle missing or not a regular file; listed in app-machine opencode.json)"]);
+});
+
+test("inspect names a package's OpenCode registration at the definition its package.json declares", () => {
+  const office = join(root, "office");
+  write(join(office, "office.yaml"), "name: sample\npackages: [{name: common}]\n");
+  write(join(office, "packages/common/src/definition.ts"), 'throw new Error("inspect must not import the definition")');
+  write(join(office, "packages/common/package.json"), packageJsonText("common", "src/definition.ts"));
+  write(join(office, ".office/resolved/opencode-assets.json"), JSON.stringify({ common: { state: "unavailable" } }));
+
+  expect(inspect(office, undefined)).toContain("[office] OpenCode registration unavailable at last sync: packages/common/src/definition.ts#opencode");
 });

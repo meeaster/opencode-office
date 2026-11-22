@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compile } from "./build.ts";
+import { writePackage } from "./test-package.ts";
 
 // An end-to-end test spawns the compiled office many times; under a parallel run it gets 30s, not Bun's 5s.
 setDefaultTimeout(30_000);
@@ -51,7 +52,7 @@ test("the installed unit keeps its installer identity and no-install policy acro
 
     for (const tool of ["docker", "systemctl", "mise"]) writeFileSync(join(bin, tool), "#!/bin/sh\n[ \"$1\" != --version ] || echo 2026.11.7\n", { mode: 0o700 });
     writeFileSync(join(state, "secrets.env"), "OPENCODE_PASSWORD=fixture-only\n", { mode: 0o600 });
-    writeFileSync(join(pkg, "package.yaml"), "name: probe\ndescription: test\nhost:\n  services: {observe: {description: Observe, script: start.sh}}\n  env: { FROM_CLAIM: visible, MISE_AUTO_INSTALL: '1', MISE_NOT_FOUND_AUTO_INSTALL: '1' }\n");
+    writePackage(join(pkg, "package.yaml"), "name: probe\ndescription: test\nhost:\n  services: {observe: {description: Observe, script: start.sh}}\n  env: { FROM_CLAIM: visible, MISE_AUTO_INSTALL: '1', MISE_NOT_FOUND_AUTO_INSTALL: '1' }\n");
     writeFileSync(join(pkg, "start.sh"), 'printf "%s\\n" "${FROM_CLAIM-none}:$MISE_AUTO_INSTALL/$MISE_NOT_FOUND_AUTO_INSTALL:$CODEX_HOME"');
     configure("original");
     cli("sync", "--packages");
@@ -100,7 +101,7 @@ test("the installed unit keeps its installer identity and no-install policy acro
 
     rmSync(config);
     mkdirSync(join(root, "packages/parent-profile"), { recursive: true });
-    writeFileSync(join(root, "packages/parent-profile/package.yaml"), "name: parent-profile\ndescription: parent marker\nhost: {env: {FROM_CLAIM: ancestor}}\n");
+    writePackage(join(root, "packages/parent-profile/package.yaml"), "name: parent-profile\ndescription: parent marker\nhost: {env: {FROM_CLAIM: ancestor}}\n");
     writeFileSync(join(root, "office.yaml"), "name: ancestor\nopencode: {mode: host, url: 'http://localhost:1'}\ntools: {sfw: {enabled: false}}\npackages: [{name: parent-profile}]\n");
     rmSync(join(env.OFFICE_MACHINE_DIR, "env.sh"));
     writeFileSync(record, JSON.stringify({ office: { name: "ancestor", dir: root }, consented: "fixture", files: [] }));

@@ -1,0 +1,8 @@
+{
+  "name": "@office/knowledge",
+  "private": true,
+  "exports": {},
+  "office": {
+    "definition": "./office.ts"
+  }
+}

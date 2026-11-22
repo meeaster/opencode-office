@@ -291,7 +291,7 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
     const own = problems.filter((problem) => problem.packages.includes(entry.name)).map((problem) => problem.message);
 
     if (item === undefined) {
-      report(false, `package ${entry.name}`, own.join("; "));
+      report(false, `package ${entry.name}`, own.join("; ") || (loaded.blocked ? "not loaded: other selected packages failed the checks before loading" : ""));
 
       continue;
     }

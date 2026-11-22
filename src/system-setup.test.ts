@@ -10,6 +10,7 @@ import { grantConsent } from "./machine.ts";
 import { loadOffice } from "./office.ts";
 import { systemPlatformVariable } from "./package-system.ts";
 import { offerRestart, type Run, type RunResult, systemStep, verifySystems } from "./system-setup.ts";
+import { writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -48,7 +49,7 @@ function makeOffice({ demo = true, machine = "", mode = "host" } = {}): void {
 
   write(join(office, "office.yaml"), `name: t\n${opencode}packages:\n${demo ? "  - name: demo\n    settings:\n      on: true\n" : "  []\n"}`);
   write(join(office, "machine.toml"), `[tools]\n${machine}`);
-  write(
+  writePackage(
     join(office, "packages/demo/package.yaml"),
     `name: demo
 description: A demo package.

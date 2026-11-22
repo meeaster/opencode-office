@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import * as v from "valibot";
 import { parse } from "yaml";
@@ -10,6 +10,8 @@ import { loadOffice } from "./office.ts";
 import { appliedSpawns, preparePackageServices } from "./package-services.ts";
 import { planSweep, type Spawned, spawnsLabel } from "./package-spawns.ts";
 import { check, packageManifestSchema } from "./schema.ts";
+import { recordRequiredBuiltins } from "./test-builtin-record.ts";
+import { writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -19,9 +21,12 @@ beforeEach(() => {
 
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
+/** Writes `path`; an office.yaml's office gets its required built-ins, as a synced office has. */
 function write(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content);
+
+  if (basename(path) === "office.yaml") recordRequiredBuiltins(dirname(path));
 }
 
 const manifest = (head: string, label: string) => check(v.safeParse(packageManifestSchema, parse(`${head}description: d\nspawns:\n  label: "${label}"\n`)));
@@ -82,9 +87,9 @@ test("office up keeps a package's spawns label beside its applied copy and hands
   const label = join(office, "state/packages/tool/spawns.label");
 
   write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: tool\n  - name: plain\n");
-  write(join(office, "packages/tool/package.yaml"), 'name: tool\ndescription: d\nspawns:\n  label: "tool_ns=office-${OFFICE_NAME}-tool"\n');
+  writePackage(join(office, "packages/tool/package.yaml"), 'name: tool\ndescription: d\nspawns:\n  label: "tool_ns=office-${OFFICE_NAME}-tool"\n');
   write(join(office, "packages/tool/compose.yaml"), "services:\n  tool:\n    image: busybox\n");
-  write(join(office, "packages/plain/package.yaml"), "name: plain\ndescription: d\n");
+  writePackage(join(office, "packages/plain/package.yaml"), "name: plain\ndescription: d\n");
   write(join(office, "packages/plain/compose.yaml"), "services:\n  plain:\n    image: busybox\n");
 
   expect((await preparePackageServices(loadOffice(office), false)).apply()).toEqual([]);
@@ -92,7 +97,7 @@ test("office up keeps a package's spawns label beside its applied copy and hands
   expect(appliedSpawns(loadOffice(office))).toEqual(new Map([["tool", "tool_ns=office-t-tool"]]));
 
   // A changed label waits with its compose file for --upgrade: it describes what the applied copy runs.
-  write(join(office, "packages/tool/package.yaml"), 'name: tool\ndescription: d\nspawns:\n  label: "tool_ns=${OFFICE_NAME}.tool"\n');
+  writePackage(join(office, "packages/tool/package.yaml"), 'name: tool\ndescription: d\nspawns:\n  label: "tool_ns=${OFFICE_NAME}.tool"\n');
   write(join(office, "packages/tool/compose.yaml"), "services:\n  tool:\n    image: busybox:1\n");
   (await preparePackageServices(loadOffice(office), false)).apply();
   expect(readFileSync(label, "utf8")).toBe("tool_ns=office-t-tool\n");

@@ -6,6 +6,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, s
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { compile } from "./build.ts";
+import { writePackage } from "./test-package.ts";
 
 /** Opt-in: an absolute OpenCode V2 launcher for the native check. */
 export const launcher = process.env.OFFICE_TEST_OPENCODE;
@@ -105,7 +106,7 @@ export function scopeFixture() {
     const yaml = `name: sample\nstate: ${home}/office-state\nopencode: {mode: host, url: ${endpoint}}\ndesks: {builder: {app: false}, sibling: {app: false}}\n`;
     const select = (selection: string) => write(join(dir, "office.yaml"), yaml + selection);
     select("packages: [{name: common}]\n");
-    write(join(dir, "packages/common/package.yaml"), "name: common\ndescription: Scope fixture\n");
+    writePackage(join(dir, "packages/common/package.yaml"), "name: common\ndescription: Scope fixture\n");
     write(join(dir, "packages/common/plugin/index.js"), command("shared-command"));
     write(join(dir, ".opencode/opencode.jsonc"), rootConfig);
     write(join(dir, "builder/.opencode/opencode.jsonc"), deskConfig);

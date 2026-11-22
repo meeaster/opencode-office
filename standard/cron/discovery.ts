@@ -1,9 +1,9 @@
 import { installedPackages, type InstalledPackages } from "../../src/layout.ts";
 import { type Office, OfficeError } from "../../src/office.ts";
-import { readPackage, resolvePackages } from "../../src/packages.ts";
+import { readPackage, requireLoadable, resolvePackages } from "../../src/packages.ts";
 import { collectJobs, type CronJob } from "./jobs.ts";
 
-/** An installed timer reads only its job's owner, without loading the other packages. */
+/** An installed timer reads only its job's owner, without loading the other packages; the whole selection is checked first. */
 export function enabledJob(office: Office, id: string): CronJob | undefined {
   const [kind, owner] = id.split(".");
   const installed: InstalledPackages["installed"] = [];
@@ -15,6 +15,7 @@ export function enabledJob(office: Office, id: string): CronJob | undefined {
     if (resolved.problems.length) throw new OfficeError(resolved.problems.map(problem => problem.message).join("\n"));
 
     if (item) {
+      requireLoadable(office);
       const read = readPackage(office, item);
 
       if (!read.ok) throw new OfficeError(read.errors.join("\n"));

@@ -12,6 +12,7 @@ import { silentStage, type Stage } from "../report/index.ts";
 import { editLock, readLockSection } from "../versions.ts";
 import { updatePackages, updateSkills } from "./pins.ts";
 import { sync } from "./sync.ts";
+import { packageJsonText } from "../test-package.ts";
 
 /** office.lock's `packages:` section in the office at `dir`, as an object. */
 const readPackageLock = (dir: string) => Object.fromEntries(readLockSection(dir, "packages"));
@@ -95,7 +96,7 @@ const skill = (text: string) => `---\nname: x\ndescription: ${text}\n---\n${text
 
 test("refresh keeps both updated pins through full sync and stops before up on a failed reference", () => {
   const repo = join(dir, "upstream");
-  const old = commit(repo, { "demo/package.yaml": "name: demo\ndescription: Before\n", "x/SKILL.md": skill("Before") });
+  const old = commit(repo, { "demo/package.json": packageJsonText("demo", "package.yaml"), "demo/package.yaml": "name: demo\ndescription: Before\n", "x/SKILL.md": skill("Before") });
   const next = commit(repo, { "demo/package.yaml": "name: demo\ndescription: After\n", "x/SKILL.md": skill("After") });
 
   write(join(dir, "office/office.yaml"), `name: test\nstate: ${dir}/state\npackages:\n  - { name: demo, repo: ${repo}, ref: ${old}, track: main, path: demo }\nskills:\n  copied:\n    - { repo: ${repo}, ref: ${old}, track: main, skills: [x] }\nreferences: [{ name: missing, url: ${dir}/missing }]\n`);
@@ -129,7 +130,7 @@ test("skills update moves each tracked group along its tags or branch, all its c
   commit(skills, { "skills/alpha/SKILL.md": skill("alpha 3") }, "v3.0.0");
 
   const gammaOne = commit(other, { "tools/gamma-skill/SKILL.md": skill("gamma one") });
-  const pkgOne = commit(pkg, { "demo/package.yaml": "name: demo\ndescription: Demo.\n" }, "v1.0.0");
+  const pkgOne = commit(pkg, { "demo/package.json": packageJsonText("demo", "package.yaml"), "demo/package.yaml": "name: demo\ndescription: Demo.\n" }, "v1.0.0");
   const pinned = commit(skills, {});
 
   commit(reference, { "README.md": "one\n" });
@@ -268,7 +269,7 @@ test("packages update advances tracked packages to a full SHA and moves untracke
   const pkg = join(dir, "package-repo");
   const skills = join(dir, "skills-repo");
   const manifest = (text: string) => `name: demo\ndescription: ${text}\nsettings:\n  greeting:\n    description: A greeting\n    default: hi\n`;
-  const pkgOne = commit(pkg, { "demo/package.yaml": manifest("one"), "fixed/package.yaml": "name: fixed\ndescription: Fixed.\n", "tagged/package.yaml": "name: tagged\ndescription: Tagged.\n" }, "v1.0.0");
+  const pkgOne = commit(pkg, { "demo/package.json": packageJsonText("demo", "package.yaml"), "fixed/package.json": packageJsonText("fixed", "package.yaml"), "tagged/package.json": packageJsonText("tagged", "package.yaml"), "demo/package.yaml": manifest("one"), "fixed/package.yaml": "name: fixed\ndescription: Fixed.\n", "tagged/package.yaml": "name: tagged\ndescription: Tagged.\n" }, "v1.0.0");
   const skillOne = commit(skills, { "alpha/SKILL.md": skill("alpha one") }, "v1.0.0");
 
   write(
@@ -361,14 +362,15 @@ test("a pending peer setting and duplicate requirements reject the staged tree; 
   const yaml = join(root, "office.yaml");
   const names = ["alpha", "bravo"];
 
-  const installer = (name: string, destination: string, extra = "") => `export default {name:"${name}",description:"fixture",async setup(c){
-    const {installs}=await c.importStandard("mise-integration/claims");
+  const installer = (name: string, destination: string, extra = "") => `import {installs} from "@office/mise-integration/claims"; import {requirements} from "@office/tooling/requirements";
+  export default {name:"${name}",description:"fixture",setup(c){
     c.add(installs,{name:"install",description:"Install",script:"run.ts",destination:"${destination}",ready:"${destination}",executable:false});
     ${extra}
   }}`;
 
   const alpha = installer("alpha", "~/.local/alpha");
-  const first = commit(repo, { "alpha/office.ts": alpha, "bravo/office.ts": installer("bravo", "~/.local/bravo"), "alpha/run.ts": "// original", "bravo/run.ts": "// original" });
+  const dependencies = ["mise-integration", "tooling"];
+  const first = commit(repo, { "alpha/package.json": packageJsonText("alpha", "office.ts", { dependencies }), "bravo/package.json": packageJsonText("bravo", "office.ts", { dependencies }), "alpha/office.ts": alpha, "bravo/office.ts": installer("bravo", "~/.local/bravo"), "alpha/run.ts": "// original", "bravo/run.ts": "// original" });
   write(yaml, `name: test\nopencode: {mode: host, url: 'http://127.0.0.1:49999'}\npackages:\n  - {name: browser, settings: {browse: false}}\n${names.map(name => `  - {name: ${name}, repo: ${repo}, ref: ${first}, track: main, path: ${name}}`).join("\n")}\n`);
   await synced("packages");
   write(yaml, read(yaml).replace("browse: false", "browse: true"));
@@ -382,7 +384,7 @@ test("a pending peer setting and duplicate requirements reject the staged tree; 
 
   for (const [code, problem] of [
     [installer("alpha", "~/.local/bin/browse"), "claimed by both package browser and package alpha"],
-    [installer("alpha", "~/.local/alpha", `const {requirements}=await c.importStandard("tooling/requirements");for(const v of ["1.1","1.2"])c.add(requirements,{name:"widget",minimumVersion:v})`), "tooling.requirements widget claimed by both"],
+    [installer("alpha", "~/.local/alpha", `for(const v of ["1.1","1.2"])c.add(requirements,{name:"widget",minimumVersion:v})`), "tooling.requirements widget claimed by both"],
   ]) {
     commit(repo, { "alpha/office.ts": code, "alpha/run.ts": "// rejected" });
     const rejected = await update("packages");
@@ -413,4 +415,50 @@ test("help names both update commands, and office.yaml refuses a track without a
   expect(() => loadOffice(join(dir, "office"))).toThrow("track needs repo, path and ref");
   write(join(dir, "office/office.yaml"), "name: t\nskills:\n  copied:\n    - { repo: r, ref: x, skills: [a] }\n    - { name: a, repo: r, path: a }\n");
   expect(() => loadOffice(join(dir, "office"))).toThrow("lists a skill name twice");
+});
+
+test.each([true, false])("packages update holds back a package that declares a dependency on a rejected one (declared: %p)", async (declared) => {
+  const repo = join(dir, "pair");
+  const yaml = join(dir, "office", "office.yaml");
+  const manifest = (name: string, text: string) => `name: ${name}\ndescription: ${text}\n`;
+  const json = packageJsonText("good", "package.yaml", { dependencies: declared ? ["bad"] : [] });
+  const first = commit(repo, { "good/package.json": json, "good/package.yaml": manifest("good", "One."), "bad/package.json": packageJsonText("bad", "package.yaml"), "bad/package.yaml": manifest("bad", "One.") });
+  write(yaml, `name: test\npackages:\n${["good", "bad"].map(name => `  - {name: ${name}, repo: ${repo}, ref: ${first}, track: main, path: ${name}}`).join("\n")}\n`);
+  await synced("packages");
+  const lock = read(join(dir, "office", "office.lock"));
+  // The newer commit changes good and loses bad's folder, so bad's copy fails.
+  const next = commit(repo, { "good/package.yaml": manifest("good", "Two."), bad: null });
+
+  expect((await update("packages")).ok).toBe(false);
+  expect(record(".office/packages/bad").commit).toBe(first);
+
+  if (declared) {
+    expect(record(".office/packages/good").commit).toBe(first);
+    expect(read(yaml)).not.toContain(next);
+    expect(read(join(dir, "office", "office.lock"))).toBe(lock);
+  } else {
+    expect(record(".office/packages/good").commit).toBe(next);
+    expect(read(yaml)).toContain(`{name: good, repo: ${repo}, ref: ${next}`);
+    expect(read(join(dir, "office", "office.lock"))).toContain(next);
+  }
+});
+
+test("packages update holds back only the package whose newer commit fails the check before loading", async () => {
+  const repo = join(dir, "checked");
+  const yaml = join(dir, "office", "office.yaml");
+  const manifest = (name: string, text: string) => `name: ${name}\ndescription: ${text}\n`;
+  const first = commit(repo, Object.fromEntries(["alpha", "beta"].flatMap(name => [[`${name}/package.json`, packageJsonText(name, "package.yaml")], [`${name}/package.yaml`, manifest(name, "One.")]])));
+  write(yaml, `name: test\npackages:\n${["alpha", "beta"].map(name => `  - {name: ${name}, repo: ${repo}, ref: ${first}, track: main, path: ${name}}`).join("\n")}\n`);
+  await synced("packages");
+  // alpha's newer commit declares a dependency office.yaml doesn't select; beta's only changes.
+  const next = commit(repo, { "alpha/package.json": packageJsonText("alpha", "package.yaml", { dependencies: ["absent"] }), "alpha/package.yaml": manifest("alpha", "Two."), "beta/package.yaml": manifest("beta", "Two.") });
+
+  const updated = await update("packages");
+  expect(updated.ok).toBe(false);
+  expect(updated.out).toContain("FAILED package alpha: found");
+  expect(updated.out).toContain("depends on @office/absent, which isn't selected");
+  expect(record(".office/packages/alpha").commit).toBe(first);
+  expect(record(".office/packages/beta").commit).toBe(next);
+  expect(read(yaml)).toContain(`{name: alpha, repo: ${repo}, ref: ${first}`);
+  expect(read(yaml)).toContain(`{name: beta, repo: ${repo}, ref: ${next}`);
 });

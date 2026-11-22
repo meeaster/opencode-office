@@ -1,4 +1,4 @@
-import type { Collection, CollectionEntry } from "../office/package-context.ts";
+import type { Collection, CollectionEntry } from "@office/office/context";
 
 export type Task = { name: string; script: string; description: string };
 

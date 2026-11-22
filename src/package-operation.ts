@@ -3,14 +3,14 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { bindPaths } from "./bound-paths.ts";
 import { boundRevision, collectReferences } from "./collect-references.ts";
-import { currentOffice, loadOffice, type Office, OfficeError, type PackageEntry, readOfficeFields } from "./office.ts";
+import { currentOffice, loadOffice, type Office, OfficeError, type PackageEntry } from "./office.ts";
 import { parse } from "yaml";
 import * as v from "valibot";
-import { commandBootstrapSchema, type LockedPackage, officeSchema, packageEntry, type PackageLock, parsePackageLock } from "./schema.ts";
+import { type LockedPackage, officeSchema, type PackageLock, parsePackageLock } from "./schema.ts";
 import { activeGeneration, beginGeneration, managedDirectory, pinActive, publishGeneration, type Candidate } from "./package-generation.ts";
-import { bindImports, coupledFailures, createImportMap, requireCoherentImports } from "./package-imports.ts";
+import { coupledFailures, writePackageLinks } from "./package-imports.ts";
 import { installedPackages } from "./layout.ts";
-import { embeddedPackage, materializePackage, readRecord, requiredPackages, type ResolvedPackage, resolvePackages, validateReplacement, verifiedCommit, writePackageSettings } from "./packages.ts";
+import { embeddedPackage, materializePackage, problemLine, readRecord, type ResolvedPackage, resolvePackages, validateReplacement, verifiedCommit, writePackageSettings } from "./packages.ts";
 import { lockFile, lockSections, packageLockChanges, readLockSection } from "./versions.ts";
 import { beginReferencePublication } from "./reference-publication.ts";
 import { readSnapshot, type ReferenceSnapshot } from "./reference-snapshot.ts";
@@ -39,11 +39,34 @@ function program() {
   return Bun.isStandaloneExecutable ? [process.execPath] : [process.execPath, "--no-install", join(import.meta.dir, "cli.ts")];
 }
 
-async function run(args: string[], folder: string, fd: number) {
-  const child = Bun.spawn([...program(), ...args], {
-    env: { ...process.env, NODE_PATH: join(folder, "node_modules") },
-    stdio: ["inherit", "inherit", "inherit", fd],
-  });
+/** What the caller's BUN_OPTIONS was, for an evaluator to give back to the processes it starts. */
+const callerOptions = "OFFICE_CALLER_BUN_OPTIONS";
+
+/**
+ * The compiled evaluator preserves symlinks, so a definition loaded through its set's link
+ * resolves its imports inside that set. Only there: the CLI's own pnpm-installed dependencies
+ * don't resolve under the flag, so the checkout's launcher and the first process never get it.
+ */
+function evaluatorEnv(): NodeJS.ProcessEnv {
+  if (!Bun.isStandaloneExecutable) return process.env;
+  const caller = process.env.BUN_OPTIONS;
+
+  return { ...process.env, BUN_OPTIONS: [caller, "--preserve-symlinks"].filter(Boolean).join(" "), [callerOptions]: caller ?? "" };
+}
+
+/** In an evaluator, gives the processes it starts (package scripts, other tools) the caller's BUN_OPTIONS back. */
+export function restoreCallerEnv() {
+  const caller = process.env[callerOptions];
+
+  if (caller === undefined) return;
+  delete process.env[callerOptions];
+
+  if (caller) process.env.BUN_OPTIONS = caller;
+  else delete process.env.BUN_OPTIONS;
+}
+
+async function run(args: string[], fd: number) {
+  const child = Bun.spawn([...program(), ...args], { env: evaluatorEnv(), stdio: ["inherit", "inherit", "inherit", fd] });
 
   const stop = () => child.kill("SIGINT");
   process.once("SIGINT", stop);
@@ -61,46 +84,15 @@ export async function runReader(dir: string, args: string[]) {
   // An adopted set holds no selection until the first candidate publishes.
   if (!existsSync(join(folder, "selection.json"))) return;
 
-  return run(["--package-reader", dir, active.name, ...args], folder, active.fd);
+  return run(["--package-reader", dir, active.name, ...args], active.fd);
 }
 
-/**
- * The packages a reader of the generation in `folder` may import from: its published selection,
- * less the packages its last sync rejected. A candidate (sync) resolves as sync does; any other
- * reader resolves live, so the saved references file is never read and an ownership problem
- * leaves out only the packages it names.
- */
-export function readerPackages(dir: string, folder: string, candidate: boolean): { packages: ResolvedPackage[]; rejected: ReadonlySet<string> } {
-  const selection = join(folder, "selection.json");
-
-  if (!existsSync(selection)) return { packages: [], rejected: new Set() };
-  const packages = v.parse(v.array(packageEntry), JSON.parse(readFileSync(selection, "utf8")));
-  const unavailable = join(folder, "unavailable.json");
-  const rejected = new Set(existsSync(unavailable) ? v.parse(v.array(v.string()), JSON.parse(readFileSync(unavailable, "utf8"))) : []);
-
-  return { packages: resolvePackages({ dir, packages }, undefined, !candidate).packages.filter(pkg => !rejected.has(pkg.entry.name)), rejected };
-}
-
-/** Binds this process to generation `name`; returns the packages its last sync rejected, whose copies don't load. */
-export function bindReader(dir: string, name: string, candidate = false): ReadonlySet<string> {
+/** Binds this process to generation `name`, recording the packages its last sync rejected, whose copies don't load. */
+export function bindReader(dir: string, name: string) {
   const folder = managedDirectory(dir, name);
-  bindPaths(dir, folder);
-  const { packages, rejected } = readerPackages(dir, folder, candidate);
-  let live: v.InferOutput<typeof commandBootstrapSchema> | undefined;
-  bindImports(dir, packages, pkg => {
-    if (candidate) return;
-    live ??= readOfficeFields(dir, commandBootstrapSchema);
-    const matches = live.packages.filter(entry => entry.name === pkg.entry.name);
-
-    if (!matches.length && requiredPackages.includes(pkg.entry.name)) return;
-    const entry = matches[0];
-
-    if (matches.length !== 1 || entry.repo !== pkg.entry.source?.repo || entry.ref !== pkg.entry.source?.ref || entry.path !== pkg.entry.source?.path) {
-      throw new OfficeError(`selection of imported package ${pkg.entry.name} differs from the active package set; run office sync --packages`);
-    }
-  });
-
-  return rejected;
+  const file = join(folder, "unavailable.json");
+  const unavailable = new Set(existsSync(file) ? v.parse(v.array(v.string()), JSON.parse(readFileSync(file, "utf8"))) : []);
+  bindPaths(dir, folder, unavailable);
 }
 
 /**
@@ -299,12 +291,12 @@ export async function publishPackages(office: Office, exclude: boolean, update?:
 
     if (update && rejected.length) return { published: false, lines, rejected: coupled(rejected) };
     const packages = candidatePackageLock(selection.packages, join(folder, "packages"), rejected, locked);
-    createImportMap(folder, selection.packages.filter(pkg => !rejected.includes(pkg.entry.name)));
+    writePackageLinks(folder, selection.packages, rejected);
     writeFileSync(join(folder, "unavailable.json"), JSON.stringify(rejected));
     writeFileSync(join(folder, "selection.json"), JSON.stringify(office.packages.map(({ name, settings, cron, source }) => ({ name, settings, cron, ...source }))));
     const request: Admission = { office, transaction, yaml, packages: Object.fromEntries(packages), embedded, validate, rejected, exclude, tracked: !!update, apply: update?.apply ?? true };
     writeFileSync(join(temporary, "input"), JSON.stringify(request));
-    const code = await run(["--package-admission", temporary], folder, reservation.fd);
+    const code = await run(["--package-admission", temporary], reservation.fd);
 
     if (code !== 0) throw new OfficeError(`package evaluator exited ${code}`);
     const result: Outcome = JSON.parse(readFileSync(join(temporary, "output"), "utf8"));
@@ -340,8 +332,6 @@ export async function evaluateAdmission(temporary: string) {
     using application = openCheckoutLease(office.dir, ".package-application");
 
     const publication = beginReferencePublication(owner, snapshot => {
-      requireCoherentImports();
-
       // OpenCode registrations may depend on defaults that setup just supplied.
       for (const item of installed.installed) {
         if (input.validate.includes(item.entry.name) && item.manifest.opencode) collectAssets(office.dir, item);
@@ -366,10 +356,20 @@ export async function evaluateAdmission(temporary: string) {
     });
 
     if (!publication.ok) throw new OfficeError(publication.errors.join("; "));
-    bindReader(office.dir, transaction.name, true);
+    bindReader(office.dir, transaction.name);
     const selection = resolvePackages(office);
     const rejected = new Set(input.rejected);
+    // Every copy, package.json, declared dependency and link is checked before the first import;
+    // this sync's own rejections are already FAILED lines.
     const installed = installedPackages(office, rejected, false);
+
+    if (installed.blocked) {
+      lines.push(...installed.blocked.map(problem => `FAILED ${problemLine(problem)}`));
+
+      // The packages the problems belong to; the caller's coupledFailures widens them to their dependents.
+      if (input.tracked) rejectedOwners = [...new Set(installed.blocked.flatMap(problem => problem.packages))];
+      throw new OfficeError("no package was loaded and no package set was published; fix the packages above and sync again");
+    }
 
     for (const item of selection.packages) {
       if (!input.validate.includes(item.entry.name)) continue;

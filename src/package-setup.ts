@@ -2,9 +2,8 @@
 // call it; each decides what to do with the result.
 import * as v from "valibot";
 import type { Collection, CollectionEntry, SettingValue } from "../packages/office/package-context.ts";
-import { packageRoot } from "./bound-paths.ts";
 import { commandRegistration, type RegisteredCommand } from "./command-table.ts";
-import { runPackageSetup, standardImports } from "./package-definition.ts";
+import { runPackageSetup } from "./package-definition.ts";
 import { namedEntry } from "./reference-snapshot.ts";
 import type { PackageManifest } from "./schema.ts";
 
@@ -20,7 +19,6 @@ export type Registered = {
 };
 
 type SetupInput = {
-  dir: string;
   name: string;
   manifest: PackageManifest;
   /** The entry's settings in office.yaml. */
@@ -30,14 +28,13 @@ type SetupInput = {
 };
 
 /** Runs `setup` and gathers its registrations. Throws when setup or a registration call throws. */
-export async function registerPackage({ dir, name, manifest, overrides, settings }: SetupInput): Promise<Registered> {
+export async function registerPackage({ name, manifest, overrides, settings }: SetupInput): Promise<Registered> {
   const collections = new Map<string, Collection<CollectionEntry>>();
   const additions: Registered["additions"] = [];
   const commands: RegisteredCommand[] = [];
   const invalid: string[] = [];
 
   const { scalars } = await runPackageSetup(manifest, overrides, {
-    ...standardImports(packageRoot(dir)),
     settings: structuredClone(settings),
     collection(handle) {
       if (!handle.id.startsWith(`${name}.`) || !/^[a-z0-9-]+\.[a-z0-9-]+$/.test(handle.id) || !v.is(v.function(), handle.parse) || collections.has(handle.id)) throw new Error(`invalid or duplicate collection ${handle.id}`);

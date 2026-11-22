@@ -8,6 +8,8 @@ import { loadOffice } from "../office.ts";
 import { applySeeds, restoreAdvice, sha256 } from "../seeds.ts";
 import { defaultPins, writeApplied, writeLock } from "../versions.ts";
 import { seedChecks, toolsNotes, versionChecks } from "./check.ts";
+import { recordRequiredBuiltins } from "../test-builtin-record.ts";
+import { writePackage } from "../test-package.ts";
 
 let dir: string;
 
@@ -113,8 +115,9 @@ test("pending seeds are one warning with their count, never a failure, and check
   const store = join(dir, ".office/seeds");
 
   writeFileSync(join(dir, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
+  recordRequiredBuiltins(dir);
   mkdirSync(seed, { recursive: true });
-  writeFileSync(join(dir, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  writePackage(join(dir, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
 
   for (const file of ["a.md", "b.md", "c.md"]) writeFileSync(join(seed, file), "laid down\n");
   expect(applySeeds(dir, "demo", seed, ["a.md", "b.md", "c.md"])).toHaveLength(3);

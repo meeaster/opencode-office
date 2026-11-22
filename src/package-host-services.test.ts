@@ -7,6 +7,7 @@ import { grantConsent, serviceEnvironment, syncMachine } from "./machine.ts";
 import { envFilePath } from "./host-env.ts";
 import { recordRequiredFixtures } from "./test-builtin-record.ts";
 import { reconcileHostServices } from "./package-host-services.ts";
+import { writePackage } from "./test-package.ts";
 
 test("host services only load the recorded environment of the same office", () => {
   const root = mkdtempSync(join(tmpdir(), "office-unit-profile-"));
@@ -67,10 +68,10 @@ test("package units are applied once, upgraded explicitly, and removed when dese
   try {
     mkdirSync(dir, { recursive: true });
     mkdirSync(join(root, ".office/packages/office"), { recursive: true });
-    writeFileSync(join(root, ".office/packages/office/package.yaml"), "name: office\ndescription: fixture\n");
+    writePackage(join(root, ".office/packages/office/package.yaml"), "name: office\ndescription: fixture\n");
     recordRequiredFixtures(join(root, ".office/packages/office"));
     writeFileSync(join(root, "office.yaml"), "name: test\nopencode: { mode: host, url: http://localhost:4096 }\npackages: [{ name: demo }]\n");
-    writeFileSync(join(dir, "package.yaml"), manifest);
+    writePackage(join(dir, "package.yaml"), manifest);
     writeFileSync(join(dir, "start.sh"), "exec sleep 3600");
     writeFileSync(join(root, "systemctl"), `#!/bin/sh\necho "$*" >> '${root}/calls'\n`);
     chmodSync(join(root, "systemctl"), 0o755);
@@ -80,12 +81,12 @@ test("package units are applied once, upgraded explicitly, and removed when dese
 
     reconcileHostServices(office, "up");
     expect(readFileSync(unit, "utf8")).toContain("Description=first service");
-    writeFileSync(join(dir, "package.yaml"), manifest.replace("first service", "new description"));
+    writePackage(join(dir, "package.yaml"), manifest.replace("first service", "new description"));
     reconcileHostServices(office, "up");
     expect(readFileSync(unit, "utf8")).toContain("Description=first service");
     reconcileHostServices(office, "upgrade");
     expect(readFileSync(unit, "utf8")).toContain("Description=new description");
-    writeFileSync(join(dir, "package.yaml"), "name: demo\ndescription: test\n");
+    writePackage(join(dir, "package.yaml"), "name: demo\ndescription: test\n");
     reconcileHostServices(office, "up");
     expect(existsSync(unit)).toBe(false);
     expect(readFileSync(join(root, "calls"), "utf8")).toContain("--user disable --now office-test-pkg-demo.first.service");

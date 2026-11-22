@@ -1,5 +1,5 @@
-import type { PackageContext } from "../office/package-context.ts";
-import { requirements } from "./exports/requirements.ts";
+import type { PackageContext } from "@office/office/context";
+import { requirements } from "./requirements.ts";
 
 export default {
   name: "tooling",

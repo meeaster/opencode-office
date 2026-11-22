@@ -34,7 +34,7 @@ import { migrateHome } from "./home-migration.ts";
 import { releaseMachine, serviceEnvironment } from "./machine.ts";
 import { currentOffice, findOffice, type Office, OfficeError } from "./office.ts";
 import { ensureDiscovery, hasPublishedSet } from "./package-generation.ts";
-import { bindReader, evaluateAdmission, runReader } from "./package-operation.ts";
+import { bindReader, evaluateAdmission, restoreCallerEnv, runReader } from "./package-operation.ts";
 import { packageSecret } from "./package-services.ts";
 import { decrypt } from "./secrets.ts";
 import { onTerminal, reported, type Reporter, type Stage } from "./report/index.ts";
@@ -66,7 +66,7 @@ const usage = `usage: office <command> [--office <dir>]
                                removes every file the office wrote on this machine, and its consent.
                                --packages applies packages at their declared pins without refreshing
                                 desk repos, references or separately declared plugin clones.
-                                Each package has one definition: office.ts or package.yaml
+                                Each package's package.json names its definition (office.definition)
   skills update                move each skills.copied group with a track to the newest commit of
                                its branch, or of its highest stable SemVer tag matching a pattern
                                such as v2.*; recopy the whole group and record the commit as its ref.
@@ -206,14 +206,20 @@ function commandArgs(args: string[]) {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
-  if (args[0] === "--package-admission") return evaluateAdmission(args[1]);
   const reader = args[0] === "--package-reader";
+  const admission = args[0] === "--package-admission";
+
+  // An evaluator gives the processes it starts the caller's BUN_OPTIONS, not its own.
+  if (reader || admission) restoreCallerEnv();
+
+  if (admission) return evaluateAdmission(args[1]);
   // Only a reader, bound to a published package set, loads packages for commands and help.
   let bound: Reader | undefined;
 
   if (reader) {
     const [, dir, name] = args.splice(0, 3);
-    bound = { dir, unavailable: bindReader(dir, name) };
+    bindReader(dir, name);
+    bound = { dir };
 
     if (args[0] === "--finish-setup" && args[1] === dir) {
       const office = currentOffice({ office: dir });

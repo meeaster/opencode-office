@@ -10,13 +10,14 @@
 // It never rewrites AGENTS.md, other hand-written content, an existing app or a file a package's
 // seed created; it deletes such a file only with its package, and only while unchanged.
 import { readdirSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
 import { prepareReferenceRefresh } from "../../packages/references/tasks/refresh.ts";
 import { claudeFiles } from "../claude.ts";
 import { unresolvedMachineOwner } from "../collect-references.ts";
 import { planReferenceApply } from "../reference-publication.ts";
 import { publishPackages } from "../package-operation.ts";
+import { editorLinks, linkForEditors } from "../package-imports.ts";
 import { checkAdoption } from "../package-generation.ts";
 import type { ReferenceSnapshot } from "../reference-snapshot.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
@@ -587,6 +588,7 @@ export async function applyPackages(office: Office, installed: InstalledPackages
   changes.push(...plan.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
   changes.push(...linkPlugins(office, plan));
   changes.push(...installPanels(office, plan.installed, removedPanels));
+  changes.push(...linkForEditors(office.dir));
 
   if (exclude) changes.push(...excludePlumbing(office));
 
@@ -647,7 +649,7 @@ export function excludePlumbing(office: Office): string[] {
     return ["could not locate the office repository's info/exclude; Office's plumbing is not excluded from commits"];
   }
 
-  const wanted = ["/.office/*", `!/${seedStore}/`, ...officeEntries(office).map((path) => `/${path}`)];
+  const wanted = ["/.office/*", `!/${seedStore}/`, `/${dirname(editorLinks)}/`, ...officeEntries(office).map((path) => `/${path}`)];
   // Lines earlier releases wrote one by one: a declared clone in `.opencode/plugins/<name>/` and first-clone staging.
   const legacy = new Set(["/.office-plugin-*/", ...office.plugins.map((plugin) => `/${pluginFolder}/${plugin.name}/`)]);
 

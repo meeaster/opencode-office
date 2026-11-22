@@ -5,6 +5,7 @@ import { git } from "./git.ts";
 import { sources } from "./github.ts";
 import { loadOffice } from "./office.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
+import { writePackage } from "./test-package.ts";
 
 const { root, exe, marker, write, read, commit, fixture, collector, published } = definitionFixture();
 
@@ -36,13 +37,13 @@ test("a built-in's bytes and a Git contributor's resolved commit survive separat
   const repo = join(root, "tags");
   const installed = join(dir, ".office/packages/docs");
   git(["init", "-qb", "main", repo]);
-  write(join(repo, "pkg/office.ts"), collector("approved:A"));
+  writePackage(join(repo, "pkg/office.ts"), collector("approved:A"), { name: "docs" });
   const first = commit(repo);
   git(["tag", "v1"], repo);
   const pin = (ref: string) => select(`  - {name: docs, repo: ${repo}, path: pkg, ref: ${ref}}\n`);
   pin("v1");
   cli(0, "sync", "--packages");
-  write(join(repo, "pkg/office.ts"), `${marker} ${collector("unapproved:B")}`);
+  writePackage(join(repo, "pkg/office.ts"), `${marker} ${collector("unapproved:B")}`, { name: "docs" });
   git(["tag", "-f", "v1", commit(repo)], repo);
   rmSync(installed, { recursive: true });
   cli(0, "sync", "--packages");
@@ -68,10 +69,10 @@ test("an overlapping or interrupted collector cannot republish an explicitly wit
   const checkout = join(dir, "references/docs/document");
   const module = join(dir, "packages/docs/office.ts");
   select("  - name: docs\n");
-  write(module, collector(repo));
+  writePackage(module, collector(repo));
   cli(0, "sync");
   write(checkout, "keep after withdrawal");
-  write(module, collector(repo, "main", 'console.log("collection-paused"); await Bun.stdin.text();'));
+  writePackage(module, collector(repo, "main", 'console.log("collection-paused"); await Bun.stdin.text();'));
 
   const pause = async () => {
     // Its own process group: the collector runs in a child `office` that holds the publication lease.
@@ -121,14 +122,14 @@ test("an overlapping or interrupted collector cannot republish an explicitly wit
   select("  - name: docs\n");
   const empty = 'export default {name:"docs",description:"withdrawn",setup(){}}';
   const paused = read(module);
-  write(module, empty);
+  writePackage(module, empty);
   cli(0, "sync", "--packages");
   const unchanged = read(join(dir, ".office/resolved/references.json"));
-  write(module, paused);
+  writePackage(module, paused);
   const superseded = await pause();
 
   try {
-    write(module, empty);
+    writePackage(module, empty);
     cli(0, "sync", "--packages");
     expect(read(join(dir, ".office/resolved/references.json"))).toBe(unchanged);
     superseded.stdin.end();
@@ -181,8 +182,8 @@ test("the executable syncs mixed definitions and keeps applied state when a sele
   const module = 'import { count } from "./defaults.ts"; export default { name: "notes", description: "Notes", settings: { count: { description: "Count", default: count } }, tools: { jq: "1.7.1" } }';
 
   select("  - name: legacy\n  - name: notes\n");
-  write(join(dir, "packages/legacy/package.yaml"), "name: legacy\ndescription: Legacy\nsettings: { label: { description: Label, default: old } }\n");
-  write(join(pkg, "office.ts"), module);
+  writePackage(join(dir, "packages/legacy/package.yaml"), "name: legacy\ndescription: Legacy\nsettings: { label: { description: Label, default: old } }\n");
+  writePackage(join(pkg, "office.ts"), module);
   write(join(pkg, "defaults.ts"), "export const count: number = 3;");
   write(join(pkg, "plugin/index.ts"), 'export default { id: "notes", setup() {} }');
   write(join(pkg, "compose.yaml"), "services:\n  notes:\n    image: example/notes\n");
@@ -201,7 +202,7 @@ test("the executable syncs mixed definitions and keeps applied state when a sele
 
   // Every unreadable definition fails the same way (src/package-definition.test.ts covers the kinds).
   const reason = "packages/notes/office.ts: bad notes import";
-  write(join(pkg, "office.ts"), 'throw new Error("bad notes import")');
+  writePackage(join(pkg, "office.ts"), 'throw new Error("bad notes import")');
   expect(cli(1, "sync", "--packages")).toContain(reason);
   expect(cli(1, "check")).toContain(reason);
   expect(readlinkSync(link)).toBe("../../packages/notes/plugin");

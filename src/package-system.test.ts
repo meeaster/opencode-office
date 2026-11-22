@@ -13,6 +13,7 @@ import { loadOffice } from "./office.ts";
 import { machinePlatform, systemPlatformVariable } from "./package-system.ts";
 import { fragmentNotes } from "./package-tools.ts";
 import { check, packageManifestSchema } from "./schema.ts";
+import { writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -45,7 +46,7 @@ const ready = () => join(dir, "root/usr/bin/demo-browser");
 
 /** A local package `demo` with a host block switched by `host` and a system block switched by `system`. */
 function demo(extra = ""): void {
-  write(
+  writePackage(
     join(office, "packages/demo/package.yaml"),
     `name: demo
 description: A demo package.
@@ -94,13 +95,15 @@ test("native directories allow children; absent and conditional files own paths 
   const file = join(office, "packages/demo/system/bootstrap.toml");
   write(file, `[bootstrap.directories."~/.config/demo"]\nmode="0755"\n[bootstrap.files."~/.config/demo/old"]\nstate="absent"\n[bootstrap.files."~/.config/demo/optional"]\nos="macos"\ncontent="mac"\n`);
   const manifest = join(office, "packages/demo/package.yaml");
+  const run = () => sync(loadOffice(office), { scope: "packages" });
+  // From source, a local package resolves its @office imports through the published set.
+  await run();
   // Convert the native recipe to the typed author; keep its explicit readiness marker.
   rmSync(manifest);
-  write(join(office, "packages/demo/office.ts"), `export default {name:"demo",description:"fixture",settings:{system:{default:false,description:"use"}},async setup(c){
-    const {recipes}=await c.importStandard("mise-integration/claims");
+  writePackage(join(office, "packages/demo/office.ts"), `import {recipes} from "@office/mise-integration/claims";
+  export default {name:"demo",description:"fixture",settings:{system:{default:false,description:"use"}},setup(c){
     c.add(recipes,{name:"demo",setting:"system",description:"Example",platforms:["ubuntu-24.04-amd64-wsl"],bootstrap:"system/bootstrap.toml",ready:[${JSON.stringify(ready())}],env:{}})
-  }}`);
-  const run = () => sync(loadOffice(office), { scope: "packages" });
+  }}`, { dependencies: ["mise-integration"] });
   expect((await run()).join("\n")).not.toContain("FAILED");
   expect(notes().notes).toContain("Example is set up on this machine");
   const original = fragment();

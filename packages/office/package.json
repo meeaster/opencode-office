@@ -1,0 +1,13 @@
+{
+  "name": "@office/office",
+  "private": true,
+  "exports": {
+    "./context": "./package-context.ts"
+  },
+  "office": {
+    "definition": "./office.ts",
+    "dependencies": [
+      "@office/tooling"
+    ]
+  }
+}

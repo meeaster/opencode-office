@@ -1,4 +1,4 @@
-import type { Collection, CollectionEntry } from "../office/package-context.ts";
+import type { Collection, CollectionEntry } from "@office/office/context";
 
 export type Repository = { name: string; url: string; ref?: string; description?: string };
 

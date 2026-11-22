@@ -26,7 +26,6 @@ const journal = v.strictObject({
 const bridges = [
   ["packages", "packages"],
   ["resolved/references.json", "references.json"],
-  ["tsconfig.contracts.json", "tsconfig.contracts.json"],
 ] as const;
 
 function digest(text: string) {

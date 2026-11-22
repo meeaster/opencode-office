@@ -1,0 +1,8 @@
+{
+  "name": "@office/design",
+  "private": true,
+  "exports": {},
+  "office": {
+    "definition": "./office.ts"
+  }
+}

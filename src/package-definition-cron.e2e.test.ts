@@ -3,6 +3,7 @@ import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
+import { writePackage } from "./test-package.ts";
 
 const { root, bin, marker, write, read, commit, fixture, collector, pausedRefresh } = definitionFixture();
 
@@ -24,15 +25,15 @@ test("stale refresh needs the actual and last-applied origin/ref; cron runs only
   const stamp = join(home, `.local/state/office/cron/cron-refs/${job}.stamp`);
   const observed = () => [git(["rev-parse", "HEAD"], checkout), read(join(checkout, "document")), read(join(checkout, ".git/FETCH_HEAD"))];
   select("  - name: docs\n");
-  write(module, collector(a));
+  writePackage(module, collector(a));
   cli(0, "sync");
   cli(0, "check");
   write(join(checkout, "document"), "dirty A");
   const before = observed();
 
-  write(module, collector(b));
+  writePackage(module, collector(b));
   cli(0, "sync", "--packages");
-  write(module, `${marker} throw Error("broken definition");`);
+  writePackage(module, `${marker} throw Error("broken definition");`);
   cli(1, "sync", "--packages");
   rmSync(probe);
   git(["remote", "set-url", "origin", b], checkout);
@@ -48,23 +49,23 @@ test("stale refresh needs the actual and last-applied origin/ref; cron runs only
   write(join(a, "document"), "pending release");
   commit(a);
   git(["switch", "-q", "main"], a);
-  write(module, collector(a, "release"));
+  writePackage(module, collector(a, "release"));
   cli(0, "sync", "--packages");
   expect(cli(1, "check", "--verbose")).toContain(`desired ${a} @ release, last applied ${a} @ main`);
   expect(observed()).toEqual(before);
 
   // A legacy ref alone cannot grant stale authority. A healthy refresh establishes the pair.
-  write(module, collector(a));
+  writePackage(module, collector(a));
   cli(0, "sync", "--packages");
   git(["config", "--unset", "office.appliedReference"], checkout);
   git(["config", "office.referenceRef", "main"], checkout);
-  write(module, collector(a, "main", 'throw Error("failed");'));
+  writePackage(module, collector(a, "main", 'throw Error("failed");'));
   cli(1, "sync", "--packages");
   expect(cli(1, "sync", "--references")).toContain("no unambiguous applied origin and ref");
   expect(observed()).toEqual(before);
-  write(module, collector(a));
+  writePackage(module, collector(a));
   cli(0, "sync");
-  write(module, `${marker} throw Error("must not import from cron");`);
+  writePackage(module, `${marker} throw Error("must not import from cron");`);
   cli(1, "sync", "--packages");
   rmSync(probe);
   write(join(a, "document"), "advanced A");
@@ -101,9 +102,10 @@ packages:
 
   write(config, declarations);
   write(join(dir, "report.sh"), "exit 0");
-  write(join(dir, "packages/cron/office.ts"), `export default {name:"cron", description:"Local jobs",
+  writePackage(join(dir, "packages/cron/office.ts"), `export default {name:"cron", description:"Local jobs",
     cron:{report:{script:"report.sh",schedule:"@daily",when:"container"}}};`);
   write(join(dir, "packages/cron/report.sh"), `echo "local child"; exit 23`);
+  cli(0, "sync", "--packages");
   const listing = "office.report\npackage.office.update-references\n";
   expect(cli(0, "cron", "list")).toBe(`${listing}package.cron.report\n`);
   expect(cli(0, "cron", "supercronic")).toBe([
@@ -136,13 +138,13 @@ packages:
   - name: unrelated
   - name: later
 `);
-  write(join(dir, "packages/unrelated/office.ts"), `import {existsSync,appendFileSync} from "node:fs";
+  writePackage(join(dir, "packages/unrelated/office.ts"), `import {existsSync,appendFileSync} from "node:fs";
     if (existsSync(new URL("../../synced", import.meta.url))) {appendFileSync(process.env.PROBE,"extra import"); throw Error("unrelated import")}
     export default {name:"unrelated",description:"Unrelated"}`);
   write(join(dir, "first.sh"), `set -eu\n"$OFFICE_CRON_COMMAND" sync --packages\necho ok > synced\necho 'throw Error("broken tick helper"); export const tick = {}' > packages/later/tick.ts`);
   write(join(pkg, "tick.sh"), "echo stale >> ran");
   write(join(pkg, "tick.ts"), 'export const tick = {script:"tick.sh",schedule:"@hourly"}');
-  write(join(pkg, "office.ts"), `import {tick} from "./tick.ts"; export default {name:"later",description:"Later",registerCron(ctx){ctx.cron.job("tick",tick)}}`);
+  writePackage(join(pkg, "office.ts"), `import {tick} from "./tick.ts"; export default {name:"later",description:"Later",registerCron(ctx){ctx.cron.job("tick",tick)}}`);
   cli(0, "sync", "--packages");
   const out = cli(1, "cron", "catch-up");
   expect(out).toContain("catching up office.first");
@@ -161,12 +163,12 @@ test("one author registers current-mode jobs and commands; a command reads curre
   const module = join(dir, "packages/report/office.ts");
   const script = join(dir, "packages/report/daily.sh");
   const data = join(dir, "packages/other/package.yaml");
-  write(data, "name: other\ndescription: Legacy jobs\ncron: {weekly: {schedule: '@weekly', script: weekly.sh}}\n");
+  writePackage(data, "name: other\ndescription: Legacy jobs\ncron: {weekly: {schedule: '@weekly', script: weekly.sh}}\n");
   write(join(dir, "packages/other/weekly.sh"), "true");
   write(script, "echo ran >> runs; test ! -e fail || exit 29");
   write(join(dir, "packages/report/two.sh"), "echo two > unsynced");
   const spare = join(dir, "packages/spare/office.ts");
-  write(spare, 'export default {name:"spare",description:"Unrelated"}');
+  writePackage(spare, 'export default {name:"spare",description:"Unrelated"}');
 
   const hour = (new Date().getUTCHours() + 12) % 24;
 
@@ -197,7 +199,7 @@ packages:
       ${extra}
     }}`;
 
-  write(module, definition());
+  writePackage(module, definition());
   configure("container", "one");
   cli(0, "sync", "--packages");
   expect(read(probe)).toBe("cron:one\nsetup:one\n");
@@ -222,21 +224,21 @@ packages:
   expect(cli(0, "cron", "list")).toContain(`package.office.update-agent-clis\n${run}\n`);
   expect(read(stamp)).toBe(success);
 
-  write(spare, `${marker} throw Error("unrelated module");`);
+  writePackage(spare, `${marker} throw Error("unrelated module");`);
   rmSync(probe);
   cli(0, "cron", "run", run);
   expect(read(join(dir, "unsynced"))).toBe("two\n");
   expect(read(probe)).toBe("cron:two\n");
   // A package command loads every selected package: an unrelated broken one fails it.
   expect(cli(1, "report", "edition")).toContain("package spare: packages/spare/office.ts: unrelated module");
-  write(spare, 'export default {name:"spare",description:"Unrelated"}');
+  writePackage(spare, 'export default {name:"spare",description:"Unrelated"}');
   rmSync(probe);
   expect(cli(0, "references", "list")).toContain("edition\ttwo");
   // Commands run setup, never registerCron.
   expect(read(probe)).toBe("setup:two\n");
 
   // A failed collector is not a successful empty list, even after making a valid registration.
-  write(module, definition('throw Error("incomplete cron batch")'));
+  writePackage(module, definition('throw Error("incomplete cron batch")'));
   expect(cli(1, "sync", "--packages")).toContain("incomplete cron batch");
   // Help doesn't collect cron jobs either: the command's setup still registers it.
   expect(cli(0, "--help")).toContain("report edition");
@@ -245,7 +247,7 @@ packages:
   expect(read(join(dir, "runs"))).toBe("ran\nran\n");
   expect(read(stamp)).toBe(success);
 
-  write(module, 'export default {name:"report",description:"Withdrawn",settings:{label:{description:"Edition",default:"one"}},registerCron(){}}');
+  writePackage(module, 'export default {name:"report",description:"Withdrawn",settings:{label:{description:"Edition",default:"one"}},registerCron(){}}');
   expect(cli(1, "sync", "--packages")).toContain("packages.report.cron.daily: no such job");
   const config = join(dir, "office.yaml");
   write(config, read(config).replace(/^    cron: \{daily:.*\n/m, ""));
@@ -260,23 +262,26 @@ test("an invalid registration rejects the owner's batch before a valid sibling c
   const pkg = join(dir, "packages/report");
   write(join(pkg, "run.sh"), "echo bad >> started");
   const job = '{schedule:"@daily",script:"run.sh"}';
+  // Synced while valid: a local package's later edits load without a sync.
+  writePackage(join(pkg, "office.ts"), 'export default {name:"report",description:"Reports"}');
+  cli(0, "sync", "--packages");
 
   // One data conflict and one asynchronous hook end to end; standard/cron/jobs.test.ts covers the other invalid registrations.
   for (const [data, extra, reason] of [
     [`cron:{first:${job}},`, "", "duplicate cron job package.report.first"],
     ["", 'return Promise.reject(Error("async job discovery"))', "synchronously"],
   ]) {
-    write(join(pkg, "office.ts"), `export default {name:"report",description:"Reports",${data}
+    writePackage(join(pkg, "office.ts"), `export default {name:"report",description:"Reports",${data}
       registerCron(ctx){ctx.cron.job("first",${job}); ${extra}}}`);
     expect(cli(1, "cron", "run", "package.report.first")).toContain(reason);
     expect(existsSync(join(dir, "started"))).toBe(false);
   }
 
-  write(join(pkg, "office.ts"), `import {writeFileSync} from "node:fs"; export default {name:"report",description:"Reports",
+  writePackage(join(pkg, "office.ts"), `import {writeFileSync} from "node:fs"; export default {name:"report",description:"Reports",
     async registerCron(){await Promise.resolve(); writeFileSync(process.env.PROBE,"async hook ran")}}`);
   expect(cli(1, "sync", "--packages")).toContain("register jobs synchronously");
   expect(existsSync(probe)).toBe(false);
-  write(join(pkg, "office.ts"), 'export default {name:"report",description:"Reports",setup(ctx){if (ctx.cron?.mode) ctx.cron.job("bad",false)}}');
+  writePackage(join(pkg, "office.ts"), 'export default {name:"report",description:"Reports",setup(ctx){if (ctx.cron?.mode) ctx.cron.job("bad",false)}}');
   expect(cli(1, "sync", "--packages")).toContain("ctx.cron belongs in registerCron(ctx)");
 }, 60_000);
 

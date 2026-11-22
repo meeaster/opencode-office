@@ -8,6 +8,7 @@ import { cloneTarget, declarationBinding, pluginClones, pluginFolder } from "./d
 import { configSources, conventionSources, projectDirectories, type Source } from "./native.ts";
 import { readDeclarations } from "./declarations.ts";
 import { officeTarget } from "./ownership.ts";
+import { readPackageJson } from "../../src/package-manifest.ts";
 
 /**
  * Desktop registration is machine-wide and can outlive deselection or a withdrawn claim. Show only
@@ -118,7 +119,8 @@ function inventory(office: Office, folder: string) {
     const declared = declarations.get(entry.name);
 
     if (declared) {
-      const origin = `${relative(office.dir, dir)}/office.ts#opencode`;
+      const json = readPackageJson(dir, entry.name);
+      const origin = `${relative(office.dir, dir)}/${json.ok ? json.value.definition : "package.json"}#opencode`;
 
       if (declared.state === "unavailable") describe(office.dir, { origin, description: "OpenCode registration unavailable at last sync" });
       else if (declared.binding !== declarationBinding(item)) describe(office.dir, { origin, description: "OpenCode declaration inputs changed; sync required" });

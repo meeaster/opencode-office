@@ -11,6 +11,7 @@ import { settingsEnv } from "./package-services.ts";
 import { fetchPackage, installPackage, readPackage, resolvePackages } from "./packages.ts";
 import { toolRepository } from "./tool.ts";
 import { readLockSection } from "./versions.ts";
+import { writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -76,7 +77,7 @@ settings_schema:
 
   const config = (models: string) => write(join(dir, "office.yaml"), `name: t\npackages:\n  - name: demo\n    settings: { roles: { review: ${models} } }\n`);
 
-  write(path, schema);
+  writePackage(path, schema);
   config("[fast, deep]");
 
   const { loaded, result } = read(dir, "demo");
@@ -97,7 +98,7 @@ settings_schema:
 test("settings the package doesn't declare, and required ones left out, are named; defaults fill the rest", () => {
   const office = join(dir, "office");
 
-  write(join(office, "packages/demo/package.yaml"), manifest);
+  writePackage(join(office, "packages/demo/package.yaml"), manifest);
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n    settings:\n      colour: blue\n");
 
   const invalid = read(office, "demo").result;
@@ -125,7 +126,7 @@ test("an install ignores the source office's records, an update by full commit S
     return git(["rev-parse", "HEAD"], repo);
   };
 
-  write(join(repo, "pkgs/demo/package.yaml"), manifest);
+  writePackage(join(repo, "pkgs/demo/package.yaml"), manifest);
   write(join(repo, "pkgs/demo/scripts/run.sh"), "echo one\n");
   write(join(repo, "pkgs/demo/seed/out/AGENTS.md"), "from the package\n");
   // Committed by the office that authored the package, as when sharing from its packages/.
@@ -179,7 +180,7 @@ test("a package plugin is linked while declared, gives way to a plugins: entry o
   const link = join(office, ".opencode/plugins/demo");
   const declared = "name: t\npackages:\n  - name: demo\n";
 
-  write(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
   write(join(office, "packages/demo/plugin/index.ts"), "export default { id: \"demo\", async setup() {} };\n");
   write(join(office, "office.yaml"), declared);
   git(["init", "--quiet", office]);
@@ -222,7 +223,7 @@ test("a seed file is created once: one the office deletes stays deleted, also on
   };
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
-  write(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
   write(join(office, "packages/demo/seed/notes/README.md"), "from the package\n");
   write(join(office, "packages/demo/seed/notes/AGENTS.md"), "from the package\n");
   write(join(office, "notes/AGENTS.md"), "the office's own\n");
@@ -246,7 +247,7 @@ test("sync removes a copied package whose entry is gone, even an edited copy, wi
   const repo = join(dir, "repo");
   const office = join(dir, "office");
 
-  write(join(repo, "pkgs/demo/package.yaml"), manifest);
+  writePackage(join(repo, "pkgs/demo/package.yaml"), manifest);
   write(join(repo, "pkgs/demo/skills/demo-skill/SKILL.md"), "---\nname: demo-skill\ndescription: Demo.\n---\n");
   write(join(repo, "pkgs/demo/seed/.github/workflows/publish.yml"), "on: push\n");
   write(join(repo, "pkgs/demo/seed/out/AGENTS.md"), "from the package\n");
@@ -261,8 +262,8 @@ test("sync removes a copied package whose entry is gone, even an edited copy, wi
   write(join(office, "out/README.md"), "the office changed this\n");
   write(join(office, "out/my-page/index.md"), "the office's own\n");
   write(join(office, ".github/dependabot.yml"), "version: 2\n");
-  write(join(office, ".office/packages/demo/package.yaml"), `${manifest}# edited\n`);
-  write(join(office, "packages/own/package.yaml"), "name: own\ndescription: Written here.\n");
+  writePackage(join(office, ".office/packages/demo/package.yaml"), `${manifest}# edited\n`);
+  writePackage(join(office, "packages/own/package.yaml"), "name: own\ndescription: Written here.\n");
   write(join(office, "office.yaml"), "name: t\n");
 
   const changes = await sync(loadOffice(office));
@@ -272,6 +273,7 @@ test("sync removes a copied package whose entry is gone, even an edited copy, wi
     "deleted out/AGENTS.md, which package demo created",
     "kept out/README.md, which changed since package demo wrote it",
     "removed .office/packages/demo/, which office.yaml no longer lists",
+    "linked packages/node_modules/@office to the published package set, for editors",
     "office.lock: removed demo",
   ]);
   expect(existsSync(join(office, ".office/packages/demo"))).toBe(false);
@@ -287,7 +289,7 @@ test("sync changes no seeded file or receipt of a package it can't read, even on
   const office = join(dir, "office");
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
-  write(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
   write(join(office, "packages/demo/seed/changed.md"), "v1\n");
   write(join(office, "packages/demo/seed/gone.md"), "v1\n");
   git(["init", "--quiet", office]);
@@ -295,7 +297,7 @@ test("sync changes no seeded file or receipt of a package it can't read, even on
 
   const lock = readFileSync(join(office, "office.lock"), "utf8");
 
-  write(join(office, "packages/demo/package.yaml"), "name: demo\n  description: [not, valid\n");
+  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\n  description: [not, valid\n");
   write(join(office, "packages/demo/seed/changed.md"), "v2\n");
   rmSync(join(office, "packages/demo/seed/gone.md"));
 
@@ -308,7 +310,7 @@ test("sync changes no seeded file or receipt of a package it can't read, even on
   expect(readFileSync(join(office, "office.lock"), "utf8")).toBe(lock);
 
   // Read again, the package's changes apply.
-  write(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
   expect((await sync(loadOffice(office))).filter((line) => line.includes(".md"))).toEqual(["updated changed.md to package demo's new seed, as the file was unchanged", "kept gone.md, which package demo no longer seeds, and dropped its receipt"]);
 });
 
@@ -316,7 +318,7 @@ test("a seed path the seeds: section couldn't hold is refused before copying, an
   const office = join(dir, "office");
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
-  write(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
   write(join(office, "packages/demo/seed/back\\slash.md"), "odd\n");
   write(join(office, "packages/demo/seed/plain.md"), "plain\n");
 
@@ -343,7 +345,7 @@ test("a pulled-in package deselected before a fresh clone installed it settles i
   const repo = join(dir, "repo");
   const office = join(dir, "office");
 
-  write(join(repo, "pkgs/demo/package.yaml"), manifest);
+  writePackage(join(repo, "pkgs/demo/package.yaml"), manifest);
   write(join(repo, "pkgs/demo/seed/out/deleted.md"), "from the package\n");
   write(join(repo, "pkgs/demo/seed/out/kept.md"), "from the package\n");
   write(join(repo, "pkgs/demo/seed/out/edited.md"), "from the package\n");
@@ -382,7 +384,7 @@ test("an earlier release's template/ folder isn't read and sync says so; renamed
   const record = '["notes/AGENTS.md"]\n';
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
-  write(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
   write(join(office, "packages/demo/template/notes/AGENTS.md"), "from the package\n");
   write(join(office, "packages/demo/template/notes/new.md"), "from the package\n");
   write(join(office, "packages/demo/.template.json"), record);
@@ -420,7 +422,7 @@ test("sync locks a Git package's commit in office.lock, keeps the entry when a c
     return git(["rev-parse", "HEAD"], repo);
   };
 
-  write(join(repo, "pkgs/demo/package.yaml"), manifest);
+  writePackage(join(repo, "pkgs/demo/package.yaml"), manifest);
   git(["init", "--quiet", repo]);
   const first = commit();
 
@@ -442,11 +444,11 @@ test("sync locks a Git package's commit in office.lock, keeps the entry when a c
   const record = join(office, ".office/packages/demo/.source.json");
   const installed = [readFileSync(record, "utf8"), readFileSync(join(office, ".office/packages/demo/.settings.json"), "utf8")];
 
-  write(join(repo, "pkgs/demo/office.ts"), "export default { name: 'demo', description: 'Both' }");
+  writePackage(join(repo, "pkgs/demo/office.ts"), "throw new Error('broken candidate')");
   const broken = commit();
 
   write(join(office, "office.yaml"), yaml(broken));
-  expect((await sync(loadOffice(office), { scope: "packages" })).join("\n")).toContain("has both office.ts and package.yaml");
+  expect((await sync(loadOffice(office), { scope: "packages" })).join("\n")).toContain("broken candidate");
   expect([readFileSync(record, "utf8"), readFileSync(join(office, ".office/packages/demo/.settings.json"), "utf8")]).toEqual(installed);
   expect(readFileSync(lock, "utf8")).toBe(locked);
 
@@ -505,7 +507,7 @@ test("a live load takes an entry naming the built-in's historical source as a no
   const office = join(dir, "office");
 
   write(join(office, "office.yaml"), `name: t\npackages:\n  - name: knowledge\n    repo: https://github.com/${toolRepository}.git\n    path: packages/knowledge\n    ref: main\n`);
-  write(join(office, ".office/packages/knowledge/package.yaml"), "name: knowledge\ndescription: Not the tool's copy.\n");
+  writePackage(join(office, ".office/packages/knowledge/package.yaml"), "name: knowledge\ndescription: Not the tool's copy.\n");
   const loaded = loadOffice(office);
   const live = resolvePackages(loaded, undefined, true);
   const knowledge = live.packages.find(item => item.entry.name === "knowledge");

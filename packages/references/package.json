@@ -1,0 +1,13 @@
+{
+  "name": "@office/references",
+  "private": true,
+  "exports": {
+    "./repositories": "./repositories.ts"
+  },
+  "office": {
+    "definition": "./office.ts",
+    "dependencies": [
+      "@office/office"
+    ]
+  }
+}

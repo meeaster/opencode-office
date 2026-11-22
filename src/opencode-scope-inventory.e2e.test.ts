@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameS
 import { dirname, join } from "node:path";
 import * as v from "valibot";
 import { command, deskConfig, gitAt, launcher, rootConfig, scopeFixture, write } from "./opencode-scope.fixture.ts";
+import { writePackage } from "./test-package.ts";
 
 const { sandbox, fixture } = scopeFixture();
 
@@ -38,7 +39,7 @@ test("compiled offline inventory distinguishes scoped declarations, links, clone
     write(path(".opencode/opencode.jsonc"), edited);
     // If inspect imports the definition or plugin, the marker or a failing process exposes it.
     rmSync(path("packages/common/package.yaml"));
-    write(path("packages/common/office.ts"), `import {writeFileSync} from "node:fs"; writeFileSync(process.env.SCOPE_IMPORTS, "definition"); throw Error("unread");`);
+    writePackage(path("packages/common/office.ts"), `import {writeFileSync} from "node:fs"; writeFileSync(process.env.SCOPE_IMPORTS, "definition"); throw Error("unread");`);
     write(join(f.home, "config/opencode/opencode.json"), '{"plugins":["hidden-global-plugin"]}');
     const report = await f.run(inspect);
 
@@ -83,7 +84,7 @@ test("compiled offline inventory distinguishes scoped declarations, links, clone
     expect(readFileSync(path(".opencode/plugins/office/index.js"), "utf8")).toBe("// independently authored");
     // A redirected plugin folder is never followed, even for a selected package.
     rmSync(path("packages/common/office.ts"));
-    write(path("packages/common/package.yaml"), "name: common\ndescription: Scope fixture\n");
+    writePackage(path("packages/common/package.yaml"), "name: common\ndescription: Scope fixture\n");
     f.select("packages: [{name: common}]\n");
     rmSync(path(".opencode/plugins"), { recursive: true });
     symlinkSync(f.env.OFFICE_APP_CONFIG_DIR, path(".opencode/plugins"));
@@ -192,11 +193,11 @@ test("ownership by target: Office's links are recognized and withdrawn by their 
   expect(readlinkSync(join(outside, ".opencode/skills/beta"))).toBe("../../../skills/beta");
 }, 60_000);
 
-test("a package plugin that changes location is relinked with a restart notice, which check reports before sync", async () => {
+test("a package plugin that changes location is relinked with a restart notice; before sync, check says to sync", async () => {
   const f = fixture("retarget", "http://127.0.0.1:1");
   const upstream = join(f.home, "upstream");
   const link = join(f.dir, ".opencode/plugins/press");
-  write(join(upstream, "pkg/package.yaml"), "name: press\ndescription: fixture\n");
+  writePackage(join(upstream, "pkg/package.yaml"), "name: press\ndescription: fixture\n", { name: "press" });
   write(join(upstream, "pkg/plugin/index.js"), command("press"));
   gitAt(upstream, f.env, "init", "-q");
   gitAt(upstream, f.env, "add", ".");
@@ -206,10 +207,11 @@ test("a package plugin that changes location is relinked with a restart notice, 
   expect(readlinkSync(link)).toBe("../../.office/packages/press/plugin");
 
   // The owner takes the package local: same name, another directory.
-  write(join(f.dir, "packages/press/package.yaml"), "name: press\ndescription: fixture\n");
+  writePackage(join(f.dir, "packages/press/package.yaml"), "name: press\ndescription: fixture\n");
   write(join(f.dir, "packages/press/plugin/index.js"), command("press"));
   f.select("packages: [{name: press}]\n");
-  expect(await f.run(["check"], 1)).toContain(".opencode/plugins/press links to ../../.office/packages/press/plugin, but its package's plugin is ../../packages/press/plugin (office sync relinks it; then restart OpenCode to pick up press");
+  // The published set still links press to its pulled-in copy, so nothing loads until sync.
+  expect(await f.run(["check"], 1)).toContain("FAIL package press: the package set links it to a different folder; run office sync");
   expect(await f.run(["sync", "--packages"])).toContain("relinked .opencode/plugins/press to ../../packages/press/plugin; restart OpenCode to pick up press");
   expect(readlinkSync(link)).toBe("../../packages/press/plugin");
   expect(await f.run(["sync", "--packages"])).not.toContain("restart OpenCode");

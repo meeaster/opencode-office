@@ -81,13 +81,21 @@ office update --version 0.1.0-20261116T163238Z   # exactly this release, whateve
 
 Updating `office` changes no office. Each office picks the new one up when you run, in it, `office sync` (updates the office's copies of the built-in packages, which stay out of Git), `office up` (in container mode, rebuilds the `opencode` image with the new `office`) and `office check` (confirms the container runs the host's `office`). `office up` keeps the OpenCode, Claude Code, Executor, mise and sfw versions the office last applied; only `office up --upgrade` applies newer ones from `office.yaml` (see "Versions"). In host mode the cron timers run the executable itself, so they use the new `office` straight away.
 
-**Upgrading an office that already has packages:** retain the working executable (and the matching image in container mode) until package sync and a representative package command succeed. `office --version` identifies the build. If the new executable rejects the candidate, `.office/current` still identifies the retained managed set, and package commands keep loading its copies: a built-in copy another executable wrote runs as long as it matches its own record. Fix the reported candidate and retry with the new executable. Update the host and container executables together (`office up`): once a sync stops saving the command index, an earlier release reports package commands as unknown. Before updating, check that `.office/current/references.json` says `"version": 4`; if not, run `office sync` with the release that wrote it, since this one no longer reads versions 2 and 3. A rejected same-executable update leaves the prior compatible commands usable. A failed application *after* publication leaves the new generation active: fix the external delivery problem and rerun `office sync --packages`.
+**Upgrading an office that already has packages:** retain the working executable (and the matching image in container mode) until package sync and a representative package command succeed. `office --version` identifies the build. If the new executable rejects the candidate, `.office/current` still identifies the retained managed set. Packages load from it only while every copy there passes this executable's checks: a built-in copy an executable from before `package.json` wrote has none, so nothing loads until `office sync` replaces it. Fix the reported candidate and retry with the new executable. Update the host and container executables together (`office up`): once a sync stops saving the command index, an earlier release reports package commands as unknown. Before updating, check that `.office/current/references.json` says `"version": 4`; if not, run `office sync` with the release that wrote it, since this one no longer reads versions 2 and 3. A rejected same-executable update leaves the prior compatible commands usable. A failed application *after* publication leaves the new generation active: fix the external delivery problem and rerun `office sync --packages`.
 
-Before the first generation sync, inspect `git ls-files -- .office/packages .office/resolved/references.json .office/tsconfig.contracts.json`. A tracked managed path stops adoption. Migrate dependent workflows first; see the [owner-led clean-clone renderer check](packages/artifact-share/README.md#install). Office preserves the index.
+**Upgrading to `package.json` packages:** every package needs a `package.json` (see "Packages"); nothing loads until each selected one has it.
+
+1. Update the host and container executables together (`office update`, then `office up`).
+2. Add a `package.json` to each package in `packages/`: `name` `@office/<name>`, `office.definition` naming its definition, and `office.dependencies` listing each `@office/…` package it imports.
+3. For each Git package, its repository needs a `package.json` too; once it has one, run `office packages update`.
+4. If the office's `tsconfig.json` extends `.office/tsconfig.contracts.json`, replace that line with `"include": ["packages"]`.
+5. Run `office sync`, which also replaces the built-in copies (an older executable's copies have no `package.json`, and `office check` says to sync), then `office check`.
+
+Before the first generation sync, inspect `git ls-files -- .office/packages .office/resolved/references.json`. A tracked managed path stops adoption. Migrate dependent workflows first; see the [owner-led clean-clone renderer check](packages/artifact-share/README.md#install). Office preserves the index.
 
 Upgrade every host, container and scheduled CLI that reads or writes this office before switching package definitions (including Shell) to `@office/` imports. An old writer does not honor the generation lease and can replace discovery links. Do not use it to sync an adopted office. For rollback to a pre-generation CLI, also restore compatible package definitions and the matching pre-adoption managed state from backup.
 
-A missing discovery link is recreated. If a checkout or old writer left a file, directory or different link at `.office/packages`, `.office/resolved/references.json` or `.office/tsconfig.contracts.json`, stop the old writer, return to the untracked revision, preserve the conflicting entry by moving it aside, and run `office sync --packages` with the upgraded CLI. Verify a package command and the package plugin links before resuming other readers.
+A missing discovery link is recreated. If a checkout or old writer left a file, directory or different link at `.office/packages` or `.office/resolved/references.json`, stop the old writer, return to the untracked revision, preserve the conflicting entry by moving it aside, and run `office sync --packages` with the upgraded CLI. Verify a package command and the package plugin links before resuming other readers.
 
 ### Building from source
 
@@ -372,10 +380,10 @@ cron:
 
 Schedules are five-field UTC cron expressions or time macros such as `@daily`. The script must be a regular `.sh` file relative to its declaring office or package, with no symlinks. All jobs run under `/bin/sh` from the office root. `office cron list` shows IDs such as `office.daily-report` and `package.office.update-references`; use `office cron run <job-id>` to run one directly in the execution environment you intend. Keep the job name when renaming its script: the ID tracks the job across renames.
 
-An `office.ts` author can register a shell script in ordinary TypeScript. For example, put this in `packages/reports/office.ts`, put `printf 'report from %s\n' "$PWD"` in `packages/reports/scripts/report.sh`, and select `reports` in `office.yaml`:
+An `office.ts` author can register a shell script in ordinary TypeScript. For example, put this in `packages/reports/office.ts` (with a `package.json` naming it, as "Packages" shows), put `printf 'report from %s\n' "$PWD"` in `packages/reports/scripts/report.sh`, and select `reports` in `office.yaml`:
 
 ```ts
-import type { CronContext } from "../../.office/packages/office/package-context.ts";
+import type { CronContext } from "@office/office/context";
 
 export default {
   name: "reports",
@@ -457,7 +465,8 @@ A package is a capability an office opts into, where the tool itself holds only 
 
 ```
 <name>/
-  office.ts             # package definition (or package.yaml in an existing package)
+  package.json          # names its definition, the office packages it depends on and what it shares
+  office.ts             # package definition, at the path package.json names (or a package.yaml)
   plugin/               # its OpenCode plugin: everything the package gives OpenCode
   skills/<id>/SKILL.md  # skills the plugin registers
   scripts/              # package-owned, for tooling and CI
@@ -483,7 +492,29 @@ There are three kinds, by where a package comes from:
 
 `.office/packages/` is a dot-folder, so searches and a plain `ls` skip what the office pulled in; `packages/` holds only the office's own packages. A pulled-in package is read-only: its `.source.json` records the SHA-256 of each file as installed (and, for a remote package, the repository, path, ref and commit). `office check` fails when a file differs from the record. `office sync` repairs a built-in from the executable. For a remote with the same declared source and ref, it fetches the **locked commit** from `office.lock` (else the recorded one), even if the tag or branch moved. If that commit is unavailable, repair fails, naming it, and leaves the copy and the lock in place. If the record itself is damaged, the lock still names the commit; without a lock entry, restore the record from office history or pin the full commit SHA. To change a package, copy it into `packages/` under a name of your own and list that instead.
 
-Use exactly one definition at the package root. `office.ts` default-exports a plain object:
+Every package has a `package.json`. It is npm's format, but office never fetches anything from a registry and a package is never published:
+
+```json
+{
+  "name": "@office/notes",
+  "private": true,
+  "exports": { "./format": "./format.ts" },
+  "office": {
+    "definition": "./office.ts",
+    "dependencies": ["@office/references"]
+  }
+}
+```
+
+- `name` is `@office/<name>`, the name `office.yaml` selects it under.
+- `office.definition` is the path of its definition inside the package: a module (any file name) or a `package.yaml`. Office looks for no file by name; a package without a `package.json`, or whose `office.definition` is missing or leads outside the package, doesn't load, and the error says what to add.
+- `exports` is its public API: what another package may import, as `@office/notes` (the `"."` entry) or `@office/notes/format`. An import of a path it doesn't list fails with Bun's own error. `"exports": {}` shares nothing; a package that leaves `exports` out makes no promise, and its files can be imported by path.
+- `office.dependencies` lists the `@office/<name>` packages it imports, type-only imports included. Each must be selected (the required `office`, `tooling`, `references` and `mise-integration` always are); a missing one stops sync and every package command before any package loads, naming both and saying to add it to `office.yaml`. Declaring a dependency doesn't select it, and an import that isn't declared isn't checked yet. Package managers ignore the `office` key, so nothing asks a registry for an `@office` name.
+- A package may keep its own `devDependencies` and `node_modules` for its tests, plugin and tools. Its definition and the modules it shares import only `@office/…` packages, Node's built-ins and its own files: a library pnpm installs doesn't resolve its own dependencies when a definition loads.
+
+Sync links each package it loads as `node_modules/@office/<name>` in the package set it publishes, and the compiled `office` loads every definition through that link, so a package's `@office/…` imports resolve inside the set it belongs to: on the first sync, while sync checks a new set, and afterwards. For editors it links `packages/node_modules/@office` to the published set (kept out of Git; a real folder there is yours and is left alone), so TypeScript follows the same imports with no generated configuration: the template's `tsconfig.json` just includes `packages`. Running from source (`bin/office`) resolves a local package's imports through that editor link, against the published set rather than the one being checked; offices run the compiled `office`.
+
+`office.ts` default-exports a plain object:
 
 ```ts
 // packages/notes/office.ts
@@ -502,7 +533,7 @@ To add a direct CLI command, register a function in `office.ts`:
 
 ```ts
 // packages/notes/office.ts
-import type { PackageContext } from "../../.office/packages/office/package-context.ts";
+import type { PackageContext } from "@office/office/context";
 import { showTitle } from "./commands/title.ts"; // export function showTitle(title: string) { console.log(title) }
 
 export default {
@@ -519,9 +550,9 @@ export default {
 
 Select `notes`, run `office sync --packages`, then `office --help` and `office notes title`. Routes and aliases are exact sequences of lowercase words (digits and dashes allowed), with no package-defined options or trailing arguments yet. A name or alias whose first word is one of the CLI's own commands (such as `sync`, `apps` or `seeds`), or `opencode inspect` and names under it, is reserved; each name has one owner. Handlers receive `{ read }`; [the built-in listing](packages/references/office.ts) registers an imported handler directly.
 
-A package command, `office --help` and bare `office` load every package `office.yaml` selects on each run: each `setup` runs with the entry's current settings, and the command runs on what was registered in that run. Nothing is read from the saved references file, so an edit to a package, a setting, a name or an alias shows at once, and a command can differ from what sync last applied until the next sync. Imports between packages still follow the last sync: the `@office/<package>/<export>` links come from the published set, so another package can import a newly selected package's public export only after `office sync`. Keep `setup` to registrations and actions inside the handler. A built-in or Git package loads from its copy in the published set only after the copy matches its record (`office sync` restores an edited one); a copy the last sync rejected, or a selected package with no copy yet, doesn't load and says to run `office sync`. A local package loads as it is. One package that fails to load fails every package command, naming it; help still lists what loaded and adds a line per failed package and per reserved or duplicate name, which never runs. Sync checks the same names and rejects the whole candidate on a problem, references included.
+A package command, `office --help` and bare `office` load every package `office.yaml` selects on each run: each `setup` runs with the entry's current settings, and the command runs on what was registered in that run. Nothing is read from the saved references file, so an edit to a package, a setting, a name or an alias shows at once, and a command can differ from what sync last applied until the next sync. Imports between packages still follow the last sync: definitions load through the published set's `node_modules/@office/<name>` links, so a newly selected package, local ones included, loads only after `office sync`. Keep `setup` to registrations and actions inside the handler. Before importing any package, every run that reads definitions (package commands and help, `office check`, `office up`, cron, `office gui dev` and the others) checks the whole selection: every built-in or Git copy against its record (`office sync` restores an edited one), every `package.json`, every declared dependency, that the published set links every selected package to its folder, and that no selected package is one the last sync rejected or has no copy yet. With any problem, no package's code runs: a package command fails naming each problem (and saying the command may be unknown, since no package loaded to tell), help lists the built-in commands and the problems, `office check` reports each problem as a failure, and cron and `office gui dev` fail naming them. A local package loads as it is. Past that check, one package that fails to load fails every package command, naming it; help still lists what loaded and adds a line per failed package and per reserved or duplicate name, which never runs. Sync checks the same names and rejects the whole candidate on a problem, references included.
 
-Packages load only in an office with a published package set: an active `.office/current` holding a selection, as sync leaves it. In a fresh clone, or after a first sync that stopped before publishing, help shows the built-in commands and a package command says to run `office sync`. This only checks that a set is available; it doesn't show that this machine trusts the office, since a copied office passes it too.
+Packages load only in an office with a published package set: an active `.office/current` holding a selection, as sync leaves it. In a fresh clone, or after a first sync that stopped before publishing, help shows the built-in commands and a package command says to run `office sync`; commands such as `office check` that run without a set report the required built-ins as not synced yet and load no package. This only checks that a set is available; it doesn't show that this machine trusts the office, since a copied office passes it too.
 
 To contribute a reference from `packages/notes/office.ts`:
 
@@ -547,7 +578,7 @@ A command in a different package can import that same handle and read the entrie
 
 In a local collection provider, symlinks may point to files or directories inside the package. Their resolved package-relative targets are part of the contract: switching the public handle to a different file requires a new sync even if both files were already present. Dangling links, loops, and links outside the package or to office-managed records cannot establish a provider contract. This check covers the provider tree, not arbitrary imports or other runtime inputs outside it.
 
-An Office definition imports another selected package's `exports/<module>.ts` as `@office/<package>/<module>`. A provider can use ordinary relative imports and read assets beside its own modules. Importing an optional provider does not select it. `office init` configures TypeScript navigation through `.office/tsconfig.contracts.json`. Existing projects can extend that file; if the project defines its own `paths`, TypeScript replaces inherited mappings. Preserve owner mappings and include the generated aliases in the owner's project, or use a separate editor project for definitions.
+A definition imports what another selected package lists in its `package.json` `exports` as `@office/<package>/<subpath>`. A provider can use ordinary relative imports and read assets beside its own modules (`import.meta.dir` is its folder as linked in the package set). Importing an optional provider does not select it. Earlier releases wrote `.office/tsconfig.contracts.json` for editors; an office `tsconfig.json` that extends it replaces that line with `"include": ["packages"]`, and a leftover `.office/tsconfig.contracts.json` link can be deleted.
 
 Managed packages and the references file are published under `.office/generations/`; `.office/current` selects them together and `.office/packages` follows it. Local `packages/` stay editable. After an interrupted tracked update, run `office sync --packages` to finish the recorded switch and reconcile external files. Office retains the current and preceding generation, plus any held by a running CLI reader or the required Office server plugin. Shipped plugins read current settings and assets through the discovery path. A settings reload is not a code upgrade: reload OpenCode to load new plugin code. A process that opens package files independently of Office does not acquire a reader lease.
 
@@ -573,7 +604,7 @@ This requires a common local workspace supporting SQLite locking and BSD-style `
 
 `aws-emulator` contributes `floci` by default. If the office already declares it, keep your declaration with `settings: { source_reference: false }` on the package, or remove your declaration to adopt the built-in reference, then sync.
 
-Existing YAML packages continue to work. The YAML examples below describe the same fields. When converting a package, replace its `package.yaml`: both files together are an error, and an import or validation error fails the read. Sync keeps the failed selection's existing settings, tool pins and plugin link; removing its selection from `office.yaml` requests cleanup.
+Existing YAML packages continue to work, named by `office.definition` like a module. The YAML examples below describe the same fields. When converting a package, point `office.definition` at the new file; a file it doesn't name is not read, and an import or validation error fails the read. Sync keeps the failed selection's existing settings, tool pins and plugin link; removing its selection from `office.yaml` requests cleanup.
 
 Office reads a managed replacement in a staging directory with the consuming office's settings and cron overrides. A broken definition, missing declared script or invalid Compose declaration leaves the installed files and tracked pin in place. A failed initial sync makes `office init` exit nonzero. For both definition formats, repair uses the executable or pinned repository rather than importing an edited installed definition. An exact Git SHA takes precedence over a contradictory source record.
 
@@ -963,7 +994,7 @@ The knowledge plugin of releases before the knowledge package, `.opencode/plugin
 
 ### Office's plumbing stays out of Git
 
-Git holds what you author: `office.yaml`, `office.lock`, `packages/<name>/`, desks, `skills/`, docs, and your own `.opencode/` config, plugins and skills. The seed store, `.office/seeds/`, is committed too: the bytes of each seed a receipt in `office.lock` names (see "Packages"); commit it with `office.lock`. What `office sync` rebuilds is not committed: the rest of `.office/` (pulled-in packages, Git-cloned plugins, mise fragments, generated state, staging) and Office's links in `.opencode/plugins/` and `.opencode/skills/` at the root and in desks. An entry there is Office's when it is a link whose target is one Office writes (a package's plugin, a clone in `.office/plugins/<name>`, a library skill); real folders, files and other links are yours, stay visible to Git, and are never changed. Sync keeps its plumbing out of commits with one delimited block in the repository's `info/exclude`, which excludes `/.office/*` and then takes back `!/.office/seeds/`, and never edits your `.gitignore` (an ignore rule of your own that covers `.office/` hides the store too). `office check` warns when a receipt's seed is missing from the store or doesn't hash to its name, as on a clone of a commit without `.office/seeds/`: restore it from Git, or, if it was never committed, copy the file as office laid it down to `.office/seeds/<sha256>`. Git-cloned plugins (`plugins:` in `office.yaml`) are checked out in `.office/plugins/<name>` and linked as `.opencode/plugins/<name>`. A fresh clone has no plumbing until `office sync` runs; the container runs it before OpenCode starts, and on the host run it once after cloning. Details: [OpenCode sources](docs/opencode-sources.md#who-owns-each-source).
+Git holds what you author: `office.yaml`, `office.lock`, `packages/<name>/`, desks, `skills/`, docs, and your own `.opencode/` config, plugins and skills. The seed store, `.office/seeds/`, is committed too: the bytes of each seed a receipt in `office.lock` names (see "Packages"); commit it with `office.lock`. What `office sync` rebuilds is not committed: the rest of `.office/` (pulled-in packages, Git-cloned plugins, mise fragments, generated state, staging), `packages/node_modules/` and Office's links in `.opencode/plugins/` and `.opencode/skills/` at the root and in desks. An entry there is Office's when it is a link whose target is one Office writes (a package's plugin, a clone in `.office/plugins/<name>`, a library skill); real folders, files and other links are yours, stay visible to Git, and are never changed. Sync keeps its plumbing out of commits with one delimited block in the repository's `info/exclude`, which excludes `/.office/*`, takes back `!/.office/seeds/` and excludes the editor link folder `/packages/node_modules/`, and never edits your `.gitignore` (an ignore rule of your own that covers `.office/` hides the store too). `office check` warns when a receipt's seed is missing from the store or doesn't hash to its name, as on a clone of a commit without `.office/seeds/`: restore it from Git, or, if it was never committed, copy the file as office laid it down to `.office/seeds/<sha256>`. Git-cloned plugins (`plugins:` in `office.yaml`) are checked out in `.office/plugins/<name>` and linked as `.opencode/plugins/<name>`. A fresh clone has no plumbing until `office sync` runs; the container runs it before OpenCode starts, and on the host run it once after cloning. Details: [OpenCode sources](docs/opencode-sources.md#who-owns-each-source).
 
 An office from an earlier release committed `.office/` and the links. The first sync moves Git-cloned plugins from `.opencode/plugins/<name>` into `.office/plugins/<name>` when it can verify them, and writes the exclude block, but excludes don't untrack files: untrack them with `git rm -r --cached --quiet -- <paths>`, which leaves them on disk, keeping `.office/seeds/` tracked; review `git status` and commit. Sync never untracks anything.
 

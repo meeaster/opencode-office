@@ -1,5 +1,4 @@
 {
-  "extends": "./.office/tsconfig.contracts.json",
   "compilerOptions": {
     "target": "esnext",
     "module": "preserve",
@@ -8,5 +7,7 @@
     "verbatimModuleSyntax": true,
     "strict": true,
     "noEmit": true
-  }
+  },
+  // Local packages; office sync links packages/node_modules/@office so their @office imports resolve.
+  "include": ["packages"]
 }

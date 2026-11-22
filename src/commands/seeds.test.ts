@@ -7,6 +7,8 @@ import { loadOffice } from "../office.ts";
 import { applySeeds, restoreAdvice, sha256 } from "../seeds.ts";
 import { editLock, readLockSection } from "../versions.ts";
 import { guidance, seedsDiff, settleSeed } from "./seeds.ts";
+import { recordRequiredBuiltins } from "../test-builtin-record.ts";
+import { writePackage } from "../test-package.ts";
 
 let dir: string;
 
@@ -34,7 +36,8 @@ const seed = () => join(dir, "packages/demo/seed");
  */
 function office() {
   write(join(dir, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
-  write(join(dir, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  recordRequiredBuiltins(dir);
+  writePackage(join(dir, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
 
   for (const file of ["notes/AGENTS.md", "notes/README.md", "mine.md"]) write(join(seed(), file), laid);
   write(join(dir, "mine.md"), "the office's own\n");
@@ -161,7 +164,7 @@ test("seeds settle stores the package's current seed and then records it, leavin
 test("settling a file that was already there gives it a stored seed, guarded from Git's conversions, so later updates are offered", () => {
   const loaded = office();
 
-  rmSync(join(dir, ".office"), { recursive: true });
+  rmSync(join(dir, ".office/seeds"), { recursive: true, force: true });
   expect(settleSeed(loaded, "mine.md")).toStartWith("settled mine.md: recorded package demo's seed");
   expect(receipts()["mine.md"]).toEqual({ package: "demo", sha256: sha256(laid) });
   expect(readdirSync(join(dir, ".office/seeds")).sort()).toEqual([".gitattributes", sha256(laid)].sort());

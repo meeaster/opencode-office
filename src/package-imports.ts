@@ -1,99 +1,88 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { type ResolvedPackage, verifyInstalledCopy } from "./packages.ts";
+// How packages reach each other: one directory link per package in a package set's
+// node_modules/@office, so `@office/<name>/…` resolves by ordinary node_modules lookup with the
+// package's package.json `exports` enforced by Bun. And which packages an update must move together.
+import { existsSync, lstatSync, mkdirSync, readlinkSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { packageLinks } from "./bound-paths.ts";
+import { readPackageJson } from "./package-manifest.ts";
+import type { ResolvedPackage } from "./packages.ts";
 
-const namespace = "@office/";
-const moduleName = /^[a-zA-Z0-9][a-zA-Z0-9_-]*\.ts$/;
-const typescript = new Bun.Transpiler({ loader: "tsx" });
-const javascript = new Bun.Transpiler({ loader: "jsx" });
-
-function inside(root: string, file: string) {
-  const rel = relative(root, file);
-
-  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
-}
-
-function publicModules(packages: ResolvedPackage[]) {
-  const modules = new Map<string, { path: string; pkg: ResolvedPackage }>();
+/**
+ * Links each package as `<folder>/node_modules/@office/<name>`, relative, so the office can move;
+ * a package this sync `rejected` gets none, so nothing imports it.
+ */
+export function writePackageLinks(folder: string, packages: ResolvedPackage[], rejected: readonly string[]) {
+  const links = packageLinks(folder);
+  mkdirSync(links, { recursive: true });
 
   for (const pkg of packages) {
-    const directory = join(pkg.dir, "exports");
-
-    if (!statSync(directory, { throwIfNoEntry: false })?.isDirectory()) continue;
-    const root = realpathSync(pkg.dir);
-
-    for (const file of readdirSync(directory).sort()) {
-      if (!moduleName.test(file)) continue;
-      const path = realpathSync(join(directory, file));
-
-      if (inside(root, path) && statSync(path).isFile()) modules.set(`${namespace}${pkg.entry.name}/${file.slice(0, -3)}`, { path, pkg });
-    }
+    if (rejected.includes(pkg.entry.name)) continue;
+    const link = join(links, pkg.entry.name);
+    symlinkSync(relative(dirname(link), pkg.dir), link);
   }
-
-  return modules;
 }
 
-export function createImportMap(folder: string, packages: ResolvedPackage[]) {
-  const paths: Record<string, string[]> = {};
-  const physical = realpathSync(folder);
-  const config = dirname(dirname(physical));
-  const nodePath = join(physical, "node_modules");
+export const editorLinks = "packages/node_modules/@office";
 
-  for (const [alias, { path }] of publicModules(packages)) {
-    const link = join(nodePath, `${alias}.ts`);
-    mkdirSync(dirname(link), { recursive: true });
-    symlinkSync(relative(dirname(link), path), link);
-    paths[alias] = [`./${relative(config, path)}`];
+/**
+ * Points `packages/node_modules/@office` at the published set's links, so an editor (and a run
+ * from source) resolves a local package's `@office/…` imports. The compiled office doesn't use
+ * it. Creates it when missing and corrects a link that points elsewhere; a real file or folder
+ * there is the owner's, reported and left, and so is a `packages/node_modules` that isn't a real
+ * folder, so nothing is written through it. An office without a packages/ folder gets none.
+ * Never throws: sync runs it after publishing, so a failure is reported as a line.
+ */
+export function linkForEditors(dir: string): string[] {
+  if (!existsSync(join(dir, "packages"))) return [];
+  const path = join(dir, editorLinks);
+  const parent = lstatSync(dirname(path), { throwIfNoEntry: false });
+  const left = (what: string, kind: string) => [`${what} is not Office's ${kind}; left as it is, so editors may not resolve @office imports (move it aside and sync to restore the link)`];
+
+  if (parent && !parent.isDirectory()) return left(dirname(editorLinks), "folder");
+
+  try {
+    const target = relative(dirname(path), join(dir, ".office/current/node_modules/@office"));
+    const entry = lstatSync(path, { throwIfNoEntry: false });
+
+    if (entry && !entry.isSymbolicLink()) return left(editorLinks, "link");
+
+    if (entry && readlinkSync(path) === target) return [];
+    mkdirSync(dirname(path), { recursive: true });
+    const temporary = `${path}.${process.pid}`;
+    // A crashed run with the same pid may have left one.
+    rmSync(temporary, { force: true });
+    symlinkSync(target, temporary);
+    renameSync(temporary, path);
+
+    return [`${entry ? "corrected" : "linked"} ${editorLinks} to the published package set, for editors`];
+  } catch (error) {
+    return [`FAILED ${editorLinks}: ${error instanceof Error ? error.message : String(error)}`];
   }
-
-  // A selected local definition can be missing. Its lexical path and the
-  // candidate folder share the office prefix even when it is a symlink.
-  const include = packages.map(pkg => `./${relative(dirname(dirname(folder)), pkg.dir)}/office.ts`);
-  writeFileSync(join(folder, "tsconfig.contracts.json"), JSON.stringify({ compilerOptions: { paths }, include }, null, 2));
-
-  return nodePath;
 }
 
-/** Which changed packages must advance together? Walk the static imports of each definition
- * and its public modules, including relative helpers. Sharing an unchanged standard provider
- * doesn't couple two independent consumers. An unreadable graph is not evidence of independence. */
-export function packageDependencies(packages: ResolvedPackage[]) {
-  const roots = packages.flatMap(pkg => statSync(pkg.dir, { throwIfNoEntry: false })?.isDirectory() ? [{ name: pkg.entry.name, root: realpathSync(pkg.dir) }] : []);
-  const deps = new Map<string, Set<string>>();
+/** Each present package's declared office dependencies; throws when a package.json can't be read. */
+function declaredDependencies(packages: ResolvedPackage[]) {
+  const graph = new Map<string, Set<string>>();
 
-  for (const { name, root } of roots) {
-    const seen = new Set<string>();
-    const imports = new Set<string>();
+  for (const pkg of packages) {
+    if (!existsSync(pkg.dir)) continue;
+    const read = readPackageJson(pkg.dir, pkg.entry.name);
 
-    const visit = (path: string) => {
-      if (seen.has(path) || !/\.(?:[mc]?[jt]s|[jt]sx)$/.test(path)) return;
-      seen.add(path);
-
-      for (const { path: spec } of (extname(path).includes("ts") ? typescript : javascript).scanImports(readFileSync(path, "utf8"))) {
-        if (spec.startsWith(namespace)) imports.add(spec.split("/")[1]);
-        else if (spec.startsWith(".") || isAbsolute(spec)) {
-          const dep = realpathSync(Bun.resolveSync(spec, dirname(path)));
-          const owner = roots.find(pkg => inside(pkg.root, dep));
-
-          if (owner && owner.name !== name) imports.add(owner.name);
-          else if (inside(root, dep)) visit(dep);
-        }
-      }
-    };
-
-    if (existsSync(join(root, "office.ts"))) visit(join(root, "office.ts"));
-    const exports = join(root, "exports");
-
-    if (existsSync(exports)) for (const file of readdirSync(exports)) if (moduleName.test(file)) visit(join(exports, file));
-    deps.set(name, imports);
+    if (!read.ok) throw new Error(read.errors.join("; "));
+    graph.set(pkg.entry.name, new Set(read.value.dependencies));
   }
 
-  return deps;
+  return graph;
 }
 
+/**
+ * Which of the `pending` packages an update must hold back, given those `rejected`: each that
+ * depends on a rejected one, or that a rejected one depends on, in either view's declared
+ * dependencies. An unreadable package.json is not evidence of independence: all are held back.
+ */
 export function coupledFailures(rejected: string[], pending: string[], views: ResolvedPackage[][]) {
   try {
-    const graphs = views.map(packageDependencies);
+    const graphs = views.map(declaredDependencies);
     const failed = new Set(rejected.filter(name => pending.includes(name)));
 
     const reachable = (from: string) => {
@@ -113,108 +102,5 @@ export function coupledFailures(rejected: string[], pending: string[], views: Re
     return [...failed];
   } catch {
     return pending;
-  }
-}
-
-/** One native module cache per evaluating process. The scan also catches an owner dependency
- * shadowing NODE_PATH; the reserved import must resolve to exactly the selected source. */
-export function importGuard(dir: string, packages: ResolvedPackage[], checkSelection?: (pkg: ResolvedPackage) => void) {
-  const selected = packages.flatMap(pkg => pkg.kind !== "local" && existsSync(pkg.dir) ? [{ pkg, root: realpathSync(pkg.dir) }] : []);
-  const managed = join(realpathSync(dir), ".office");
-  const seen = new Set<string>();
-  const verified = new Set<string>();
-
-  function targetOf(spec: string) {
-    const [, name, member, ...extra] = spec.split("/");
-    const pkg = packages.find(item => item.entry.name === name);
-
-    if (!pkg || extra.length || !member || !moduleName.test(`${member}.ts`)) return;
-    const file = join(pkg.dir, "exports", `${member}.ts`);
-
-    if (!statSync(file, { throwIfNoEntry: false })?.isFile()) return;
-    const path = realpathSync(file);
-
-    if (inside(realpathSync(pkg.dir), path)) return { pkg, path };
-  }
-
-  function verify(pkg: ResolvedPackage) {
-    if (verified.has(pkg.dir)) return;
-    checkSelection?.(pkg);
-    verifyInstalledCopy(pkg);
-    verified.add(pkg.dir);
-  }
-
-  function visit(path: string, root: string) {
-    if (seen.has(path)) return;
-    const ext = extname(path);
-
-    if (!/^\.(?:[mc]?[jt]s|[jt]sx)$/.test(ext)) return;
-    const parser = ext.includes("ts") ? typescript : javascript;
-    seen.add(path);
-
-    try {
-      for (const edge of parser.scanImports(readFileSync(path, "utf8"))) {
-        const spec = edge.path;
-
-        if (spec.startsWith(namespace)) {
-          const target = targetOf(spec);
-
-          if (!target) throw new Error(`${path}: ${spec} is not a public export of a selected package`);
-          const actual = realpathSync(Bun.resolveSync(spec, dirname(path)));
-
-          if (actual !== target.path) throw new Error(`${path}: ${spec} resolves to ${actual}, expected ${target.path}`);
-
-          verify(target.pkg);
-          visit(target.path, realpathSync(target.pkg.dir));
-        } else if (spec.startsWith(".") || isAbsolute(spec)) {
-          let resolved;
-
-          try { resolved = realpathSync(Bun.resolveSync(spec, dirname(path))); }
-          catch { resolved = resolve(dirname(path), spec); }
-
-          if (!inside(root, resolved) && inside(managed, resolved)) {
-            const peer = selected.some(item => item.root === root) && selected.find(item => inside(item.root, resolved));
-
-            if (peer) {
-              verify(peer.pkg);
-              visit(resolved, peer.root);
-              continue;
-            }
-
-            const target = resolved.match(/\/packages\/([^/]+)\/(?:exports\/)?([^/]+)\.ts$/);
-            const alias = target && `${namespace}${target[1]}/${target[2]}`;
-            const suggestion = alias && targetOf(alias) ? alias : "@office/<package>/<export>";
-            throw new Error(`${path}: ${spec} crosses into ${resolved}; import the selected public module as ${suggestion}`);
-          }
-
-          if (existsSync(resolved)) visit(resolved, root);
-        }
-      }
-    } catch (error) {
-      seen.delete(path);
-      throw error;
-    }
-  }
-
-  return (path: string) => visit(realpathSync(path), realpathSync(dirname(path)));
-}
-
-let guard: ReturnType<typeof importGuard> | undefined;
-let rejected: Error | undefined;
-
-export function requireCoherentImports() {
-  if (rejected) throw rejected;
-}
-
-export function bindImports(dir: string, packages: ResolvedPackage[], checkSelection?: (pkg: ResolvedPackage) => void) {
-  guard = importGuard(dir, packages, checkSelection);
-}
-
-export function verifyImports(path: string) {
-  try {
-    if (existsSync(path)) guard?.(path);
-  } catch (error) {
-    rejected = error instanceof Error ? error : new Error(String(error));
-    throw rejected;
   }
 }

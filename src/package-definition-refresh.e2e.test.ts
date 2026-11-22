@@ -3,6 +3,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rea
 import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
+import { writePackage } from "./test-package.ts";
 
 const { root, bin, exe, variant, marker, write, read, commit, prompt, fixture, collector, pausedRefresh, published } = definitionFixture();
 
@@ -29,7 +30,7 @@ packages: [${packages.join(", ")}]
 
   const aws = "{name: aws-emulator}";
   const manual = "{name: manual}";
-  const definition = (body: string) => write(local, `${marker} export default {name:"manual",description:"Manual",async setup({add}) {${body}}}`);
+  const definition = (body: string) => writePackage(local, `${marker} export default {name:"manual",description:"Manual",async setup({add}) {${body}}}`);
   const add = (name: string, url = wanted) => `add({registry:"references.repository",value:{name:"${name}",url:"${url}"}});`;
   const broken = () => definition(`${add("partial")} await Promise.resolve(); throw Error("collector interrupted");`);
   const list = () => published(dir);
@@ -45,11 +46,10 @@ packages: [${packages.join(", ")}]
   rmSync(realpathSync(snapshot));
   configure([manual, aws]);
   broken();
-  // The command loads every selected package: one failed, one not synced yet.
+  // A selected package not synced yet stops the command before any package loads, the broken one included.
   const unsynced = cli(1, "references", "list");
-  expect(unsynced).toContain("package manual: ");
-  expect(unsynced).toContain("collector interrupted");
   expect(unsynced).toContain("package aws-emulator: not synced yet; run office sync");
+  expect(unsynced).not.toContain("collector interrupted");
   expect(cli(1, "sync", "--packages")).toContain("collector interrupted");
   expect(list()).toContain(`${floci} @ main\tpackage aws-emulator`);
   expect(list()).not.toContain("partial");
@@ -99,7 +99,7 @@ packages: [${packages.join(", ")}]
   expect(head(checkout)).toBe(second);
   expect(list()).toContain("manual\t../../origin\tpackage manual (stale)");
   expect(list()).not.toContain("partial");
-  write(local, `${marker} throw Error("never import on read");`);
+  writePackage(local, `${marker} throw Error("never import on read");`);
   // Help loads packages too, and names the one that failed.
   expect(cli(0, "--help")).toMatch(/references list[\s\S]*package manual: .*never import on read/);
   rmSync(probe);
@@ -172,7 +172,7 @@ test("a different pin of a Git contributor cannot inherit the old pin's claims",
   const setup = `add({registry:"references.repository",value:{name:"remote-docs",url:"../../local"}});`;
 
   const publish = (body: string) => {
-    write(module, `export default {name:"docs",description:"Docs",setup({add}){${body}}}`);
+    writePackage(module, `export default {name:"docs",description:"Docs",setup({add}){${body}}}`, { name: "docs" });
     select(`  - {name: docs, repo: ${repo}, path: pkg, ref: ${commit(repo)}}\n`);
   };
 
@@ -423,10 +423,10 @@ test.skipIf(process.getuid?.() === 0)("a failed materialization matches only the
     block("aws-emulator");
     block("references");
     expect(f.newer(1, "sync", "--packages")).toContain("EACCES");
-    // The variant's references package also changed and could not be installed: it doesn't
-    // load, so its command is unknown. The independent data reader still sees the correct generation.
+    // The variant's references package also changed and could not be installed: no package
+    // loads, and the command names why. The independent data reader still sees the correct generation.
     expect(f.newer(0, "--help")).toContain("package references: rejected by the last sync; run office sync");
-    expect(f.newer(2, "references", "list")).toContain("package references: rejected by the last sync; run office sync");
+    expect(f.newer(1, "references", "list")).toContain("package references: rejected by the last sync; run office sync");
     expect(f.newer(0, "instructions", f.dir)).not.toContain("references/floci/");
   } finally {
     for (const name of ["aws-emulator", "references"]) rmSync(join(folder, name, "unreadable"), { force: true });

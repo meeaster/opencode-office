@@ -141,7 +141,7 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
         }
 
         const { collections: provided, additions, commands: registered, invalid, scalars } = await registerPackage({
-          dir: office.dir, name, manifest: pkg.manifest, overrides: item.entry.settings ?? {}, settings: pkg.settings,
+          name, manifest: pkg.manifest, overrides: item.entry.settings ?? {}, settings: pkg.settings,
         });
 
         applyScalarSettings(pkg, scalars);

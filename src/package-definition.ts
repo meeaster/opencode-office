@@ -1,27 +1,10 @@
-import { lstatSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";
 import { parse } from "yaml";
 import type { PackageContext, SettingValue } from "../packages/office/package-context.ts";
-import { toolPath } from "./tool.ts";
-import { verifyImports } from "./package-imports.ts";
+import { readPackageJson } from "./package-manifest.ts";
 import { check, type PackageManifest, packageManifestSchema, type Parsed, scalarSetting, settingVariable } from "./schema.ts";
-
-const names = ["office.ts", "package.yaml"] as const;
-
-export function standardImports(packages: string): Pick<PackageContext, "importStandard"> {
-  return { importStandard(module) {
-    // Compatibility for offices upgrading their executable before changing their definitions.
-    // This legacy surface does not participate in resolving static @office imports.
-    if (module !== "tooling/requirements" && module !== "mise-integration/claims") throw new Error(`unknown legacy standard contract ${module}`);
-
-    const path = join(packages, `${module}.ts`);
-
-    if (!readFileSync(path).equals(readFileSync(toolPath(`packages/${module}.ts`)))) throw new Error(`standard contract ${module} differs from this executable; sync to repair it`);
-
-    return import(path);
-  } };
-}
 
 type Registrations = Omit<PackageContext, "booleanSetting" | "scalarSetting">;
 
@@ -71,30 +54,28 @@ function setupContext(context: Registrations, settings: Readonly<Record<string, 
   });
 }
 
-export function definitionFiles(dir: string) {
-  return names.filter((name) => lstatSync(join(dir, name), { throwIfNoEntry: false }) !== undefined);
-}
-
-/** Read one definition. Both inputs go through the same validation and defaults. */
-export function readDefinition(dir: string, where: string, verifyCopy?: (file: string) => void): Parsed<{ manifest: PackageManifest; file: string }> {
+/**
+ * Read one definition: the file the package's package.json names in `office.definition`, loaded
+ * from `root` (the folder itself, or the set's link to it) after `verifyCopy` passes. A `.yaml` or
+ * `.yml` file is a package.yaml; any other is a module. Both go through the same validation and defaults.
+ */
+export function readDefinition(dir: string, name: string, where: string, { verifyCopy, root = dir }: { verifyCopy?: () => void; root?: string } = {}): Parsed<{ manifest: PackageManifest; file: string }> {
   let file = where;
 
   try {
-    const [name, other] = definitionFiles(dir);
+    // A pulled-in copy is checked against its record first, its package.json included.
+    verifyCopy?.();
+    const json = readPackageJson(dir, name);
 
-    if (other !== undefined) return { ok: false, errors: [`${where} has both office.ts and package.yaml; keep exactly one package definition`] };
+    if (!json.ok) return { ok: false, errors: json.errors.map(error => `${where}: ${error}`) };
+    const { definition } = json.value;
 
-    if (name === undefined) return { ok: false, errors: [`${where} has no office.ts or package.yaml; office sync installs built-in and remote packages`] };
-
-    const path = join(dir, name);
-
-    file = `${where}/${name}`;
-    verifyCopy?.(name);
-
-    if (name === "office.ts") verifyImports(path);
+    file = `${where}/${definition}`;
+    const path = join(root, definition);
+    const yaml = /\.ya?ml$/.test(definition);
 
     // Bun loads external TypeScript synchronously in both the launcher and the executable.
-    const document = name === "office.ts" ? require(path).default : parse(readFileSync(path, "utf8"), { stringKeys: true });
+    const document = yaml ? parse(readFileSync(path, "utf8"), { stringKeys: true }) : require(path).default;
     const result = check(v.safeParse(packageManifestSchema, document));
 
     if (!result.ok) return { ok: false, errors: result.errors.map((error) => `${file}: ${error}`) };

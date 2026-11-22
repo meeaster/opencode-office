@@ -6,6 +6,7 @@ import { sync } from "./commands/sync.ts";
 import { commandRegistration, nameProblems } from "./command-table.ts";
 import { git } from "./git.ts";
 import { loadOffice } from "./office.ts";
+import { writePackage } from "./test-package.ts";
 
 const run = () => {};
 const owned = (owner: string, name: string, aliases: string[] = []) => ({ owner, command: { name, aliases } });
@@ -51,7 +52,7 @@ test("sync reports a reserved name with its package and publishes nothing", asyn
 
   try {
     write("office.yaml", "name: t\npackages:\n  - name: notes\n");
-    write("packages/notes/office.ts", 'export default {name:"notes",description:"Notes",setup(ctx){ctx.command({name:"sync extra",summary:"Extra",run(){}})}}');
+    writePackage(join(office, "packages/notes/office.ts"), 'export default {name:"notes",description:"Notes",setup(ctx){ctx.command({name:"sync extra",summary:"Extra",run(){}})}}');
     git(["init", "--quiet", office]);
     const changes = await sync(loadOffice(office), { scope: "packages" });
 

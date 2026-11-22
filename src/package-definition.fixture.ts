@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { compile } from "./build.ts";
 import { git } from "./git.ts";
+import { writePackage } from "./test-package.ts";
 import type officePlugin from "../packages/office/plugin/index.ts";
 
 export function definitionFixture() {
@@ -56,8 +57,8 @@ export function definitionFixture() {
     git(["init", "-q", dist]);
 
     for (const path of ["src", "standard", "packages", "template", "image", "compose.yaml", "LICENSE", "package.json"]) cpSync(join(checkout, path), join(dist, path), { recursive: true });
-    write(join(dist, "packages/arrival/office.ts"), `${marker} export default { name: "arrival", description: "Newly shipped" }`);
-    write(join(dist, "packages/legacy/package.yaml"), "name: legacy\ndescription: Legacy YAML fixture\n");
+    writePackage(join(dist, "packages/arrival/office.ts"), `${marker} export default { name: "arrival", description: "Newly shipped" }`);
+    writePackage(join(dist, "packages/legacy/package.yaml"), "name: legacy\ndescription: Legacy YAML fixture\n");
     const aws = join(dist, "packages/aws-emulator/office.ts");
     write(aws, read(aws).replace("if (!includeSource) return;", 'throw Error("changed built-in collector");'));
     const commands = join(dist, "packages/references/office.ts");

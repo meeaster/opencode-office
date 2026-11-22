@@ -1,0 +1,13 @@
+{
+  "name": "@office/browser",
+  "private": true,
+  "exports": {},
+  "office": {
+    "definition": "./office.ts",
+    "dependencies": [
+      "@office/mise-integration",
+      "@office/office",
+      "@office/tooling"
+    ]
+  }
+}

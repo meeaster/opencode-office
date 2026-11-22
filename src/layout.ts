@@ -6,7 +6,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { type Office, type Repository } from "./office.ts";
-import { builtinSource, gitSelection, readRecord, type InstalledPackage, type PackageProblem, readPackage, requiredPackages, resolvePackages } from "./packages.ts";
+import { builtinSource, definitionGate, gitSelection, readRecord, type InstalledPackage, type PackageProblem, readPackage, requiredPackages, resolvePackages } from "./packages.ts";
 import { readSnapshot } from "./reference-snapshot.ts";
 import { machineCollection, project } from "../standard/mise-integration/projection.ts";
 import { pluginClones } from "../standard/opencode/delivery.ts";
@@ -37,13 +37,18 @@ export function library(office: Office): string[] {
 }
 
 /** Packages installed with valid settings. Filesystem conflicts in plugin delivery are not
- * package-load failures and must not disable independent consumers such as cron. */
+ * package-load failures and must not disable independent consumers such as cron. The whole
+ * selection passes `definitionGate` first (the `rejected` packages, this sync's own failures, are
+ * skipped); with any problem, no definition is imported and `blocked` holds the problems. */
 export function installedPackages(office: Office, rejected: ReadonlySet<string> = new Set(), publishedMachine = true): InstalledPackages {
   const installed: InstalledPackage[] = [];
   const resolved = resolvePackages(office);
   const problems = [...resolved.problems];
   const selected = new Set([...requiredPackages, ...office.packages.map((entry) => entry.name)]);
   const unread = new Set(selected);
+  const blocked = definitionGate(office, resolved.packages, rejected);
+
+  if (blocked.length) return { selected, installed, problems: [...problems, ...blocked], unread, blocked };
 
   const snapshot = publishedMachine ? readSnapshot(office.dir) : undefined;
 
@@ -81,6 +86,8 @@ export type InstalledPackages = {
   problems: PackageProblem[];
   /** Selected but unresolved or unreadable: absence from `installed` cannot authorize cleanup. */
   unread: Set<string>;
+  /** The problems `definitionGate` found; with any, no package loaded. */
+  blocked?: PackageProblem[];
 };
 
 export type SkillSelection = {

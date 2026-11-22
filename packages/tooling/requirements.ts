@@ -1,4 +1,4 @@
-import type { Collection, CollectionEntry } from "../office/package-context.ts";
+import type { Collection, CollectionEntry } from "@office/office/context";
 
 export type Requirement = { name: string; minimumVersion: string; hostOnly?: boolean };
 

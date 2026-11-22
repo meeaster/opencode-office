@@ -4,10 +4,10 @@
     "module": "preserve",
     "moduleResolution": "bundler",
     "paths": {
-      "@office/office/*": ["./packages/office/exports/*"],
-      "@office/references/*": ["./packages/references/exports/*"],
-      "@office/tooling/*": ["./packages/tooling/exports/*"],
-      "@office/mise-integration/*": ["./packages/mise-integration/exports/*"]
+      "@office/office/context": ["./packages/office/package-context.ts"],
+      "@office/references/repositories": ["./packages/references/repositories.ts"],
+      "@office/tooling/requirements": ["./packages/tooling/requirements.ts"],
+      "@office/mise-integration/claims": ["./packages/mise-integration/claims.ts"]
     },
     "lib": ["esnext"],
     "types": ["bun"],

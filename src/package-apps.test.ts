@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { appFolders } from "./commands/apps.ts";
 import { sync } from "./commands/sync.ts";
 import { loadOffice } from "./office.ts";
+import { writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -29,7 +30,7 @@ const manifest = "name: demo\nnamespace: widget\ndescription: A demo package.\ns
 
 /** A local package `demo` shipping an Executor app, listed in office.yaml with `entry` appended. */
 function demo(entry = "", packageYaml = manifest): void {
-  write(join(office, "packages/demo/package.yaml"), packageYaml);
+  writePackage(join(office, "packages/demo/package.yaml"), packageYaml);
   write(join(office, "packages/demo/executor-app/package.json"), '{ "dependencies": { "apps": "0.0.1" } }\n');
   write(join(office, "office.yaml"), `name: t\ndesks: { work: { app: false } }\npackages:\n  - name: demo\n${entry}`);
 }

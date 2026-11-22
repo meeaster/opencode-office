@@ -14,6 +14,7 @@ import { check, packageManifestSchema } from "./schema.ts";
 import { wrappedCommands } from "./sfw.ts";
 import { configureStartup } from "./shell-startup.ts";
 import { defaultPins, hostPlatform } from "./versions.ts";
+import { packageJsonText, writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -53,7 +54,7 @@ function write(path: string, content: string): void {
 /** A host-mode office with consent, a local package `demo` whose host block declares `host`, and the firewall as `firewall` says. */
 function makeOffice({ firewall = true, host = "", tools = "" } = {}): void {
   write(join(office, "office.yaml"), `name: t\nopencode:\n  mode: host\n  url: http://127.0.0.1:49999\n${firewall ? tools : `tools:\n${tools.replace(/^tools:\n/, "")}  sfw: { enabled: false }\n`}packages:\n  - name: demo\n`);
-  write(join(office, "packages/demo/package.yaml"), `name: demo\ndescription: A demo package.\n${host}`);
+  writePackage(join(office, "packages/demo/package.yaml"), `name: demo\ndescription: A demo package.\n${host}`);
 }
 
 const data = () => join(dir, "data");
@@ -206,14 +207,15 @@ test("a package's host block adds folders and variables to the environment file;
 
   expect(sourced).toBe(`${hostWrappers()}:${join(process.env.MISE_DATA_DIR || join(dir, "home/.local/share/mise"), "shims")}:${join(dir, "home/.opencode/bin")}:${join(office, "packages/demo/bin")}:${join(dir, "home/.local/bin")}:/opt/demo/bin:/usr/bin:/bin|it's on`);
 
-  const conflict = join(office, "packages/demo/office.ts");
-  write(conflict, "throw new Error('must not be evaluated')");
-  expect((await sync(loadOffice(office))).join("\n")).toContain("has both office.ts and package.yaml");
+  const manifest = join(office, "packages/demo/package.json");
+  const json = readFileSync(manifest, "utf8");
+  write(manifest, "{");
+  expect((await sync(loadOffice(office))).join("\n")).toContain("FAILED package demo: package.json: JSON Parse error");
   expect(readFileSync(envFilePath(), "utf8")).toBe(env);
-  rmSync(conflict);
+  write(manifest, json);
 
   write(join(office, "office.yaml"), `${readFileSync(join(office, "office.yaml"), "utf8")}  - name: other\n`);
-  write(join(office, "packages/other/package.yaml"), "name: other\ndescription: Another.\nhost:\n  env:\n    DEMO_MODE: off\n");
+  writePackage(join(office, "packages/other/package.yaml"), "name: other\ndescription: Another.\nhost:\n  env:\n    DEMO_MODE: off\n");
 
   expect(await sync(loadOffice(office))).toContain(`FAILED packages demo and other both set DEMO_MODE in their host or system block, so ${envFilePath()} sets neither; remove it from one`);
   expect(readFileSync(envFilePath(), "utf8")).not.toContain("DEMO_MODE");
@@ -225,7 +227,7 @@ test("one failed read and one deselection keep and withdraw their respective mac
   const config = join(office, "office.yaml");
   const initial = readFileSync(config, "utf8");
   write(config, `${initial}  - name: other\n`);
-  write(join(office, "packages/other/package.yaml"), `name: other\ndescription: Other\n${host("other")}`);
+  writePackage(join(office, "packages/other/package.yaml"), `name: other\ndescription: Other\n${host("other")}`);
 
   for (const name of ["demo", "other"]) write(join(office, `packages/${name}/install.ts`), "");
   grantConsent(loadOffice(office));
@@ -236,7 +238,7 @@ test("one failed read and one deselection keep and withdraw their respective mac
   expect(readFileSync(link("other"), "utf8")).toContain("other:install");
   expect(readFileSync(envFilePath(), "utf8")).toContain("OTHER_MODE");
   write(config, initial);
-  write(join(office, "packages/demo/package.yaml"), "[bad");
+  writePackage(join(office, "packages/demo/package.yaml"), "[bad");
   expect((await run()).join("\n")).toContain("FAILED package demo");
   expect(readFileSync(link("demo"), "utf8")).toBe(before);
   expect(existsSync(join(office, ".office/mise/other.toml"))).toBe(false);
@@ -261,11 +263,12 @@ test("an older combined environment is kept until sync can record its owners", a
   const path = join(dir, "record/machine.json");
   write(path, JSON.stringify(record));
   const before = readFileSync(envFilePath(), "utf8");
-  write(join(office, "packages/demo/office.ts"), "throw Error('conflict')");
+  writePackage(join(office, "packages/demo/office.ts"), "throw Error('conflict')");
   expect((await run()).join("\n")).toContain("predates package ownership records");
   expect(readFileSync(envFilePath(), "utf8")).toBe(before);
   expect(readFileSync(path, "utf8")).toBe(JSON.stringify(record));
   rmSync(join(office, "packages/demo/office.ts"));
+  write(join(office, "packages/demo/package.json"), packageJsonText("demo", "package.yaml"));
   expect((await run()).join("\n")).not.toContain("FAILED");
   expect(readFileSync(path, "utf8")).toContain("DEMO_MODE");
 });

@@ -11,6 +11,7 @@ import { sha256, storedSeedProblems } from "./seeds.ts";
 import { readLockSection } from "./versions.ts";
 import { PlainReporter } from "./report/plain.ts";
 import { silentStage } from "./report/reporter.ts";
+import { writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -156,7 +157,7 @@ test("packages-only sync applies changed settings and plugin links without visit
   const upstream = join(dir, "unavailable");
 
   mkdirSync(join(pkg, "plugin"), { recursive: true });
-  writeFileSync(join(pkg, "package.yaml"), "name: demo\ndescription: Demo\nsettings:\n  title: { description: Title, default: Before }\n");
+  writePackage(join(pkg, "package.yaml"), "name: demo\ndescription: Demo\nsettings:\n  title: { description: Title, default: Before }\n");
   writeFileSync(join(dir, "office.yaml"), `name: demo\npackages: [{ name: demo, settings: { title: After } }]\nreferences: [{ name: docs, url: ${upstream} }]\ndesks: { work: { repos: [{ name: example, url: ${upstream} }] } }\nplugins: [{ name: other, repo: ${upstream} }]\n`);
 
   const changes = await sync(loadOffice(dir), { scope: "packages" });
@@ -174,7 +175,7 @@ test("a fresh clone of a commit holds every seed its receipts name, byte for byt
   const committer = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "core.autocrlf=true"];
 
   mkdirSync(join(office, "packages/demo/seed/notes"), { recursive: true });
-  writeFileSync(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: Demo\n");
+  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: Demo\n");
   // Git would turn the CRLF file's endings to LF at add, and the LF file's to CRLF at checkout.
   writeFileSync(join(office, "packages/demo/seed/notes/AGENTS.md"), "# Notes\r\n\r\nWindows endings.\r\n");
   writeFileSync(join(office, "packages/demo/seed/notes/README.md"), "# Notes\n\nUnix endings.\n");
@@ -235,7 +236,7 @@ test("sync of an office that is a Git worktree excludes its plumbing in the excl
   writeFileSync(join(office, "skills/alpha/SKILL.md"), "---\nname: alpha\ndescription: fixture\n---\n");
 
   const changes = await sync(loadOffice(office));
-  const block = `# mine\n${excludeStart}\n/.office/*\n!/.office/seeds/\n/.opencode/plugins/demo\n/.opencode/plugins/office\n/.opencode/skills/alpha\n${excludeEnd}\n`;
+  const block = `# mine\n${excludeStart}\n/.office/*\n!/.office/seeds/\n/packages/node_modules/\n/.opencode/plugins/demo\n/.opencode/plugins/office\n/.opencode/skills/alpha\n${excludeEnd}\n`;
 
   expect(changes.filter(line => line.startsWith("FAILED"))).toEqual([]);
   expect(changes).toContain("excluded /.opencode/plugins/demo from commits (info/exclude)");
@@ -279,7 +280,7 @@ test("info/exclude: a malformed block is left alone and reported, CRLF endings a
   rmSync(join(office, "builder"), { recursive: true });
   git(["init", "--quiet", office]);
   const plumbing = () => excludePlumbing(loadOffice(office));
-  const lines = ["/.office/*", "!/.office/seeds/", "/.opencode/plugins/common", "/.opencode/plugins/imported", "/.opencode/plugins/office"];
+  const lines = ["/.office/*", "!/.office/seeds/", "/packages/node_modules/", "/.opencode/plugins/common", "/.opencode/plugins/imported", "/.opencode/plugins/office"];
   const block = (eol: string) => [excludeStart, ...lines, excludeEnd].map(line => line + eol).join("");
 
   // A start without an end (an end without a start, duplicates): nothing is guessed or rewritten.
@@ -333,7 +334,7 @@ test("info/exclude holds Office's plumbing in one block after the owner's lines,
   // The owner's lines, one an earlier release wrote for a clone in .opencode/plugins/, and the block
   // as the release before the seed store wrote it.
   writeFileSync(exclude, `# the owner's\n*.log\n/.opencode/plugins/imported/\n${excludeStart}\n/.office/\n${excludeEnd}\n/after\n`);
-  const block = (lines: string[]) => [excludeStart, "/.office/*", "!/.office/seeds/", ...lines, excludeEnd].join("\n");
+  const block = (lines: string[]) => [excludeStart, "/.office/*", "!/.office/seeds/", "/packages/node_modules/", ...lines, excludeEnd].join("\n");
   const all = block(["/.opencode/plugins/common", "/.opencode/plugins/imported", "/.opencode/plugins/office", "/.opencode/skills/alpha", "/builder/.opencode/skills/alpha"]);
   const changes = excludePlumbing(loadOffice(office));
 

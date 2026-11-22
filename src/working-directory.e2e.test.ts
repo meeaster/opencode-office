@@ -8,7 +8,8 @@ import { compile, runtime } from "./build.ts";
 setDefaultTimeout(30_000);
 
 // A compiled executable reads bunfig.toml and .env from the folder it runs in unless the build turns
-// that off. Neither may run code or set variables before office's own code does.
+// that off. Neither may run code or set variables before office's own code does, nor may the
+// folder's package.json, which office's build reads.
 const root = mkdtempSync(join(tmpdir(), "office-working-directory-"));
 const folder = join(root, "folder");
 const ran = join(root, "preload-ran");
@@ -18,6 +19,8 @@ beforeAll(() => {
   writeFileSync(join(folder, "preload.ts"), `require("node:fs").writeFileSync(${JSON.stringify(ran)}, "ran");\n`);
   writeFileSync(join(folder, "bunfig.toml"), 'preload = ["./preload.ts"]\n');
   writeFileSync(join(folder, ".env"), "OFFICE_PROBE_FROM_DOTENV=loaded\n");
+  // The compiled office reads package.json files (for packages' exports); the folder's own changes nothing.
+  writeFileSync(join(folder, "package.json"), JSON.stringify({ name: "folder", type: "commonjs", main: "./preload.ts", imports: { "#preload": "./preload.ts" } }));
 });
 
 const runIn = (exe: string, args: string[] = []) => Bun.spawnSync([exe, ...args], { cwd: folder, env: { PATH: process.env.PATH, HOME: root } });

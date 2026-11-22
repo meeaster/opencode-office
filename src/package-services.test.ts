@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import * as v from "valibot";
 import { parse } from "yaml";
@@ -10,6 +10,8 @@ import { compose, composeArguments } from "./commands/compose.ts";
 import { loadOffice } from "./office.ts";
 import { composeProblems, ensureSecrets, packageSecret, planServices, preparePackageServices, secretsPath } from "./package-services.ts";
 import { check, packageManifestSchema } from "./schema.ts";
+import { recordRequiredBuiltins } from "./test-builtin-record.ts";
+import { writePackage } from "./test-package.ts";
 
 let dir: string;
 let cache: string | undefined;
@@ -27,9 +29,12 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+/** Writes `path`; an office.yaml's office gets its required built-ins, as a synced office has. */
 function write(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content);
+
+  if (basename(path) === "office.yaml") recordRequiredBuiltins(dirname(path));
 }
 
 test("a package's compose file may name only its own resources and publish only on 127.0.0.1", () => {
@@ -93,7 +98,7 @@ test("a namespaced package's services and settings follow its namespace, and two
   const office = join(dir, "office");
 
   write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: canvas\n    settings:\n      url: https://example.com\n");
-  write(join(office, "packages/canvas/package.yaml"), "name: canvas\nnamespace: doop\ndescription: d\nsettings:\n  url:\n    description: u\n    required: true\n");
+  writePackage(join(office, "packages/canvas/package.yaml"), "name: canvas\nnamespace: doop\ndescription: d\nsettings:\n  url:\n    description: u\n    required: true\n");
   write(join(office, "packages/canvas/compose.yaml"), "services:\n  design:\n    image: busybox\n");
   await expect(preparePackageServices(loadOffice(office), false)).rejects.toThrow("package canvas: compose.yaml: services.design: must be named doop or doop-*");
 
@@ -102,14 +107,14 @@ test("a namespaced package's services and settings follow its namespace, and two
   expect(readFileSync(join(office, "state/packages/canvas/settings.env"), "utf8")).toBe("DOOP_URL='https://example.com'\n");
 
   write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: canvas\n    settings:\n      url: https://example.com\n  - name: doop\n");
-  write(join(office, "packages/doop/package.yaml"), "name: doop\ndescription: d\n");
+  writePackage(join(office, "packages/doop/package.yaml"), "name: doop\ndescription: d\n");
   await expect(preparePackageServices(loadOffice(office), false)).rejects.toThrow("packages canvas and doop claim the same namespace, doop");
 });
 
 test("a package without services gets declared secrets on up, and get reveals only current declarations", async () => {
   write(join(dir, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: notes\n  - name: plain\n");
-  write(join(dir, "packages/notes/package.yaml"), "name: notes\ndescription: test\nsecrets:\n  NOTES_KEY:\n    generate: hex\n    bytes: 32\n");
-  write(join(dir, "packages/plain/package.yaml"), "name: plain\ndescription: test\n");
+  writePackage(join(dir, "packages/notes/package.yaml"), "name: notes\ndescription: test\nsecrets:\n  NOTES_KEY:\n    generate: hex\n    bytes: 32\n");
+  writePackage(join(dir, "packages/plain/package.yaml"), "name: plain\ndescription: test\n");
   const office = loadOffice(dir);
 
   expect(() => packageSecret(office, "notes", "NOTES_KEY")).toThrow("run office up");
@@ -121,7 +126,7 @@ test("a package without services gets declared secrets on up, and get reveals on
   expect(existsSync(join(office.state, "packages/notes/include.yaml"))).toBe(false);
   (await preparePackageServices(office, false)).apply();
   expect(packageSecret(office, "notes", "NOTES_KEY")).toBe(key);
-  write(join(dir, "packages/notes/package.yaml"), "name: notes\ndescription: test\n");
+  writePackage(join(dir, "packages/notes/package.yaml"), "name: notes\ndescription: test\n");
   expect(() => packageSecret(office, "notes", "NOTES_KEY")).toThrow("declares");
 });
 
@@ -149,7 +154,7 @@ test.skipIf(Bun.which("docker") === null)("Compose uses applied package settings
   const before = process.env.CANVAS_PORT;
 
   write(join(office, "office.yaml"), "name: precedence\nstate: state\npackages:\n  - name: canvas\n    settings:\n      port: 43219\n      title: Cost = lunch\n");
-  write(join(office, "packages/canvas/package.yaml"), "name: canvas\ndescription: d\nsettings:\n  port:\n    description: p\n    default: 3000\n  title:\n    description: t\n    default: x\n");
+  writePackage(join(office, "packages/canvas/package.yaml"), "name: canvas\ndescription: d\nsettings:\n  port:\n    description: p\n    default: 3000\n  title:\n    description: t\n    default: x\n");
   write(join(office, "packages/canvas/compose.yaml"), 'services:\n  canvas:\n    image: busybox\n    environment:\n      TITLE: ${CANVAS_TITLE}\n    ports: ["127.0.0.1:${CANVAS_PORT}:${CANVAS_PORT}"]\n');
   write(join(office, "packages/canvas/.env"), "CANVAS_PORT=11111\n");
   write(join(office, "state/secrets.env"), "OPENCODE_PASSWORD=test\n");
@@ -209,8 +214,8 @@ test("office up runs the applied copy through an include in the package's folder
 
   for (const name of ["demo", "zeta"]) write(join(office, `packages/${name}/compose.yaml`), services.replaceAll("demo", name));
 
-  write(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: d\nsettings:\n  url:\n    description: u\n    required: true\nsecrets:\n  DEMO_KEY:\n    generate: hex\n    bytes: 16\n");
-  write(join(office, "packages/zeta/package.yaml"), "name: zeta\ndescription: z\n");
+  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: d\nsettings:\n  url:\n    description: u\n    required: true\nsecrets:\n  DEMO_KEY:\n    generate: hex\n    bytes: 16\n");
+  writePackage(join(office, "packages/zeta/package.yaml"), "name: zeta\ndescription: z\n");
 
   const loaded = loadOffice(office);
   const first = await preparePackageServices(loaded, false);
@@ -242,7 +247,7 @@ test("office up runs the applied copy through an include in the package's folder
 
   // Converting a still-selected package to a broken TS definition isn't a service removal.
   rmSync(join(office, "packages/demo/package.yaml"));
-  write(join(office, "packages/demo/office.ts"), 'throw new Error("cannot load demo");');
+  writePackage(join(office, "packages/demo/office.ts"), 'throw new Error("cannot load demo");');
   rmSync(join(office, "packages/demo/compose.yaml"));
   (await preparePackageServices(loaded, true)).apply();
   expect(readFileSync(join(state, "demo/compose.yaml"), "utf8")).toBe(`${services}# changed\n`);

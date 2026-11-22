@@ -1,5 +1,5 @@
-import type { PackageContext } from "../office/package-context.ts";
-import { installs, recipes, tasks } from "./exports/claims.ts";
+import type { PackageContext } from "@office/office/context";
+import { installs, recipes, tasks } from "./claims.ts";
 
 export default {
   name: "mise-integration",

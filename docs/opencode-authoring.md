@@ -1,9 +1,22 @@
 # Register a package's OpenCode assets
 
-`office.ts` can declare a server plugin directory and a desktop bundle in code. Here is the Tracks consumer in a local office:
+A package definition (`office.ts`, or whatever file its `package.json` names) can declare a server plugin directory and a desktop bundle in code. Here is the Tracks consumer in a local office. Its `package.json` names the definition and declares the package it imports from:
+
+```json
+{
+  "name": "@office/tracks",
+  "private": true,
+  "exports": {},
+  "office": {
+    "definition": "./office.ts",
+    "dependencies": ["@office/office"]
+  }
+}
+```
 
 ```ts
-import type { OpenCodeContext } from "../../.office/packages/office/package-context.ts";
+// office.ts
+import type { OpenCodeContext } from "@office/office/context";
 
 export default {
   name: "tracks",

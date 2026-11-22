@@ -1,0 +1,13 @@
+{
+  "name": "@office/mise-integration",
+  "private": true,
+  "exports": {
+    "./claims": "./claims.ts"
+  },
+  "office": {
+    "definition": "./office.ts",
+    "dependencies": [
+      "@office/office"
+    ]
+  }
+}

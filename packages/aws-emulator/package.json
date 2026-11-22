@@ -1,0 +1,13 @@
+{
+  "name": "@office/aws-emulator",
+  "private": true,
+  "exports": {},
+  "office": {
+    "definition": "./office.ts",
+    "dependencies": [
+      "@office/office",
+      "@office/references",
+      "@office/tooling"
+    ]
+  }
+}

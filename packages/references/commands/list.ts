@@ -1,4 +1,4 @@
-import type { CommandInputs } from "../../office/package-context.ts";
+import type { CommandInputs } from "@office/office/context";
 import { repositories } from "../repositories.ts";
 
 export function listReferences(inputs: CommandInputs): void {

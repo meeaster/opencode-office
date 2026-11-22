@@ -1,18 +1,17 @@
 // Package commands and their help: every run loads each package office.yaml selects, runs its
 // setup, and works from what it registered in this process. Nothing is read from the saved
 // references file. Runs only in a reader bound to the office's published package set.
-import { existsSync } from "node:fs";
 import * as v from "valibot";
 import type { Collection, CollectionEntry, CommandInputs } from "../packages/office/package-context.ts";
 import { repositories } from "../packages/references/repositories.ts";
 import { commandNames, nameProblems, type NameProblem, type RegisteredCommand } from "./command-table.ts";
 import { loadOffice, type Office, OfficeError } from "./office.ts";
-import { readPackage, type ResolvedPackage, resolvePackages } from "./packages.ts";
+import { definitionGate, problemLine, readPackage, type ResolvedPackage, resolvePackages } from "./packages.ts";
 import { type Registered, registerPackage } from "./package-setup.ts";
 import { namedEntry } from "./reference-snapshot.ts";
 
-/** A reader process: the office it is bound to and the packages that set's last sync rejected. */
-export type Reader = { dir: string; unavailable: ReadonlySet<string> };
+/** A reader process: the office it is bound to (`bindReader` recorded the set's rejected packages). */
+export type Reader = { dir: string };
 
 type Entry = { id: string; value: CollectionEntry; owner: string };
 
@@ -25,28 +24,23 @@ export type CommandLoad = {
   names: NameProblem[];
   /** Entries claimed twice. */
   conflicts: string[];
+  /** Problems the check before loading found; with any, nothing loaded. */
+  blocked?: string[];
   read: CommandInputs["read"];
 };
 
 /**
- * Load one resolved package as the "What loads" rules say and run its setup. Undefined for a
- * package with no setup; throws, naming what failed, when it can't load.
+ * Load one resolved package, checked with the rest of the selection, and run its setup. Undefined
+ * for a package with no setup; throws, naming what failed, when it can't load.
  */
-export async function loadPackage(office: Office, item: ResolvedPackage, unavailable: ReadonlySet<string>): Promise<Registered | undefined> {
-  if (item.kind !== "local") {
-    if (unavailable.has(item.entry.name)) throw new Error("rejected by the last sync; run office sync");
-
-    if (!existsSync(item.dir)) throw new Error("not synced yet; run office sync");
-  }
-
-  // Checks a pulled-in copy against its record before importing any of its code.
+export async function loadPackage(office: Office, item: ResolvedPackage): Promise<Registered | undefined> {
   const read = readPackage(office, item);
 
   if (!read.ok) throw new Error(read.errors.join("; "));
   const { manifest, settings } = read.value;
 
   if (!manifest.setup) return undefined;
-  const registered = await registerPackage({ dir: office.dir, name: item.entry.name, manifest, overrides: item.entry.settings ?? {}, settings });
+  const registered = await registerPackage({ name: item.entry.name, manifest, overrides: item.entry.settings ?? {}, settings });
 
   if (registered.invalid.length) throw new Error(registered.invalid.join("; "));
 
@@ -54,15 +48,21 @@ export async function loadPackage(office: Office, item: ResolvedPackage, unavail
 }
 
 /** Load every package office.yaml selects and combine what they registered. */
-async function loadForCommands({ dir, unavailable }: Reader): Promise<CommandLoad> {
+async function loadForCommands({ dir }: Reader): Promise<CommandLoad> {
   const office = loadOffice(dir);
   const resolved = resolvePackages(office, undefined, true);
-  const failures = resolved.problems.map(problem => `package ${problem.packages.join(", ")}: ${problem.message}`);
+  const failures = resolved.problems.map(problemLine);
   const loaded: { name: string; registered: Registered }[] = [];
+
+  // A package the last sync rejected, and every copy, package.json, declared dependency and link,
+  // is checked before the first import.
+  const problems = definitionGate(office, resolved.packages).map(problemLine);
+
+  if (problems.length) return { ...combine(office.references, [], [...failures, ...problems]), blocked: problems };
 
   for (const item of resolved.packages) {
     try {
-      const registered = await loadPackage(office, item, unavailable);
+      const registered = await loadPackage(office, item);
 
       if (registered) loaded.push({ name: item.entry.name, registered });
     } catch (error) {
@@ -144,6 +144,9 @@ export async function dispatchCommand(reader: Reader, words: string[]): Promise<
   if (words.some(word => /\s/.test(word))) return { found: false, failures: [] };
   const requested = words.join(" ");
   const load = await loadForCommands(reader);
+
+  // With the gate's problems, ownership conflicts too: no package loaded, so the command may be a typo.
+  if (load.blocked) throw new OfficeError(`${requested}: unknown command, or a package command that can't run: no package loaded: ${load.failures.join("; ")}`);
   const matches = load.commands.filter(({ command }) => commandNames(command).includes(requested));
 
   if (!matches.length) return { found: false, failures: load.failures };

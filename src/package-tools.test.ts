@@ -14,6 +14,7 @@ import { loadOffice } from "./office.ts";
 import { localEdits, pulledDir, readRecord } from "./packages.ts";
 import { check, packageManifestSchema } from "./schema.ts";
 import { compareToolVersions, fragmentNotes, machineBelowFloors, machineFiles, moveFragmentTools, oldToolFragments, orphanFragments, packageLines, packagesFileProblems, strayFragments } from "./package-tools.ts";
+import { writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -35,7 +36,7 @@ function write(path: string, content: string): void {
 
 /** A local package `name` declaring `tools`. */
 function pkg(name: string, tools: string): void {
-  write(join(office, `packages/${name}/package.yaml`), `name: ${name}\ndescription: A ${name} package.\n${tools}`);
+  writePackage(join(office, `packages/${name}/package.yaml`), `name: ${name}\ndescription: A ${name} package.\n${tools}`);
 }
 
 /** A local package `demo` declaring `tools`, listed in office.yaml. */
@@ -195,6 +196,9 @@ test("a package that doesn't read, as package.yaml's tools take exact versions o
 
 test("check reports a declared tool missing from machine.packages.toml, or the file itself, and comments that differ from what sync writes", async () => {
   demo('tools:\n  "npm:agent-browser": "0.43.0"\n');
+  // A synced office (nothing loads before the first sync), whose machine.packages.toml was then removed.
+  await sync(loadOffice(office));
+  rmSync(join(office, "machine.packages.toml"));
 
   expect(notes()).toEqual({ ok: false, notes: ["tools npm:agent-browser are missing: machine.packages.toml doesn't exist; office sync writes it"] });
 
@@ -494,14 +498,17 @@ test("setup requirements share a floor with external manifests; failed collectio
   pkg("external", 'tools: {bun: "1.5.0"}');
   const author = join(office, "packages/author/office.ts");
 
-  const code = `export default { name: "author", description: "Uses Bun", settings:{ floor:{ description:"Tool floor",default:"1.4.4" } }, async setup(ctx) {
-    const { requirements } = await ctx.importStandard("tooling/requirements");
+  const code = `import { requirements } from "@office/tooling/requirements";
+  export default { name: "author", description: "Uses Bun", settings:{ floor:{ description:"Tool floor",default:"1.4.4" } }, setup(ctx) {
     ctx.add(requirements, {name:"bun", minimumVersion:ctx.settings.floor});
   }};`;
 
-  write(author, code);
-  write(join(office, "office.yaml"), "name: t\npackages: [{name: external}, {name: author}]\n");
   const run = () => sync(loadOffice(office), { scope: "packages" });
+  // From source, a local package resolves its @office imports through the published set.
+  write(join(office, "office.yaml"), "name: t\npackages: [{name: external}]\n");
+  await run();
+  writePackage(author, code, { dependencies: ["tooling"] });
+  write(join(office, "office.yaml"), "name: t\npackages: [{name: external}, {name: author}]\n");
   expect((await run()).join("\n")).not.toContain("FAILED");
   expect(lines()).toEqual(['"bun" = "1.5.0" # author, external']);
   const good = packages();
@@ -513,17 +520,21 @@ test("setup requirements share a floor with external manifests; failed collectio
 test("exclusive install roots are independent of task and readiness names", async () => {
   const config = join(office, "office.yaml");
 
+  const host = "name: t\nopencode: {mode: host, url: 'http://127.0.0.1:49999'}\n";
+  const run = () => sync(loadOffice(office), { scope: "packages" });
+
   for (const name of ["first", "second"]) {
-    write(join(office, `packages/${name}/office.ts`), `export default {name:"${name}", description:"Install", async setup(ctx){
-      const { installs } = await ctx.importStandard("mise-integration/claims");
+    writePackage(join(office, `packages/${name}/office.ts`), `import { installs } from "@office/mise-integration/claims";
+    export default {name:"${name}", description:"Install", setup(ctx){
       ctx.add(installs,{name:"${name}", description:"Install", script:"run.ts", destination:"~/.local/share/release", ready:"~/.local/share/${name}.json", executable:false});
-    }}`);
+    }}`, { dependencies: ["mise-integration"] });
     write(join(office, `packages/${name}/run.ts`), 'throw Error("setup must not execute me")');
   }
 
-  const host = "name: t\nopencode: {mode: host, url: 'http://127.0.0.1:49999'}\n";
+  // From source, a local package resolves its @office imports through the published set.
+  write(config, `${host}packages: []\n`);
+  await run();
   write(config, `${host}packages: [{name: first}]\n`);
-  const run = () => sync(loadOffice(office), { scope: "packages" });
   expect((await run()).join("\n")).not.toContain("FAILED");
   const first = join(office, ".office/mise/first.toml");
   const before = readFileSync(first, "utf8");
@@ -538,18 +549,23 @@ test("a rejected publication cannot retain host consent or a deselected plugin",
   const config = join(office, "office.yaml");
   const writeConfig = (mode: string, selected: string) => write(config, `name: test\nopencode: ${mode}\npackages: [{name: browser}, {name: first}, {name: ${selected}}]\n`);
 
+  const run = () => sync(loadOffice(office), { scope: "packages" });
+
   for (const name of ["first", "second"]) {
-    write(join(office, `packages/${name}/office.ts`), `export default {name:"${name}",description:"Reference",async setup(c){
-      const {repositories}=await import("@office/references/repositories");
+    writePackage(join(office, `packages/${name}/office.ts`), `import {repositories} from "@office/references/repositories";
+    export default {name:"${name}",description:"Reference",setup(c){
       c.add(repositories,{name:"guide",url:"https://example.invalid/guide"})
-    }}`);
+    }}`, { dependencies: ["references"] });
   }
+
+  // From source, a local package resolves its @office imports through the published set.
+  write(config, "name: test\npackages: []\n");
+  await run();
 
   pkg("editor", "");
   write(join(office, "packages/editor/plugin/index.ts"), "// fixture");
   writeConfig("{mode: host, url: 'http://127.0.0.1:49999'}", "editor");
   grantConsent(loadOffice(office));
-  const run = () => sync(loadOffice(office), { scope: "packages" });
   expect((await run()).join("\n")).not.toContain("FAILED");
   const link = join(globalConfD(), "office-test-1-browser.toml");
   const plugin = join(office, ".opencode/plugins/editor");

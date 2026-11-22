@@ -15,9 +15,10 @@ const root = resolve(import.meta.dir, "..");
 /**
  * How the compiled office runs. It installs nothing on import, and it ignores the bunfig.toml and
  * .env of the folder it runs in, which a compiled executable otherwise reads: a folder's preload
- * script would run, and its variables apply, before office's own code.
+ * script would run, and its variables apply, before office's own code. It reads package.json
+ * files, so one package's import of another follows that package's `exports`.
  */
-export const runtime = { execArgv: ["--no-install"], autoloadBunfig: false, autoloadDotenv: false };
+export const runtime = { execArgv: ["--no-install"], autoloadBunfig: false, autoloadDotenv: false, autoloadPackageJson: true };
 
 /** Compiles the CLI from this checkout into `outfile`, stamped with `version` and the checkout's commit. */
 export async function compile(outfile: string, version = manifest.version): Promise<void> {

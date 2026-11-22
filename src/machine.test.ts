@@ -9,6 +9,7 @@ import { serverUnit, serverUnitPath } from "./host-server.ts";
 import { claim, grantConsent, machineRecordVariable, machineReport, matchesServerUnit, miseConfigVariable, readMachine, releaseMachine, syncMachine, writeServerUnit } from "./machine.ts";
 import { oldMiseFiles } from "./migrate.ts";
 import { loadOffice, OfficeError, readConfig } from "./office.ts";
+import { writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -50,7 +51,7 @@ const host = "opencode:\n  mode: host\n  url: http://127.0.0.1:49999\n";
  */
 function makeOffice(at: string, { name = "t", opencode = host, packages = "packages:\n  - name: demo\n", firewall = false } = {}): void {
   write(join(at, "office.yaml"), `name: ${name}\n${opencode}${firewall ? "" : "socket_firewall: false\n"}${packages}`);
-  write(join(at, "packages/demo/package.yaml"), 'name: demo\ndescription: A demo package.\ntools:\n  jq: "1.7.1"\nhost:\n  install:\n    description: Demo\n    creates: ~/.local/bin/demo\n    script: scripts/install.ts\n');
+  writePackage(join(at, "packages/demo/package.yaml"), 'name: demo\ndescription: A demo package.\ntools:\n  jq: "1.7.1"\nhost:\n  install:\n    description: Demo\n    creates: ~/.local/bin/demo\n    script: scripts/install.ts\n');
   write(join(at, "machine.toml"), '# The office\'s own.\n[tools]\njq = "1.8.0"\n');
 }
 

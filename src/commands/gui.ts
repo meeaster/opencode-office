@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, watch } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 
 import { installPanel, locate, panelBundle, sha256 } from "../desktop.ts";
-import { readPackage, resolvePackages } from "../packages.ts";
+import { readPackage, requireLoadable, resolvePackages } from "../packages.ts";
 import { loadOffice, type Office, OfficeError } from "../office.ts";
 import { collectAssets } from "../../standard/opencode/assets.ts";
 import { declarationBinding } from "../../standard/opencode/delivery.ts";
@@ -17,6 +17,7 @@ function panelSource(office: Office, name: string) {
   if (resolved === undefined) throw new OfficeError(`office.yaml lists no package ${name}`);
 
   if (resolved.kind !== "local") throw new OfficeError(`${name} is a ${resolved.kind} package; office gui dev works on the office's own packages, in packages/<name>/`);
+  requireLoadable(office);
   const read = readPackage(office, resolved);
 
   if (!read.ok) throw new OfficeError(read.errors.join("; "));

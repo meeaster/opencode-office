@@ -62,17 +62,14 @@ function fixture(): void {
   const pkg = join(root, ".office/packages/office");
 
   mkdirSync(join(pkg, "scripts"), { recursive: true });
-  copyFileSync(join(import.meta.dir, "../../packages/office/office.ts"), join(pkg, "office.ts"));
-  copyFileSync(join(import.meta.dir, "../../packages/office/floors.ts"), join(pkg, "floors.ts"));
+  for (const file of ["office.ts", "floors.ts", "package.json"]) copyFileSync(join(import.meta.dir, "../../packages/office", file), join(pkg, file));
   cpSync(join(import.meta.dir, "../../packages/office/scripts"), join(pkg, "scripts"), { recursive: true });
-  // This fixture copies the real Office definition but doesn't run package sync.
-  // Give it the actual selected module in the same resolver layout as an installation.
-  const exports = join(dirname(pkg), "tooling/exports");
-  mkdirSync(exports, { recursive: true });
-  copyFileSync(join(import.meta.dir, "../../packages/tooling/requirements.ts"), join(dirname(exports), "requirements.ts"));
-  copyFileSync(join(import.meta.dir, "../../packages/tooling/exports/requirements.ts"), join(exports, "requirements.ts"));
+  // This fixture copies the real Office definition but doesn't run package sync: give it the
+  // package it imports, linked as a package set links it.
+  const tooling = join(dirname(pkg), "tooling");
+  cpSync(join(import.meta.dir, "../../packages/tooling"), tooling, { recursive: true });
   mkdirSync(join(root, ".office/node_modules/@office"), { recursive: true });
-  symlinkSync(exports, join(root, ".office/node_modules/@office/tooling"));
+  symlinkSync(tooling, join(root, ".office/node_modules/@office/tooling"));
   recordRequiredFixtures(pkg);
 
   const place = shellQuote(root);

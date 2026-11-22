@@ -5,6 +5,7 @@ import { git } from "./git.ts";
 import { loadOffice } from "./office.ts";
 import { preparePackageServices } from "./package-services.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
+import { writePackage } from "./test-package.ts";
 
 const { root, bin, marker, write, read, commit, fixture, collector } = definitionFixture();
 
@@ -16,7 +17,7 @@ test("tracked updates validate the consuming settings and staged assets before p
   const link = join(dir, ".opencode/plugins/shared");
   git(["init", "-q", "-b", "main", repo]);
   const definition = 'export default {name:"shared",description:"Shared",setup(ctx){ctx.command({name:"edition",summary:"Current edition",run(){console.log("original edition")}})},settings:{title:{description:"Title",required:true}}}';
-  write(join(source, "office.ts"), definition);
+  writePackage(join(source, "office.ts"), definition);
   write(join(source, "compose.yaml"), "services:\n  shared:\n    image: example/shared\n    env_file: ./base.env\n");
   write(join(source, "base.env"), "FEATURE=original\n");
   write(join(source, "plugin/index.ts"), "// original");
@@ -43,7 +44,7 @@ test("tracked updates validate the consuming settings and staged assets before p
     [definition.replace("settings:", 'registerCron(ctx){ctx.cron.job("job",{script:"missing.sh",schedule:"@daily"})},settings:'), "missing.sh"],
     [definition.replace("settings:", 'registerCron(ctx){ctx.cron.job("job",false);throw Error("interrupted replacement")},settings:'), "interrupted replacement"],
   ]) {
-    write(join(source, "office.ts"), candidate);
+    writePackage(join(source, "office.ts"), candidate);
     commit(repo);
     expect(cli(1, "packages", "update")).toContain(reason);
     expect(readlinkSync(link)).toBe("../../.office/packages/shared/plugin");
@@ -54,9 +55,9 @@ test("tracked updates validate the consuming settings and staged assets before p
 
   // Only the new revision declares `enabled`; staging setup also needs a published sibling.
   write(join(source, "base.env"), "FEATURE=updated\n");
-  write(join(source, "office.ts"), `export default {name:"shared",description:"New",async setup(c){
+  writePackage(join(source, "office.ts"), `export default {name:"shared",description:"New",async setup(c){
     if(c.booleanSetting("enabled",{default:false,description:"Enabled"})){
-      const {repositories}=await import("../references/repositories.ts");
+      const {repositories}=await import("@office/references/repositories");
       c.add(repositories,{name:"enabled",url:"new-revision"});
     }
   }}`);
@@ -123,11 +124,11 @@ test("down uses the applied Compose inputs and marked unit without importing the
   const { dir, home, probe, cli, select } = fixture("teardown");
   select("  - name: notes\nstate: ./state\n");
   const pkg = join(dir, "packages/notes");
-  write(join(pkg, "office.ts"), 'export default { name:"notes",description:"Notes",spawns:{label:"test=notes-${OFFICE_NAME}"}}');
+  writePackage(join(pkg, "office.ts"), 'export default { name:"notes",description:"Notes",spawns:{label:"test=notes-${OFFICE_NAME}"}}');
   write(join(pkg, "compose.yaml"), "services: {notes: {image: example/notes}}\n");
   cli(0, "sync", "--packages");
   (await preparePackageServices(loadOffice(dir), false)).apply();
-  write(join(pkg, "office.ts"), `${marker} throw Error("unread")`);
+  writePackage(join(pkg, "office.ts"), `${marker} throw Error("unread")`);
   const unit = "office-teardown-pkg-notes.bridge.service";
   write(join(home, "units", unit), `# office package services: ${dir}\n`);
   write(join(home, "bin/systemctl"), '#!/bin/sh\necho "$*" >> "$HOME/service.calls"\n', 0o755);
@@ -220,7 +221,7 @@ test("the executable installs a TS-only Git package at its locked commit, repair
 
   git(["init", "-q", repo]);
   write(join(repo, "packages/shared/title.ts"), sibling);
-  write(join(repo, "packages/shared/office.ts"), 'import { title } from "./title.ts"; export default { name: "shared", description: "Shared", settings: { title: { description: "Title", default: title } } }');
+  writePackage(join(repo, "packages/shared/office.ts"), 'import { title } from "./title.ts"; export default { name: "shared", description: "Shared", settings: { title: { description: "Title", default: title } } }');
   const first = commit(repo);
 
   git(["tag", "v1"], repo);
@@ -289,7 +290,7 @@ test("the executable installs a TS-only Git package at its locked commit, repair
   // move the lock (an invalid one is a unit test in packages.test.ts).
   const locked = read(lock);
 
-  write(join(repo, "packages/shared/office.ts"), 'throw new Error("bad candidate");');
+  writePackage(join(repo, "packages/shared/office.ts"), 'throw new Error("bad candidate");');
   select(source(commit(repo)));
   expect(cli(1, "sync", "--packages")).toContain("office.ts: bad candidate");
   expect(read(record)).toBe(updated);
