@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -11,7 +10,8 @@ import { settingsEnv } from "./package-services.ts";
 import { fetchPackage, installPackage, readPackage, resolvePackages } from "./packages.ts";
 import { recordRequiredBuiltins } from "./test-builtin-record.ts";
 import { readLockSection } from "./versions.ts";
-import { definitionText, settingsSchema, writePackage } from "./test-package.ts";
+import { readReceipts } from "../packages/seeds/store.ts";
+import { definitionText, markingDefinition, settingsSchema, writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -28,11 +28,6 @@ function write(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
-/** The seed receipts in the office at `office`, as an object. */
-function receipts(office: string) {
-  return Object.fromEntries(readLockSection(office, "seeds"));
-}
-
 /** The office's package named `name`, read with its settings. */
 function read(office: string, name: string) {
   const loaded = loadOffice(office);
@@ -41,18 +36,6 @@ function read(office: string, name: string) {
   if (resolved === undefined) throw new Error(`no package ${name}`);
 
   return { loaded, result: readPackage(loaded, resolved) };
-}
-
-/** What a fresh clone has of `.office/`: the committed seed store, and none of the rest. */
-function freshClone(office: string): void {
-  for (const entry of existsSync(join(office, ".office")) ? readdirSync(join(office, ".office")) : []) if (entry !== "seeds") rmSync(join(office, ".office", entry), { recursive: true, force: true });
-}
-
-/** Each stored seed's name and bytes. */
-function storedSeeds(office: string): Record<string, string> {
-  const store = join(office, ".office/seeds");
-
-  return Object.fromEntries(readdirSync(store).map((name) => [name, readFileSync(join(store, name), "utf8")]));
 }
 
 const manifest = "settings: {type: object, additionalProperties: false, properties: {url: {type: string}, title: {type: string, default: Shared}}, required: [url]}\n";
@@ -137,7 +120,7 @@ test("two packages' schemas with the same $id each validate, with their own $ref
   expect(read(dir, "two").result).toMatchObject({ ok: false, errors: ["packages.two.settings.size: must be string"] });
 });
 
-test("an install ignores the source office's records, an update by full commit SHA replaces the package, an edited copy is restored, and seed copies are left alone", async () => {
+test("an install ignores the source office's records, an update by full commit SHA replaces the package, and an edited copy is restored", async () => {
   const repo = join(dir, "repo");
   const office = join(dir, "office");
 
@@ -150,7 +133,6 @@ test("an install ignores the source office's records, an update by full commit S
 
   writePackage(join(repo, "pkgs/demo/package.yaml"), manifest);
   write(join(repo, "pkgs/demo/scripts/run.sh"), "echo one\n");
-  write(join(repo, "pkgs/demo/seed/out/AGENTS.md"), "from the package\n");
   // Committed by the office that authored the package, as when sharing from its packages/.
   write(join(repo, "pkgs/demo/.template.json"), '["out/AGENTS.md"]\n');
   write(join(repo, "pkgs/demo/.settings.json"), '{"url":"https://example.com","title":"Shared"}\n');
@@ -178,8 +160,7 @@ test("an install ignores the source office's records, an update by full commit S
 
   if (!installed.ok) throw new Error(installed.errors.join("\n"));
 
-  expect(installPackage(loaded, installed.value)).toEqual(["wrote .office/packages/demo/.settings.json", "wrote .office/packages/demo/.office.json (opencode: container)", "created out/AGENTS.md from package demo"]);
-  write(join(office, "out/AGENTS.md"), "the office's own\n");
+  expect(installPackage(loaded, installed.value)).toEqual(["wrote .office/packages/demo/.settings.json", "wrote .office/packages/demo/.office.json (opencode: container)"]);
   write(script, "echo edited\n");
 
   const [restored] = await fetchPackage(loaded, loaded.packages[0], source);
@@ -196,7 +177,6 @@ test("an install ignores the source office's records, an update by full commit S
   if (!updated.result.ok) throw new Error(updated.result.errors.join("\n"));
 
   expect(installPackage(updated.loaded, updated.result.value)).toEqual([]);
-  expect(readFileSync(join(office, "out/AGENTS.md"), "utf8")).toBe("the office's own\n");
 });
 
 test("a package plugin is linked while declared, gives way to a plugins: entry of its name without git running through the link, and is unlinked when the entry goes", async () => {
@@ -236,47 +216,12 @@ test("a package plugin is linked while declared, gives way to a plugins: entry o
   expect(existsSync(link)).toBe(false);
 });
 
-test("a seed file is created once: one the office deletes stays deleted, also on a fresh clone, one already there is kept, and one the package adds later is created", () => {
-  const office = join(dir, "office");
-
-  const install = () => {
-    const { loaded, result } = read(office, "demo");
-
-    if (!result.ok) throw new Error(result.errors.join("\n"));
-
-    return installPackage(loaded, result.value);
-  };
-
-  write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
-  writePackage(join(office, "packages/demo/package.yaml"), "{}\n");
-  write(join(office, "packages/demo/seed/notes/README.md"), "from the package\n");
-  write(join(office, "packages/demo/seed/notes/AGENTS.md"), "from the package\n");
-  write(join(office, "notes/AGENTS.md"), "the office's own\n");
-
-  expect(install()).toEqual(["wrote packages/demo/.settings.json", "wrote packages/demo/.office.json (opencode: container)", "kept notes/AGENTS.md, which was already there, instead of package demo's copy", "created notes/README.md from package demo"]);
-  expect(receipts(office)).toEqual({ "notes/AGENTS.md": { package: "demo", existing: true }, "notes/README.md": { package: "demo", sha256: createHash("sha256").update("from the package\n").digest("hex") } });
-  expect(existsSync(join(office, "packages/demo/.template.json"))).toBe(false);
-
-  // The receipts are in office.lock, so a fresh clone doesn't copy the deleted files again.
-  rmSync(join(office, "notes"), { recursive: true });
-  freshClone(office);
-  write(join(office, "packages/demo/seed/notes/later.md"), "added by a later version\n");
-
-  expect(install()).toEqual(["created notes/later.md from package demo"]);
-  expect(existsSync(join(office, "notes/README.md"))).toBe(false);
-  expect(existsSync(join(office, "notes/AGENTS.md"))).toBe(false);
-  expect(install()).toEqual([]);
-});
-
-test("sync removes a copied package whose entry is gone, even an edited copy, with the seed files it still holds, and leaves changed files, the office's own and a package written in the office beside them", async () => {
+test("sync removes a copied package whose entry is gone, even an edited copy, and leaves the files it laid down, the office's own and a package written in the office", async () => {
   const repo = join(dir, "repo");
   const office = join(dir, "office");
 
-  writePackage(join(repo, "pkgs/demo/package.yaml"), manifest);
+  writePackage(join(repo, "pkgs/demo/office.ts"), markingDefinition("out/marker.md", "from the package\n", `settings: ${settingsSchema({ title: "Shared" }, { url: "string" })}`));
   write(join(repo, "pkgs/demo/skills/demo-skill/SKILL.md"), "---\nname: demo-skill\ndescription: Demo.\n---\n");
-  write(join(repo, "pkgs/demo/seed/.github/workflows/publish.yml"), "on: push\n");
-  write(join(repo, "pkgs/demo/seed/out/AGENTS.md"), "from the package\n");
-  write(join(repo, "pkgs/demo/seed/out/README.md"), "from the package\n");
   git(["init", "--quiet", repo]);
   git(["add", "-A"], repo);
   git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "-m", "one"], repo);
@@ -284,124 +229,50 @@ test("sync removes a copied package whose entry is gone, even an edited copy, wi
   write(join(office, "office.yaml"), `name: t\npackages:\n  - name: demo\n    repo: ${repo}\n    path: pkgs/demo\n    ref: ${git(["rev-parse", "HEAD"], repo)}\n    settings: { url: https://example.com }\n`);
   git(["init", "--quiet", office]);
   await sync(loadOffice(office));
-  write(join(office, "out/README.md"), "the office changed this\n");
+  expect(readFileSync(join(office, "out/marker.md"), "utf8")).toBe("from the package\n");
   write(join(office, "out/my-page/index.md"), "the office's own\n");
-  write(join(office, ".github/dependabot.yml"), "version: 2\n");
-  writePackage(join(office, ".office/packages/demo/package.yaml"), `${manifest}# edited\n`);
+  write(join(office, ".office/packages/demo/office.ts"), "// edited\n");
   writePackage(join(office, "packages/own/package.yaml"), "{}\n");
   write(join(office, "office.yaml"), "name: t\n");
 
   const changes = await sync(loadOffice(office));
 
   expect(changes).toEqual([
-    "deleted .github/workflows/publish.yml, which package demo created",
-    "deleted out/AGENTS.md, which package demo created",
-    "kept out/README.md, which changed since package demo wrote it",
     "removed .office/packages/demo/, which office.yaml no longer lists",
     "linked packages/node_modules/@office to the published package set, for editors",
     "office.lock: removed demo",
   ]);
   expect(existsSync(join(office, ".office/packages/demo"))).toBe(false);
-  expect(existsSync(join(office, ".github/workflows"))).toBe(false);
-  expect(readFileSync(join(office, ".github/dependabot.yml"), "utf8")).toBe("version: 2\n");
-  expect(readFileSync(join(office, "out/README.md"), "utf8")).toBe("the office changed this\n");
+  expect(readFileSync(join(office, "out/marker.md"), "utf8")).toBe("from the package\n");
   expect(readFileSync(join(office, "out/my-page/index.md"), "utf8")).toBe("the office's own\n");
   expect(existsSync(join(office, "packages/own/package.yaml"))).toBe(true);
   expect(await sync(loadOffice(office))).toEqual([]);
 });
 
-test("sync changes no seeded file or receipt of a package it can't read, even one whose seed changed or went", async () => {
+test("a package set that can't be read runs no package's sync function, and the next sync that reads it does", async () => {
   const office = join(dir, "office");
+  const marker = join(office, "marker.md");
 
-  write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
-  writePackage(join(office, "packages/demo/package.yaml"), "{}\n");
-  write(join(office, "packages/demo/seed/changed.md"), "v1\n");
-  write(join(office, "packages/demo/seed/gone.md"), "v1\n");
+  write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n  - name: other\n");
+  writePackage(join(office, "packages/demo/office.ts"), markingDefinition("marker.md", "v1\n"));
+  writePackage(join(office, "packages/other/package.yaml"), "{}\n");
   git(["init", "--quiet", office]);
-  expect(await sync(loadOffice(office))).toContain("created changed.md from package demo");
+  await sync(loadOffice(office));
+  expect(readFileSync(marker, "utf8")).toBe("v1\n");
 
-  const lock = readFileSync(join(office, "office.lock"), "utf8");
-
-  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\n  description: [not, valid\n");
-  write(join(office, "packages/demo/seed/changed.md"), "v2\n");
-  rmSync(join(office, "packages/demo/seed/gone.md"));
+  // Another package breaks: demo's new version doesn't run.
+  writePackage(join(office, "packages/demo/office.ts"), markingDefinition("marker.md", "v2\n"));
+  writePackage(join(office, "packages/other/package.yaml"), "name: other\n  description: [not, valid\n");
 
   const changes = await sync(loadOffice(office));
 
-  expect(changes.some((line) => line.startsWith("FAILED") && line.includes("demo"))).toBe(true);
-  expect(changes.filter((line) => line.includes(".md"))).toEqual([]);
-  expect(readFileSync(join(office, "changed.md"), "utf8")).toBe("v1\n");
-  expect(readFileSync(join(office, "gone.md"), "utf8")).toBe("v1\n");
-  expect(readFileSync(join(office, "office.lock"), "utf8")).toBe(lock);
+  expect(changes.some((line) => line.startsWith("FAILED") && line.includes("other"))).toBe(true);
+  expect(readFileSync(marker, "utf8")).toBe("v1\n");
 
-  // Read again, the package's changes apply.
-  writePackage(join(office, "packages/demo/package.yaml"), "{}\n");
-  expect((await sync(loadOffice(office))).filter((line) => line.includes(".md"))).toEqual(["updated changed.md to package demo's new seed, as the file was unchanged", "kept gone.md, which package demo no longer seeds, and dropped its receipt"]);
-});
-
-test("a seed path the seeds: section couldn't hold is refused before copying, and the other files go ahead; an unreadable lock refuses before any copy", () => {
-  const office = join(dir, "office");
-
-  write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
-  writePackage(join(office, "packages/demo/package.yaml"), "{}\n");
-  write(join(office, "packages/demo/seed/back\\slash.md"), "odd\n");
-  write(join(office, "packages/demo/seed/plain.md"), "plain\n");
-
-  const install = () => {
-    const { loaded, result } = read(office, "demo");
-
-    if (!result.ok) throw new Error(result.errors.join("\n"));
-
-    return installPackage(loaded, result.value).filter((line) => !line.startsWith("wrote"));
-  };
-
-  // Runtime pins that can't be read: the receipts couldn't be saved, so nothing is copied.
-  write(join(office, "office.lock"), "mise: [not, a, pin]\n");
-  expect(install()).toEqual(["FAILED package demo's seed/back\\slash.md: not a plain office-relative path", expect.stringMatching(/^FAILED package demo's seed files: office\.lock is not valid/)]);
-  expect(existsSync(join(office, "plain.md"))).toBe(false);
-
-  rmSync(join(office, "office.lock"));
-  expect(install()).toEqual(["FAILED package demo's seed/back\\slash.md: not a plain office-relative path", "created plain.md from package demo"]);
-  expect(existsSync(join(office, "back\\slash.md"))).toBe(false);
-  expect(Object.keys(receipts(office))).toEqual(["plain.md"]);
-});
-
-test("a pulled-in package deselected before a fresh clone installed it settles its receipts without its copy", async () => {
-  const repo = join(dir, "repo");
-  const office = join(dir, "office");
-
-  writePackage(join(repo, "pkgs/demo/package.yaml"), manifest);
-  write(join(repo, "pkgs/demo/seed/out/deleted.md"), "from the package\n");
-  write(join(repo, "pkgs/demo/seed/out/kept.md"), "from the package\n");
-  write(join(repo, "pkgs/demo/seed/out/edited.md"), "from the package\n");
-  write(join(repo, "pkgs/demo/seed/mine.md"), "from the package\n");
-  git(["init", "--quiet", repo]);
-  git(["add", "-A"], repo);
-  git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "-m", "one"], repo);
-
-  write(join(office, "mine.md"), "the office's own\n");
-  write(join(office, "office.yaml"), `name: t\npackages:\n  - name: demo\n    repo: ${repo}\n    path: pkgs/demo\n    ref: ${git(["rev-parse", "HEAD"], repo)}\n    settings: { url: https://example.com }\n`);
-  git(["init", "--quiet", office]);
+  // Read again, demo's sync runs.
+  writePackage(join(office, "packages/other/package.yaml"), "{}\n");
   await sync(loadOffice(office));
-  rmSync(join(office, "out/deleted.md"));
-  write(join(office, "out/edited.md"), "the office changed this\n");
-
-  // Removed from office.yaml before the package was installed on another clone.
-  const seeds = storedSeeds(office);
-
-  expect(Object.keys(seeds)).toHaveLength(2);
-  freshClone(office);
-  write(join(office, "office.yaml"), "name: t\n");
-  expect((await sync(loadOffice(office))).filter((line) => line.includes(".md") || line.includes("demo"))).toEqual([
-    "kept out/edited.md, which changed since package demo wrote it",
-    "deleted out/kept.md, which package demo created",
-    "office.lock: removed demo",
-  ]);
-  expect(readFileSync(join(office, "mine.md"), "utf8")).toBe("the office's own\n");
-  expect(readdirSync(join(office, "out"))).toEqual(["edited.md"]);
-  expect(receipts(office)).toEqual({});
-  // Office never deletes a stored seed.
-  expect(storedSeeds(office)).toEqual(seeds);
+  expect(readFileSync(marker, "utf8")).toBe("v2\n");
 });
 
 test("sync locks a Git package's commit in office.lock, keeps the entry when a changed ref fails, and drops it with the package", async () => {
@@ -492,6 +363,7 @@ test("an entry without repo is built-in when shipped and local otherwise; the re
     ["mise-integration", "built-in", ".office/packages/mise-integration"],
     ["office", "built-in", ".office/packages/office"],
     ["references", "built-in", ".office/packages/references"],
+    ["seeds", "built-in", ".office/packages/seeds"],
     ["knowledge", "built-in", ".office/packages/knowledge"],
     ["mine", "local", "packages/mine"],
     ["shared", "remote", ".office/packages/shared"],
@@ -515,9 +387,9 @@ test("sync installs the built-in packages from the tool and restores an edited c
   expect(existsSync(join(office, ".office/packages/office/plugin/index.js"))).toBe(true);
 
   const original = readFileSync(skill, "utf8");
-  const received = receipts(office);
+  const received = readReceipts(office);
 
-  expect(Object.values(received).some((receipt) => receipt.package === "knowledge" && "sha256" in receipt)).toBe(true);
+  expect([...received.values()].some((receipt) => receipt.package === "knowledge" && "sha256" in receipt)).toBe(true);
 
   write(skill, "edited\n");
   rmSync(join(office, ".office/packages/knowledge/README.md"));
@@ -528,7 +400,7 @@ test("sync installs the built-in packages from the tool and restores an edited c
   expect(restored[0]).toStartWith("restored .office/packages/office, undoing edits to skills/office/SKILL.md (edited);");
   expect(restored[1]).toStartWith("restored .office/packages/knowledge, undoing edits to README.md (removed);");
   expect(readFileSync(skill, "utf8")).toBe(original);
-  expect(receipts(office)).toEqual(received);
+  expect(readReceipts(office)).toEqual(received);
   expect(await sync(loadOffice(office))).toEqual([]);
 });
 

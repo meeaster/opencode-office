@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { commandHelp, dispatchCommand, type Reader } from "./direct-commands.ts";
-import { reservedWord } from "./command-table.ts";
+import { packageRoute, reservedWord } from "./command-table.ts";
 
 import * as v from "valibot";
 
@@ -22,7 +22,6 @@ import { pair } from "./commands/pair.ts";
 import { pin } from "./commands/pin.ts";
 import { updatePackages, updateSkills } from "./commands/pins.ts";
 import { finishSetup, setup } from "./commands/setup.ts";
-import { seedsDiff, settleSeed } from "./commands/seeds.ts";
 import { sessionInstructions } from "./commands/session-instructions.ts";
 import { runInContainer } from "./commands/shell.ts";
 import { summarize, sync } from "./commands/sync.ts";
@@ -40,6 +39,7 @@ import { decrypt } from "./secrets.ts";
 import { onTerminal, reported, type Reporter, type Stage } from "./report/index.ts";
 import { age } from "./schema.ts";
 import { writeContainerWrappers } from "./sfw.ts";
+import { requireKnownLockKeys } from "./versions.ts";
 import { version } from "./tool.ts";
 
 const usage = `usage: office <command> [--office <dir>]
@@ -75,12 +75,6 @@ const usage = `usage: office <command> [--office <dir>]
                                the office.lock commit of each untracked tag or branch ref to where
                                it points now, then apply them as sync does. Neither command syncs
                                anything else, and office sync applies pins without moving them
-  seeds diff [path]            for a seeded file whose package changed its seed after you edited it
-                               (pending), show what the package changed and what you changed, then
-                               the settle command; without a path, list the pending files. Paths
-                               are relative to the office's folder
-  seeds settle <path>          record the package's current seed for <path> as dealt with, whether
-                               or not the file took its changes; the file is left as it is
   check                        report drift from office.yaml and the tool, the running
                                containers and opted-in managed OpenCode
   refresh [--verbose]          update tracked package and skill pins and the office.lock commits
@@ -201,6 +195,15 @@ function commandArgs(args: string[]) {
   });
 }
 
+/** Says no command matched `words`, and when the office has no published package set, that sync publishes one. */
+function unknownCommand(dir: string | undefined, words: readonly string[], failures: readonly string[]) {
+  const unpublished = dir !== undefined && words[0] !== undefined && !reservedWord(words[0]) && !hasPublishedSet(dir);
+  const failed = failures.length ? `; packages that failed to load, one of which may provide it: ${failures.join("; ")}` : "";
+
+  console.error(`Unknown command or options: ${words.join(" ")}; see office --help${unpublished ? ". Package commands load once office sync publishes a package set: run office sync" : ""}${failed}`);
+  process.exitCode = 2;
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
@@ -246,6 +249,38 @@ async function main(): Promise<void> {
     return;
   }
 
+  // A package command gets its words as typed: they never reach the CLI's own option parser.
+  const route = packageRoute(args);
+
+  if (route) {
+    if (bound) {
+      const dispatched = await dispatchCommand(bound, route.words);
+
+      if (!dispatched.found) unknownCommand(bound.dir, route.words, dispatched.failures);
+
+      return;
+    }
+
+    let found: string | undefined;
+
+    try { found = findOffice(route.office ?? process.cwd()); } catch { /* not in an office: no package command can run */ }
+
+    if (found) {
+      ensureDiscovery(found);
+      const status = await runReader(found, args);
+
+      if (status !== undefined) {
+        process.exitCode = status;
+
+        return;
+      }
+    }
+
+    unknownCommand(found, route.words, []);
+
+    return;
+  }
+
   let parsed;
 
   try {
@@ -263,6 +298,9 @@ async function main(): Promise<void> {
 
   if (!reader && !flags.version && command !== "init") {
     try { dir = findOffice(flags.office ?? process.cwd()); } catch { /* bootstrap handles offices not found */ }
+
+    // A sync that publishes refuses a lock it can't read whole before it repairs anything, discovery links too.
+    if (dir && command === "sync" && !flags.references && !flags["release-machine"]) requireKnownLockKeys(dir);
 
     if (dir) ensureDiscovery(dir);
 
@@ -377,14 +415,6 @@ async function main(): Promise<void> {
 
       reporter.finish([]);
     }, { verbose: flags.verbose === true });
-  } else if (command === "seeds") {
-    const seedsUsage = "usage: office seeds diff [path] | office seeds settle <path> [--office <dir>]";
-
-    if (Object.keys(flags).some(key => key !== "office")) throw new OfficeError(seedsUsage);
-
-    if (rest[0] === "diff" && rest.length <= 2) console.log(seedsDiff(currentOffice(flags), rest[1]));
-    else if (rest[0] === "settle" && rest.length === 2) console.log(settleSeed(currentOffice(flags), rest[1]));
-    else throw new OfficeError(seedsUsage);
   } else if (command === "refresh") {
     if (rest.length || Object.keys(flags).some(key => !["office", "verbose"].includes(key))) throw new OfficeError("usage: office refresh [--office <dir>] [--verbose]");
     const verbose = flags.verbose === true;
@@ -490,14 +520,10 @@ async function main(): Promise<void> {
 
     await guiDev(currentOffice(flags), rest[1]);
   } else {
+    // A first word of the CLI's own: a package name under it is reserved, and dispatch says so.
     const dispatched = Object.keys(flags).every(key => key === "office") && bound ? await dispatchCommand(bound, positionals) : { found: false as const, failures: [] };
 
-    if (!dispatched.found) {
-      const unpublished = dir !== undefined && positionals[0] !== undefined && !reservedWord(positionals[0]) && !hasPublishedSet(dir);
-      const failures = dispatched.failures.length ? `; packages that failed to load, one of which may provide it: ${dispatched.failures.join("; ")}` : "";
-      console.error(`Unknown command or options: ${positionals.join(" ")}; see office --help${unpublished ? ". Package commands load once office sync publishes a package set: run office sync" : ""}${failures}`);
-      process.exitCode = 2;
-    }
+    if (!dispatched.found) unknownCommand(dir, positionals, dispatched.failures);
   }
 }
 

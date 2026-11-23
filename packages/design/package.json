@@ -4,6 +4,9 @@
   "private": true,
   "exports": {},
   "office": {
-    "definition": "./office.ts"
+    "definition": "./office.ts",
+    "dependencies": [
+      "@office/seeds"
+    ]
   }
 }

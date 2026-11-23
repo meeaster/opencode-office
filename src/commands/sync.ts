@@ -6,10 +6,11 @@
 // and installs package panels on the desktop app's machine. A package's skills aren't linked: its plugin registers them.
 // Office's links are recognized by their target
 // (standard/opencode/ownership.ts) and kept out of commits through the repository's info/exclude.
-// It never rewrites AGENTS.md, other hand-written content, an existing app or a file a package's
-// seed created; it deletes such a file only with its package, and only while unchanged.
+// It never rewrites AGENTS.md, other hand-written content or an existing app; what packages write
+// in the office is their own `sync` functions' work.
 import { readdirSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import * as v from "valibot";
 
 import { prepareReferenceRefresh } from "../../packages/references/tasks/refresh.ts";
 import { claudeFiles } from "../claude.ts";
@@ -32,9 +33,9 @@ import { syncTools } from "../package-tools.ts";
 import { type Desk, type Office, skillGroups } from "../office.ts";
 import { silentStage, type Stage } from "../report/index.ts";
 import { type InstalledPackage, installPackage, removePackage, requirePackageOwnership } from "../packages.ts";
-import { keepSeedAttributes, seedStore, settleReceipts } from "../seeds.ts";
 import { describeGroup, stageGroup } from "../skill-copies.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
+import { requireKnownLockKeys } from "../versions.ts";
 
 /** "release-notes" → "Release notes", for titles in scaffolded files. */
 function title(name: string): string {
@@ -428,6 +429,9 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
     },
   };
 
+  // Before anything is written: a key office.lock holds that office doesn't know stops the sync.
+  if (scope !== "references") requireKnownLockKeys(office.dir);
+
   if (scope !== "references") requirePackageOwnership(office);
 
   if (scope === "packages") {
@@ -447,32 +451,37 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
 
   changes.push(...copySkills(office));
 
-  // info/exclude is written once, after skills are linked too. References are cloned only once
-  // this sync recorded the ones it resolved.
-  const recorded = await syncPackages(office, changes, stage, false);
-  reported.push(...await syncClones(office, recorded ? "all" : "others", stage, verbose));
+  // info/exclude is written once, after skills are linked too, and only from a package set that was
+  // applied whole. References are cloned only once this sync recorded the ones it resolved. A
+  // package's sync function that threw stops the sync here.
+  const applied = await syncPackages(office, changes, stage, false);
+
+  if (applied.stopped) return reported;
+  reported.push(...await syncClones(office, applied.recorded ? "all" : "others", stage, verbose));
   changes.push(...claudeFiles(office.dir, true));
   changes.push(...linkSkills(office));
-  changes.push(...excludePlumbing(office));
+
+  if (applied.committed) changes.push(...excludePlumbing(office, applied.committed));
 
   return reported;
 }
 
 /**
  * Installs, updates, restores and removes the office's packages at the refs office.yaml pins, then
- * applies them: settings and seed files, their mise tools (linked machine-wide where the
+ * applies them: settings, packages' sync functions, their mise tools (linked machine-wide where the
  * office manages the machine), plugin links and desktop panels. `office sync` and `office packages
  * update` both apply packages this way. A rejected candidate applies nothing. Each change goes to
- * `changes`. Returns whether the switch recorded the references it resolved.
+ * `changes`. Returns whether the switch recorded the references it resolved, whether a package's
+ * sync function stopped the sync, and, when the set was applied whole, the committed folders.
  */
-export async function syncPackages(office: Office, changes: { push: (...lines: string[]) => void }, stage: Stage = silentStage, exclude = true): Promise<boolean> {
+export async function syncPackages(office: Office, changes: { push: (...lines: string[]) => void }, stage: Stage = silentStage, exclude = true) {
   requirePluginDestination(office);
   const result = await publishPackages(office, exclude);
 
   if (result.generation) stage.detail(`active package generation: ${result.generation}`);
   changes.push(...result.lines);
 
-  return result.recorded === true;
+  return { recorded: result.recorded === true, stopped: result.stopped === true, committed: result.committed };
 }
 
 /**
@@ -497,18 +506,8 @@ export async function applyPackages(office: Office, gathered: Gathered, changes:
 
     if (bundle !== undefined && existsSync(join(withdrawals, name, bundle))) removedPanels.push(name);
 
-    const result = removePackage(office, name, join(withdrawals, name));
-    changes.push(...result);
-
-    if (!result.some(line => line.startsWith("FAILED"))) rmSync(join(withdrawals, name), { recursive: true });
-  }
-
-  // Receipts of a pulled-in package with nothing to withdraw, as on a fresh clone. A local package's
-  // stay, as its seed files do, and so do those of a withdrawal that failed, to retry.
-  try {
-    changes.push(...settleReceipts(office.dir, (name) => !installed.selected.has(name) && !installed.unread.has(name) && !existsSync(join(withdrawals, name)) && !existsSync(join(office.dir, "packages", name))));
-  } catch (error) {
-    changes.push(`FAILED seed receipts of packages office.yaml no longer lists: ${error instanceof Error ? error.message : String(error)}`);
+    changes.push(...removePackage(office, name, join(withdrawals, name)));
+    rmSync(join(withdrawals, name), { recursive: true });
   }
 
   // Executable cron owners were validated with their other contributions before publication.
@@ -517,12 +516,17 @@ export async function applyPackages(office: Office, gathered: Gathered, changes:
   if (!cron.ok) changes.push(...cron.errors.map((error) => `FAILED ${error}`));
 
   for (const item of installed.installed) changes.push(...installPackage(office, item));
-  changes.push(...keepSeedAttributes(office.dir));
 
-  // The machine is reconciled in either mode (container mode releases the host's files) only
-  // once every selected package loaded.
-  if (gathered.unread.size) changes.push(`not reconciling any package's tools or machine files: what package ${[...gathered.unread].join(", ")} claims is unknown until a sync loads it`);
-  else changes.push(...syncTools(office, gathered.packages, [...gathered.selected]), ...syncMachine(office, gathered));
+  // The machine is reconciled in either mode (container mode releases the host's files), and
+  // packages' sync functions run, only once every selected package loaded.
+  if (gathered.unread.size) {
+    const unknown = [...gathered.unread].join(", ");
+
+    changes.push(`not running any package's sync function: what package ${unknown} registers is unknown until a sync loads it`, `not reconciling any package's tools or machine files: what package ${unknown} claims is unknown until a sync loads it`);
+  } else {
+    await runSyncFunctions(office, gathered, changes);
+    changes.push(...syncTools(office, gathered.packages, [...gathered.selected]), ...syncMachine(office, gathered));
+  }
 
   const plan = withPluginPlan(office, { ...installed, problems: [] }, "collect");
   changes.push(...plan.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
@@ -530,8 +534,39 @@ export async function applyPackages(office: Office, gathered: Gathered, changes:
   changes.push(...installPanels(office, plan.installed, removedPanels));
   changes.push(...linkForEditors(office.dir));
 
-  if (exclude) changes.push(...excludePlumbing(office));
+  if (exclude && !gathered.unread.size) changes.push(...excludePlumbing(office, gathered.committed));
+}
 
+/** What a `sync` function may return: lines, or nothing. */
+const syncLines = v.optional(v.array(v.string()));
+
+/** A package's `sync` function threw: the sync stops there, with the package set switched. */
+export class SyncStopped extends Error {}
+
+/**
+ * Runs each package's `sync` function, in the order the packages loaded, each line it returns going
+ * to `changes` under the package's name as it finishes. The first that throws, or returns something
+ * other than lines, stops the rest: SyncStopped names the package.
+ */
+export async function runSyncFunctions(office: Office, gathered: Pick<Gathered, "packages" | "entries">, changes: string[]) {
+  for (const item of gathered.packages) {
+    const name = item.entry.name;
+
+    if (!item.manifest.sync) continue;
+    let returned: unknown;
+
+    try {
+      returned = await item.manifest.sync({ office: { dir: office.dir }, entries: gathered.entries, settings: structuredClone(item.settings) });
+    } catch (error) {
+      throw new SyncStopped(`package ${name}: its sync failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    const lines = v.safeParse(syncLines, returned);
+
+    if (!lines.success) throw new SyncStopped(`package ${name}: its sync returned something other than a list of lines`);
+
+    for (const line of lines.output ?? []) changes.push(`package ${name}: ${line}`);
+  }
 }
 
 /**
@@ -566,7 +601,8 @@ export const excludeEnd = "# end of office sync";
 /**
  * Keeps Office's plumbing out of commits without touching the owner's .gitignore: one block in the
  * repository's info/exclude naming every entry of `.office/` (packages, clones, staging and
- * generated state) but the seed store, `.office/seeds/`, which is committed, and each Office link,
+ * generated state) but the `committed` folders packages declare, sorted, each written
+ * `.office/<name>/`, which are committed, and each Office link,
  * with a leading slash and no trailing one so a link matches. Lines outside the block are the
  * owner's and stay, byte for byte, CRLF endings included. An office that isn't a Git repository's
  * root gets nothing.
@@ -577,7 +613,7 @@ export const excludeEnd = "# end of office sync";
  * writing at once each keep every owner line they read, and the last rename wins; only an owner
  * edit made within that moment, between a sync's read and its rename, can be overwritten.
  */
-export function excludePlumbing(office: Office): string[] {
+export function excludePlumbing(office: Office, committed: readonly string[]): string[] {
   if (!existsSync(join(office.dir, ".git"))) return [];
 
   let exclude: string;
@@ -589,7 +625,7 @@ export function excludePlumbing(office: Office): string[] {
     return ["could not locate the office repository's info/exclude; Office's plumbing is not excluded from commits"];
   }
 
-  const wanted = ["/.office/*", `!/${seedStore}/`, `/${dirname(editorLinks)}/`, ...officeEntries(office).map((path) => `/${path}`)];
+  const wanted = ["/.office/*", ...[...committed].sort().map(folder => `!/${folder}`), `/${dirname(editorLinks)}/`, ...officeEntries(office).map((path) => `/${path}`)];
 
   if (existsSync(exclude)) exclude = realpathSync(exclude);
   const text = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";

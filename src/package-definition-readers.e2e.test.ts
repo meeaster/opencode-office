@@ -14,9 +14,9 @@ for (const kind of ["local", "tracked"]) {
     const pkg = kind === "local" ? join(dir, "packages/arrival") : join(repo, "arrival");
     const installed = kind === "local" ? pkg : join(dir, ".office/packages/arrival");
     const link = join(dir, ".opencode/plugins/arrival");
-    writePackage(join(pkg, "office.ts"), definitionText(`{}`, `${marker}`));
+    // Its sync appends a line each time it runs.
+    writePackage(join(pkg, "office.ts"), definitionText(`{sync({office}){appendFileSync(join(office.dir, "arrival.md"), "ran\\n")}}`, `${marker} import {join} from "node:path";`));
     write(join(pkg, "plugin/index.ts"), "// original plugin");
-    write(join(pkg, "seed/arrival.md"), "seed");
     let identity = "packages/arrival";
 
     if (kind === "local") select("  - name: arrival\n");
@@ -65,7 +65,7 @@ test("reads return the provider's parsed values, a copy each; sync admits no bat
   write(contract, 'export const items={id:"catalog.items",parse(i){if(!Number.isFinite(i.count))throw Error("expected count");return {...i,count:i.count+1}}}');
   writePackage(path("beta"), definitionText(`{commands:{items:{summary:"items",run(i){
     const handle={id:"catalog.items",parse(){throw Error("reader parser ran")}};
-    const first=i.read(handle); if(first.length)first[0].value.count=99;console.log(JSON.stringify(i.read(handle)));
+    const first=i.entries(handle); if(first.length)first[0].value.count=99;console.log(JSON.stringify(i.entries(handle)));
   }}}}`));
   cli(0, "sync", "--packages");
   // Normalized once by the provider, not by the reader's handle; changing one read leaves the next alone.
@@ -99,7 +99,7 @@ test("a reader uses the provider as it is now; a writer that fails stops sync an
   select("  - name: alpha\n  - name: catalog\n  - name: beta\n");
   write(contract, 'export const items={id:"catalog.items",parse:i=>i};export const display=i=>i.value.toFixed(0)');
   writePackage(join(packages, "catalog/office.ts"), definitionText('{setup(c){c.registry(items)}}', 'import {items} from "./items.ts";'), { exports: { "./items": "./items.ts" } });
-  writePackage(join(packages, "beta/office.ts"), definitionText(`{commands:{display:{summary:"display",run(i){console.log(i.read(items).map(row=>display(row.value)).join(",") || "empty")}}}}`, `import {items,display} from "@office/catalog/items";`), uses);
+  writePackage(join(packages, "beta/office.ts"), definitionText(`{commands:{display:{summary:"display",run(i){console.log(i.entries(items).map(row=>display(row.value)).join(",") || "empty")}}}}`, `import {items,display} from "@office/catalog/items";`), uses);
   writePackage(writer, author(add), uses);
   cli(0, "sync", "--packages");
   expect(cli(0, "display")).toContain("12");
@@ -139,7 +139,7 @@ for (const order of [["alpha", "catalog"], ["catalog", "alpha"]]) {
       c.add(items,{name:"sample"});}}}`, `import {items,unit} from "@office/catalog/items";import {expected} from "./exports/expected.ts";
       if(unit!==expected)throw Error("incompatible revisions");`), { exports: { "./expected": "./exports/expected.ts" }, dependencies: ["catalog"] });
     writePackage(join(repo, "catalog/office.ts"), definitionText(`{setup(c){c.registry(items)},
-      commands:{measure:{summary:"measure",run(i){console.log(i.read(items)[0].value.unit)}}}}`, `import {items,unit} from "./exports/items.ts";import {expected} from "@office/alpha/expected";
+      commands:{measure:{summary:"measure",run(i){console.log(i.entries(items)[0].value.unit)}}}}`, `import {items,unit} from "./exports/items.ts";import {expected} from "@office/alpha/expected";
       if(expected!==unit)throw Error("incompatible revisions");`), { exports: { "./items": "./exports/items.ts" }, dependencies: ["alpha"] });
     contract("metres");
     const first = commit(repo);

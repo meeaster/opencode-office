@@ -11,7 +11,7 @@ packages:
   - name: knowledge
 ```
 
-Run `office sync`. The package in `.office/packages/knowledge/` follows the executable and is read-only. Sync copies new seed files (`seed/`) only when the office has not handled them before, and preserves files already there. When the package changes a seed, sync replaces the office's file only while it is unchanged; an edited one is offered through `office seeds diff`. The office owns `knowledge/`. The package has no settings.
+Run `office sync`. The package in `.office/packages/knowledge/` follows the executable and is read-only. Its `office.ts` declares the starter files under its `seed/knowledge/` as seeds for `knowledge/`; sync lays one down only when the office has not handled it before, and preserves files already there. When the package changes a seed, sync replaces the office's file only while it is unchanged; an edited one is offered through `office seeds diff`. The office owns `knowledge/`. The package has no settings.
 
 ## Plain-file knowledge
 

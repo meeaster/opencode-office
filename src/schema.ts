@@ -4,7 +4,7 @@
 import * as v from "valibot";
 import { isAsyncFunction } from "node:util/types";
 
-import type { CommandInputs, JsonValue, OpenCodeContext, RegisterCron, SettingValue, SetupContext } from "../sdk/index.ts";
+import type { CommandInputs, JsonValue, Lifecycle, Problem, OpenCodeContext, RegisterCron, SettingValue, SetupContext } from "../sdk/index.ts";
 import { validSchedule } from "../standard/cron/schedule.ts";
 
 export type { SettingValue } from "../sdk/index.ts";
@@ -614,9 +614,10 @@ export function defaultOffSetting(schema: DeclaredSettings, name: string): boole
 /** A package command's name or alias: lowercase words separated by spaces. */
 export const commandRoute = v.pipe(v.string(), v.regex(/^[a-z][a-z0-9-]*(?: [a-z][a-z0-9-]*)*$/, issue => `invalid route ${JSON.stringify(issue.input)}; expected lowercase command words separated by spaces`));
 
-/** What a package declares under one command name: its one-line summary, aliases and handler. */
+/** What a package declares under one command name: its one-line summary, usage, aliases and handler. */
 const packageCommand = v.strictObject({
   summary: v.pipe(v.string(), v.nonEmpty(), v.regex(/^[^\p{Cc}]+$/u, "expected a single-line command summary")),
+  usage: v.optional(v.pipe(v.string(), v.nonEmpty(), v.regex(/^[^\p{Cc}]+$/u, "expected a single-line usage"))),
   aliases: v.optional(v.array(commandRoute), []),
   run: v.custom<(inputs: CommandInputs) => void | Promise<void>>(value => v.is(v.function(), value), "expected a command handler"),
 }, mapping);
@@ -630,6 +631,16 @@ const packageCommands = v.pipe(
   v.transform(commands => new Map(Object.entries(commands))),
   v.map(commandRoute, packageCommand),
   v.transform(commands => Object.fromEntries(commands)),
+);
+
+/** The entries of `.office/` office itself keeps, which no package may declare committed. */
+export const officeFolders = new Set(["cache", "claude", "current", "generation-ticket", "generations", "mise", "node_modules", "packages", "plugins", "publishing.json", "resolved", "tmp"]);
+
+/** A committed folder: one plain folder name directly under `.office/`, written `.office/<name>/`, that office doesn't keep itself. */
+const committedFolder = v.pipe(
+  v.string(),
+  v.check(path => /^\.office\/[A-Za-z0-9][A-Za-z0-9._-]*\/$/.test(path), issue => `${JSON.stringify(issue.input)} is not one folder directly under .office/, written .office/<name>/`),
+  v.check(path => !officeFolders.has(path.slice(".office/".length, -1).toLowerCase()), issue => `${JSON.stringify(issue.input)} is one of office's own folders`),
 );
 
 /** The settings a schema declares whose compose variable is also one of the package's secrets. */
@@ -661,6 +672,9 @@ export function packageManifestSchema(packageName: string) {
         opencode: v.optional(v.custom<(ctx: OpenCodeContext) => void>(value => v.is(v.function(), value), "must be a synchronous registration function in office.ts")),
         settings: v.optional(settingsSchema),
         commands: v.optional(packageCommands, {}),
+        sync: v.optional(v.custom<(inputs: Lifecycle) => readonly string[] | void | Promise<readonly string[] | void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
+        check: v.optional(v.custom<(inputs: Lifecycle) => readonly Problem[] | Promise<readonly Problem[]>>(value => v.is(v.function(), value), "must be a function in office.ts")),
+        committed: v.optional(v.pipe(v.array(committedFolder, "must be a list of folders under .office/"), v.check(list => new Set(list).size === list.length, "lists a folder twice")), []),
         secrets: v.nullish(v.record(v.pipe(v.string(), v.regex(/^[A-Z][A-Z0-9_]*$/, "must be an environment variable name in capitals")), packageSecret, "must map variable names to how each is generated"), {}),
         // mise tools the package needs, each at the version it was tested with: `office sync` writes
         // them to the office's machine.packages.toml at that version, whose versions are the office's
@@ -677,7 +691,7 @@ export function packageManifestSchema(packageName: string) {
         // The label on Docker resources its services create themselves, which `office down` removes.
         spawns: v.optional(spawnsBlock),
       },
-      "must be a mapping of namespace, settings, commands, setup, secrets, tools, host, system, cron, registerCron, opencode, executor_app and spawns",
+      "must be a mapping of namespace, settings, commands, setup, sync, check, committed, secrets, tools, host, system, cron, registerCron, opencode, executor_app and spawns",
     ),
     v.transform((manifest) => ({ ...manifest, settings: manifest.settings ?? noSettings, namespace: manifest.namespace ?? packageName })),
     v.forward(
@@ -825,31 +839,6 @@ function parseKeyed<T>(section: string, value: unknown, entry: v.GenericSchema<u
 /** office.lock's `packages:` section from a parsed document. */
 export function parsePackageLock(value: unknown): Parsed<PackageLock> {
   return parseKeyed("packages", value, packageLockEntry);
-}
-
-/**
- * A seed file's receipt in office.lock: the package that handled it, and either the SHA-256 of
- * the bytes office wrote (office created it) or `existing: true` (a file was already there, so
- * the office owns it).
- */
-const seedReceipt = v.union([
-  v.strictObject({ package: name, sha256: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/, "must be 64 lowercase hex digits")) }),
-  v.strictObject({ package: name, existing: v.literal(true) }),
-], "must be { package, sha256 } or { package, existing: true }");
-
-export type SeedReceipt = v.InferOutput<typeof seedReceipt>;
-
-/** office.lock's `seeds:` section, keyed by each file's path relative to the office. */
-export type SeedReceipts = Map<string, SeedReceipt>;
-
-/** Whether `path` is a plain office-relative file path: no leading slash, `.`, `..` or empty parts. */
-export function officeRelativePath(path: string): boolean {
-  return path !== "" && !path.includes("\\") && !/[\n\r]/.test(path) && path.split("/").every((part) => part !== "" && part !== "." && part !== "..");
-}
-
-/** office.lock's `seeds:` section from a parsed document. */
-export function parseSeedReceipts(value: unknown): Parsed<SeedReceipts> {
-  return parseKeyed("seeds", value, seedReceipt, (path) => (officeRelativePath(path) ? undefined : "must be a path relative to the office"));
 }
 
 /** Where an issue is, such as `desks.assistant.repos[0].url`. */

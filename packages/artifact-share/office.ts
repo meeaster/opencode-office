@@ -1,4 +1,5 @@
 import { Package } from "@office/sdk";
+import { seeds } from "@office/seeds";
 
 export default Package.define({
   settings: {
@@ -10,5 +11,9 @@ export default Package.define({
       title: { type: "string", default: "Artifacts", description: "The site's name, shown as the index page's heading and on each rendered page's link back to it" },
       theme: { type: "string", default: "paper", description: "The theme a reader sees until they choose another with the site's picker, by id, such as paper, dracula or github; see the package README for the list" },
     },
+  },
+  setup(ctx) {
+    seeds.add(ctx, { destination: "artifacts", source: "seed/artifacts" });
+    seeds.add(ctx, { destination: ".github/workflows/publish-artifacts.yml", source: "seed/.github/workflows/publish-artifacts.yml" });
   },
 });

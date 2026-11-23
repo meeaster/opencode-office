@@ -5,7 +5,7 @@
 // once per evaluated package set, and each decides what a problem means. Nothing is read from an
 // earlier run, and nothing is saved for a later one.
 import * as v from "valibot";
-import type { CommandInputs, Registry, RegistryEntry, SettingValue } from "../sdk/index.ts";
+import type { Entries, Registry, RegistryEntry, SettingValue } from "../sdk/index.ts";
 import { isRepository, repositories } from "../packages/references/repositories.ts";
 import { machineCollection, project, type Projection, recipeSystem } from "../standard/mise-integration/projection.ts";
 import type { AppliedReference } from "./applied-references.ts";
@@ -15,6 +15,7 @@ import { installedPackages, type InstalledPackages } from "./layout.ts";
 import type { Office } from "./office.ts";
 import { type InstalledPackage, type PackageProblem, problemLine } from "./packages.ts";
 import { jsonObject, type Registered, registerPackage } from "./package-setup.ts";
+import type { PackageManifest } from "./schema.ts";
 
 /** A package whose setup ran in this run: what it read as, with the claims its entries made and its effective system block. */
 export type GatheredPackage = InstalledPackage & Projection;
@@ -52,8 +53,10 @@ export type Gathered = {
   references: AppliedReference[];
   /** No problem and nothing unread: only then do registries say what every package registered. */
   complete: boolean;
+  /** The folders under .office/ the definitions declare committed, sorted, whether or not setup ran. */
+  committed: string[];
   /** Reads a registry; throws when the gathering is incomplete. */
-  read: CommandInputs["read"];
+  entries: Entries;
 };
 
 /** One line for a gathering problem. */
@@ -79,7 +82,10 @@ export async function gatherPackages(office: Office, { skip = new Set<string>(),
   const problems: GatherProblem[] = inventory.problems.map(({ packages, message }) => ({ packages, message }));
   const settings = new Map(inventory.installed.map(item => [item.entry.name, item.settings]));
   const commands = [...inventory.definitions].flatMap(([owner, manifest]) => declaredCommands(manifest).map(command => ({ owner, command, settings: settings.get(owner) })));
+  const committed = committedFolders(inventory.definitions);
   const setUp: SetUp[] = [];
+
+  problems.push(...committed.problems);
 
   // With any invalid settings, or nothing loaded, no setup runs: commands and help still see what definitions declare.
   if (!inventory.blocked && !inventory.invalidSettings.length) {
@@ -113,7 +119,7 @@ export async function gatherPackages(office: Office, { skip = new Set<string>(),
     }
   }
 
-  const { entries } = parsed;
+  const added = parsed.entries;
   const complete = !inventory.blocked && !problems.length && !inventory.unread.size;
   const incomplete = () => problems.map(problemText).join("; ") || `not loaded: ${[...inventory.unread].join(", ")}`;
 
@@ -121,13 +127,31 @@ export async function gatherPackages(office: Office, { skip = new Set<string>(),
     selected: inventory.selected, unread: inventory.unread, inventory, packages, commands, problems, complete,
     blocked: inventory.blocked,
     names: nameProblems(commands),
-    references: entries.flatMap(({ id, value, owner }) => id === repositories.id && isRepository(value) ? [{ ...structuredClone(value), owner }] : []),
-    read: <T extends RegistryEntry>(registry: Registry<T>) => {
+    committed: committed.folders,
+    references: added.flatMap(({ id, value, owner }) => id === repositories.id && isRepository(value) ? [{ ...structuredClone(value), owner }] : []),
+    entries: <T extends RegistryEntry>(registry: Registry<T>) => {
       if (!complete) throw new Error(`cannot read ${registry.id}: the packages' registrations are incomplete: ${incomplete()}`);
 
-      return readEntries(entries, registry);
+      return readEntries(added, registry);
     },
   };
+}
+
+/** The committed folders the definitions declare, sorted, and a problem naming both packages for each folder two of them declare. */
+export function committedFolders(definitions: ReadonlyMap<string, Pick<PackageManifest, "committed">>) {
+  const owners = new Map<string, string>();
+  const problems: GatherProblem[] = [];
+
+  for (const [name, { committed }] of definitions) {
+    for (const folder of committed) {
+      const first = owners.get(folder);
+
+      if (first === undefined) owners.set(folder, name);
+      else problems.push({ packages: [first, name], named: true, message: `${folder} is declared committed by both package ${first} and package ${name}` });
+    }
+  }
+
+  return { folders: [...owners.keys()].sort(), problems };
 }
 
 /** A registry's entries, each a copy of its provider's parser output. */

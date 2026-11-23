@@ -15,7 +15,7 @@ packages:
       url: https://<owner>.github.io/<repository>
 ```
 
-Then run `office sync` and commit the seed files below, with `office.lock` and `.office/seeds/`. The package itself is in `.office/packages/artifact-share/`, which updates with `office`, is read-only there and, like the rest of `.office/` but the seed store, is kept out of Git by sync. Set the repository's Pages source to "GitHub Actions" once (Settings → Pages).
+Then run `office sync` and commit the seed files below, with `office.lock` and `.office/seeds/`. The package itself is in `.office/packages/artifact-share/`, which updates with `office`, is read-only there and, like the rest of `.office/` but the `seeds` package's store, is kept out of Git by sync. Set the repository's Pages source to "GitHub Actions" once (Settings → Pages).
 
 **Pin the renderer in CI.** Set repository variables `ARTIFACT_OFFICE_RELEASE` (the exact Office release) and `ARTIFACT_OFFICE_SHA256` (its verified `office-linux-x64` digest). The seeded workflow restores packages from this binary before rendering. Review the selected packages and their pinned Git sources: their definitions run during package sync. Keep the build job read-only; only the separate deployment job needs Pages permissions.
 
@@ -40,7 +40,7 @@ Then run `office sync` and commit the seed files below, with `office.lock` and `
 | `scripts/site.js` | The site's one script: the theme picker and light, dark or system switch on every page, saved in the browser and shared across the site, and the index's search, sort and copy link. Without JavaScript the site shows the default theme in the reader's system scheme and hides these controls |
 | `scripts/style.css` | The look of the index and of rendered Markdown pages: system fonts only, nothing loaded from other sites. An office's own `artifacts/style.css` replaces it |
 | `test/` | Tests of the theme mapping, the link filter and the code blocks, run by this repository's `pnpm test` |
-| `seed/` | Copied once into the office: `artifacts/AGENTS.md` (what agents may put there), `artifacts/README.md` and `.github/workflows/publish-artifacts.yml`. The office owns these copies: `office sync` keeps edits and deletions, and replaces a copy only while it is untouched and the package's seed changes |
+| `seed/` | The files `office.ts` declares as seeds with `seeds.add`, laid down once in the office: `artifacts/AGENTS.md` (what agents may put there), `artifacts/README.md` and `.github/workflows/publish-artifacts.yml`. The office owns these copies: `office sync` keeps edits and deletions, replaces a copy only while it is untouched and the package's seed changes, and leaves them when the package is removed |
 
 ## Markdown blocks
 

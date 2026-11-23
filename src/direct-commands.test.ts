@@ -75,6 +75,44 @@ test("a definition's commands run by name or alias with its settings as office.y
   expect(await printed(["notes", "list"])).toEqual(["label:edited"]);
 });
 
+test("the longest declared name or alias starting the words runs, with the rest as its arguments as given, and its office's folder", async () => {
+  const echo = (name: string) => `run({args, office}){console.log(${JSON.stringify(name)}, JSON.stringify(args), office.dir)}`;
+
+  office({
+    notes: { body: `{commands:{"notes":{summary:"Notes",${echo("notes")}},"notes show":{summary:"Show a note",usage:"<path>",aliases:["notes cat"],${echo("show")}}}}` },
+  });
+
+  expect(await printed(["notes", "show", "a/b.md", "--raw"])).toEqual([`show ["a/b.md","--raw"] ${dir}`]);
+  expect(await printed(["notes", "cat", "my notes/a b.md"])).toEqual([`show ["my notes/a b.md"] ${dir}`]);
+  expect(await printed(["notes", "show"])).toEqual([`show [] ${dir}`]);
+  expect(await printed(["notes", "showing"])).toEqual([`notes ["showing"] ${dir}`]);
+  expect(await dispatchCommand({ dir }, ["note", "show"])).toEqual({ found: false, failures: [] });
+  expect(await commandHelp({ dir })).toEqual(["  notes    Notes", "  notes show <path> | notes cat <path>    Show a note"]);
+});
+
+test("two packages may declare a name and a longer one starting with it; two declaring one folder committed fails the gathering naming both", async () => {
+  office({
+    short: { body: '{commands:{"notes":{summary:"Notes",run({args}){console.log("short", args.join(","))}}},committed:[".office/notes/"]}' },
+    long: { body: '{commands:{"notes show":{summary:"Show",run({args}){console.log("long", args.join(","))}}},committed:[".office/notes/",".office/alpha/"]}' },
+  });
+
+  const gathered = await gatherPackages(loadOffice(dir));
+
+  expect(gathered.names).toEqual([]);
+  expect(gathered.committed).toEqual([".office/alpha/", ".office/notes/"]);
+  expect(gathered.problems).toEqual([{ packages: ["short", "long"], named: true, message: ".office/notes/ is declared committed by both package short and package long" }]);
+  expect(gathered.complete).toBe(false);
+});
+
+test("a committed folder that isn't one plain folder under .office/, or is one office keeps, fails its package's load naming it", async () => {
+  const paths = ["notes/", ".office/generations/", ".office/Packages/", ".office/a/b/", ".office/*/", ".office/notes"];
+
+  office(Object.fromEntries(paths.map((path, index) => [`p${index}`, { body: `{committed:[${JSON.stringify(path)}]}` }])));
+  const { problems } = await gatherPackages(loadOffice(dir));
+
+  expect(problems.map(({ packages, message }) => [packages, message])).toEqual(paths.map((path, index) => [[`p${index}`], expect.stringContaining(JSON.stringify(path))]));
+});
+
 test("a package that can't load fails with its reason, and the others' commands are still listed", async () => {
   office({
     module: { body: "{}", prelude: 'throw Error("module failed");' },
@@ -218,7 +256,7 @@ test("a command reads a contributed system recipe without its bootstrap file; on
   const recipe = { name: "giver", setting: "system", description: "Giver", platforms: ["ubuntu-24.04-amd64-wsl"], bootstrap: "system/bootstrap.toml", ready: ["/opt/giver"], env: {} };
   const settings = '{type:"object",additionalProperties:false,properties:{system:{type:"boolean",default:false}}}';
 
-  office({ giver: { body: `{settings:${settings},setup(c){c.add({id: "mise-integration.recipes"}, ${JSON.stringify(recipe)})},commands:{"giver show":{summary:"Show",run({read}){for (const e of read({id: "mise-integration.recipes"})) console.log(e.value.name, e.value.bootstrap)}}}}` } });
+  office({ giver: { body: `{settings:${settings},setup(c){c.add({id: "mise-integration.recipes"}, ${JSON.stringify(recipe)})},commands:{"giver show":{summary:"Show",run({entries}){for (const e of entries({id: "mise-integration.recipes"})) console.log(e.value.name, e.value.bootstrap)}}}}` } });
 
   expect(await printed(["giver", "show"])).toEqual(["giver system/bootstrap.toml"]);
   expect((await gatherPackages(loadOffice(dir), { machine: true })).problems).toEqual([{ packages: ["giver"], message: "system/bootstrap.toml must be a file inside package giver" }]);
@@ -238,7 +276,7 @@ test("every setup finishes before an entry is parsed, whatever the order; handle
   office({
     // The consumer is set up first and adds through its own handle object with the provider's id.
     consumer: { body: '{setup(c){finished.count++; c.add({id: "provider.items", parse: i => i}, {name: "entry"})}}', prelude: 'import {finished} from "../provider/items.ts";' },
-    provider: { body: '{setup(c){finished.count++; c.registry(items)},commands:{"provider show":{summary:"Show",run({read}){for (const e of read(items)) console.log(JSON.stringify([e.value, e.owner]))}}}}', prelude: 'import {finished, items} from "./items.ts";' },
+    provider: { body: '{setup(c){finished.count++; c.registry(items)},commands:{"provider show":{summary:"Show",run({entries}){for (const e of entries(items)) console.log(JSON.stringify([e.value, e.owner]))}}}}', prelude: 'import {finished, items} from "./items.ts";' },
   });
 
   expect(await printed(["provider", "show"])).toEqual([JSON.stringify([{ name: "entry", seen: 2 }, "consumer"])]);
@@ -255,7 +293,7 @@ test("adding to a registry no selected package registered fails, naming the adde
   const gathered = await gatherPackages(loadOffice(dir));
 
   expect(gathered.complete).toBe(false);
-  expect(() => gathered.read({ id: "nobody.items", parse: (input: RegistryEntry) => input })).toThrow("cannot read nobody.items: the packages' registrations are incomplete: package adder: no provider registered nobody.items");
+  expect(() => gathered.entries({ id: "nobody.items", parse: (input: RegistryEntry) => input })).toThrow("cannot read nobody.items: the packages' registrations are incomplete: package adder: no provider registered nobody.items");
 });
 
 test("a value that isn't a JSON object, such as one holding a function, fails the run naming the adder and the registry", async () => {

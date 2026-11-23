@@ -6,6 +6,7 @@
     "paths": {
       "@office/sdk": ["./sdk/index.ts"],
       "@office/references/repositories": ["./packages/references/repositories.ts"],
+      "@office/seeds": ["./packages/seeds/handles.ts"],
       "@office/tooling/requirements": ["./packages/tooling/requirements.ts"],
       "@office/mise-integration/claims": ["./packages/mise-integration/claims.ts"]
     },

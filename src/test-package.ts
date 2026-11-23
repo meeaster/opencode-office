@@ -60,3 +60,19 @@ export function writePackage(file: string, text: string, options: PackageOptions
   writeFileSync(file, text);
   writeFileSync(join(dir, "package.json"), packageJsonText(options.name ?? basename(dir), basename(file), options));
 }
+
+/** A seed as a test package declares it to the seeds package: a destination and one of source and text. */
+export type TestSeed = { destination: string; source: string } | { destination: string; text: string };
+
+/**
+ * A definition that declares `seeds` in its setup, through a handle with the seeds registry's id
+ * (handles match by id), so a package run from source needs no `@office/seeds` import.
+ */
+export function seedingDefinition(seeds: TestSeed[]) {
+  return definitionText(`{ setup(ctx) { for (const seed of ${JSON.stringify(seeds)}) ctx.add({ id: "seeds.seed", parse: value => value }, seed); } }`);
+}
+
+/** A definition whose `sync` writes `text` to `file` in the office, so a test sees whether, and from which version, it ran. */
+export function markingDefinition(file: string, text: string, fields = "") {
+  return definitionText(`{ ${fields}${fields ? ", " : ""}sync({ office }) { mkdirSync(dirname(join(office.dir, ${JSON.stringify(file)})), { recursive: true }); writeFileSync(join(office.dir, ${JSON.stringify(file)}), ${JSON.stringify(text)}); } }`, 'import { mkdirSync, writeFileSync } from "node:fs"; import { dirname, join } from "node:path";');
+}

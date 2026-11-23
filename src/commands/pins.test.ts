@@ -12,7 +12,7 @@ import { silentStage, type Stage } from "../report/index.ts";
 import { editLock, readLockSection } from "../versions.ts";
 import { updatePackages, updateSkills } from "./pins.ts";
 import { sync } from "./sync.ts";
-import { definitionText, packageJsonText } from "../test-package.ts";
+import { definitionText, markingDefinition, packageJsonText, settingsSchema } from "../test-package.ts";
 
 /** office.lock's `packages:` section in the office at `dir`, as an object. */
 const readPackageLock = (dir: string) => Object.fromEntries(readLockSection(dir, "packages"));
@@ -297,7 +297,7 @@ packages:
 
   expect(readPackageLock(join(dir, "office"))).toEqual(locked);
 
-  const pkgTwo = commit(pkg, { "demo/package.yaml": manifest("two"), "demo/seed/notes/DEMO.md": "from demo\n", "tagged/package.yaml": "# Tagged two.\n{}\n" }, "v1.1.0");
+  const pkgTwo = commit(pkg, { "demo/package.json": packageJsonText("demo"), "demo/package.yaml": null, "demo/office.ts": markingDefinition("notes/DEMO.md", "from demo\n", `settings: ${settingsSchema({ greeting: "hi" })}`), "tagged/package.yaml": "# Tagged two.\n{}\n" }, "v1.1.0");
 
   // The untracked tag moves to the new commit.
   git([...identity, "tag", "-f", "-a", "v1.0.0", "-m", "moved"], pkg);
@@ -318,7 +318,7 @@ packages:
   expect(record(".office/packages/tagged")).toMatchObject({ ref: "v1.0.0", commit: pkgTwo });
   expect(read(join(dir, "office/office.yaml"))).toContain("  # Follows the v1 line.\n");
   expect(record(".office/packages/demo")).toMatchObject({ commit: pkgTwo, ref: pkgTwo });
-  // Applied as sync applies a package: its seed file is created.
+  // Applied as sync applies a package: its sync function runs.
   expect(read(join(dir, "office/notes/DEMO.md"))).toBe("from demo\n");
   expect(record(".office/packages/fixed").commit).toBe(pkgOne);
   // Skill pins and copies wait for office skills update.
@@ -474,7 +474,7 @@ test("packages update retries without a provider whose newer commit fails setup 
   const repo = join(dir, "coupled");
   const yaml = join(dir, "office", "office.yaml");
   const names = ["provider", "consumer", "healthy"];
-  const provider = (extra: string) => definitionText(`{setup(c){c.registry(items);${extra}},commands:{"provider show":{summary:"show",run({read}){console.log("entries:" + read(items).map(e => e.value.name).join(","))}}}}`, 'import {items} from "./items.ts";');
+  const provider = (extra: string) => definitionText(`{setup(c){c.registry(items);${extra}},commands:{"provider show":{summary:"show",run({entries}){console.log("entries:" + entries(items).map(e => e.value.name).join(","))}}}}`, 'import {items} from "./items.ts";');
   const consumer = (name: string) => definitionText(`{setup(c){c.add(items,{name:"${name}"})}}`, 'import {items} from "@office/provider/items";');
 
   const first = commit(repo, {

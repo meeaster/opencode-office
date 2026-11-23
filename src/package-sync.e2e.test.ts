@@ -10,19 +10,23 @@ import { definitionText, writePackage } from "./test-package.ts";
 
 const { root, write, read, commit, fixture } = definitionFixture({ second: false });
 
-const imports = 'import {repositories} from "@office/references/repositories"; import {requirements} from "@office/tooling/requirements"; import {tasks} from "@office/mise-integration/claims";';
+const imports = 'import {repositories} from "@office/references/repositories"; import {requirements} from "@office/tooling/requirements"; import {tasks} from "@office/mise-integration/claims"; import {mkdirSync, writeFileSync} from "node:fs"; import {join} from "node:path";';
 const dependencies = ["references", "tooling", "mise-integration"];
 
-/** A definition that requires `tool`, adds the task `task` and the reference `reference`. */
-function claims({ tool, task, reference, extra = "" }: { tool: string; task: string; reference: string; extra?: string }) {
+/**
+ * A definition that requires `tool`, adds the task `task` and the reference `reference`, and whose
+ * `sync` writes `mark` to `notes/<file>` when both are given.
+ */
+function claims({ tool, task, reference, extra = "", file, mark }: { tool: string; task: string; reference: string; extra?: string; file?: string; mark?: string }) {
   const [name, version] = tool.split("@");
+  const sync = file === undefined ? "" : `, sync({office}){mkdirSync(join(office.dir, "notes"), {recursive: true}); writeFileSync(join(office.dir, "notes/${file}"), ${JSON.stringify(mark)})}`;
 
   return definitionText(`{setup(c){
     c.add(requirements,{name:"${name}",minimumVersion:"${version}"});
     c.add(tasks,{name:"hello",script:"hello.sh",description:"${task}"});
     c.add(repositories,{name:"${reference}",url:"https://example.invalid/${reference}.git"});
     ${extra}
-  }}`, imports);
+  }${sync}}`, imports);
 }
 
 /** office.yaml for a host-mode office selecting `packages`. */
@@ -34,9 +38,8 @@ test("a setup that throws stops package sync and changes nothing it applies; fix
   const first = join(dir, "packages/first");
   const second = join(dir, "packages/second/office.ts");
   const third = join(dir, "packages/third");
-  writePackage(join(first, "office.ts"), claims({ tool: "jq@1.7.1", task: "Say hello", reference: "first-docs" }), { dependencies });
+  writePackage(join(first, "office.ts"), claims({ tool: "jq@1.7.1", task: "Say hello", reference: "first-docs", file: "first.md", mark: "first\n" }), { dependencies });
   write(join(first, "hello.sh"), "echo hello\n");
-  write(join(first, "seed/notes/first.md"), "first seed\n");
   write(join(first, "plugin/index.ts"), "export default { id: \"first\", async setup() {} };\n");
   writePackage(second, definitionText("{setup(){}}"));
   writePackage(join(third, "office.ts"), definitionText("{}"));
@@ -49,8 +52,8 @@ test("a setup that throws stops package sync and changes nothing it applies; fix
     tools: () => read(join(dir, "machine.packages.toml")),
     fragment: () => read(join(dir, ".office/mise/first.toml")),
     plugin: () => readlinkSync(join(dir, ".opencode/plugins/first")),
-    seed: () => read(join(dir, "notes/first.md")),
-    receipts: () => read(join(dir, "office.lock")),
+    marker: () => read(join(dir, "notes/first.md")),
+    lock: () => read(join(dir, "office.lock")),
     applied: () => read(join(dir, ".office/resolved/references.json")),
     deselected: () => readlinkSync(join(dir, ".opencode/plugins/third")),
   };
@@ -62,8 +65,7 @@ test("a setup that throws stops package sync and changes nothing it applies; fix
   expect(before.applied).toContain("first-docs");
 
   writePackage(second, definitionText('{setup(){throw Error("second is broken")}}'));
-  writePackage(join(first, "office.ts"), claims({ tool: "jq@1.8.0", task: "Say goodbye", reference: "first-guide" }), { dependencies });
-  write(join(first, "seed/notes/first.md"), "edited seed\n");
+  writePackage(join(first, "office.ts"), claims({ tool: "jq@1.8.0", task: "Say goodbye", reference: "first-guide", file: "first.md", mark: "edited\n" }), { dependencies });
   rmSync(join(first, "plugin"), { recursive: true });
   write(yaml, host("  - name: first\n  - name: second\n"));
   expect(cli(1, "sync", "--packages")).toContain("FAILED package second: second is broken");
@@ -76,7 +78,7 @@ test("a setup that throws stops package sync and changes nothing it applies; fix
   expect(outputs.fragment()).toContain("Say goodbye");
   expect(outputs.applied()).toContain("first-guide");
   expect(outputs.applied()).not.toContain("first-docs");
-  expect(outputs.seed()).toBe("edited seed\n");
+  expect(outputs.marker()).toBe("edited\n");
   expect(lstatSync(join(dir, ".opencode/plugins/first"), { throwIfNoEntry: false })).toBeUndefined();
   expect(lstatSync(join(dir, ".opencode/plugins/third"), { throwIfNoEntry: false })).toBeUndefined();
 
@@ -95,17 +97,16 @@ test("a Git package that can't be fetched doesn't stop the others, but no packag
   git(["init", "-qb", "main", repo]);
   writePackage(join(repo, "remote/office.ts"), definitionText('{setup(c){c.registry({id:"remote.items",parse:i=>i}); c.add(tasks,{name:"hello",script:"hello.sh",description:"Remote hello"})}}', 'import {tasks} from "@office/mise-integration/claims";'), { name: "remote", dependencies: ["mise-integration"] });
   write(join(repo, "remote/hello.sh"), "echo hello\n");
-  write(join(repo, "remote/seed/notes/remote.md"), "remote seed\n");
   write(join(repo, "remote/plugin/index.ts"), "export default { id: \"remote\", async setup() {} };\n");
   const pinned = commit(repo);
-  writePackage(join(local, "office.ts"), claims({ tool: "jq@1.7.1", task: "Local hello", reference: "local-docs" }), { dependencies });
+  writePackage(join(local, "office.ts"), claims({ tool: "jq@1.7.1", task: "Local hello", reference: "local-docs", file: "local.md", mark: "v1\n" }), { dependencies });
   write(join(local, "hello.sh"), "echo hello\n");
   write(yaml, host(`  - {name: remote, repo: ${repo}, path: remote, ref: ${pinned}}\n  - name: local\n`));
   cli(0, "sync", "--packages");
   const current = readlinkSync(join(dir, ".office/current"));
   const tools = read(join(dir, "machine.packages.toml"));
   const fragments = ["remote", "local"].map(name => read(join(dir, `.office/mise/${name}.toml`)));
-  const receipts = read(join(dir, "office.lock"));
+  const lock = read(join(dir, "office.lock"));
   const plugin = join(dir, ".opencode/plugins/remote");
   const target = readlinkSync(plugin);
 
@@ -114,7 +115,7 @@ test("a Git package that can't be fetched doesn't stop the others, but no packag
   writePackage(join(local, "office.ts"), claims({ tool: "jq@1.7.1", task: "Local hello", reference: "local-docs", extra: `
     c.add(repositories,{name:"local-guide",url:"https://example.invalid/guide.git"});
     c.add(requirements,{name:"yq",minimumVersion:"4.44.1"});
-    c.add(tasks,{name:"more",script:"hello.sh",description:"Local more"});` }), { dependencies });
+    c.add(tasks,{name:"more",script:"hello.sh",description:"Local more"});`, file: "local.md", mark: "v2\n" }), { dependencies });
 
   const output = cli(1, "sync", "--packages");
   expect(output).toContain("FAILED .office/packages/remote");
@@ -123,8 +124,9 @@ test("a Git package that can't be fetched doesn't stop the others, but no packag
   expect(read(join(dir, ".office/resolved/references.json"))).toContain("local-guide");
   expect(read(join(dir, "machine.packages.toml"))).toBe(tools);
   expect(["remote", "local"].map(name => read(join(dir, `.office/mise/${name}.toml`)))).toEqual(fragments);
-  expect(read(join(dir, "notes/remote.md"))).toBe("remote seed\n");
-  expect(read(join(dir, "office.lock"))).toBe(receipts);
+  expect(output).toContain("not running any package's sync function: what package remote registers is unknown");
+  expect(read(join(dir, "notes/local.md"))).toBe("v1\n");
+  expect(read(join(dir, "office.lock"))).toBe(lock);
   expect(readlinkSync(plugin)).toBe(target);
   expect(cli(1, "references", "list")).toContain("package remote: rejected by the last sync; run office sync");
 

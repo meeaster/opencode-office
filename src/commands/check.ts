@@ -37,17 +37,15 @@ import { wrappedCommands } from "../sfw.ts";
 import { toolPins } from "../mise-toml.ts";
 import { destinationProblems } from "../../standard/mise-integration/projection.ts";
 import { fragmentNotes, machineBelowFloors, machineFile, orphanFragments, packagesFile, packagesFileProblems, strayFragments } from "../package-tools.ts";
-import { describeRecord, fileHashes, type InstalledPackage, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, requiredPackages, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
+import { describeRecord, fileHashes, type InstalledPackage, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
 import { describeIgnoredSkills, ignoredSkills, readIgnoredFolders } from "../../packages/office/plugin/ignored-skills.ts";
 import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces, shadowing, withLoaded } from "../outside.ts";
 import { pinnedTools } from "../schema.ts";
-import { seedReceiptProblems, storedSeedProblems } from "../seeds.ts";
 import { builtinFiles, builtinPackages, version } from "../tool.ts";
-import { changes, defaultPins, describeMove, executorImage, isTested, readApplied, readLockSection, tested, toolsFor, wantedPins } from "../versions.ts";
+import { changes, defaultPins, describeMove, executorImage, isTested, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
 import { appFolders, deployedFrameworks } from "./apps.ts";
 import { compose, officeImage, ports, runningPins } from "./compose.ts";
 import { keyOrganization } from "./executor.ts";
-import { seededPaths } from "./seeds.ts";
 import type { Stage } from "../report/index.ts";
 
 /** Prints one check; "warn" is shown but doesn't fail `office check`. */
@@ -165,29 +163,9 @@ async function drift(office: Office, { loaded, claims, references }: Context): P
 
   problems.push(...orphanFragments(office, listed), ...strayFragments(office), ...(claims ? packagesFileProblems(office, claims.packages, listed) : []));
 
-  problems.push(...packageLockProblems(office), ...seedReceiptProblems(office.dir, new Set([...requiredPackages, ...office.packages.map((entry) => entry.name)])));
+  problems.push(...packageLockProblems(office));
 
   return problems;
-}
-
-/** A warning for each receipt whose stored seed is missing or corrupt, and one for any pending seeds. Reads only. */
-export function seedChecks(office: Office, report: Report): void {
-  for (const problem of storedSeedProblems(office.dir)) report("warn", "seeds", problem);
-
-  // An unreadable seeds: section is drift, which seedReceiptProblems reports.
-  try {
-    readLockSection(office.dir, "seeds");
-  } catch {
-    return;
-  }
-
-  try {
-    const pending = seededPaths(office).filter((item) => item.state === "pending").length;
-
-    if (pending > 0) report("warn", "seeds", `${pending} ${pending === 1 ? "seed" : "seeds"} pending; office seeds diff`);
-  } catch (error) {
-    report("warn", "seeds", `can't tell which seeds are pending: ${error instanceof Error ? error.message : String(error)}`);
-  }
 }
 
 /**
@@ -375,7 +353,7 @@ async function packageChecks(office: Office, report: Report, { gathered, loaded,
   }
 
   if (!claims) {
-    report("warn", "package claims", `not checked while a package doesn't load: the shared ${packagesFile}, the fragments in .office/mise/, machine destinations and the checkouts of packages' references; fix the packages above, then office check`);
+    report("warn", "package claims", `not checked while a package doesn't load: the shared ${packagesFile}, the fragments in .office/mise/, machine destinations, the checkouts of packages' references and packages' own check functions; fix the packages above, then office check`);
 
     return;
   }
@@ -384,6 +362,41 @@ async function packageChecks(office: Office, report: Report, { gathered, loaded,
   for (const error of destinationProblems(office, claims.packages)) report(false, "machine destinations", error);
 
   for (const line of machineBelowFloors(office, claims.packages)) report("warn", machineFile, line);
+
+  await packageCheckFunctions(office, report, claims);
+}
+
+/** What a `check` function may return: a list of problems. */
+const problemList = v.array(v.strictObject({ level: v.picklist(["warning", "failed"]), message: v.string() }));
+
+/**
+ * Each package's own `check` function, in the order packages loaded, from a complete gathering: a
+ * warning line for each warning, a failed line for each failure, and a failed line naming the
+ * package for one that throws or returns something other than problems.
+ */
+export async function packageCheckFunctions(office: Office, report: Report, gathered: Pick<Gathered, "packages" | "entries">): Promise<void> {
+  for (const item of gathered.packages) {
+    const name = `package ${item.entry.name}`;
+
+    if (!item.manifest.check) continue;
+    let problems: unknown;
+
+    try {
+      problems = await item.manifest.check({ office: { dir: office.dir }, entries: gathered.entries, settings: structuredClone(item.settings) });
+    } catch (error) {
+      report(false, name, `its check failed: ${error instanceof Error ? error.message : String(error)}`);
+
+      continue;
+    }
+
+    if (!v.is(problemList, problems)) {
+      report(false, name, "its check returned something other than a list of problems");
+
+      continue;
+    }
+
+    for (const { level, message } of problems) report(level === "warning" ? "warn" : false, name, message);
+  }
 }
 
 /**
@@ -1136,7 +1149,6 @@ export async function check(office: Office, stage?: Stage, verbose = false, gath
   }
 
   await packageChecks(office, report, run);
-  seedChecks(office, report);
   withdrawnClones(office, report);
   spawnChecks(office, report);
 

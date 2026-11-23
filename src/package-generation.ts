@@ -7,7 +7,7 @@ import { tryFileLock } from "./file-lock.ts";
 import { atomicWrite } from "./secrets.ts";
 import { OfficeError } from "./office.ts";
 import { type PackageLock, parsePackageLock } from "./schema.ts";
-import { editLock, lockFile, lockSections, packageSectionKey, publicationBusy, readLockText } from "./versions.ts";
+import { editLock, lockFile, lockSections, packageSectionKey, publicationBusy, readLockText, requireKnownLockKeys } from "./versions.ts";
 
 const id = v.pipe(v.string(), v.regex(/^g-[a-f0-9-]{36}$/));
 
@@ -201,6 +201,8 @@ export function recover(dir: string) {
   const path = join(dir, ".office/publishing.json");
 
   if (!existsSync(path)) return;
+  // Rolling forward publishes: never around a key office doesn't know.
+  requireKnownLockKeys(dir);
   const intent = v.parse(journal, JSON.parse(readFileSync(path, "utf8")));
   const current = activeGeneration(dir);
   const pins = digest(readFileSync(join(dir, "office.yaml"), "utf8"));
@@ -248,6 +250,8 @@ export function ensureDiscovery(dir: string) {
 /** Reserve the final path and protect both the source and candidate during materialization. */
 export function beginGeneration(dir: string) {
   return locked(dir, () => {
+    // Before the first generation, a recovery or a prune: a lock office can't read whole stops it all.
+    requireKnownLockKeys(dir);
     establish(dir);
     recover(dir);
     const previous = activeGeneration(dir);
@@ -290,6 +294,7 @@ export function publishGeneration({ dir, previous, name, original, lock }: Candi
   const ticket = join(dir, ".office/generation-ticket");
 
   return locked(dir, () => {
+    requireKnownLockKeys(dir);
     establish(dir);
     recover(dir);
 
@@ -307,7 +312,7 @@ export function publishGeneration({ dir, previous, name, original, lock }: Candi
 
     // Fails here, before anything changes, when office.lock must be rewritten and can't be read.
     if (after !== before) {
-      for (const section of Object.values(now)) if (!section.ok) throw section.error;
+      for (const section of [now.runtime, now.packages]) if (!section.ok) throw section.error;
     }
 
     const path = join(dir, ".office/publishing.json");

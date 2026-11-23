@@ -16,8 +16,12 @@ test("tracked updates validate the consuming settings and staged assets before p
   const installed = join(dir, ".office/packages/shared");
   const link = join(dir, ".opencode/plugins/shared");
   git(["init", "-q", "-b", "main", repo]);
-  const definition = definitionText('{commands:{edition:{summary:"Current edition",run(){console.log("original edition")}}},settings:{type:"object",additionalProperties:false,required:["title"],properties:{title:{type:"string"}}}}');
-  writePackage(join(source, "office.ts"), definition);
+  // Its seeds are a folder: a file added there would be laid down by any revision that publishes.
+  const seeded = 'setup(c){seeds.add(c,{destination:"seeded",source:"seed"})},';
+  const withSeeds = (body: string) => definitionText(body, 'import {seeds} from "@office/seeds";');
+  const definition = withSeeds(`{${seeded}commands:{edition:{summary:"Current edition",run(){console.log("original edition")}}},settings:{type:"object",additionalProperties:false,required:["title"],properties:{title:{type:"string"}}}}`);
+  const uses = { dependencies: ["seeds"] };
+  writePackage(join(source, "office.ts"), definition, uses);
   write(join(source, "compose.yaml"), "services:\n  shared:\n    image: example/shared\n    env_file: ./base.env\n");
   write(join(source, "base.env"), "FEATURE=original\n");
   write(join(source, "plugin/index.ts"), "// original");
@@ -27,7 +31,7 @@ test("tracked updates validate the consuming settings and staged assets before p
   select(`  - {name: shared, repo: ${repo}, ref: ${first}, path: shared, track: main, settings: {title: Mine}}\nstate: ./state\n`);
   cli(0, "sync", "--packages");
   (await preparePackageServices(loadOffice(dir), false)).apply();
-  const paths = ["office.yaml", ".office/resolved/references.json", "shared.md", ".opencode/plugins/shared/index.ts", "state/packages/shared/compose.yaml", "state/packages/shared/settings.env", "state/packages/shared/include.yaml"].map(path => join(dir, path));
+  const paths = ["office.yaml", ".office/resolved/references.json", "seeded/shared.md", ".office/seeds/receipts.json", ".opencode/plugins/shared/index.ts", "state/packages/shared/compose.yaml", "state/packages/shared/settings.env", "state/packages/shared/include.yaml"].map(path => join(dir, path));
   paths.push(join(dir, "office.lock"), ...[".source.json", ".settings.json", "base.env", "compose.yaml", "office.ts"].map(file => join(installed, file)));
   const before = paths.map(read);
   write(join(source, "seed/extra.md"), "new seed");
@@ -46,42 +50,45 @@ test("tracked updates validate the consuming settings and staged assets before p
     [definition.replace("settings:", 'registerCron(ctx){ctx.cron.job("job",{script:"missing.sh",schedule:"@daily"})},settings:'), "missing.sh"],
     [definition.replace("settings:", 'registerCron(ctx){ctx.cron.job("job",false);throw Error("interrupted replacement")},settings:'), "interrupted replacement"],
   ]) {
-    writePackage(join(source, "office.ts"), candidate);
+    writePackage(join(source, "office.ts"), candidate, uses);
     commit(repo);
     expect(cli(1, "packages", "update")).toContain(reason);
     expect(readlinkSync(link)).toBe("../../.office/packages/shared/plugin");
     expect(paths.map(read)).toEqual(before);
     expect(cli(0, "edition")).toContain("original edition");
-    expect(existsSync(join(dir, "extra.md"))).toBe(false);
+    expect(existsSync(join(dir, "seeded/extra.md"))).toBe(false);
   }
 
   // Only the new revision declares `enabled`; staging setup also needs a published sibling.
   write(join(source, "base.env"), "FEATURE=updated\n");
-  writePackage(join(source, "office.ts"), definitionText(`{settings:{type:"object",additionalProperties:false,properties:{enabled:{type:"boolean",default:false}}},async setup(c){
+  writePackage(join(source, "office.ts"), withSeeds(`{settings:{type:"object",additionalProperties:false,properties:{enabled:{type:"boolean",default:false}}},async setup(c){
+    seeds.add(c,{destination:"seeded",source:"seed"});
     if(c.settings.enabled){
       const {repositories}=await import("@office/references/repositories");
       c.add(repositories,{name:"enabled",url:"new-revision"});
     }
-  }}`));
-  // The new revision also changes both seeds: the unchanged file is replaced, the edited one offered.
+  }}`), uses);
+  // The new revision also changes both seeds' source files: the unchanged file is replaced, the edited one offered, each against the new bytes.
   write(join(source, "seed/shared.md"), "updated seed");
   write(join(source, "seed/edited.md"), "updated seed\n");
-  write(join(dir, "edited.md"), "the owner's edit\n");
+  write(join(dir, "seeded/edited.md"), "the owner's edit\n");
   const next = commit(repo);
   select(`  - {name: shared, repo: ${repo}, ref: ${first}, path: shared, track: main, settings: {enabled: true}}\nstate: ./state\n`);
-  expect(cli(0, "packages", "update")).toContain("pending edited.md: package shared changed its seed");
+  const updated = cli(0, "packages", "update");
+  expect(updated).toContain("package seeds: pending seeded/edited.md: package shared changed its seed");
+  expect(updated).toContain("package seeds: created seeded/extra.md from package shared");
   expect(read(paths[0])).toContain(next);
   expect(cli(0, "references", "list")).toContain("enabled\tnew-revision\tpackage shared");
-  expect(read(join(dir, "shared.md"))).toBe("updated seed");
-  expect(read(join(dir, "edited.md"))).toBe("the owner's edit\n");
-  const shown = cli(0, "seeds", "diff", "edited.md");
+  expect(read(join(dir, "seeded/shared.md"))).toBe("updated seed");
+  expect(read(join(dir, "seeded/edited.md"))).toBe("the owner's edit\n");
+  const shown = cli(0, "seeds", "diff", "seeded/edited.md");
   expect(shown).toContain("+updated seed");
   expect(shown).toContain("+the owner's edit");
   expect(shown).toContain("Keep owner deletions deleted, including package rewrites of deleted rules or sections.");
-  expect(shown).toContain("office seeds settle edited.md");
-  expect(cli(0, "seeds", "settle", "edited.md")).toContain("settled edited.md");
+  expect(shown).toContain("office seeds settle seeded/edited.md");
+  expect(cli(0, "seeds", "settle", "seeded/edited.md")).toContain("settled seeded/edited.md");
   expect(cli(0, "seeds", "diff")).toContain("No seeds are pending.");
-  expect(read(join(dir, "edited.md"))).toBe("the owner's edit\n");
+  expect(read(join(dir, "seeded/edited.md"))).toBe("the owner's edit\n");
   expect(cli(0, "--help")).toContain("seeds settle <path>");
 }, 60_000);
 

@@ -98,7 +98,7 @@ Turning `executor_app` off brings the key file and the `doop` MCP server back. I
 | `executor-app/` | The `doop` Executor app `office apps deploy` deploys while `executor_app` is on: `address.ts` holds the address rule, `doop.ts` declares the Doop provider (agent key, and OAuth when `oauth` is on) with an MCP health check, `index.ts` proxies Doop's MCP tools with approval for destructive ones, and `package.ts` holds the settings' defaults, which deploy replaces with the office's |
 | `plugin/index.ts` | The OpenCode plugin, which `office sync` links as `.opencode/plugins/design`. It registers the `doop` MCP server when the key file exists and `executor_app` is off, reloads MCP when the key changes, and reloads MCP and the skill below when resolved settings change. Its directory watchers close when the plugin unloads |
 | `skills/doop/` | The skill every session gets: when to use Doop, to load Doop's own guide first, where the user opens the canvas, and what to tell the user when the office isn't connected yet |
-| `seed/.opencode/doop/.gitignore` | Copied once into the office: keeps the agent key out of git |
+| `seed/.opencode/doop/.gitignore` | Declared in `office.ts` as a seed, laid down once in the office as `.opencode/doop/.gitignore`: keeps the agent key out of git |
 
 ## Upgrading Doop
 

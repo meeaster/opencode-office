@@ -1,4 +1,5 @@
 import { Package } from "@office/sdk";
+import { seeds } from "@office/seeds";
 
 export default Package.define({
   namespace: "doop",
@@ -17,5 +18,8 @@ export default Package.define({
     DOOP_BETTER_AUTH_SECRET: { generate: "hex", bytes: 32 },
     DOOP_SECRETS_ENCRYPTION_KEYS: { generate: "base64", bytes: 32, prefix: "k1:" },
     DOOP_DB_PASSWORD: { generate: "hex", bytes: 32 },
+  },
+  setup(ctx) {
+    seeds.add(ctx, { destination: ".opencode/doop/.gitignore", source: "seed/.opencode/doop/.gitignore" });
   },
 });

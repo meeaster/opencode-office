@@ -1,0 +1,11 @@
+{
+  "name": "@office/seeds",
+  "description": "Seeded files: files a package lays down once in the office, which are the owner's from then on, with receipts, a committed store of what was laid down, and the diff and settle commands for updates.",
+  "private": true,
+  "exports": {
+    ".": "./handles.ts"
+  },
+  "office": {
+    "definition": "./office.ts"
+  }
+}

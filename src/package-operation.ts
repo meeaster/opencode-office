@@ -12,7 +12,7 @@ import { type GatheredPackage, type GatherProblem, gatherPackages, problemLines 
 import { materializePackage, readRecord, type ResolvedPackage, resolvePackages, validateReplacement, verifiedCommit, writePackageSettings } from "./packages.ts";
 import { lockFile, lockSections, packageLockChanges, readLockSection } from "./versions.ts";
 import { writeAppliedReferences } from "./applied-references.ts";
-import { applyPackages } from "./commands/sync.ts";
+import { applyPackages, SyncStopped } from "./commands/sync.ts";
 import { collectJobs } from "../standard/cron/jobs.ts";
 import { claimAssetProblems, destinationProblems } from "../standard/mise-integration/projection.ts";
 import { openCheckoutLease } from "./checkout-lease.ts";
@@ -36,8 +36,11 @@ type Admission = {
  * Three outcomes: rejected before publishing (`published` false, the pointer where it was), published
  * and applied, or published with a failed application (FAILED lines). `recorded` is whether the
  * applied references file was written after the switch; without it no reference checkout is touched.
+ * `stopped` is a package's sync function throwing: a full sync runs none of its later steps.
+ * `committed`, the folders packages declare committed, is set only when the set was applied with
+ * every package loaded and no sync function threw; without it the exclude block is left as it is.
  */
-type Outcome = { published: boolean; recorded?: boolean; lines: string[]; rejected?: string[]; generation?: string };
+type Outcome = { published: boolean; recorded?: boolean; stopped?: boolean; committed?: string[]; lines: string[]; rejected?: string[]; generation?: string };
 
 function program() {
   return Bun.isStandaloneExecutable ? [process.execPath] : [process.execPath, "--no-install", join(import.meta.dir, "cli.ts")];
@@ -254,8 +257,8 @@ async function prepareSources(office: Office, selection: ReturnType<typeof resol
     item.dir = dir;
   }
 
-  // Keep outstanding removal receipts with the candidate. After a crash or a deferred
-  // apply, the previous generation need not stay pinned just to finish a seed withdrawal.
+  // Keep outstanding withdrawals with the candidate. After a crash or a deferred apply, the
+  // previous generation need not stay pinned just to finish removing a package's panel.
   const withdrawals = join(folder, "withdrawals");
   mkdirSync(withdrawals);
   const selected = new Set(selection.packages.map(pkg => pkg.entry.name));
@@ -365,6 +368,8 @@ export async function evaluateAdmission(temporary: string) {
   const folder = managedDirectory(office.dir, transaction.name);
   let published = false;
   let recorded = false;
+  let stopped = false;
+  let committed: string[] | undefined;
   let rejectedOwners: string[] | undefined;
   const lines: string[] = [];
 
@@ -434,15 +439,27 @@ export async function evaluateAdmission(temporary: string) {
         item.dir = stable;
       }
 
+      // Lines a step returned before one threw are still reported.
       const applied: string[] = [];
-      await applyPackages(office, gathered, applied, input.exclude, join(folder, "withdrawals"));
-      lines.push(...applied);
+
+      try {
+        await applyPackages(office, gathered, applied, input.exclude, join(folder, "withdrawals"));
+      } finally {
+        lines.push(...applied);
+      }
+
+      if (!gathered.unread.size) committed = gathered.committed;
 
       if (applied.some(line => line.startsWith("FAILED"))) lines.push(`generation ${transaction.name} is active; retry the incomplete application with office sync --packages`);
     }
   } catch (error) {
-    lines.push(`FAILED ${published ? `generation ${transaction.name} is active; retry application with office sync --packages: ` : ""}${error instanceof Error ? error.message : String(error)}`);
+    const text = error instanceof Error ? error.message : String(error);
+
+    stopped = error instanceof SyncStopped;
+
+    if (stopped) lines.push(`FAILED ${text}; the new package set is active and the rest of this sync did not run: fix the package, then run office sync again`);
+    else lines.push(`FAILED ${published ? `generation ${transaction.name} is active; retry application with office sync --packages: ` : ""}${text}`);
   }
 
-  writeFileSync(join(temporary, "output"), JSON.stringify({ published, recorded, lines, rejected: rejectedOwners, generation: published ? transaction.name : undefined } satisfies Outcome));
+  writeFileSync(join(temporary, "output"), JSON.stringify({ published, recorded, stopped, committed, lines, rejected: rejectedOwners, generation: published ? transaction.name : undefined } satisfies Outcome));
 }

@@ -72,8 +72,22 @@ export default Package.define({
     void [port, verbose, account, storage, tags, note, cpu, required, text, other, memory, models, modelText, mode, pair, numbers];
   },
   commands: {
-    "typed show": { summary: "Show", run({ settings }) { const port: number = settings.port; void port; } },
+    "typed show": { summary: "Show", usage: "<path>", run({ settings, args, office }) { const port: number = settings.port; const words: readonly string[] = args; const dir: string = office.dir; void [port, words, dir]; } },
   },
+  committed: [".office/typed/"],
+  sync({ settings, office, entries }) {
+    const port: number = settings.port;
+
+    void [port, office.dir, entries];
+
+    return [\`synced \${office.dir}\`];
+  },
+  check: ({ settings }) => [{ level: settings.verbose ? "warning" : "failed", message: "typed" }],
+});
+
+export const problems = Package.define({
+  // @ts-expect-error a problem is a warning or a failure
+  check: () => [{ level: "info", message: "x" }],
 });
 
 // A root the typing doesn't cover makes the whole object loose, and any of its keys may be absent.

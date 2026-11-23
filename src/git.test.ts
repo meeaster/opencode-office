@@ -7,11 +7,10 @@ import { dirname, join } from "node:path";
 import { excludeEnd, excludeStart, excludePlumbing, summarize, sync } from "./commands/sync.ts";
 import { cloneShallow, git } from "./git.ts";
 import { loadOffice } from "./office.ts";
-import { sha256, storedSeedProblems } from "./seeds.ts";
-import { readLockSection } from "./versions.ts";
+import { readReceipts, sha256 } from "../packages/seeds/store.ts";
 import { PlainReporter } from "./report/plain.ts";
 import { silentStage } from "./report/reporter.ts";
-import { writePackage } from "./test-package.ts";
+import { seedingDefinition, writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -177,48 +176,48 @@ test("packages-only sync applies changed settings and plugin links without visit
   for (const path of ["references/docs", "work/repos/example", ".opencode/plugins/other"]) expect(existsSync(join(dir, path))).toBe(false);
 });
 
-test("a fresh clone of a commit holds every seed its receipts name, byte for byte, under core.autocrlf", async () => {
+test("a fresh clone of a commit holds the receipts and every seed they name, byte for byte, under core.autocrlf, and Git offers nothing else of .office/", async () => {
   const office = join(dir, "office");
   const clone = join(dir, "clone");
   const committer = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "core.autocrlf=true"];
 
-  mkdirSync(join(office, "packages/demo/seed/notes"), { recursive: true });
-  writePackage(join(office, "packages/demo/package.yaml"), "# Demo\n{}\n");
   // Git would turn the CRLF file's endings to LF at add, and the LF file's to CRLF at checkout.
-  writeFileSync(join(office, "packages/demo/seed/notes/AGENTS.md"), "# Notes\r\n\r\nWindows endings.\r\n");
-  writeFileSync(join(office, "packages/demo/seed/notes/README.md"), "# Notes\n\nUnix endings.\n");
+  writePackage(join(office, "packages/demo/office.ts"), seedingDefinition([{ destination: "notes", source: "starter" }]));
+  mkdirSync(join(office, "packages/demo/starter"));
+  writeFileSync(join(office, "packages/demo/starter/AGENTS.md"), "# Notes\r\n\r\nWindows endings.\r\n");
+  writeFileSync(join(office, "packages/demo/starter/README.md"), "# Notes\n\nUnix endings.\n");
   writeFileSync(join(office, "office.yaml"), "name: demo\npackages: [{ name: demo }]\n");
   git(["init", "--quiet", office]);
 
   const changes = await sync(loadOffice(office), { scope: "packages" });
 
   expect(changes.filter(line => line.startsWith("FAILED"))).toEqual([]);
-  const receipts = [...readLockSection(office, "seeds").values()].flatMap(receipt => ("sha256" in receipt ? [receipt.sha256] : []));
+  const receipts = [...readReceipts(office).values()].flatMap(receipt => ("sha256" in receipt ? [receipt.sha256] : []));
 
   expect(receipts).toHaveLength(2);
 
   // A sync with no seed to copy still restores an edited or removed guard.
   for (const edit of [() => writeFileSync(join(office, ".office/seeds/.gitattributes"), "* text\n"), () => rmSync(join(office, ".office/seeds/.gitattributes"))]) {
     edit();
-    expect(await sync(loadOffice(office), { scope: "packages" })).toContain("wrote .office/seeds/.gitattributes");
+    expect(await sync(loadOffice(office), { scope: "packages" })).toContain("package seeds: wrote .office/seeds/.gitattributes");
     expect(readFileSync(join(office, ".office/seeds/.gitattributes"), "utf8")).toBe("* -text -filter -ident -working-tree-encoding\n");
   }
 
-  // Of .office/, Git offers the seed store alone: its seeds and its .gitattributes.
+  // Of .office/, Git offers the seed store alone: its seeds, its receipts and its .gitattributes.
   const offered = git(["status", "--porcelain", "--untracked-files=all"], office).split("\n").filter(line => line.slice(3).startsWith(".office/"));
 
-  expect(offered.sort()).toEqual([".gitattributes", ...receipts].map(name => `?? .office/seeds/${name}`).sort());
-  git([...committer, "add", "office.lock", ".office/seeds"], office);
+  expect(offered.sort()).toEqual([".gitattributes", "receipts.json", ...receipts].map(name => `?? .office/seeds/${name}`).sort());
+  git([...committer, "add", ".office/seeds"], office);
   git([...committer, "commit", "--quiet", "-m", "seeds"], office);
   git(["-c", "core.autocrlf=true", "clone", "--quiet", "--config", "core.autocrlf=true", office, clone]);
 
   // The committed bytes hash to their names too, so a conversion at add would show even where checkout undoes it.
-  const cloned = [...readLockSection(clone, "seeds").values()].flatMap(receipt => ("sha256" in receipt ? [receipt.sha256] : []));
+  expect(readReceipts(clone)).toEqual(readReceipts(office));
 
-  expect(cloned.sort()).toEqual(receipts.sort());
-
-  for (const hash of cloned) expect(sha256(execFileSync("git", ["show", `HEAD:.office/seeds/${hash}`], { cwd: clone }))).toBe(hash);
-  expect(storedSeedProblems(clone)).toEqual([]);
+  for (const hash of receipts) {
+    expect(sha256(execFileSync("git", ["show", `HEAD:.office/seeds/${hash}`], { cwd: clone }))).toBe(hash);
+    expect(sha256(readFileSync(join(clone, ".office/seeds", hash)))).toBe(hash);
+  }
 });
 
 // One full sync: the block is written after plugins and skills are both linked, after the owner's
@@ -288,8 +287,8 @@ test("info/exclude: a malformed block is left alone and reported, CRLF endings a
   rmSync(join(office, ".opencode/skills"), { recursive: true });
   rmSync(join(office, "builder"), { recursive: true });
   git(["init", "--quiet", office]);
-  const plumbing = () => excludePlumbing(loadOffice(office));
-  const lines = ["/.office/*", "!/.office/seeds/", "/packages/node_modules/", "/.opencode/plugins/common", "/.opencode/plugins/imported", "/.opencode/plugins/office"];
+  const plumbing = () => excludePlumbing(loadOffice(office), []);
+  const lines = ["/.office/*", "/packages/node_modules/", "/.opencode/plugins/common", "/.opencode/plugins/imported", "/.opencode/plugins/office"];
   const block = (eol: string) => [excludeStart, ...lines, excludeEnd].map(line => line + eol).join("");
 
   // A start without an end (an end without a start, duplicates): nothing is guessed or rewritten.
@@ -335,19 +334,18 @@ test("info/exclude holds Office's plumbing in one block after the owner's lines,
   linkedOffice(office);
 
   // Without Git, nothing is written and no repository is made.
-  expect(excludePlumbing(loadOffice(office))).toEqual([]);
+  expect(excludePlumbing(loadOffice(office), [])).toEqual([]);
   expect(existsSync(join(office, ".git"))).toBe(false);
 
   git(["init", "--quiet", office]);
   writeFileSync(join(office, ".gitignore"), "/builder/repos/\n");
   // The owner's lines around a block that holds other lines than office sync wants.
   writeFileSync(exclude, `# the owner's\n*.log\n${excludeStart}\n/.office/\n${excludeEnd}\n/after\n`);
-  const block = (lines: string[]) => [excludeStart, "/.office/*", "!/.office/seeds/", "/packages/node_modules/", ...lines, excludeEnd].join("\n");
+  const block = (lines: string[]) => [excludeStart, "/.office/*", "/packages/node_modules/", ...lines, excludeEnd].join("\n");
   const all = block(["/.opencode/plugins/common", "/.opencode/plugins/imported", "/.opencode/plugins/office", "/.opencode/skills/alpha", "/builder/.opencode/skills/alpha"]);
-  const changes = excludePlumbing(loadOffice(office));
+  const changes = excludePlumbing(loadOffice(office), []);
 
   expect(changes).toContain("excluded /.office/* from commits (info/exclude)");
-  expect(changes).toContain("stopped excluding /.office/seeds/ from commits (info/exclude)");
   expect(changes).toContain("stopped excluding /.office/ from commits (info/exclude)");
   expect(readFileSync(exclude, "utf8")).toBe(`# the owner's\n*.log\n${all}\n/after\n`);
 
@@ -358,6 +356,18 @@ test("info/exclude holds Office's plumbing in one block after the owner's lines,
 
   // Withdrawn entries leave the block, which stays in place; the owner's lines around it stay.
   for (const path of [".opencode/plugins/common", ".opencode/skills/alpha", "builder/.opencode/skills/alpha"]) rmSync(join(office, path));
-  expect(excludePlumbing(loadOffice(office))).toContain("stopped excluding /.opencode/plugins/common from commits (info/exclude)");
+  expect(excludePlumbing(loadOffice(office), [])).toContain("stopped excluding /.opencode/plugins/common from commits (info/exclude)");
   expect(readFileSync(exclude, "utf8")).toBe(`# the owner's\n*.log\n${block(["/.opencode/plugins/imported", "/.opencode/plugins/office"])}\n/after\n`);
+
+  // Committed folders packages declare are taken back out, sorted; an empty list drops them again.
+  const kept = ["/.opencode/plugins/imported", "/.opencode/plugins/office"];
+  const committed = [excludeStart, "/.office/*", "!/.office/alpha/", "!/.office/notes/", "/packages/node_modules/", ...kept, excludeEnd].join("\n");
+  mkdirSync(join(office, ".office/notes"));
+  writeFileSync(join(office, ".office/notes/x.md"), "x\n");
+  expect(excludePlumbing(loadOffice(office), [".office/notes/", ".office/alpha/"])).toEqual(["stopped excluding /.office/alpha/ from commits (info/exclude)", "stopped excluding /.office/notes/ from commits (info/exclude)"]);
+  expect(readFileSync(exclude, "utf8")).toBe(`# the owner's\n*.log\n${committed}\n/after\n`);
+  expect(git(["status", "--porcelain", "--untracked-files=all"], office).split("\n").filter(line => line.includes(".office/"))).toEqual(["?? .office/notes/x.md"]);
+  expect(excludePlumbing(loadOffice(office), [])).toEqual(["excluded /.office/alpha/ from commits (info/exclude)", "excluded /.office/notes/ from commits (info/exclude)"]);
+  expect(readFileSync(exclude, "utf8")).toBe(`# the owner's\n*.log\n${block(kept)}\n/after\n`);
+  expect(git(["status", "--porcelain", "--untracked-files=all"], office)).not.toContain(".office/");
 });

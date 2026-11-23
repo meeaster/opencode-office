@@ -93,7 +93,7 @@ test("an entry comes with its owner's name and the folder its definition was loa
   const { dir, cli, select } = fixture("sdk-folder");
 
   write(join(dir, "packages/provider/items.ts"), 'import {Registry} from "@office/sdk"; export const items = Registry.define({id: "provider.items", parse: entry => entry});');
-  writePackage(join(dir, "packages/provider/office.ts"), definitionText('{setup(c){c.registry(items)},commands:{"provider show":{summary:"Show",run({read}){for (const e of read(items)) console.log([e.owner, e.folder, existsSync(join(e.folder, e.value.path))].join("|"))}}}}', 'import {existsSync} from "node:fs"; import {join} from "node:path"; import {items} from "./items.ts";'), { exports: { "./items": "./items.ts" } });
+  writePackage(join(dir, "packages/provider/office.ts"), definitionText('{setup(c){c.registry(items)},commands:{"provider show":{summary:"Show",run({entries}){for (const e of entries(items)) console.log([e.owner, e.folder, existsSync(join(e.folder, e.value.path))].join("|"))}}}}', 'import {existsSync} from "node:fs"; import {join} from "node:path"; import {items} from "./items.ts";'), { exports: { "./items": "./items.ts" } });
   writePackage(join(dir, "packages/consumer/office.ts"), definitionText('{setup(c){c.add(items,{name:"doc",path:"data/doc.txt"})}}', 'import {items} from "@office/provider/items";'), { dependencies: ["provider"] });
   write(join(dir, "packages/consumer/data/doc.txt"), "doc\n");
   select("  - name: provider\n  - name: consumer\n");

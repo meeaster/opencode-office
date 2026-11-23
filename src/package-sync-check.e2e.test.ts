@@ -46,7 +46,7 @@ test("a broken package in check: a failed line naming it, one line for the skipp
   const { dir, cli, select } = fixture("broken-check");
   const repo = upstream("check-origin");
   const pkg = join(dir, "packages/broken");
-  writePackage(join(pkg, "office.ts"), definitionText('{setup(c){c.add(requirements,{name:"jq",minimumVersion:"1.7.1"})}}', 'import {requirements} from "@office/tooling/requirements";'), { dependencies: ["tooling"] });
+  writePackage(join(pkg, "office.ts"), definitionText('{setup(c){c.add(requirements,{name:"jq",minimumVersion:"1.7.1"}); seeds.add(c,{destination:"notes/broken.md",source:"seed/notes/broken.md"})}}', 'import {requirements} from "@office/tooling/requirements"; import {seeds} from "@office/seeds";'), { dependencies: ["tooling", "seeds"] });
   write(join(pkg, "seed/notes/broken.md"), "seed\n");
   select("  - name: broken\n");
   write(join(dir, "office.yaml"), read(join(dir, "office.yaml")).replace("references: []", `references: [{name: docs, url: ${repo}}]`));
@@ -54,19 +54,19 @@ test("a broken package in check: a failed line naming it, one line for the skipp
   cli(0, "check");
 
   // A requirement added since the last sync shows in check, which says to sync.
-  writePackage(join(pkg, "office.ts"), definitionText('{setup(c){c.add(requirements,{name:"jq",minimumVersion:"1.7.1"});c.add(requirements,{name:"yq",minimumVersion:"4.44.1"})}}', 'import {requirements} from "@office/tooling/requirements";'), { dependencies: ["tooling"] });
+  writePackage(join(pkg, "office.ts"), definitionText('{setup(c){c.add(requirements,{name:"jq",minimumVersion:"1.7.1"});c.add(requirements,{name:"yq",minimumVersion:"4.44.1"}); seeds.add(c,{destination:"notes/broken.md",source:"seed/notes/broken.md"})}}', 'import {requirements} from "@office/tooling/requirements"; import {seeds} from "@office/seeds";'), { dependencies: ["tooling", "seeds"] });
   expect(cli(1, "check")).toMatch(/FAIL package broken: .*machine\.packages\.toml lacks yq; office sync adds it/);
 
   writePackage(join(pkg, "office.ts"), definitionText('{setup(){throw Error("broken setup")}}'));
-  // The stored seed the receipt names no longer hashes to it.
+  // The stored seed the receipt names no longer hashes to it: a seed warning would be due if the seeds package's check ran.
   const stored = readdirSync(join(dir, ".office/seeds"), { recursive: true, withFileTypes: true }).filter(entry => entry.isFile()).map(entry => join(entry.parentPath, entry.name)).filter(path => read(path) === "seed\n");
   expect(stored).toHaveLength(1);
   write(stored[0], "corrupted\n");
   rmSync(join(dir, "references/docs"), { recursive: true });
   const output = cli(1, "check");
   expect(output).toMatch(/^FAIL package broken: .*broken setup/m);
-  expect(output.match(/^WARN package claims: not checked while a package doesn't load/gm)).toHaveLength(1);
-  expect(output).toMatch(/^WARN seeds: notes\/broken\.md: its seed .* doesn't hash to its name/m);
+  expect(output.match(/^WARN package claims: not checked while a package doesn't load: .*packages' own check functions/gm)).toHaveLength(1);
+  expect(output).not.toMatch(/broken\.md|\.office\/seeds/);
   expect(output).toContain("reference references/docs is not cloned");
 }, 60_000);
 

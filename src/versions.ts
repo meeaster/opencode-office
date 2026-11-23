@@ -1,16 +1,15 @@
 // The versions an office runs. office.yaml pins OpenCode, Claude Code, Executor, mise and sfw; office.lock
-// (written only by the tool) holds what makes each verifiable, Git packages' commits and seed
-// receipts; the state folder's applied.json records what `office up` last applied. The tool
+// (written only by the tool) holds what makes each verifiable and Git packages' commits; the state folder's applied.json records what `office up` last applied. The tool
 // supplies the versions a new office starts at, and tested ranges for the runtimes other than Executor.
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import * as v from "valibot";
-import { Document, isMap, parse, stringify } from "yaml";
+import { parse, stringify } from "yaml";
 
 import { openCheckoutLease, publicationLease } from "./checkout-lease.ts";
 import { type Office, OfficeError } from "./office.ts";
-import { check, type HostPlatform, type Lock, type LockedPackage, type PackageLock, type Parsed, parsePackageLock, parseSeedReceipts, type PinnedTool, pinnedTools, lockSchema, type SeedReceipts, version } from "./schema.ts";
+import { check, type HostPlatform, type Lock, type LockedPackage, type PackageLock, parsePackageLock, type PinnedTool, pinnedTools, lockSchema, version } from "./schema.ts";
 import { atomicWrite } from "./secrets.ts";
 
 export type Pin = Lock[PinnedTool];
@@ -97,17 +96,24 @@ function invalidLock(fix: string, errors: string[]): OfficeError {
   return new OfficeError(`${lockFile} is not valid (${fix}):\n${errors.map((line) => `  ${line}`).join("\n")}`);
 }
 
-/** office.lock's sections: runtime pins (undefined: none), Git packages and seed receipts. */
-export type Sections = { runtime: Lock | undefined; packages: PackageLock; seeds: SeedReceipts };
+/** office.lock's sections: runtime pins (undefined: none) and Git packages. */
+export type Sections = { runtime: Lock | undefined; packages: PackageLock };
 
-/** Each section of office.lock as read, or why it can't be: each section is read on its own. */
-export type ReadSections = { [Key in keyof Sections]: { ok: true; value: Sections[Key] } | { ok: false; error: OfficeError } };
+/**
+ * Each section of office.lock as read, or why it can't be: each section is read on its own.
+ * `unknown` is a top-level key that is neither a runtime pin nor a section: with one, every section
+ * fails with it and nothing may rewrite the file.
+ */
+type SectionReads = { [Key in keyof Sections]: { ok: true; value: Sections[Key] } | { ok: false; error: OfficeError } };
+
+export type ReadSections = SectionReads & { unknown?: OfficeError };
+
+const knownKeys = new Set<string>([...pinnedTools, "packages"]);
 
 /** The remedy each section's error names. */
 const fixes: Record<keyof Sections, string> = {
   runtime: "run office pin to rewrite it",
   packages: "restore it from Git, or remove its packages: section for office sync to rewrite",
-  seeds: "restore it from Git: without its seeds: section, sync would copy again every seed file the office deleted",
 };
 
 /** office.lock's text, or null when the office has none. */
@@ -123,29 +129,40 @@ export function lockSections(text: string | null): ReadSections {
   const fail = (key: keyof Sections, errors: string[]) => ({ ok: false as const, error: invalidLock(fixes[key], errors) });
 
   if (typeof document !== "object" || document === null || Array.isArray(document)) {
-    return { runtime: fail("runtime", ["the file: must be a mapping"]), packages: fail("packages", ["the file: must be a mapping"]), seeds: fail("seeds", ["the file: must be a mapping"]) };
+    return { runtime: fail("runtime", ["the file: must be a mapping"]), packages: fail("packages", ["the file: must be a mapping"]) };
   }
 
   // SAFETY: checked above to be a mapping; each section is validated below.
-  const { packages, seeds, ...pins } = document as Record<string, unknown>;
+  const { packages, ...pins } = document as Record<string, unknown>;
+  const unknownKeys = Object.keys(document).filter(key => !knownKeys.has(key));
+
+  if (unknownKeys.length) {
+    const unknown = new OfficeError(`${lockFile} has a top-level key office doesn't know: ${unknownKeys.join(", ")}. Nothing was read from it or written; remove the key (an earlier release's adoption step may move it), then run the command again`);
+    const refused = { ok: false as const, error: unknown };
+
+    return { runtime: refused, packages: refused, unknown };
+  }
+
   const runtime = Object.keys(pins).length === 0 ? { ok: true as const, value: undefined } : check(v.safeParse(lockSchema, pins));
 
-  const keyed = <T>(key: "packages" | "seeds", value: unknown, parsed: (value: unknown) => Parsed<Map<string, T>>) => {
-    const result = value === undefined ? { ok: true as const, value: new Map<string, T>() } : parsed(value);
-
-    return result.ok ? result : fail(key, result.errors);
-  };
+  const locked = packages === undefined ? { ok: true as const, value: new Map() } : parsePackageLock(packages);
 
   return {
     runtime: runtime.ok ? runtime : fail("runtime", runtime.errors),
-    packages: keyed("packages", packages, parsePackageLock),
-    seeds: keyed("seeds", seeds, parseSeedReceipts),
+    packages: locked.ok ? locked : fail("packages", locked.errors),
   };
+}
+
+/** Throws when the office's office.lock has a top-level key office doesn't know; a missing or otherwise unreadable lock passes. */
+export function requireKnownLockKeys(dir: string): void {
+  const { unknown } = lockSections(readLockText(dir));
+
+  if (unknown) throw unknown;
 }
 
 /** One section of office.lock in the office at `dir`; throws, naming its remedy, when it can't be read. */
 export function readLockSection<Key extends keyof Sections>(dir: string, key: Key): Sections[Key] {
-  const read = lockSections(readLockText(dir))[key];
+  const read: SectionReads[Key] = lockSections(readLockText(dir))[key];
 
   if (!read.ok) throw read.error;
 
@@ -164,34 +181,8 @@ const packagesHeader = [
   "# package's repo, path and ref in office.yaml match.",
 ];
 
-const seedsHeader = [
-  "# Written by `office sync`; don't edit. Each seed file a package handled, by its path: the",
-  "# SHA-256 of what office created (removing the package deletes the file only while it matches),",
-  "# or existing: a file that was already there. Sync never copies a file with a receipt again, so",
-  "# a seed file the office deleted stays deleted.",
-];
-
 function byKey<T>(entries: Iterable<[string, T]>): [string, T][] {
   return [...entries].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
-}
-
-/**
- * The `seeds:` section's YAML, one line per file so a diff or a merge conflict touches only the
- * files that changed. The library writes each path as a mapping key, so any path the reader accepts
- * reads back as itself (`---`, `# x`, `__proto__`).
- */
-function renderReceipts(seeds: SeedReceipts): string {
-  // Object.fromEntries defines own keys, so every path survives.
-  const document = new Document({ seeds: Object.fromEntries(byKey(seeds).map(([path, receipt]) => [path, "sha256" in receipt ? { package: receipt.package, sha256: receipt.sha256 } : { package: receipt.package, existing: true }])) });
-  const section = document.get("seeds");
-
-  if (isMap(section)) {
-    for (const pair of section.items) {
-      if (isMap(pair.value)) pair.value.flow = true;
-    }
-  }
-
-  return document.toString({ lineWidth: 0 }).trimEnd();
 }
 
 function sortedPackages(packages: PackageLock): [string, LockedPackage][] {
@@ -204,7 +195,7 @@ export function packageSectionKey(packages: PackageLock): string {
 }
 
 /** office.lock's text for its sections, or null when all are empty. Entries are sorted by key. */
-function renderLock({ runtime: pins, packages, seeds }: Sections): string | null {
+function renderLock({ runtime: pins, packages }: Sections): string | null {
   const runtime = pins === undefined ? [] : [
     ...runtimeHeader,
     ...pinnedTools.flatMap((tool) => {
@@ -219,8 +210,7 @@ function renderLock({ runtime: pins, packages, seeds }: Sections): string | null
 
   // Object.fromEntries defines own keys, so every package name survives.
   const section = packages.size === 0 ? [] : [...packagesHeader, stringify({ packages: Object.fromEntries(sortedPackages(packages)) }, { lineWidth: 0 }).trimEnd()];
-  const received = seeds.size === 0 ? [] : [...seedsHeader, renderReceipts(seeds)];
-  const parts = [runtime, section, received].filter((part) => part.length > 0);
+  const parts = [runtime, section].filter((part) => part.length > 0);
 
   if (parts.length === 0) return null;
 
@@ -235,7 +225,7 @@ export const publicationBusy = "another office command is changing packages or o
  * whole when they changed (removing it when all are empty), keeping each unedited section's
  * entries. Every section must be readable, so it throws, naming the remedy, before calling `edit`;
  * `replacing` names a section `edit` sets whole, which may be unreadable. The edit runs under the
- * lease package publication holds, so a runtime pin writer, a seed step and a publication never
+ * lease package publication holds, so a runtime pin writer and a publication never
  * put back each other's stale section; `leased` says the caller holds it already (it is exclusive
  * and not reentrant).
  */
@@ -244,6 +234,9 @@ export function editLock<T>(dir: string, edit: (sections: Sections) => T, { leas
   lease?.acquire(publicationBusy);
 
   const read = lockSections(readLockText(dir));
+
+  // A key office doesn't know would be lost by any rewrite, so no edit replaces the file around it.
+  if (read.unknown) throw read.unknown;
 
   // An unreadable section is refused, or starts empty when `edit` replaces it.
   const unreadable = <Value>(key: keyof Sections, empty: Value): Value => {
@@ -257,7 +250,6 @@ export function editLock<T>(dir: string, edit: (sections: Sections) => T, { leas
   const sections: Sections = {
     runtime: read.runtime.ok ? read.runtime.value : unreadable("runtime", undefined),
     packages: read.packages.ok ? read.packages.value : unreadable("packages", new Map()),
-    seeds: read.seeds.ok ? read.seeds.value : unreadable("seeds", new Map()),
   };
 
   const before = renderLock(sections);

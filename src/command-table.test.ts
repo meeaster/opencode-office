@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { sync } from "./commands/sync.ts";
-import { declaredCommands, nameProblems } from "./command-table.ts";
+import { declaredCommands, nameProblems, packageRoute } from "./command-table.ts";
+import { OfficeError } from "./office.ts";
 import { git } from "./git.ts";
 import { loadOffice } from "./office.ts";
 import { parseManifest } from "./schema.ts";
@@ -51,15 +52,40 @@ test("each name or alias has one owner, across packages and within one", () => {
 });
 
 test("a package can't take a first word of the CLI's own commands, nor opencode inspect", () => {
-  for (const name of ["sync", "sync extra", "apps extra", "seeds list", "packages show"]) {
+  for (const name of ["sync", "sync extra", "apps extra", "check list", "packages show"]) {
     expect(nameProblems([owned("ink", "draft show", [name])])).toEqual([{ name, owners: ["ink"], message: `package ink: command ${name} is reserved` }]);
   }
 
   expect(messages(owned("ink", "opencode inspect"), owned("press", "opencode inspect deep"))).toEqual([
     "package ink: command opencode inspect is reserved", "package press: command opencode inspect deep is reserved",
   ]);
-  // Only the CLI's own first words: other packages may name references list or opencode commands.
-  expect(messages(owned("ink", "references list"), owned("press", "opencode tidy"))).toEqual([]);
+  // Only the CLI's own first words: other packages may name references list, seeds commands or opencode commands.
+  expect(messages(owned("ink", "references list"), owned("press", "opencode tidy"), owned("quill", "seeds list"))).toEqual([]);
+});
+
+test("a package command's words are the tokens as given, without --office; the CLI's own commands, opencode inspect, --help and --version stay the CLI's", () => {
+  expect(packageRoute(["notes", "show", "my notes/a b.md", "--force", "-x"])).toEqual({ office: undefined, words: ["notes", "show", "my notes/a b.md", "--force", "-x"] });
+  expect(packageRoute(["--office", "/o", "notes", "show", "x"])).toEqual({ office: "/o", words: ["notes", "show", "x"] });
+  expect(packageRoute(["notes", "show", "x", "--office=/o"])).toEqual({ office: "/o", words: ["notes", "show", "x"] });
+
+  for (const args of [[], ["sync", "--force"], ["apps", "extra"], ["opencode", "inspect"], ["--verbose", "notes"], ["notes", "--help"], ["notes", "-h"], ["notes", "--version"]]) expect(packageRoute(args)).toBeUndefined();
+
+  expect(packageRoute(["opencode", "tidy"])).toEqual({ office: undefined, words: ["opencode", "tidy"] });
+});
+
+test("only tokens before -- are the CLI's: the package gets -- and what follows as typed, --office there is its own, and --office needs a value that isn't an option", () => {
+  expect(packageRoute(["notes", "show", "--", "--office", "/x", "--help", "-h", "--version"])).toEqual({ office: undefined, words: ["notes", "show", "--", "--office", "/x", "--help", "-h", "--version"] });
+  expect(packageRoute(["--office", "/o", "notes", "--", "--office=/x"])).toEqual({ office: "/o", words: ["notes", "--", "--office=/x"] });
+  expect(packageRoute(["notes", "--"])).toEqual({ office: undefined, words: ["notes", "--"] });
+  expect(packageRoute(["notes", "--office=--help"])).toEqual({ office: "--help", words: ["notes"] });
+
+  expect(() => packageRoute(["notes", "show", "--office"])).toThrow(new OfficeError("option --office needs a folder: --office <dir>"));
+  expect(() => packageRoute(["notes", "--office", "--", "x"])).toThrow("option --office is ambiguous: -- starts with a dash; to name such a folder, use --office=--");
+  expect(() => packageRoute(["--office", "--help", "notes"])).toThrow("option --office is ambiguous: --help starts with a dash; to name such a folder, use --office=--help");
+  expect(() => packageRoute(["notes", "--office", "-h"])).toThrow("option --office is ambiguous");
+
+  expect(() => packageRoute(["sync", "--office"])).toThrow("option --office needs a folder");
+  expect(packageRoute(["exec", "--", "ls", "--office"])).toBeUndefined();
 });
 
 test("sync reports a reserved name, or one claimed twice, by command-only packages and by ones that failed, and a registry key two packages add, and publishes nothing", async () => {
@@ -80,14 +106,14 @@ test("sync reports a reserved name, or one claimed twice, by command-only packag
     writePackage(join(office, "packages/pages/office.ts"), definitionText('{commands:{"shared show":{summary:"Show",run(){}}}}'));
     // A failed setup, or a check failed after the definition loaded, doesn't withdraw a claim.
     writePackage(join(office, "packages/quill/office.ts"), definitionText('{setup(){throw Error("setup failed")},commands:{"apps extra":{summary:"Extra",run(){}}}}'));
-    writePackage(join(office, "packages/service/office.ts"), definitionText('{host:{services:{svc:{description:"Service",script:"missing.sh"}}},commands:{"seeds extra":{summary:"Extra",run(){}}}}'));
+    writePackage(join(office, "packages/service/office.ts"), definitionText('{host:{services:{svc:{description:"Service",script:"missing.sh"}}},commands:{"check extra":{summary:"Extra",run(){}}}}'));
     git(["init", "--quiet", office]);
     const changes = await sync(loadOffice(office), { scope: "packages" });
 
     expect(changes).toContain("FAILED package notes: command sync extra is reserved");
     expect(changes).toContain("FAILED command shared show claimed by both package notes and package pages");
     expect(changes).toContain("FAILED package quill: command apps extra is reserved");
-    expect(changes).toContain("FAILED package service: command seeds extra is reserved");
+    expect(changes).toContain("FAILED package service: command check extra is reserved");
     expect(changes).toContain("FAILED alpha.shared docs claimed by both package alpha and package beta");
   } finally {
     rmSync(office, { recursive: true, force: true });

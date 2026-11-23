@@ -1,6 +1,5 @@
 // Packages: capabilities an office opts into, each a folder with a definition, an OpenCode
-// plugin, skills the plugin registers, package-owned scripts, seed files copied once into the
-// office and a desktop app panel (src/desktop.ts). There are three kinds, by where a package comes from:
+// plugin, skills the plugin registers, package-owned scripts and a desktop app panel (src/desktop.ts). There are three kinds, by where a package comes from:
 //
 // - built-in: shipped inside the `office` executable (the tool's packages/), listed by name alone,
 //   and replaced whenever it differs from the executable's copy. `office` is always installed.
@@ -29,8 +28,8 @@ import { collectJobs } from "../standard/cron/jobs.ts";
 import { composeProblems, packageComposeFile } from "./package-services.ts";
 import { settingsEnv } from "../standard/compose/services.ts";
 import { gateDefaultProblem, systemSection } from "./package-system.ts";
-import { check, MalformedSettings, officeRelativePath, type PackageManifest, type Parsed, type SettingValue, settingVariable } from "./schema.ts";
-import { applySeeds, seedFolder, settleReceipts, sha256 } from "./seeds.ts";
+import { check, MalformedSettings, type PackageManifest, type Parsed, type SettingValue, settingVariable } from "./schema.ts";
+import { sha256 } from "./hash.ts";
 import { build, buildCommit, builtinFiles, builtinPackages } from "./tool.ts";
 
 /** Where a pulled-in package records where it came from and the hash of each of its files. */
@@ -59,7 +58,7 @@ export const sdkName = "sdk";
 const sdkReserved = `the name ${sdkName} is reserved for ${scope}${sdkName}; rename the package`;
 
 /** The built-in packages every office has, without an entry in office.yaml. */
-export const requiredPackages = ["tooling", "mise-integration", "office", "references"];
+export const requiredPackages = ["tooling", "mise-integration", "office", "references", "seeds"];
 
 const files = v.record(v.string(), v.string());
 
@@ -448,26 +447,13 @@ export async function materializePackage(office: Office, item: ResolvedPackage, 
 }
 
 /**
- * Removes a pulled-in package whose entry left office.yaml: settles its seed receipts in
- * office.lock (each file it created that still matches its receipt goes, with the folders that
- * leaves empty; changed files and files that were already there stay), then removes the package
- * folder. With receipts that can't be read or written it changes nothing and says why. Returns
- * one line per change; a refusal starts with FAILED.
+ * Removes a pulled-in package whose entry left office.yaml: its folder goes, unless `retained`
+ * names a copy kept elsewhere. Returns one line per change.
  */
 export function removePackage(office: Office, name: string, retained?: string): string[] {
-  const dir = retained ?? pulledDir(office, name);
-  const where = join(pulledFolder, name);
-  let changes: string[];
+  if (!retained) rmSync(pulledDir(office, name), { recursive: true });
 
-  try {
-    changes = settleReceipts(office.dir, (owner) => owner === name);
-  } catch (error) {
-    return [`FAILED ${where}: not removed, because its seed receipts can't be read or written: ${error instanceof Error ? error.message : String(error)}`];
-  }
-
-  if (!retained) rmSync(dir, { recursive: true });
-
-  return [...changes, `removed ${where}/, which office.yaml no longer lists`];
+  return [`removed ${join(pulledFolder, name)}/, which office.yaml no longer lists`];
 }
 
 /** Check the installed source before importing any code. */
@@ -810,23 +796,7 @@ export function writePackageSettings(office: Office, installed: InstalledPackage
   return changes;
 }
 
-/**
- * Writes a package's settings file and .office.json, and applies its `seed/` (its seed files): each
- * path with no receipt in office.lock is copied to the same path in the office, unless a file is
- * already there, and from then on the office owns it; a file still unchanged is replaced when the
- * package's seed changes (src/seeds.ts). Returns one line per change.
- */
+/** Writes a package's settings file and .office.json. Returns one line per change. */
 export function installPackage(office: Office, installed: InstalledPackage): string[] {
-  const changes: string[] = [];
-  const name = installed.entry.name;
-
-  changes.push(...writePackageSettings(office, installed));
-
-  const folder = join(installed.dir, seedFolder);
-  const files = filesIn(folder);
-
-  // A path the seeds: section couldn't hold is refused before anything is copied.
-  for (const file of files.filter((file) => !officeRelativePath(file))) changes.push(`FAILED package ${name}'s ${seedFolder}/${file}: not a plain office-relative path`);
-
-  return [...changes, ...applySeeds(office.dir, name, folder, files.filter(officeRelativePath))];
+  return writePackageSettings(office, installed);
 }

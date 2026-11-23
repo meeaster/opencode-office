@@ -191,7 +191,7 @@ test("the executable syncs mixed definitions and keeps applied state when a sele
   const pkg = join(dir, "packages/notes");
   const link = join(dir, ".opencode/plugins/notes");
   const pins = join(dir, "machine.packages.toml");
-  const module = definitionText('{ settings: { type: "object", additionalProperties: false, properties: { count: { type: "integer", default: count } } }, tools: { jq: "1.7.1" } }', 'import { count } from "./defaults.ts";');
+  const module = definitionText('{ settings: { type: "object", additionalProperties: false, properties: { count: { type: "integer", default: count } } }, tools: { jq: "1.7.1" }, sync({ office }) { mkdirSync(join(office.dir, "notes"), { recursive: true }); appendFileSync(join(office.dir, "notes/example"), "ran\\n"); } }', 'import { count } from "./defaults.ts"; import { appendFileSync, mkdirSync } from "node:fs"; import { join } from "node:path";');
 
   select("  - name: legacy\n  - name: notes\n");
   writePackage(join(dir, "packages/legacy/package.yaml"), "# Legacy\nsettings: { type: object, additionalProperties: false, properties: { label: { type: string, default: old } } }\n");
@@ -199,16 +199,17 @@ test("the executable syncs mixed definitions and keeps applied state when a sele
   write(join(pkg, "defaults.ts"), "export const count: number = 3;");
   write(join(pkg, "plugin/index.ts"), 'export default { id: "notes", setup() {} }');
   write(join(pkg, "compose.yaml"), "services:\n  notes:\n    image: example/notes\n");
-  write(join(pkg, "seed/notes/example"), "seed");
   cli(0, "sync");
-  expect(read(join(dir, "notes/example"))).toBe("seed");
+  expect(read(join(dir, "notes/example"))).toBe("ran\n");
   expect(JSON.parse(read(join(dir, "packages/legacy/.settings.json")))).toEqual({ label: "old" });
   expect(JSON.parse(read(join(pkg, ".settings.json")))).toEqual({ count: 3 });
   expect(cli(0, "check")).toMatch(/ok   package notes: .*compose.yaml contributes services notes/);
   write(join(pkg, "defaults.ts"), "export const count: number = 7;");
-  write(join(dir, "notes/example"), "owner");
   cli(0, "sync", "--packages");
   const applied = read(pins);
+  const marked = read(join(dir, "notes/example"));
+
+  expect(marked).toBe("ran\nran\n");
 
   expect(applied).toContain('"jq" = "1.7.1" # notes');
 
@@ -220,12 +221,12 @@ test("the executable syncs mixed definitions and keeps applied state when a sele
   expect(readlinkSync(link)).toBe("../../packages/notes/plugin");
   expect(read(pins)).toBe(applied);
   expect(JSON.parse(read(join(pkg, ".settings.json")))).toEqual({ count: 7 });
-  expect(read(join(dir, "notes/example"))).toBe("owner");
+  expect(read(join(dir, "notes/example"))).toBe(marked);
 
   select("  - name: legacy\n");
   cli(0, "sync", "--packages");
   expect(existsSync(link)).toBe(false);
   expect(read(pins)).not.toContain('"jq"');
-  expect(read(join(dir, "notes/example"))).toBe("owner");
+  expect(read(join(dir, "notes/example"))).toBe(marked);
   expect(existsSync(join(dir, "node_modules"))).toBe(false);
 }, 60_000);

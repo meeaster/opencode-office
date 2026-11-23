@@ -1,8 +1,9 @@
+import { OfficeError } from "./office.ts";
 import type { PackageManifest } from "./schema.ts";
 
 // The core CLI owns these command families, including its non-public entrypoints. It matches its
 // own commands by exact shape, so a package name under one of these words would otherwise run.
-const reserved = new Set("help version init setup executor secrets sync skills packages seeds check refresh instructions context up down shell exec pin pair apps gui upgrade-tools update cron env sfw-wrappers host-agent-cli-update".split(" "));
+const reserved = new Set("help version init setup executor secrets sync skills packages check refresh instructions context up down shell exec pin pair apps gui upgrade-tools update cron env sfw-wrappers host-agent-cli-update".split(" "));
 
 /** A command a package declares, with its name; the definition's schema checked it. */
 export type RegisteredCommand = PackageManifest["commands"][string] & { name: string };
@@ -52,4 +53,40 @@ export function nameProblems(commands: OwnedCommand[]): NameProblem[] {
   }
 
   return problems;
+}
+
+/**
+ * A package command's words, when the first word isn't one of the CLI's own commands: the tokens as
+ * given, with `--office <dir>` taken out, before any parsing. Only tokens before `--` are the CLI's:
+ * `--` and every token after it reach the package as they are. Undefined for the CLI's own
+ * commands, for `opencode inspect`, and when `--help`, `-h` or `--version` is given before `--`,
+ * which stay the CLI's. Throws for `--office` before `--` without a value or with one that starts
+ * with a dash, which the CLI's option parser refuses too, whatever the command (`--office=<dir>`
+ * takes any).
+ */
+export function packageRoute(args: readonly string[]): { office?: string; words: string[] } | undefined {
+  const words: string[] = [];
+  let office: string | undefined;
+  let problem: string | undefined;
+  let index = 0;
+
+  for (; index < args.length && args[index] !== "--"; index++) {
+    const token = args[index];
+    const value = args[index + 1];
+
+    if (token.startsWith("--office=")) office = token.slice("--office=".length);
+    else if (token !== "--office") words.push(token);
+    else if (value === undefined) problem ??= "option --office needs a folder: --office <dir>";
+    else if (value.startsWith("-")) problem ??= `option --office is ambiguous: ${value} starts with a dash; to name such a folder, use --office=${value}`;
+    else office = args[++index];
+  }
+
+  if (problem !== undefined) throw new OfficeError(problem);
+  const [first, second] = words;
+
+  if (first === undefined || first.startsWith("-") || reservedWord(first) || (first === "opencode" && second === "inspect")) return;
+
+  if (words.some(word => word === "--help" || word === "-h" || word === "--version")) return;
+
+  return { office, words: [...words, ...args.slice(index)] };
 }

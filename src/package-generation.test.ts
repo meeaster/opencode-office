@@ -117,6 +117,48 @@ test("recovery accepts a switch that never began, and refuses office.yaml or the
   }
 });
 
+test("with a key office.lock doesn't know, no generation is made or published and no interrupted switch rolls forward, each naming the key", () => {
+  const unknown = "office.lock has a top-level key office doesn't know: extra";
+  const addKey = () => writeFileSync(join(dir, "office.lock"), `${readLockText(dir) ?? ""}extra: true\n`);
+
+  // A fresh office: not even its first generation is made.
+  writeFileSync(join(dir, "office.yaml"), yamls.before);
+  writeLock(dir, defaultPins);
+  addKey();
+  const fresh = readLockText(dir);
+
+  expect(() => beginGeneration(dir)).toThrow(unknown);
+  expect(existsSync(join(dir, ".office/current"))).toBe(false);
+  expect(readLockText(dir)).toBe(fresh);
+
+  // The key appears between reservation and publication: the pointer stays.
+  rmSync(join(dir, "office.lock"));
+  writeLock(dir, defaultPins);
+
+  {
+    using reservation = beginGeneration(dir);
+    const before = active();
+
+    addKey();
+    const reserved = readLockText(dir);
+
+    expect(() => publishGeneration(reservation.transaction, yamls.after, sections.notes)).toThrow(unknown);
+    expect(active()).toBe(before);
+    expect(readFileSync(join(dir, "office.yaml"), "utf8")).toBe(yamls.before);
+    expect(readLockText(dir)).toBe(reserved);
+  }
+
+  // An interrupted switch that would roll forward is left as it was, its journal kept.
+  const { previous } = interrupted("previous", "after", sections.empty, { pins: true });
+  addKey();
+  const interruptedLock = readLockText(dir);
+
+  expect(() => recover(dir)).toThrow(unknown);
+  expect(active()).toBe(previous);
+  expect(journal()).toBe(true);
+  expect(readLockText(dir)).toBe(interruptedLock);
+});
+
 test("a runtime pin write between reservation and publication neither supersedes the publication nor is lost", () => {
   writeFileSync(join(dir, "office.yaml"), yamls.before);
   using reservation = beginGeneration(dir);

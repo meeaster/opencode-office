@@ -43,16 +43,39 @@ export type Entry<Value> = {
   folder: string;
 };
 
-/** What a command's handler gets: the registries to read, and its package's settings as office.yaml has them now. */
-export type CommandInputs<Settings = Readonly<Record<string, SettingValue>>> = {
-  read<Value extends RegistryEntry>(registry: Registry<Value>): readonly Entry<Value>[];
+/** The office a command or lifecycle function runs in. */
+export type OfficeInfo = {
+  /** The office's folder, absolute. */
+  readonly dir: string;
+};
+
+/** Returns a registry's entries, each with its owner and folder; every call returns its own copy. */
+export type Entries = <Value extends RegistryEntry>(registry: Registry<Value>) => readonly Entry<Value>[];
+
+/** What a package's `sync` and `check` get: the office, the registries to read, and its settings. */
+export type Lifecycle<Settings = Readonly<Record<string, SettingValue>>> = {
+  readonly office: OfficeInfo;
+  readonly entries: Entries;
   readonly settings: Settings;
+};
+
+/** A problem a package's `check` reports: a warning leaves `office check`'s exit status alone; a failure makes it 1. */
+export type Problem = { level: "warning" | "failed"; message: string };
+
+/**
+ * What a command's handler gets: the office, the registries to read, its package's settings as
+ * office.yaml has them now, and the words after the command's name, exactly as typed.
+ */
+export type CommandInputs<Settings = Readonly<Record<string, SettingValue>>> = Lifecycle<Settings> & {
+  readonly args: readonly string[];
 };
 
 /** A command a package declares under its name: `office <name>` runs it. */
 export type Command<Settings = Readonly<Record<string, SettingValue>>> = {
   /** One line for `office --help`. */
   summary: string;
+  /** What follows the name in help, such as `<path>`; the command parses its own `args`. */
+  usage?: string;
   aliases?: readonly string[];
   run(inputs: CommandInputs<Settings>): void | Promise<void>;
 };
@@ -165,6 +188,15 @@ export type Definition<Schema extends SettingsSchema = NoSettings> = {
   /** Its commands, by name. */
   commands?: { readonly [name: string]: Command<Settings<Schema>> };
   setup?(ctx: SetupContext<Settings<Schema>>): void | Promise<void>;
+  /**
+   * Runs at each sync that switches and applies the package set with every selected package loaded,
+   * after every `setup`, in the order packages load. Returns the lines to print. A throw stops the sync.
+   */
+  sync?(inputs: Lifecycle<Settings<Schema>>): readonly string[] | void | Promise<readonly string[] | void>;
+  /** Runs at `office check` with every selected package loaded, and only reports: it must not write. */
+  check?(inputs: Lifecycle<Settings<Schema>>): readonly Problem[] | Promise<readonly Problem[]>;
+  /** Folders directly under `.office/` that are committed, such as `.office/notes/`: sync leaves each out of its exclude block. */
+  committed?: readonly string[];
   /** What its services, volumes and variables are named after, when that isn't its name. */
   namespace?: string;
   secrets?: { readonly [variable: string]: Secret };

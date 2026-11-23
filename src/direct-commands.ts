@@ -2,7 +2,7 @@
 // (src/gather.ts) and works from what the definitions declare and what their setups registered in
 // this process. Runs only in a reader bound to the office's published package set.
 import { commandNames } from "./command-table.ts";
-import { gatherPackages, problemLines } from "./gather.ts";
+import { type DeclaredCommand, gatherPackages, problemLines } from "./gather.ts";
 import { loadOffice, OfficeError } from "./office.ts";
 
 /** A reader process: the office it is bound to (`bindReader` recorded the set's rejected packages). */
@@ -13,7 +13,7 @@ export async function commandHelp({ dir }: Reader): Promise<string[]> {
   const load = await gatherPackages(loadOffice(dir));
 
   return [
-    ...load.commands.map(({ command }) => `  ${commandNames(command).join(" | ")}    ${command.summary}`),
+    ...load.commands.map(({ command }) => `  ${commandNames(command).map(name => command.usage === undefined ? name : `${name} ${command.usage}`).join(" | ")}    ${command.summary}`),
     ...problemLines(load.problems).map(problem => `  ${problem}`),
     ...[...new Set(load.names.map(problem => problem.message))].map(message => `  ${message}`),
   ];
@@ -24,25 +24,51 @@ export type Dispatch =
   /** No loaded package provides the command; `failures` name the packages that failed to load. */
   | { found: false; failures: string[] };
 
-/** Runs a package command: any package problem, or a naming problem of the requested command, fails it. */
+/**
+ * The declared name or alias that starts `words` with the most words, and every command declaring
+ * it; the words after it are its arguments. Undefined when no name starts them.
+ */
+export function longestMatch(commands: readonly DeclaredCommand[], words: readonly string[]) {
+  let best: { name: string; length: number } | undefined;
+
+  for (const { command } of commands) {
+    for (const name of commandNames(command)) {
+      const parts = name.split(" ");
+
+      if (parts.length > words.length || parts.some((part, index) => part !== words[index])) continue;
+
+      if (!best || parts.length > best.length) best = { name, length: parts.length };
+    }
+  }
+
+  if (!best) return;
+  const { name, length } = best;
+
+  return { name, matches: commands.filter(({ command }) => commandNames(command).includes(name)), args: words.slice(length) };
+}
+
+/**
+ * Runs a package command from the words given, exactly as typed: the longest declared name that
+ * starts them runs, with the rest as its arguments. Any package problem, or a naming problem of the
+ * matched command, fails it.
+ */
 export async function dispatchCommand({ dir }: Reader, words: string[]): Promise<Dispatch> {
-  if (words.some(word => /\s/.test(word))) return { found: false, failures: [] };
   const requested = words.join(" ");
   const load = await gatherPackages(loadOffice(dir));
 
   // With the gate's problems, ownership conflicts too: no package loaded, so the command may be a typo.
   if (load.blocked) throw new OfficeError(`${requested}: unknown command, or a package command that can't run: no package loaded: ${problemLines(load.problems).join("; ")}`);
-  const matches = load.commands.filter(({ command }) => commandNames(command).includes(requested));
+  const match = longestMatch(load.commands, words);
 
-  if (!matches.length) return { found: false, failures: problemLines(load.problems) };
-  const claimed = new Set(matches.flatMap(({ command }) => commandNames(command)));
+  if (!match) return { found: false, failures: problemLines(load.problems) };
+  const claimed = new Set(match.matches.flatMap(({ command }) => commandNames(command)));
   const names = new Set(load.names.filter(problem => claimed.has(problem.name)).map(problem => problem.message));
   const problems = [...problemLines(load.problems), ...names];
 
-  if (problems.length) throw new OfficeError(`${requested}: ${problems.join("; ")}`);
-  const [{ command, settings = {} }] = matches;
+  if (problems.length) throw new OfficeError(`${match.name}: ${problems.join("; ")}`);
+  const [{ command, settings = {} }] = match.matches;
 
-  await command.run({ read: load.read, settings: structuredClone(settings) });
+  await command.run({ office: { dir }, entries: load.entries, settings: structuredClone(settings), args: match.args });
 
   return { found: true };
 }
