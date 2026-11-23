@@ -3,7 +3,8 @@
 // how it reads what `sync`, `up` and `down` return.
 import * as v from "valibot";
 
-import type { Host, OfficeInfo } from "../sdk/index.ts";
+import type { Host, OfficeInfo, SyncInputs } from "../sdk/index.ts";
+import type { Gathered } from "./gather.ts";
 import { type Office, OfficeError } from "./office.ts";
 import { hostTimers } from "./timers.ts";
 import { officeCommand } from "./tool.ts";
@@ -51,4 +52,19 @@ export async function packageLines(name: string, phase: "sync" | "up" | "down", 
   if (!lines.success) return { ok: false, problem: `package ${name}: its ${phase} returned something other than a list of lines` };
 
   return { ok: true, lines: (lines.output ?? []).map(line => `package ${name}: ${line}`) };
+}
+
+type HookRun = ({ phase: "sync" } & Pick<SyncInputs, "exclude" | "updateExcluded">) | { phase: "up"; starting: (name: string) => void };
+
+export async function* runPackageHooks(office: Office, gathered: Pick<Gathered, "entries" | "packages">, run: HookRun) {
+  for (const { entry: { name }, manifest, settings } of gathered.packages) {
+    if (!manifest[run.phase]) continue;
+    if (run.phase === "up") run.starting(name);
+
+    yield await packageLines(name, run.phase, () => {
+      const inputs = { office: officeInfo(office), entries: gathered.entries, settings: structuredClone(settings) };
+
+      return run.phase === "sync" ? manifest.sync?.({ ...inputs, exclude: run.exclude, updateExcluded: run.updateExcluded }) : manifest.up?.({ ...inputs, host: packageHost(office, name) });
+    });
+  }
 }

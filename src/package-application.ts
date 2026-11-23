@@ -2,7 +2,7 @@ import { readdirSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { linkForEditors } from "./package-imports.ts";
 import type { Gathered } from "./gather.ts";
-import { officeInfo, packageLines } from "./lifecycle-inputs.ts";
+import { runPackageHooks } from "./lifecycle-inputs.ts";
 import { installPanel, locate, panelId, removalNote } from "./desktop.ts";
 import { syncMachine } from "./machine.ts";
 import { linkPlugins, withPluginPlan } from "../standard/opencode/delivery.ts";
@@ -46,14 +46,20 @@ export async function applyPackages(office: Office, gathered: Gathered, changes:
   // The machine is reconciled in either mode (container mode releases the host's files), and
   // packages' sync functions run, only once every selected package loaded. A sync function that
   // throws stops the rest, plugins and panels included.
-  let excluded: string[] = [];
+  const paths = new Set<string>();
 
   if (gathered.unread.size) {
     const unknown = [...gathered.unread].join(", ");
 
     changes.push(`not running any package's sync function: what package ${unknown} registers is unknown until a sync loads it`, `not reconciling any package's tools or machine files: what package ${unknown} claims is unknown until a sync loads it`);
   } else {
-    excluded = await runSyncFunctions(office, gathered, changes);
+    for await (const result of runPackageHooks(office, gathered, { phase: "sync", exclude: additions => {
+      for (const path of additions) paths.add(excludedPath(path));
+    }, updateExcluded: change => updateExcluded(office, change) })) {
+      if (!result.ok) throw new SyncStopped(result.problem);
+      changes.push(...result.lines);
+    }
+
     changes.push(...syncTools(office, gathered.packages, [...gathered.selected]), ...syncMachine(office, gathered));
   }
 
@@ -63,6 +69,8 @@ export async function applyPackages(office: Office, gathered: Gathered, changes:
   changes.push(...installPanels(office, plan.panels, removedPanels));
   changes.push(...linkForEditors(office.dir));
 
+  const excluded = [...paths].sort();
+
   if (exclude && !gathered.unread.size) changes.push(...excludePlumbing(office, gathered.committed, excluded));
 
   return excluded;
@@ -70,34 +78,6 @@ export async function applyPackages(office: Office, gathered: Gathered, changes:
 
 /** A package's `sync` function threw: the sync stops there, with the package set switched. */
 export class SyncStopped extends Error {}
-
-/**
- * Runs each package's `sync` function, in the order the packages loaded, each line it returns going
- * to `changes` under the package's name as it finishes. The first that throws, or returns something
- * other than lines, stops the rest: SyncStopped names the package. Returns the paths they excluded
- * from commits, sorted.
- */
-export async function runSyncFunctions(office: Office, gathered: Pick<Gathered, "packages" | "entries">, changes: Change[]): Promise<string[]> {
-  const excluded = new Set<string>();
-
-  for (const item of gathered.packages) {
-    const name = item.entry.name;
-    const run = item.manifest.sync?.bind(item.manifest);
-
-    if (!run) continue;
-
-    const exclude = (paths: readonly string[]) => {
-      for (const path of paths) excluded.add(excludedPath(path));
-    };
-
-    const result = await packageLines(name, "sync", () => run({ office: officeInfo(office), entries: gathered.entries, settings: structuredClone(item.settings), exclude, updateExcluded: change => updateExcluded(office, change) }));
-
-    if (!result.ok) throw new SyncStopped(result.problem);
-    changes.push(...result.lines);
-  }
-
-  return [...excluded].sort();
-}
 
 /**
  * Installs each package's desktop app panel on the machine the app runs on, and says how to remove

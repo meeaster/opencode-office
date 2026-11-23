@@ -24,7 +24,7 @@ import { notify } from "../notify.ts";
 import { CommandFailed, progress, say, streamChecked, warn } from "../report/index.ts";
 import { displayLines } from "../report/reporter.ts";
 import { type Gathered, gatherPackages, problemLines } from "../gather.ts";
-import { officeInfo, packageHost, packageLines } from "../lifecycle-inputs.ts";
+import { runPackageHooks } from "../lifecycle-inputs.ts";
 import { type Office, OfficeError, readEnvFile } from "../office.ts";
 import { hostLayout, hostWrappers } from "../host-env.ts";
 import { markServerStopped, planServer, serverIncumbent, startServer } from "../host-server.ts";
@@ -472,25 +472,6 @@ function choosePins(office: Office, upgrade: boolean) {
 }
 
 /**
- * Each package's `up` function, in the order the packages loaded, its lines printed under the
- * package's name. The first that throws, or returns something other than lines, stops the rest.
- */
-async function runUpFunctions(office: Office, gathered: Pick<Gathered, "packages" | "entries">): Promise<void> {
-  for (const item of gathered.packages) {
-    const name = item.entry.name;
-    const run = item.manifest.up?.bind(item.manifest);
-
-    if (!run) continue;
-    progress(`running package ${name}'s up`);
-    const result = await packageLines(name, "up", () => run({ office: officeInfo(office), entries: gathered.entries, settings: structuredClone(item.settings), host: packageHost(office, name) }));
-
-    if (!result.ok) throw new OfficeError(result.problem);
-
-    for (const line of result.lines) say(line);
-  }
-}
-
-/**
  * Starts the office's services; returns a one-line summary of what runs. Every selected package
  * is gathered first, and nothing starts unless all of them load: `gathered` is the gathering a
  * finishing reader already made; standalone, `up` gathers itself. Packages' `up` functions run last.
@@ -613,7 +594,11 @@ export async function up(office: Office, { upgrade = false, refresh = false, gat
     await startServer(office, plan, upgrade, changed);
   }
 
-  await runUpFunctions(office, packages);
+  for await (const result of runPackageHooks(office, packages, { phase: "up", starting: name => progress(`running package ${name}'s up`) })) {
+    if (!result.ok) throw new OfficeError(result.problem);
+
+    for (const line of result.lines) say(line);
+  }
 
   const packaged = serviceFiles(office).length;
   const executor = `Executor${packaged > 0 ? ` and the services of ${packaged} ${packaged === 1 ? "package" : "packages"}` : ""}`;

@@ -4,7 +4,6 @@
 // entries become its claims. Commands, help, sync's admission and `office check` all gather this way,
 // once per evaluated package set, and each decides what a problem means. Nothing is read from an
 // earlier run, and nothing is saved for a later one.
-import { join, relative } from "node:path";
 import * as v from "valibot";
 import type { Entries, Registry, RegistryEntry, SettingValue } from "../sdk/index.ts";
 import { isRepository, repositories } from "../packages/references/repositories.ts";
@@ -69,8 +68,9 @@ export type Gathered = {
 
 export function publishedView(office: Office, gathered: Gathered): Gathered {
   function published<T extends InstalledPackage>(item: T): T {
-    if (item.kind === "local") return item;
-    const dir = join(office.dir, ".office/packages", item.entry.name);
+    const dir = packageDeliveryDir(office.dir, item);
+
+    if (dir === item.dir) return item;
 
     return { ...item, dir };
   }

@@ -1,9 +1,7 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { editorLinks } from "./package-imports.ts";
-import { locate } from "./desktop.ts";
 import { git } from "./git.ts";
-import { clones } from "./layout.ts";
 import { officeEntries } from "../standard/opencode/ownership.ts";
 import { atomicWrite } from "./secrets.ts";
 import { type Office, OfficeError } from "./office.ts";
