@@ -68,7 +68,6 @@ export type Office = {
   secrets?: OfficeConfig["secrets"];
   /** The runtimes' versions and every release age, from `tools` (or the keys before it). */
   tools: ResolvedTools;
-  cron: OfficeConfig["cron"];
   /** Whether package downloads go through Socket Firewall: on unless sfw's `enabled` under `tools` is false. */
   socketFirewall: boolean;
   references: Repository[];
@@ -151,7 +150,6 @@ export function loadOffice(dir: string, config = readConfig(dir)): Office {
     git: config.git,
     secrets: config.secrets,
     tools,
-    cron: config.cron,
     socketFirewall: tools.socketFirewall,
     references: config.references,
     desks: Object.entries(config.desks).map(([deskName, desk]) => ({ name: deskName, ...desk })),

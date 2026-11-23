@@ -32,7 +32,7 @@ function write(path: string, text: string) {
 function local(name: string, definition: string, settings: ResolvedPackage["entry"]["settings"] = {}): ResolvedPackage {
   writePackage(join(dir, "packages", name, "office.ts"), definition);
 
-  return { entry: { name, settings, cron: {}, source: undefined }, kind: "local", dir: join(dir, "packages", name) };
+  return { entry: { name, settings, source: undefined }, kind: "local", dir: join(dir, "packages", name) };
 }
 
 /** A synced office (its required built-ins as fixtures) selecting `entries`, each a package with its definition body and settings. */
@@ -305,14 +305,14 @@ test("a value that isn't a JSON object, such as one holding a function, fails th
 });
 
 test("the selection is checked without importing: rejected, uncopied and edited copies, package.json and declared dependencies, @office/sdk among them", () => {
-  const pulled = (name: string): ResolvedPackage => ({ entry: { name, settings: {}, cron: {}, source: undefined }, kind: "built-in", dir: join(dir, ".office/packages", name) });
+  const pulled = (name: string): ResolvedPackage => ({ entry: { name, settings: {}, source: undefined }, kind: "built-in", dir: join(dir, ".office/packages", name) });
   const marker = `import {writeFileSync} from "node:fs"; writeFileSync(${JSON.stringify(join(dir, "imported"))}, "x");`;
   writePackage(join(dir, ".office/packages/rejected/office.ts"), marker);
   writePackage(join(dir, ".office/packages/recorded/office.ts"), marker);
   writeFileSync(join(dir, ".office/packages/recorded/.source.json"), JSON.stringify({ office: "fixture", commit: "fixture", files: fileHashes(join(dir, ".office/packages/recorded")) }));
   const clean = [pulled("recorded"), local("consumer", marker), local("needs", marker)];
   // office.yaml selects, not what resolved: "broken" is selected even though it failed resolution.
-  const office = { packages: ["recorded", "consumer", "needs", "broken", "absent"].map(name => ({ name, settings: {}, cron: {}, source: undefined })) };
+  const office = { packages: ["recorded", "consumer", "needs", "broken", "absent"].map(name => ({ name, settings: {}, source: undefined })) };
   writePackage(join(dir, "packages/needs/office.ts"), marker, { dependencies: ["references", "consumer", "broken"] });
 
   expect(selectionProblems(office, clean)).toEqual([]);

@@ -1,4 +1,5 @@
-import { type CronContext, Package } from "@office/sdk";
+import { cron } from "@office/cron";
+import { Package } from "@office/sdk";
 import { requirements } from "@office/tooling/requirements";
 import { floors } from "./floors.ts";
 
@@ -23,11 +24,8 @@ export default Package.define({
   },
   setup(ctx) {
     for (const [name, minimumVersion] of Object.entries(floors)) ctx.add(requirements, { name, minimumVersion });
-  },
-  registerCron(ctx: CronContext): undefined {
-    ctx.cron.job("update-references", { schedule: "0 6 * * *", script: "scripts/update-references.sh" });
-    ctx.cron.job("upgrade-tools", { schedule: "30 6 * * *", script: "scripts/upgrade-tools.sh" });
-
-    ctx.cron.job("update-agent-clis", ctx.cron.mode === "managed-host" ? { schedule: "30 7 * * *", script: "scripts/update-agent-clis.sh" } : false);
+    cron.add(ctx, { name: "update-references", schedule: "0 6 * * *", script: "scripts/update-references.sh" });
+    cron.add(ctx, { name: "upgrade-tools", schedule: "30 6 * * *", script: "scripts/upgrade-tools.sh" });
+    cron.add(ctx, { name: "update-agent-clis", schedule: "30 7 * * *", script: "scripts/update-agent-clis.sh", when: "managed-host" });
   },
 });

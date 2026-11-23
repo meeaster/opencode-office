@@ -42,15 +42,16 @@ test("typed registrations replace both conventions: one owned link, isolated pan
   const collections = readFileSync(f.imports, "utf8");
   expect(collections).toBe("setup\ncollected\nsetup\ncollected\n");
   expect(await f.run(["opencode", "inspect"])).toContain("last synced registration: server declared, desktop declared");
+  // cron list is a package command: it runs every setup once, never the opencode(ctx) collection.
   await f.run(["cron", "list"]);
   // A minimal fixture intentionally fails full office health; check gathers once and never re-collects.
   await f.run(["check"], 1);
-  expect(readFileSync(f.imports, "utf8")).toBe(`${collections}setup\n`);
+  expect(readFileSync(f.imports, "utf8")).toBe(`${collections}setup\nsetup\n`);
   // A package command loads every selected package's setup, never its opencode(ctx) collection.
   await f.run(["references", "list"]);
-  expect(readFileSync(f.imports, "utf8")).toBe(`${collections}setup\nsetup\n`);
-  expect(await f.run(["folio", "edition"])).toContain("fiction");
   expect(readFileSync(f.imports, "utf8")).toBe(`${collections}setup\nsetup\nsetup\n`);
+  expect(await f.run(["folio", "edition"])).toContain("fiction");
+  expect(readFileSync(f.imports, "utf8")).toBe(`${collections}setup\nsetup\nsetup\nsetup\n`);
 
   if (groundwork) {
     // Custom receipts do not change the schema/data in the older reader's links table.

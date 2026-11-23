@@ -1,8 +1,9 @@
 // `office check`: drift between office.yaml, the tool and the folders, the packages and their
 // panels on the desktop app's machine, then, when this office's
 // containers are running, whether Executor is ready, each desk loads what it should on the OpenCode
-// server of the office's mode, the container runs the host's `office`, the cron jobs are
-// scheduled (supercronic, or the host's timers), and in container mode the image refresh timer is
+// server of the office's mode, the container runs the host's `office` and Supercronic runs the
+// cron package's jobs as they are now (packages' own checks report their host timers), and in
+// container mode the image refresh timer is
 // active and the image's Debian packages are recent. Last, for information, what sessions load from
 // outside the office (the session's home, folders above the office).
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -13,10 +14,10 @@ import { claudeFiles } from "../claude.ts";
 import { appliedReferenceProblem, referenceOriginProblem } from "../git.ts";
 import { appliedReferences } from "../applied-references.ts";
 import { type Gathered, gatherPackages } from "../gather.ts";
-import { cronRevision } from "../../standard/cron/container.ts";
-import { cronTimers, refreshTimer, staleTimerUnits, timerStates } from "../../standard/cron/host.ts";
-import { collectJobs } from "../../standard/cron/jobs.ts";
+import { containerSchedule } from "../container-schedule.ts";
 import { hasSystemd } from "../systemd.ts";
+import { officeInfo, packageHost } from "../lifecycle-inputs.ts";
+import { ownedUnits, packageUnits, refreshOwner, refreshTimer, timerStatus } from "../timers.ts";
 import { configFile, installedPanelNames, locate, panelDir, panelId, panelState, readPanelRecord, removalNote } from "../desktop.ts";
 import { ghConfigDir, ghLogin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
 import { hookNote, hookState } from "../hook.ts";
@@ -382,7 +383,7 @@ export async function packageCheckFunctions(office: Office, report: Report, gath
     let problems: unknown;
 
     try {
-      problems = await item.manifest.check({ office: { dir: office.dir }, entries: gathered.entries, settings: structuredClone(item.settings) });
+      problems = await item.manifest.check({ office: officeInfo(office), entries: gathered.entries, settings: structuredClone(item.settings), host: packageHost(office, item.entry.name, { readOnly: true }) });
     } catch (error) {
       report(false, name, `its check failed: ${error instanceof Error ? error.message : String(error)}`);
 
@@ -519,35 +520,50 @@ function expectedSkills(office: Office, desk: string | undefined, { loaded }: Co
   return { expected: [...expected], forbidden: [...everything].filter((skill) => !expected.has(skill)) };
 }
 
-function cron(office: Office, report: Report, running: string[], { gathered }: Context): void {
-  const jobs = collectJobs(office, gathered.inventory);
+/**
+ * The office's own timer and the container's scheduler; the cron package's check reports host
+ * timers. In host mode, a refresh timer left from container mode; in container mode, host timers
+ * left from host mode, the weekly refresh timer, the image's age, and in a running container a
+ * schedule other than the jobs as they are now, or Supercronic not running.
+ */
+function scheduling(office: Office, report: Report, running: string[], { claims }: Context): void {
+  const stale = office.opencode.mode === "host" ? ownedUnits(office, refreshOwner) : packageUnits(office);
 
-  if (!jobs.ok) {
-    for (const error of jobs.errors) report(false, "cron", error);
+  if (stale.length > 0) report(false, "timers", `obsolete units: ${stale.join(", ")} (office up removes them)`);
 
-    return;
-  }
+  if (office.opencode.mode === "host") return;
 
-  const timers = office.opencode.mode === "host" ? cronTimers(office, jobs.value) : [refreshTimer(office)];
-  const stale = staleTimerUnits(office, timers);
+  if (hasSystemd()) {
+    const wanted = refreshTimer(office);
+    const label = `timer ${wanted.unit}`;
 
-  if (stale.length > 0) report(false, "cron", `obsolete units: ${stale.join(", ")} (office up removes them)`);
+    try {
+      const [installed] = timerStatus(office, refreshOwner);
 
-  if (office.opencode.mode === "host" || hasSystemd()) {
-    for (const timer of timerStates(timers)) {
-      const detail = !timer.active ? "not active" : !timer.matches ? "installed schedule differs" : `${timer.calendar}; next ${timer.next || "?"}, last ${timer.last || "never"}`;
-
-      report(timer.active && timer.matches, `timer ${timer.unit}`, timer.active && timer.matches ? detail : `${detail} (run office up)`);
+      if (installed === undefined || installed.files !== "pair" || !installed.active) report(false, label, "not active (run office up)");
+      else if (installed.calendar !== wanted.calendar || !installed.persistent) report(false, label, "installed schedule differs (run office up)");
+      else report(true, label, `${wanted.calendar}; next ${installed.next ?? "?"}, last ${installed.last ?? "never"}`);
+    } catch (error) {
+      // A unit systemd loaded from a file office didn't write is not the office's refresh timer.
+      report(false, label, error instanceof Error ? error.message : String(error));
     }
   } else {
     report("warn", "image refresh", "no systemd user manager, so nothing refreshes the opencode image weekly; run office up --refresh yourself");
   }
 
-  if (office.opencode.mode === "host") return;
-
   imageAge(office, report);
 
-  if (!running.includes("opencode")) return;
+  // The packages didn't load: the gathering's check names them.
+  if (!running.includes("opencode") || claims === undefined) return;
+  let schedule: ReturnType<typeof containerSchedule>;
+
+  try {
+    schedule = containerSchedule(office, claims);
+  } catch (error) {
+    report(false, "cron", error instanceof Error ? error.message : String(error));
+
+    return;
+  }
 
   let applied = "";
 
@@ -557,13 +573,13 @@ function cron(office: Office, report: Report, running: string[], { gathered }: C
     // Earlier containers do not have a schedule revision.
   }
 
-  if (applied !== cronRevision(jobs.value)) {
+  if (applied !== schedule.revision) {
     report(false, "cron", "the container's schedule is out of date (run office up)");
 
     return;
   }
 
-  if (jobs.value.length === 0) return;
+  if (schedule.jobs === 0) return;
 
   const processes = compose(office, ["top", "opencode"], { capture: true });
 
@@ -797,7 +813,7 @@ async function runtime(office: Office, report: Report, run: Context, stage?: Sta
 
   stage?.detail("services and timers");
   hostServiceStatus(office, report, run.gathered.inventory);
-  cron(office, report, running, run);
+  scheduling(office, report, running, run);
 
   return root;
 }

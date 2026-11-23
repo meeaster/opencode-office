@@ -2,7 +2,8 @@
 // contribute (src/package-services.ts), and the office's own compose.yaml when it has one, as the
 // compose project office-<name>. In host mode the opencode
 // container stays off (its compose profile isn't enabled), and `office up` prepares what the
-// container would otherwise do itself: the office's tools and its cron jobs.
+// container would otherwise do itself: the office's tools, and packages' `up` functions, such as
+// cron's timers, run last.
 //
 // `office up` runs the versions it last applied (the state folder's applied.json) and says what
 // office.yaml has moved to since; `office up --upgrade` applies those, after backing up what the
@@ -14,16 +15,16 @@ import { randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { cronRevision } from "../../standard/cron/container.ts";
-import { requireJobs } from "../../standard/cron/discovery.ts";
-import { cronTimers, installTimers, refreshTimer, removeTimers } from "../../standard/cron/host.ts";
+import { containerSchedule } from "../container-schedule.ts";
 import { hasSystemd } from "../systemd.ts";
+import { refreshOwner, refreshTimer, removePackageTimers, removeTimers, writeTimers } from "../timers.ts";
 import { ghConfigDir, ghHosts } from "../github.ts";
 import { hostTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";
 import { CommandFailed, progress, say, streamChecked, warn } from "../report/index.ts";
 import { displayLines } from "../report/reporter.ts";
-import type { InstalledPackages } from "../layout.ts";
+import { type Gathered, gatherPackages, problemLines } from "../gather.ts";
+import { officeInfo, packageHost, packageLines } from "../lifecycle-inputs.ts";
 import { type Office, OfficeError, readEnvFile } from "../office.ts";
 import { hostLayout, hostWrappers } from "../host-env.ts";
 import { markServerStopped, planServer, serverIncumbent, startServer } from "../host-server.ts";
@@ -315,7 +316,7 @@ async function refreshImages(office: Office, pins: Lock, refreshed: string): Pro
 /** Installs the weekly refresh timer, which needs a systemd user manager the machine may lack. */
 function installRefreshTimer(office: Office): void {
   if (hasSystemd()) {
-    installTimers(office, [refreshTimer(office)]);
+    for (const line of writeTimers(office, refreshOwner, [refreshTimer(office)])) say(line);
 
     return;
   }
@@ -471,13 +472,37 @@ function choosePins(office: Office, upgrade: boolean) {
 }
 
 /**
- * Starts the office's services; returns a one-line summary of what runs. `inventory` is the
- * packages a finishing reader already read; standalone, `up` reads their definitions itself.
+ * Each package's `up` function, in the order the packages loaded, its lines printed under the
+ * package's name. The first that throws, or returns something other than lines, stops the rest.
  */
-export async function up(office: Office, { upgrade = false, refresh = false, inventory }: { upgrade?: boolean; refresh?: boolean; inventory?: InstalledPackages } = {}): Promise<string> {
+async function runUpFunctions(office: Office, gathered: Pick<Gathered, "packages" | "entries">): Promise<void> {
+  for (const item of gathered.packages) {
+    const name = item.entry.name;
+    const run = item.manifest.up?.bind(item.manifest);
+
+    if (!run) continue;
+    progress(`running package ${name}'s up`);
+    const result = await packageLines(name, "up", () => run({ office: officeInfo(office), entries: gathered.entries, settings: structuredClone(item.settings), host: packageHost(office, name) }));
+
+    if (!result.ok) throw new OfficeError(result.problem);
+
+    for (const line of result.lines) say(line);
+  }
+}
+
+/**
+ * Starts the office's services; returns a one-line summary of what runs. Every selected package
+ * is gathered first, and nothing starts unless all of them load: `gathered` is the gathering a
+ * finishing reader already made; standalone, `up` gathers itself. Packages' `up` functions run last.
+ */
+export async function up(office: Office, { upgrade = false, refresh = false, gathered }: { upgrade?: boolean; refresh?: boolean; gathered?: Gathered } = {}): Promise<string> {
+  const packages = gathered ?? await gatherPackages(office);
+
+  if (!packages.complete) throw new OfficeError(`packages didn't load, so nothing was started: ${problemLines(packages.problems).join("; ") || `not loaded: ${[...packages.unread].join(", ")}`}; fix them and run office sync, then office up`);
+  const inventory = packages.inventory;
   const managed = office.opencode.managed !== undefined;
-  const jobs = requireJobs(office, inventory);
-  const timers = office.opencode.mode === "host" ? cronTimers(office, jobs) : [];
+  // The container's schedule, from the packages' jobs; a wrong job stops it before anything starts.
+  const schedule = office.opencode.mode === "container" ? containerSchedule(office, packages) : undefined;
 
   if (managed) requireServerConsent(office);
 
@@ -521,6 +546,10 @@ export async function up(office: Office, { upgrade = false, refresh = false, inv
     // An opencode container left from container mode would answer on the old port.
     progress("starting the containers");
     await composeStreamed(office, ["rm", "--stop", "--force", "opencode"], { profiles: "container", pins });
+
+    // The container's scheduler is stopped; its weekly refresh goes before any host timer starts.
+    for (const line of removeTimers(office, refreshOwner)) say(line);
+
     await composeStreamed(office, ["up", "-d", "--build", "--remove-orphans"], { pins });
     finishSweep();
     writeExecutorFiles(office);
@@ -541,12 +570,13 @@ export async function up(office: Office, { upgrade = false, refresh = false, inv
     if (refresh) await refreshImages(office, pins, refreshed);
     else await buildImages(office, pins, refreshed);
 
-    // Installing only the refresh timer removes cron timers left from host mode, which would run
-    // the jobs twice.
+    // Host timers left from host mode would run jobs beside the container's scheduler: every
+    // package's goes before the container starts, whatever happens after.
+    for (const line of removePackageTimers(office)) say(line);
     installRefreshTimer(office);
     // A changed schedule or enabled set needs a new container even when its image is unchanged.
     progress("starting the containers");
-    await composeStreamed(office, ["up", "-d", "--build", "--remove-orphans"], { pins, cronRevision: cronRevision(jobs) });
+    await composeStreamed(office, ["up", "-d", "--build", "--remove-orphans"], { pins, cronRevision: schedule?.revision });
     finishSweep();
     writeExecutorFiles(office);
   }
@@ -583,7 +613,7 @@ export async function up(office: Office, { upgrade = false, refresh = false, inv
     await startServer(office, plan, upgrade, changed);
   }
 
-  if (office.opencode.mode === "host") installTimers(office, timers);
+  await runUpFunctions(office, packages);
 
   const packaged = serviceFiles(office).length;
   const executor = `Executor${packaged > 0 ? ` and the services of ${packaged} ${packaged === 1 ? "package" : "packages"}` : ""}`;
@@ -609,14 +639,16 @@ export async function startExecutor(office: Office): Promise<void> {
 }
 
 /**
- * Stops the office's containers, whichever mode started them, and its timers. What packages'
+ * Stops the office's containers, whichever mode started them, and its image refresh timer;
+ * packages' `down` functions, such as cron's removing its timers, ran before. What packages'
  * services created themselves (their spawns labels) goes too: its containers first, since one
  * attached to the office's network keeps Compose from removing it, then its networks.
  */
 export function down(office: Office): void {
   reconcileHostServices(office, "down");
   markServerStopped(office);
-  removeTimers(office);
+
+  for (const line of removeTimers(office, refreshOwner)) say(line);
   stopRecordedServer(office);
 
   const finishSweep = sweepSpawned([...appliedSpawns(office).values()], "removing what packages' services created");

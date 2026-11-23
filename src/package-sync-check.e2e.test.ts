@@ -22,7 +22,7 @@ function upstream(name: string) {
   return repo;
 }
 
-test("check and the reader that finishes refresh each run every setup once; standalone up and a named cron run none", () => {
+test("check, standalone up, a named cron run and the reader that finishes refresh each run every setup once", () => {
   const { dir, env, probe, cli, select } = fixture("counted");
   writePackage(join(dir, "packages/counter/office.ts"), counted());
   select("  - name: counter\n");
@@ -34,8 +34,15 @@ test("check and the reader that finishes refresh each run every setup once; stan
   expect(lines()).toBe("run\n");
   rmSync(probe);
 
-  for (const args of [["up"], ["cron", "run", "package.office.update-references"]]) Bun.spawnSync([exe, "--office", dir, ...args], { cwd: root, env });
-  expect(lines()).toBe("");
+  // Up gathers before it starts anything (its Compose fails here, after that).
+  Bun.spawnSync([exe, "--office", dir, "up"], { cwd: root, env });
+  expect(lines()).toBe("run\n");
+  rmSync(probe);
+
+  // A named run gathers every package, as any package command does.
+  Bun.spawnSync([exe, "--office", dir, "cron", "run", "package.office.update-references"], { cwd: root, env });
+  expect(lines()).toBe("run\n");
+  rmSync(probe);
 
   // Refresh syncs (admission gathers too), then its finishing reader gathers once for up and check.
   Bun.spawnSync([exe, "--office", dir, "refresh"], { cwd: root, env });

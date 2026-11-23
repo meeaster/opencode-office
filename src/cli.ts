@@ -27,14 +27,13 @@ import { runInContainer } from "./commands/shell.ts";
 import { summarize, sync } from "./commands/sync.ts";
 import { update } from "./commands/update.ts";
 import { upgradeTools } from "./commands/upgrade.ts";
-import { cronCommand } from "../standard/cron/command.ts";
-import { namedJob } from "../standard/cron/discovery.ts";
 import { releaseMachine, serviceEnvironment } from "./machine.ts";
 import { currentOffice, findOffice, type Office, OfficeError } from "./office.ts";
 import { type Gathered, gatherPackages } from "./gather.ts";
-import { ensureDiscovery, hasPublishedSet } from "./package-generation.ts";
+import { checkDirectories, ensureDiscovery, hasPublishedSet } from "./package-generation.ts";
 import { bindReader, evaluateAdmission, restoreCallerEnv, runReader } from "./package-operation.ts";
 import { packageSecret } from "./package-services.ts";
+import { shutdownPackages } from "./package-shutdown.ts";
 import { decrypt } from "./secrets.ts";
 import { onTerminal, reported, type Reporter, type Stage } from "./report/index.ts";
 import { age } from "./schema.ts";
@@ -114,9 +113,6 @@ const usage = `usage: office <command> [--office <dir>]
                                (minimum age: 0d by default), or exactly <release>; --check only reports.
                                Offices pick it up with office sync and office up; it never
                                changes office.yaml's tools
-  cron list | run <job-id>      list applicable jobs or run one by its qualified ID
-  cron supercronic | catch-up   container internals: print generated supercronic input or run
-                               jobs missed since their last success
   env --container              print the opencode container's environment file: the Socket
                                 Firewall wrappers on PATH and package managers' and mise's release ages
   env host-service <name> --office <absolute-dir>
@@ -228,15 +224,21 @@ async function main(): Promise<void> {
       return reported("setup", officeContext(office), reporter => finishSetup(office, args[2] === "shell", args[3] || undefined, reporter), { verbose: args[4] === "verbose" });
     }
 
+    if (args[0] === "--shutdown" && args[1] === dir) {
+      if (!(await shutdownPackages(currentOffice({ office: dir })))) process.exitCode = 1;
+
+      return;
+    }
+
     if (args[0] === "--finish-refresh" && args[1] === dir) {
       const office = currentOffice({ office: dir });
       const verbose = args[2] === "verbose";
 
       return reported("refresh", officeContext(office), async reporter => {
-        // One gathering for every step of the finishing reader; office up itself needs none.
+        // One gathering for every step of the finishing reader, office up's included.
         const gathered = await gatherPackages(office, { machine: true });
         const services = reporter.stage("Services", { key: "services" });
-        services.done(await up(office, { inventory: gathered.inventory }));
+        services.done(await up(office, { gathered }));
         await checkStage(office, reporter, verbose, gathered);
         reporter.finish([]);
       }, { verbose });
@@ -302,10 +304,13 @@ async function main(): Promise<void> {
     // A sync that publishes refuses a lock it can't read whole before it repairs anything, discovery links too.
     if (dir && command === "sync" && !flags.references && !flags["release-machine"]) requireKnownLockKeys(dir);
 
-    if (dir) ensureDiscovery(dir);
+    // Down's own shutdown can't depend on the package set: its reader is started on its own.
+    const shutdown = command === "down" && !flags.help;
+
+    if (dir && !shutdown) ensureDiscovery(dir);
 
     // Help and bare `office` list package commands, so they load packages in the reader too.
-    if (dir && (flags.help || command === undefined || !["sync", "refresh", "packages", "sfw-wrappers", "env"].includes(command))) {
+    if (dir && !shutdown && (flags.help || command === undefined || !["sync", "refresh", "packages", "sfw-wrappers", "env"].includes(command))) {
       const status = await runReader(dir, args);
 
       if (status !== undefined) {
@@ -483,15 +488,17 @@ async function main(): Promise<void> {
   } else if (command === "pair") {
     console.log(await pair(currentOffice(flags), flags.origin));
   } else if (command === "down") {
-    down(currentOffice(flags));
-  } else if (command === "host-agent-cli-update" && rest.length === 0) {
     const office = currentOffice(flags);
+    const packaged = await packageShutdown(office);
 
-    namedJob(office, agentUpdateJob);
+    down(office);
 
-    process.exitCode = await updateAgentClis(office);
-  } else if (command === "cron") {
-    await cronCommand(currentOffice(flags), rest);
+    if (!packaged) {
+      console.error("office: the office's own shutdown completed, but not every package's (above)");
+      process.exitCode = 1;
+    }
+  } else if (command === "host-agent-cli-update" && rest.length === 0) {
+    process.exitCode = await updateAgentClis(currentOffice(flags));
   } else if (command === "env" && flags.container === true) {
     process.stdout.write(containerEnvText(containerOffice(flags)));
   } else if (command === "env" && rest[0] === "host-service") {
@@ -524,6 +531,31 @@ async function main(): Promise<void> {
     const dispatched = Object.keys(flags).every(key => key === "office") && bound ? await dispatchCommand(bound, positionals) : { found: false as const, failures: [] };
 
     if (!dispatched.found) unknownCommand(dir, positionals, dispatched.failures);
+  }
+}
+
+/**
+ * Runs each package's `down` in a shutdown reader bound to the published package set; returns
+ * whether every package took part. Neither a reader that can't start nor one that fails stops the
+ * caller, which runs the office's own shutdown next.
+ */
+async function packageShutdown(office: Office): Promise<boolean> {
+  try {
+    // Down skips discovery so a broken package set can't stop it; still never pin or import through a redirected folder.
+    checkDirectories(office.dir);
+    const status = await runReader(office.dir, ["--shutdown", office.dir]);
+
+    if (status === undefined) {
+      console.log("office: no package set is published, so no package took part in the shutdown");
+
+      return true;
+    }
+
+    return status === 0;
+  } catch (error) {
+    console.error(`office: the packages' shutdown couldn't start: ${error instanceof Error ? error.message : String(error)}`);
+
+    return false;
   }
 }
 

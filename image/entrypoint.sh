@@ -101,7 +101,8 @@ if ls "$conf_d"/office-*.toml >/dev/null 2>&1; then
   (cd / && mise install --quiet) || echo "office: mise install failed for the office's machine-wide tools" >&2
 fi
 
-# Generated from the office's YAML jobs. The runner stamps successes in the home volume.
+# The crontab is what the cron package prints: the jobs packages declare and the office's own from
+# the cron package's settings. The runner stamps successes in the home volume.
 # Jobs missed while the computer was off run once now, in the background, then supercronic keeps
 # the schedule. Job output goes to the container log.
 if office --office "$office" cron supercronic > /tmp/office-crontab && [ -s /tmp/office-crontab ]; then

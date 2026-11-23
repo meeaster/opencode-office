@@ -4,7 +4,7 @@ import { repositories } from "./repositories.ts";
 
 export default Package.define({
   commands: {
-    "references list": { summary: "Show desired references and their claimants without fetching", run: listReferences },
+    "references list": { summary: "Show desired references and their claimants without fetching", result: listReferences },
   },
   setup(ctx) {
     ctx.registry(repositories);

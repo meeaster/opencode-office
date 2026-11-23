@@ -364,6 +364,7 @@ test("an entry without repo is built-in when shipped and local otherwise; the re
     ["office", "built-in", ".office/packages/office"],
     ["references", "built-in", ".office/packages/references"],
     ["seeds", "built-in", ".office/packages/seeds"],
+    ["cron", "built-in", ".office/packages/cron"],
     ["knowledge", "built-in", ".office/packages/knowledge"],
     ["mine", "local", "packages/mine"],
     ["shared", "remote", ".office/packages/shared"],
@@ -425,7 +426,7 @@ test("the required office package ignores the Claude app's synced skills unless 
   expect(read(office, "office").result).toMatchObject({ ok: false, errors: ["packages.office.settings.ignored: the package declares no such setting; remove it from office.yaml"] });
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: office\n    repo: https://example.com/fork.git\n    path: packages/office\n    ref: main\n");
-  expect(() => loadOffice(office)).toThrow("the required office package is built in: its entry can only configure settings and cron");
+  expect(() => loadOffice(office)).toThrow("the required office package is built in: its entry can only configure settings");
 
   // A skill a built-in package renamed, as an earlier executable's copy held it, leaves on the next sync.
   const skills = join(office, ".office/packages/office/skills");

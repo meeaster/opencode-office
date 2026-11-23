@@ -1,4 +1,6 @@
-// The schedule grammar and UTC matching shared by both cron runners and the declaration schemas.
+// The schedule grammar: five UTC cron fields or a macro such as @daily. From one reading come the
+// systemd calendar a host timer uses, the numeric line Supercronic reads, and the matcher catch-up
+// uses, so every runner fires at the same minutes.
 const macros = new Map(Object.entries({
   "@yearly": "0 0 1 1 *",
   "@annually": "0 0 1 1 *",
@@ -81,9 +83,12 @@ export function scheduleFields(expression: string): ScheduleFields | undefined {
   return { minute, hour, day, month, weekday };
 }
 
-/** Schema predicate. In particular, a schedule must not inject another line in generated input. */
+/** The characters a schedule may hold, on one line, so it can't add a line to generated input. */
+export const scheduleCharacters = "^[\\w@?*,/ \\t-]+$";
+
+/** Whether `expression` is a schedule. */
 export function validSchedule(expression: string): boolean {
-  if (!/^[\w@?*,/ \t-]+$/.test(expression) || /[\r\n]/.test(expression)) return false;
+  if (!new RegExp(scheduleCharacters).test(expression) || /[\r\n]/.test(expression)) return false;
 
   try {
     return scheduleFields(expression) !== undefined;
@@ -92,14 +97,27 @@ export function validSchedule(expression: string): boolean {
   }
 }
 
-/** Numeric supercronic input from the same fields used for catch-up. */
-export function numericSchedule(fields: ScheduleFields): string {
-  return [fields.minute, fields.hour, fields.day, fields.month, fields.weekday]
-    .map((field) => field === undefined ? "*" : [...field].sort((a, b) => a - b).join(","))
-    .join(" ");
+function values(set: Set<number> | undefined, format: (value: number) => string = String): string {
+  return set === undefined ? "*" : [...set].sort((a, b) => a - b).map(format).join(",");
 }
 
-/** A matcher for a five-field expression or a macro such as @daily; undefined for other forms. */
+/** Numeric supercronic input from the same fields used for catch-up. */
+export function numericSchedule(fields: ScheduleFields): string {
+  return [fields.minute, fields.hour, fields.day, fields.month, fields.weekday].map(field => values(field)).join(" ");
+}
+
+const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** The systemd OnCalendar value for the same minutes, in UTC. */
+export function calendar({ minute, hour, day, month, weekday }: ScheduleFields): string {
+  const two = (number: number) => String(number).padStart(2, "0");
+  const date = `*-${values(month, two)}-${values(day, two)}`;
+  const time = `${values(hour, two)}:${values(minute, two)}:00`;
+
+  return `${weekday === undefined ? "" : `${values(weekday, (index: number) => weekdays[index])} `}${date} ${time} UTC`;
+}
+
+/** A matcher for the minutes a schedule's fields allow. */
 export function schedule({ minute, hour, day, month, weekday }: ScheduleFields): (date: Date) => boolean {
 
   // Cron's rule: when both day fields are restricted, either one matching is enough.

@@ -1,0 +1,11 @@
+{
+  "name": "@office/cron",
+  "description": "Scheduled jobs: packages declare theirs with cron.add, the office adds its own and overrides packages' in this package's settings, and office up runs them as systemd user timers on a host or with Supercronic in the OpenCode container, catching up missed runs.",
+  "private": true,
+  "exports": {
+    ".": "./handles.ts"
+  },
+  "office": {
+    "definition": "./office.ts"
+  }
+}

@@ -24,7 +24,6 @@ import { copyFromRepository } from "./git.ts";
 import { type Office, OfficeError, type PackageEntry } from "./office.ts";
 import { readDefinition } from "./package-definition.ts";
 import { readPackageJson, scope } from "./package-manifest.ts";
-import { collectJobs } from "../standard/cron/jobs.ts";
 import { composeProblems, packageComposeFile } from "./package-services.ts";
 import { settingsEnv } from "../standard/compose/services.ts";
 import { gateDefaultProblem, systemSection } from "./package-system.ts";
@@ -58,7 +57,7 @@ export const sdkName = "sdk";
 const sdkReserved = `the name ${sdkName} is reserved for ${scope}${sdkName}; rename the package`;
 
 /** The built-in packages every office has, without an entry in office.yaml. */
-export const requiredPackages = ["tooling", "mise-integration", "office", "references", "seeds"];
+export const requiredPackages = ["tooling", "mise-integration", "office", "references", "seeds", "cron"];
 
 const files = v.record(v.string(), v.string());
 
@@ -173,7 +172,7 @@ export function resolvePackages(office: Pick<Office, "dir" | "packages">, only?:
   if (problems.length && !live) return { packages: [], problems };
 
   const packages: ResolvedPackage[] = requiredPackages.flatMap((name) => (only !== undefined && name !== only) || excluded.has(name) ? [] : [{
-    entry: office.packages.find((entry) => entry.name === name) ?? { name, settings: {}, cron: {}, source: undefined },
+    entry: office.packages.find((entry) => entry.name === name) ?? { name, settings: {}, source: undefined },
     kind: "built-in",
     dir: pulledDir(office, name),
   }]);
@@ -565,7 +564,7 @@ export function problemLine(problem: PackageProblem) {
   return `package ${problem.packages.join(", ")}: ${problem.message}`;
 }
 
-/** For a reader of one package's definition (cron, the GUI): fails, naming every problem, unless the whole selection passes `definitionGate`. */
+/** For a reader of one package's definition (the GUI): fails, naming every problem, unless the whole selection passes `definitionGate`. */
 export function requireLoadable(office: Office) {
   const problems = definitionGate(office, resolvePackages(office, undefined, true).packages);
 
@@ -578,26 +577,13 @@ export function requireLoadable(office: Office) {
  * with the schema itself. A setting that reaches the package's compose file must hold no single
  * quote or line feed, and a system setup's setting must stay off unless office.yaml turns it on.
  */
-function resolveSettings({ entry, dir }: ResolvedPackage, manifest: PackageManifest, file: string): Parsed<Record<string, SettingValue>> {
-  const validator = settingsValidator(manifest, file);
+function resolveSettings(resolved: ResolvedPackage, manifest: PackageManifest, file: string): Parsed<Record<string, SettingValue>> {
+  const { entry, dir } = resolved;
+  const schema = schemaSettings(resolved, manifest, file);
 
-  if (!validator.ok) return validator;
-  const validate = validator.value;
-  const settings = structuredClone(entry.settings ?? {});
+  if (!schema.ok) return schema;
+  const settings = schema.value;
   const path = `packages.${entry.name}.settings`;
-
-  if (!validate(settings)) {
-    return { ok: false, errors: (validate.errors ?? []).map(issue => {
-      const at = `${path}${issue.instancePath.replaceAll("/", ".")}`;
-
-      if (issue.keyword === "additionalProperties") return `${at}.${String(issue.params.additionalProperty)}: the package declares no such setting; remove it from office.yaml`;
-
-      if (issue.keyword === "required") return `${at}.${String(issue.params.missingProperty)}: is required; add it to office.yaml`;
-
-      return `${at}: ${issue.message}`;
-    }) };
-  }
-
   const errors = Object.keys(settings).flatMap(key => manifest.secrets[settingVariable(manifest.namespace, key)] ? [`${path}.${key}: conflicts with a package secret`] : []);
   const gate = manifest.system && gateDefaultProblem(entry, settings, manifest.system.setting);
 
@@ -612,6 +598,32 @@ function resolveSettings({ entry, dir }: ResolvedPackage, manifest: PackageManif
   }
 
   return { ok: true, value: settings };
+}
+
+/**
+ * The package's settings in office.yaml checked against its own schema only, with the schema's
+ * defaults applied: what `office down` gives a package's `down`, without the checks for its
+ * compose file and system setup.
+ */
+export function schemaSettings({ entry }: Pick<ResolvedPackage, "entry">, manifest: PackageManifest, file: string): Parsed<Record<string, SettingValue>> {
+  const validator = settingsValidator(manifest, file);
+
+  if (!validator.ok) return validator;
+  const validate = validator.value;
+  const settings = structuredClone(entry.settings ?? {});
+  const path = `packages.${entry.name}.settings`;
+
+  if (validate(settings)) return { ok: true, value: settings };
+
+  return { ok: false, errors: (validate.errors ?? []).map(issue => {
+    const at = `${path}${issue.instancePath.replaceAll("/", ".")}`;
+
+    if (issue.keyword === "additionalProperties") return `${at}.${String(issue.params.additionalProperty)}: the package declares no such setting; remove it from office.yaml`;
+
+    if (issue.keyword === "required") return `${at}.${String(issue.params.missingProperty)}: is required; add it to office.yaml`;
+
+    return `${at}: ${issue.message}`;
+  }) };
 }
 
 // One Ajv for every package's settings schema. It registers no schema under its `$id`, so two
@@ -655,11 +667,6 @@ export function readPackage(office: Office, resolved: ResolvedPackage): { ok: tr
 
   const { manifest, file } = read.value;
   const errors: string[] = [];
-
-  for (const key of Object.keys(entry.cron)) {
-    if (!manifest.registerCron && !Object.hasOwn(manifest.cron, key)) errors.push(`packages.${entry.name}.cron.${key}: no such job in ${file}`);
-  }
-
   const settings = resolveSettings(resolved, manifest, file);
 
   // Before the checks below that read the package's folder, so a failing one can't hide it.
@@ -722,7 +729,7 @@ function candidateProblems(office: Pick<Office, "dir" | "packages">, candidate: 
 
 /**
  * Sync's admission checks a changed copy against the consuming entry before any live path points
- * at its files: its selection, settings, assets, cron, system setup and compose file. Its setup runs
+ * at its files: its selection, settings, assets, system setup and compose file. Its setup runs
  * with every other package's, in the admission's gathering.
  */
 export function validateReplacement(office: Office, resolved: ResolvedPackage) {
@@ -745,9 +752,6 @@ export function validateReplacement(office: Office, resolved: ResolvedPackage) {
     if (!statSync(path, { throwIfNoEntry: false })?.isFile() || relative(realpathSync(item.dir), realpathSync(path)).startsWith("..")) throw new Error(`${file} must be a file inside the package`);
   }
 
-  const jobs = collectJobs({ ...office, cron: {} }, { installed: [item], problems: [] });
-
-  if (!jobs.ok) throw new Error(jobs.errors.join("; "));
   // Its own system block: a recipe it contributes is checked when admission gathers it.
   const section = systemSection(office, { ...item, system: item.manifest.system });
 

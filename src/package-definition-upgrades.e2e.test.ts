@@ -46,9 +46,12 @@ test("tracked updates validate the consuming settings and staged assets before p
     [definitionText('{settings:{type:"object",additionalProperties:false,properties:{title:{type:"string",default:"fallback"}}},opencode(c){if(c.settings.title==="Mine")c.serverPlugin("missing")}}'), "existing directory"],
     // A removed setup call is a call to something that isn't there.
     [definitionText('{settings:{type:"object",additionalProperties:false,properties:{title:{type:"string"}}},setup(c){c.booleanSetting("active",{default:true,description:"Active"})}}'), "booleanSetting"],
-    [definition.replace("settings:", 'cron:{job:{script:"missing.sh",schedule:"@daily"}},settings:'), "missing.sh"],
-    [definition.replace("settings:", 'registerCron(ctx){ctx.cron.job("job",{script:"missing.sh",schedule:"@daily"})},settings:'), "missing.sh"],
-    [definition.replace("settings:", 'registerCron(ctx){ctx.cron.job("job",false);throw Error("interrupted replacement")},settings:'), "interrupted replacement"],
+    // The ways jobs were declared before cron was a package are unknown keys.
+    [definition.replace("settings:", 'cron:{job:{script:"job.sh",schedule:"@daily"}},settings:'), "office.ts: cron: must be a mapping of"],
+    [definition.replace("settings:", 'registerCron(){},settings:'), "office.ts: registerCron: must be a mapping of"],
+    // A job the cron registry's parser refuses (handles match by id, so no import is needed).
+    [definition.replace(seeded, `setup(c){seeds.add(c,{destination:"seeded",source:"seed"});c.add({id:"cron.jobs",parse:v=>v},{name:"job",schedule:"every tuesday",script:"job.sh"})},`), "cron job job: schedule must be"],
+    [definition.replace(seeded, `setup(c){seeds.add(c,{destination:"seeded",source:"seed"});throw Error("interrupted replacement")},`), "interrupted replacement"],
   ]) {
     writePackage(join(source, "office.ts"), candidate, uses);
     commit(repo);
@@ -90,6 +93,18 @@ test("tracked updates validate the consuming settings and staged assets before p
   expect(cli(0, "seeds", "diff")).toContain("No seeds are pending.");
   expect(read(join(dir, "seeded/edited.md"))).toBe("the owner's edit\n");
   expect(cli(0, "--help")).toContain("seeds settle <path>");
+
+  // A job whose script the new commit lacks passes the parser: the set is published, then the cron
+  // package's sync, and every command after it, names the job.
+  writePackage(join(source, "office.ts"), withSeeds(`{settings:{type:"object",additionalProperties:false,properties:{enabled:{type:"boolean",default:false}}},setup(c){
+    seeds.add(c,{destination:"seeded",source:"seed"});
+    c.add({id:"cron.jobs",parse:v=>v},{name:"digest",schedule:"@daily",script:"digest.sh"});
+  }}`), uses);
+  const lacking = commit(repo);
+  const missing = "cron package.shared.digest: digest.sh must be an existing regular script inside package shared's folder";
+  expect(cli(1, "packages", "update")).toContain(missing);
+  expect(read(paths[0])).toContain(lacking);
+  expect(cli(1, "cron", "list")).toContain(missing);
 }, 60_000);
 
 test("a broken embedded replacement leaves the installed package usable and fails a new init", () => {
@@ -129,7 +144,7 @@ test("built-in YAML and TS enforce the same record and bootstrap repair rules", 
   }
 }, 60_000);
 
-test("down uses the applied Compose inputs and marked unit without importing the selected owner", async () => {
+test("down tears down from the applied Compose inputs and marked unit when the owner's definition throws on import, naming it", async () => {
   const { dir, home, probe, cli, select } = fixture("teardown");
   select("  - name: notes\nstate: ./state\n");
   const pkg = join(dir, "packages/notes");
@@ -142,8 +157,9 @@ test("down uses the applied Compose inputs and marked unit without importing the
   write(join(home, "units", unit), `# office package services: ${dir}\n`);
   write(join(home, "bin/systemctl"), '#!/bin/sh\necho "$*" >> "$HOME/service.calls"\n', 0o755);
   write(join(home, "bin/docker"), '#!/bin/sh\necho "$*" >> "$HOME/docker.calls"\ncase "$1" in ps) echo fixture-container;; esac\n', 0o755);
-  cli(0, "down");
-  expect(existsSync(probe)).toBe(false);
+  // The shutdown reader imports the owner for its `down` and names it; the office's own teardown doesn't need it.
+  expect(cli(1, "down")).toContain("package notes: left out of shutdown, so what it installed, such as its timers, stays installed: packages/notes/office.ts: unread");
+  expect(read(probe)).toBe("imported\n");
   expect(read(join(home, "service.calls"))).toContain(`disable --now ${unit}`);
   expect(existsSync(join(home, "units", unit))).toBe(false);
   const calls = read(join(home, "docker.calls"));

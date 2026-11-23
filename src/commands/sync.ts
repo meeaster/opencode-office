@@ -10,7 +10,6 @@
 // in the office is their own `sync` functions' work.
 import { readdirSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import * as v from "valibot";
 
 import { prepareReferenceRefresh } from "../../packages/references/tasks/refresh.ts";
 import { claudeFiles } from "../claude.ts";
@@ -19,8 +18,8 @@ import { publishPackages } from "../package-operation.ts";
 import { editorLinks, linkForEditors } from "../package-imports.ts";
 import { openCheckoutLease } from "../checkout-lease.ts";
 import type { Gathered } from "../gather.ts";
+import { officeInfo, packageLines } from "../lifecycle-inputs.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
-import { collectJobs } from "../../standard/cron/jobs.ts";
 import { syncMachine } from "../machine.ts";
 import { cloneOrFetchStreamed, clonePluginStreamed, existingPluginDestination, git, isClone, PluginCheckoutProblem, referenceGit, referenceOriginProblem, refreshCloneStreamed, verifiedHead } from "../git.ts";
 import { type Clone, clones, skillSelections } from "../layout.ts";
@@ -510,11 +509,6 @@ export async function applyPackages(office: Office, gathered: Gathered, changes:
     rmSync(join(withdrawals, name), { recursive: true });
   }
 
-  // Executable cron owners were validated with their other contributions before publication.
-  const cron = collectJobs(office, { installed: installed.installed.filter(pkg => !pkg.manifest.registerCron), problems: [] });
-
-  if (!cron.ok) changes.push(...cron.errors.map((error) => `FAILED ${error}`));
-
   for (const item of installed.installed) changes.push(...installPackage(office, item));
 
   // The machine is reconciled in either mode (container mode releases the host's files), and
@@ -537,9 +531,6 @@ export async function applyPackages(office: Office, gathered: Gathered, changes:
   if (exclude && !gathered.unread.size) changes.push(...excludePlumbing(office, gathered.committed));
 }
 
-/** What a `sync` function may return: lines, or nothing. */
-const syncLines = v.optional(v.array(v.string()));
-
 /** A package's `sync` function threw: the sync stops there, with the package set switched. */
 export class SyncStopped extends Error {}
 
@@ -551,21 +542,13 @@ export class SyncStopped extends Error {}
 export async function runSyncFunctions(office: Office, gathered: Pick<Gathered, "packages" | "entries">, changes: string[]) {
   for (const item of gathered.packages) {
     const name = item.entry.name;
+    const run = item.manifest.sync?.bind(item.manifest);
 
-    if (!item.manifest.sync) continue;
-    let returned: unknown;
+    if (!run) continue;
+    const result = await packageLines(name, "sync", () => run({ office: officeInfo(office), entries: gathered.entries, settings: structuredClone(item.settings) }));
 
-    try {
-      returned = await item.manifest.sync({ office: { dir: office.dir }, entries: gathered.entries, settings: structuredClone(item.settings) });
-    } catch (error) {
-      throw new SyncStopped(`package ${name}: its sync failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-
-    const lines = v.safeParse(syncLines, returned);
-
-    if (!lines.success) throw new SyncStopped(`package ${name}: its sync returned something other than a list of lines`);
-
-    for (const line of lines.output ?? []) changes.push(`package ${name}: ${line}`);
+    if (!result.ok) throw new SyncStopped(result.problem);
+    changes.push(...result.lines);
   }
 }
 

@@ -2,10 +2,8 @@
 // an office needs no packages). Parsing returns the checked config, or one error per problem,
 // each naming the field and what it expected.
 import * as v from "valibot";
-import { isAsyncFunction } from "node:util/types";
 
-import type { CommandInputs, JsonValue, Lifecycle, Problem, OpenCodeContext, RegisterCron, SettingValue, SetupContext } from "../sdk/index.ts";
-import { validSchedule } from "../standard/cron/schedule.ts";
+import type { CheckInputs, CommandInputs, DownInputs, JsonValue, Lifecycle, Problem, OpenCodeContext, UpInputs, SettingValue, SetupContext } from "../sdk/index.ts";
 
 export type { SettingValue } from "../sdk/index.ts";
 
@@ -25,32 +23,14 @@ function uniqueNames<Item extends { name: string }>(items: Item[]): boolean {
 
 const mapping = "must be a mapping of the fields this schema knows";
 
-// The bounds leave room for a qualified ID and office name in a systemd unit filename.
-const jobName = v.pipe(name, v.maxLength(48, "must be at most 48 characters"));
-const cronSchedule = v.pipe(text, v.check(validSchedule, "must be a valid five-field UTC cron schedule or a time macro such as @daily"));
+// The bound leaves room for the office's and package's names in a systemd unit filename.
+const unitPart = v.pipe(name, v.maxLength(48, "must be at most 48 characters"));
 
-const cronScript = v.pipe(
+/** A script a package runs: a relative .sh path inside its folder, with nothing a shell would read. */
+const packageScript = v.pipe(
   text,
-  v.regex(/^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)*\.sh$/, "must be a relative .sh path, such as cron/update-references.sh"),
+  v.regex(/^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)*\.sh$/, "must be a relative .sh path, such as scripts/serve.sh"),
 );
-
-const cronFields = { schedule: cronSchedule, script: cronScript };
-
-export const registeredJobName = v.pipe(jobName, v.check(key => !["constructor", "prototype", "__proto__"].includes(key), "reserved job name"));
-export const registeredJob = v.strictObject(cronFields, mapping);
-
-// Valibot's record parser skips prototype keys; refuse them instead of losing a job or override.
-const noPrototypeKeys = v.rawCheck(({ dataset, addIssue }) => {
-  const input = Object(dataset.value);
-
-  if (["__proto__", "prototype", "constructor"].some((key) => Object.hasOwn(input, key))) {
-    addIssue({ message: "constructor, prototype and __proto__ are reserved names" });
-  }
-});
-
-const officeCron = v.optional(v.pipe(v.unknown(), noPrototypeKeys, v.record(jobName, v.strictObject(cronFields, mapping), "must map job names to schedules and scripts")), {});
-const packageCron = v.optional(v.pipe(v.unknown(), noPrototypeKeys, v.record(jobName, v.strictObject({ ...cronFields, when: v.optional(v.picklist(["managed-host", "host", "container"])) }, mapping), "must map job names to schedules and scripts")), {});
-const cronOverrides = v.optional(v.pipe(v.unknown(), noPrototypeKeys, v.record(jobName, v.strictObject({ schedule: v.optional(cronSchedule), enabled: v.optional(v.boolean("must be true or false")) }, mapping), "must map job names to schedule and enabled overrides")), {});
 
 export const repository = v.strictObject(
   {
@@ -304,18 +284,16 @@ export const packageEntry = v.pipe(
       // What `office packages update` moves ref to; without it, ref stays where it is.
       track: v.optional(track),
       settings: v.pipe(v.nullish(v.record(v.string(), settingValue, "must map setting names to values")), v.transform((settings) => settings ?? {})),
-      cron: cronOverrides,
     },
     mapping,
   ),
   v.check((entry) => (entry.repo === undefined ? entry.path === undefined && entry.ref === undefined : entry.path !== undefined && entry.ref !== undefined), "needs repo, path and ref together, or none of them for a built-in package or one in packages/<name>/"),
   v.check((entry) => entry.track === undefined || entry.repo !== undefined, "track needs repo, path and ref: only a package from another repository follows a branch or tags"),
-  v.check((entry) => entry.name !== "office" || entry.repo === undefined, "the required office package is built in: its entry can only configure settings and cron"),
+  v.check((entry) => entry.name !== "office" || entry.repo === undefined, "the required office package is built in: its entry can only configure settings"),
   // The check above makes the three all present or all absent; `source` carries that as a type.
-  v.transform(({ name: packageName, settings, cron, repo, path, ref, track: follows }) => ({
+  v.transform(({ name: packageName, settings, repo, path, ref, track: follows }) => ({
     name: packageName,
     settings,
-    cron,
     source: repo !== undefined && path !== undefined && ref !== undefined ? { repo, path, ref, track: follows } : undefined,
   })),
 );
@@ -358,14 +336,13 @@ export const officeSchema = v.pipe(v.strictObject(
     git,
     secrets: v.optional(v.strictObject({ executor_owner: v.optional(text), server: v.optional(text) })),
     tools,
-    cron: officeCron,
     references: repositories,
     desks: v.nullish(v.record(v.pipe(name, v.check(key => key !== "executor-apps", "executor-apps is reserved for shared Executor app sources")), desk, "must map desk names to desks"), {}),
     skills,
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
     packages: packageEntries,
   },
-  "must be a mapping of name, state, opencode, executor, git, secrets, tools, cron, references, desks, skills, plugins and packages",
+  "must be a mapping of name, state, opencode, executor, git, secrets, tools, references, desks, skills, plugins and packages",
 ), v.forward(v.check(({ secrets, opencode }) => secrets?.server === undefined || (opencode !== "container" && opencode.mode === "host" && opencode.managed), "requires opencode.managed: true in host mode"), ["secrets", "server"]));
 
 export type OfficeConfig = v.InferOutput<typeof officeSchema>;
@@ -478,9 +455,9 @@ const hostValue = v.pipe(
 const hostBlock = v.strictObject(
   {
     setting: v.optional(v.string()),
-    services: v.optional(v.record(jobName, v.strictObject({
+    services: v.optional(v.record(unitPart, v.strictObject({
       description: v.pipe(text, v.regex(/^[^\r\n\0]+$/, "must be one line")),
-      script: cronScript,
+      script: packageScript,
       setting: v.optional(v.string()),
     }, mapping))),
     tools: miseTools,
@@ -614,13 +591,17 @@ export function defaultOffSetting(schema: DeclaredSettings, name: string): boole
 /** A package command's name or alias: lowercase words separated by spaces. */
 export const commandRoute = v.pipe(v.string(), v.regex(/^[a-z][a-z0-9-]*(?: [a-z][a-z0-9-]*)*$/, issue => `invalid route ${JSON.stringify(issue.input)}; expected lowercase command words separated by spaces`));
 
-/** What a package declares under one command name: its one-line summary, usage, aliases and handler. */
-const packageCommand = v.strictObject({
-  summary: v.pipe(v.string(), v.nonEmpty(), v.regex(/^[^\p{Cc}]+$/u, "expected a single-line command summary")),
-  usage: v.optional(v.pipe(v.string(), v.nonEmpty(), v.regex(/^[^\p{Cc}]+$/u, "expected a single-line usage"))),
-  aliases: v.optional(v.array(commandRoute), []),
-  run: v.custom<(inputs: CommandInputs) => void | Promise<void>>(value => v.is(v.function(), value), "expected a command handler"),
-}, mapping);
+/** What a package declares under one command name: its one-line summary, usage, aliases and its one handler. */
+const packageCommand = v.pipe(
+  v.strictObject({
+    summary: v.pipe(v.string(), v.nonEmpty(), v.regex(/^[^\p{Cc}]+$/u, "expected a single-line command summary")),
+    usage: v.optional(v.pipe(v.string(), v.nonEmpty(), v.regex(/^[^\p{Cc}]+$/u, "expected a single-line usage"))),
+    aliases: v.optional(v.array(commandRoute), []),
+    result: v.optional(v.custom<(inputs: CommandInputs) => string | Promise<string>>(value => v.is(v.function(), value), "expected a command handler")),
+    run: v.optional(v.custom<(inputs: CommandInputs) => void | Promise<void>>(value => v.is(v.function(), value), "expected a command handler")),
+  }, mapping),
+  v.check(command => (command.result === undefined) !== (command.run === undefined), "must declare exactly one of result or run"),
+);
 
 /**
  * The commands a package declares, by name. Read as a map of its own entries: Valibot's record
@@ -673,7 +654,9 @@ export function packageManifestSchema(packageName: string) {
         settings: v.optional(settingsSchema),
         commands: v.optional(packageCommands, {}),
         sync: v.optional(v.custom<(inputs: Lifecycle) => readonly string[] | void | Promise<readonly string[] | void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
-        check: v.optional(v.custom<(inputs: Lifecycle) => readonly Problem[] | Promise<readonly Problem[]>>(value => v.is(v.function(), value), "must be a function in office.ts")),
+        check: v.optional(v.custom<(inputs: CheckInputs) => readonly Problem[] | Promise<readonly Problem[]>>(value => v.is(v.function(), value), "must be a function in office.ts")),
+        up: v.optional(v.custom<(inputs: UpInputs) => readonly string[] | void | Promise<readonly string[] | void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
+        down: v.optional(v.custom<(inputs: DownInputs) => readonly string[] | void | Promise<readonly string[] | void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
         committed: v.optional(v.pipe(v.array(committedFolder, "must be a list of folders under .office/"), v.check(list => new Set(list).size === list.length, "lists a folder twice")), []),
         secrets: v.nullish(v.record(v.pipe(v.string(), v.regex(/^[A-Z][A-Z0-9_]*$/, "must be an environment variable name in capitals")), packageSecret, "must map variable names to how each is generated"), {}),
         // mise tools the package needs, each at the version it was tested with: `office sync` writes
@@ -682,16 +665,11 @@ export function packageManifestSchema(packageName: string) {
         tools: miseTools,
         host: v.optional(hostBlock),
         system: v.optional(systemBlock),
-        cron: packageCron,
-        registerCron: v.optional(v.pipe(
-          v.custom<RegisterCron>(value => v.is(v.function(), value), "must be a function in office.ts"),
-          v.check(hook => !isAsyncFunction(hook), "must register jobs synchronously"),
-        )),
         executor_app: v.optional(executorAppBlock),
         // The label on Docker resources its services create themselves, which `office down` removes.
         spawns: v.optional(spawnsBlock),
       },
-      "must be a mapping of namespace, settings, commands, setup, sync, check, committed, secrets, tools, host, system, cron, registerCron, opencode, executor_app and spawns",
+      "must be a mapping of namespace, settings, commands, setup, sync, check, up, down, committed, secrets, tools, host, system, opencode, executor_app and spawns",
     ),
     v.transform((manifest) => ({ ...manifest, settings: manifest.settings ?? noSettings, namespace: manifest.namespace ?? packageName })),
     v.forward(

@@ -17,7 +17,7 @@ function pkg(name: string, kind: ResolvedPackage["kind"], folder: string, depend
   writeFileSync(join(folder, "office.ts"), "export default {}");
   writeFileSync(join(folder, "package.json"), packageJsonText(name, "office.ts", { dependencies }));
 
-  return { entry: { name, settings: {}, cron: {}, source: undefined }, kind, dir: folder };
+  return { entry: { name, settings: {}, source: undefined }, kind, dir: folder };
 }
 
 test("a package set links each package it loads to its folder, relative, and a rejected one not at all", () => {

@@ -34,7 +34,7 @@ tools:
   codex:
     minimum_release_age: 1d
 # After tools.
-cron: {}
+references: []
 `;
 
   const result = setVersions(text, [
@@ -62,15 +62,15 @@ tools:
     version: 0.171.0
     minimum_release_age: 1d
 # After tools.
-cron: {}
+references: []
 `);
   expect(versionsOf(result)).toEqual({ opencode: "2.3.5", claude: "2.1.330", codex: "0.171.0", executor: "2.0.0-beta.52", mise: "2026.11.10", sfw: "1.17.0" });
 });
 
 test("a runtime tools doesn't list is added after its last entry, in the short form", () => {
-  const text = "name: t\ntools:\n  minimum_release_age: 3d\n  executor:\n    version: 2.0.0-beta.49\n    minimum_release_age: 7d\n# Next.\ncron: {}\n";
+  const text = "name: t\ntools:\n  minimum_release_age: 3d\n  executor:\n    version: 2.0.0-beta.49\n    minimum_release_age: 7d\n# Next.\nreferences: []\n";
 
-  expect(setVersions(text, [{ tool: "claude", to: "2.1.330" }])).toBe("name: t\ntools:\n  minimum_release_age: 3d\n  executor:\n    version: 2.0.0-beta.49\n    minimum_release_age: 7d\n  claude: 2.1.330\n# Next.\ncron: {}\n");
+  expect(setVersions(text, [{ tool: "claude", to: "2.1.330" }])).toBe("name: t\ntools:\n  minimum_release_age: 3d\n  executor:\n    version: 2.0.0-beta.49\n    minimum_release_age: 7d\n  claude: 2.1.330\n# Next.\nreferences: []\n");
   expect(setVersions("name: t\ntools:\n    opencode: 2.3.2", [{ tool: "sfw", to: "1.17.0" }])).toBe("name: t\ntools:\n    opencode: 2.3.2\n    sfw: 1.17.0\n");
 });
 

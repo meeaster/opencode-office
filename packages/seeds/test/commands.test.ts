@@ -250,7 +250,7 @@ test("a folder where a stored seed belongs is unusable: diff and settle refuse n
 function inputs(args: string[], list: Entry<Seed>[]) {
   const entries: Entries = <Value extends RegistryEntry>(registry: Registry<Value>) => list.flatMap(item => (registry.id === "seeds.seed" ? [{ ...item, value: registry.parse(item.value) }] : []));
 
-  return { office: { dir }, entries, settings: {}, args };
+  return { office: { dir, name: "test", mode: "container" as const, launcher: "office" }, entries, settings: {}, args };
 }
 
 test("the commands print their output, and fail with exit status 1 and one line, changing nothing, for a wrong number of words, an invalid receipts file, or one of the wrong shape", () => {

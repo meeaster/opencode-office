@@ -17,7 +17,7 @@ afterAll(() => rmSync(office, { recursive: true, force: true }));
 /** The checkout's copy of built-in `name`, read with `settings` from office.yaml. */
 function read(name: string, settings: Record<string, SettingValue>): InstalledPackage {
   writeFileSync(join(office, "office.yaml"), "name: t\n");
-  const result = readPackage(loadOffice(office), { entry: { name, settings, cron: {}, source: undefined }, kind: "local", dir: join(import.meta.dir, "../packages", name) });
+  const result = readPackage(loadOffice(office), { entry: { name, settings, source: undefined }, kind: "local", dir: join(import.meta.dir, "../packages", name) });
 
   if (!result.ok) throw new Error(result.errors.join("\n"));
 
@@ -70,5 +70,28 @@ test("knowledge, references, tooling and mise-integration accept no settings", (
   for (const name of ["knowledge", "references", "tooling", "mise-integration"]) {
     expect(read(name, {}).settings).toEqual({});
     expect(() => read(name, { extra: true })).toThrow(`packages.${name}.settings.extra: the package declares no such setting`);
+  }
+});
+
+test("cron: the office's own jobs and overrides of packages' jobs; a wrong shape is refused by the schema", () => {
+  const settings = {
+    jobs: { heartbeat: { schedule: "@hourly", script: "scripts/heartbeat.sh" } },
+    overrides: { "package.office.upgrade-tools": { enabled: false }, "package.office.update-references": { schedule: "0 5 * * *" } },
+  };
+
+  expect(read("cron", settings).settings).toEqual(settings);
+  expect(read("cron", {}).settings).toEqual({});
+
+  for (const [wrong, message] of [
+    [{ jobs: { heartbeat: { schedule: "@hourly" } } }, "packages.cron.settings.jobs.heartbeat.script: is required"],
+    [{ jobs: { heartbeat: { schedule: "@hourly", script: "../outside.sh" } } }, "packages.cron.settings.jobs.heartbeat.script: must match pattern"],
+    [{ jobs: { heartbeat: { schedule: "@hourly\n* * * * *", script: "a.sh" } } }, "packages.cron.settings.jobs.heartbeat.schedule: must match pattern"],
+    [{ jobs: { Heartbeat: { schedule: "@hourly", script: "a.sh" } } }, "packages.cron.settings.jobs: property name must be valid"],
+    [{ jobs: { constructor: { schedule: "@hourly", script: "a.sh" } } }, "packages.cron.settings.jobs: property name must be valid"],
+    [{ overrides: { "package.office.upgrade-tools": { when: "host" } } }, "packages.cron.settings.overrides.package.office.upgrade-tools.when: the package declares no such setting"],
+    [{ overrides: { "package.office.upgrade-tools": { enabled: "no" } } }, "packages.cron.settings.overrides.package.office.upgrade-tools.enabled: must be boolean"],
+    [{ heartbeat: {} }, "packages.cron.settings.heartbeat: the package declares no such setting"],
+  ] as const) {
+    expect(() => read("cron", wrong)).toThrow(message);
   }
 });

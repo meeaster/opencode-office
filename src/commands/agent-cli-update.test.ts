@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 
-import { cronTimers } from "../../standard/cron/host.ts";
-import { requireJobs } from "../../standard/cron/discovery.ts";
+import { effectiveJobs, jobs } from "@office/cron";
+import cron from "../../packages/cron/office.ts";
+import { gatherPackages } from "../gather.ts";
 import { hostEnvironment } from "../host-env.ts";
+import { officeInfo } from "../lifecycle-inputs.ts";
 import { loadOffice } from "../office.ts";
 import { shellQuote } from "../sfw.ts";
 import { recordRequiredFixtures } from "../test-builtin-record.ts";
@@ -62,14 +64,18 @@ function fixture(): void {
   const pkg = join(root, ".office/packages/office");
 
   mkdirSync(join(pkg, "scripts"), { recursive: true });
+
   for (const file of ["office.ts", "floors.ts", "package.json"]) copyFileSync(join(import.meta.dir, "../../packages/office", file), join(pkg, file));
   cpSync(join(import.meta.dir, "../../packages/office/scripts"), join(pkg, "scripts"), { recursive: true });
   // This fixture copies the real Office definition but doesn't run package sync: give it the
-  // package it imports, linked as a package set links it.
-  const tooling = join(dirname(pkg), "tooling");
-  cpSync(join(import.meta.dir, "../../packages/tooling"), tooling, { recursive: true });
+  // packages it imports, linked as a package set links them.
   mkdirSync(join(root, ".office/node_modules/@office"), { recursive: true });
-  symlinkSync(tooling, join(root, ".office/node_modules/@office/tooling"));
+
+  for (const name of ["tooling", "cron"]) {
+    cpSync(join(import.meta.dir, "../../packages", name), join(dirname(pkg), name), { recursive: true, filter: source => !source.includes("/test") });
+    symlinkSync(join(dirname(pkg), name), join(root, `.office/node_modules/@office/${name}`));
+  }
+
   recordRequiredFixtures(pkg);
 
   const place = shellQuote(root);
@@ -139,8 +145,9 @@ esac
   }));
 }
 
-function job(...args: string[]) {
-  return Bun.spawn([process.execPath, join(import.meta.dir, "../cli.ts"), "--office", root, "cron", ...args], {
+/** `office host-agent-cli-update`, as the job's script runs it, in the fixture's environment. */
+function direct() {
+  return Bun.spawn([process.execPath, join(import.meta.dir, "../cli.ts"), "--office", root, "host-agent-cli-update"], {
     stdout: "pipe", stderr: "pipe",
     env: {
       HOME: join(root, "home"), PATH: `${join(root, "bin")}:${dirname(process.execPath)}:/usr/bin:/bin`,
@@ -155,10 +162,19 @@ function job(...args: string[]) {
   });
 }
 
-async function result(child = job("run", agentUpdateJob)) {
+async function result(child = direct()) {
   const [code, out, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
 
   return { code, out, error };
+}
+
+/** The cron package's jobs in the fixture office, gathered as `office cron list` gathers them. */
+async function cronJobs() {
+  const office = loadOffice(root);
+  const gathered = await gatherPackages(office);
+  const settings = gathered.packages.find(item => item.entry.name === "cron")?.settings ?? {};
+
+  return effectiveJobs(officeInfo(office), gathered.entries(jobs), settings);
 }
 
 function calls(): string[] {
@@ -167,14 +183,13 @@ function calls(): string[] {
   return existsSync(path) ? readFileSync(path, "utf8").trim().split("\n") : [];
 }
 
-test.skipIf(process.platform !== "linux")("manual package job screens the native update, restarts only for changed OpenCode and verifies the new PID", async () => {
+test.skipIf(process.platform !== "linux")("a manual update screens the native update, restarts only for changed OpenCode and verifies the new PID", async () => {
   fixture();
-  expect((await result(job("list"))).out.trim().split("\n")).toContain(agentUpdateJob);
+  expect((await cronJobs()).find(job => job.id === agentUpdateJob)?.calendar).toBe("*-*-* 07:30:00 UTC");
   const office = loadOffice(root);
   const vars = Object.fromEntries(hostEnvironment(office, []).environment.variables);
 
   expect(vars).toMatchObject({ DISABLE_AUTOUPDATER: "1", OPENCODE_DISABLE_AUTOUPDATE: "1", NPM_CONFIG_MIN_RELEASE_AGE: "3" });
-  expect(cronTimers(office, requireJobs(office)).find((timer) => timer.description === agentUpdateJob)?.calendar).toBe("*-*-* 07:30:00 UTC");
   write("claude-next", "");
   const unchanged = await result();
 
@@ -191,15 +206,12 @@ test.skipIf(process.platform !== "linux")("manual package job screens the native
 test.skipIf(process.platform !== "linux")("the package schedule can change, but its predicate and managed-only environment policy stay fixed", async () => {
   fixture();
   const yaml = readFileSync(join(root, "office.yaml"), "utf8");
-  const override = "packages: [{name: office, cron: {update-agent-clis: {schedule: '15 9 * * *'}}}]\n";
+  const override = `packages: [{name: cron, settings: {overrides: {${agentUpdateJob}: {schedule: '15 9 * * *'}}}}]\n`;
 
   write("office.yaml", yaml + override);
-
-  const office = loadOffice(root);
-
-  expect(cronTimers(office, requireJobs(office)).find((timer) => timer.description === agentUpdateJob)?.calendar).toBe("*-*-* 09:15:00 UTC");
+  expect((await cronJobs()).find(job => job.id === agentUpdateJob)?.calendar).toBe("*-*-* 09:15:00 UTC");
   write("office.yaml", yaml.replace(", managed: true", "") + override);
-  expect((await result(job("list"))).out.trim().split("\n").sort()).toEqual(["package.office.update-references", "package.office.upgrade-tools"]);
+  expect((await cronJobs()).map(job => job.id).sort()).toEqual(["package.office.update-references", "package.office.upgrade-tools"]);
   expect(Object.fromEntries(hostEnvironment(loadOffice(root), []).environment.variables)).not.toHaveProperty("DISABLE_AUTOUPDATER");
   expect(calls()).toEqual([]);
 });
@@ -234,7 +246,7 @@ test.skipIf(process.platform !== "linux")("an unsupported Codex launcher fails i
   expect(calls()).toEqual(["claude update", "screened", "opencode upgrade"]);
 });
 
-test.skipIf(process.platform !== "linux")("stopped office, unregistered listener, and disabled override do not run either updater", async () => {
+test.skipIf(process.platform !== "linux")("a stopped office or an unregistered listener runs neither updater", async () => {
   fixture();
   state(2200, "2.3.1", false);
   expect(await result()).toMatchObject({ code: 0, out: expect.stringContaining("OpenCode is stopped") });
@@ -247,11 +259,25 @@ test.skipIf(process.platform !== "linux")("stopped office, unregistered listener
   rmSync(join(root, "xdg-state/opencode/service.json"));
   expect(await result()).toMatchObject({ code: 1, error: expect.stringContaining("cannot verify the registered OpenCode listener") });
 
+  expect(calls()).toEqual([]);
+});
+
+test.skipIf(process.platform !== "linux")("with its job disabled, the scheduled run refuses and runs nothing, while running the updater directly still updates", async () => {
+  fixture();
   const yaml = readFileSync(join(root, "office.yaml"), "utf8");
 
-  write("office.yaml", `${yaml}packages: [{name: office, cron: {update-agent-clis: {enabled: false}}}]\n`);
-  expect(await result()).toMatchObject({ code: 1, error: expect.stringContaining("not enabled for this office") });
+  write("office.yaml", `${yaml}packages: [{name: cron, settings: {overrides: {${agentUpdateJob}: {enabled: false}}}}]\n`);
+  const office = loadOffice(root);
+  const gathered = await gatherPackages(office);
+  const settings = gathered.packages.find(item => item.entry.name === "cron")?.settings ?? {};
+  const run = cron.commands?.["cron run"]?.run;
+
+  // What the job's timer runs: `office cron run <id>`, which reads the job's eligibility now.
+  expect(run?.({ office: officeInfo(office), entries: gathered.entries, settings, args: [agentUpdateJob] })).rejects.toThrow(`cron ${agentUpdateJob}: not enabled for this office`);
   expect(calls()).toEqual([]);
+
+  expect(await result()).toMatchObject({ code: 0, out: expect.stringContaining("already current at PID 2200") });
+  expect(calls()).toEqual(["claude update", "codex update", "screened", "opencode upgrade"]);
 });
 
 test.skipIf(process.platform !== "linux")("overlapping manual runs share one OS lock", async () => {

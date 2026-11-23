@@ -6,7 +6,8 @@
   "office": {
     "definition": "./office.ts",
     "dependencies": [
-      "@office/tooling"
+      "@office/tooling",
+      "@office/cron"
     ]
   }
 }

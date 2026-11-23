@@ -24,7 +24,7 @@ afterEach(() => {
 const locked = "a".repeat(40);
 const published = "b".repeat(40);
 const source = { repo: "https://example.com/acme/packages.git", path: "notes", ref: "v1", track: undefined };
-const entry: PackageEntry = { name: "notes", settings: {}, cron: {}, source };
+const entry: PackageEntry = { name: "notes", settings: {}, source };
 const entryLock = { repo: source.repo, path: source.path, ref: source.ref, commit: locked };
 const lock = new Map([["notes", entryLock]]);
 
@@ -65,8 +65,8 @@ test("the candidate lock takes each staged Git copy's commit, keeps a failed one
   staged("fresh", { ...source, commit: next });
 
   const previous = new Map([["notes", entryLock], ["failed", entryLock], ["gone", entryLock]]);
-  const local: ResolvedPackage = { entry: { name: "own", settings: {}, cron: {}, source: undefined }, kind: "local", dir: "" };
-  const builtin: ResolvedPackage = { entry: { name: "office", settings: {}, cron: {}, source: undefined }, kind: "built-in", dir: "" };
+  const local: ResolvedPackage = { entry: { name: "own", settings: {}, source: undefined }, kind: "local", dir: "" };
+  const builtin: ResolvedPackage = { entry: { name: "office", settings: {}, source: undefined }, kind: "built-in", dir: "" };
 
   expect(candidatePackageLock([builtin, local, remote("notes", "v2"), remote("failed", "v2"), remote("fresh")], join(dir, "packages"), ["failed"], previous)).toEqual(new Map([
     ["notes", { repo: source.repo, path: source.path, ref: "v2", commit: next }],

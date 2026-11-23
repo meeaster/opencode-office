@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { requireJobs } from "../../standard/cron/discovery.ts";
 import { git } from "../git.ts";
 import { githubStep, planGithub, unreachableSources } from "../github.ts";
 import { installHook } from "../hook.ts";
@@ -201,11 +200,9 @@ export async function finishSetup(office: Office, shell: boolean, ownerEmail: st
     email = await reporter.ask({ kind: "text", message: "Executor owner email (it signs you in to the dashboard)", placeholder: "you@example.com", validate: (value) => (value.includes("@") ? undefined : "An email address, like you@example.com") });
   }
 
-  if (requireJobs(office, gathered.inventory).length > 0) stage.note("Cron: applicable jobs are installed at startup. Review them with office cron list.");
-
   await startExecutor(office);
   await bootstrapExecutor(office, email);
-  stage.done(await up(office, { inventory: gathered.inventory }));
+  stage.done(await up(office, { gathered }));
 
   // Apps: the Executor apps the office deploys.
   stage = reporter.stage("Apps", { key: "apps" });

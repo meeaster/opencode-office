@@ -149,7 +149,7 @@ function rootText(root: string, office: OfficeInfo, apps: string[]): string {
     sessionScope.trimEnd(),
     "- `office.yaml` declares the desks, their repositories, the references, which skills from `skills/` are enabled where, cloned plugins and packages: the office's own in `packages/<name>/`, and built-in and remote ones in `.office/packages/`, which are read-only. After changing it, run `office sync`. A package with a desktop app panel (`gui/`) gets it installed on the app's machine only when `office sync` runs on the host, not in the container.",
     "- For onboarding use `office setup`. Owner credentials are human-only: let the human run `office executor credentials` in their terminal, never capture its output in an agent transcript. Keep private age identities and decrypted runtime state outside the office repository.",
-    "- `cron:` in `office.yaml` declares file-system jobs; `office cron list` shows which jobs apply in this mode.",
+    "- Scheduled jobs are the `cron` package's: the office's own go under its entry's `settings.jobs` in `office.yaml`, changes to packages' jobs under `settings.overrides`; `office cron list` shows which jobs apply in this mode, and `office up` applies a schedule change.",
     "- `git` in `office.yaml` sets the commit identity of the container and the office's jobs; with `credentials: gh`, HTTPS remotes use the user's GitHub login, which the user manages on the host. Never run `gh auth login`, `logout` or `switch` for them.",
     ...firewallLines(office),
     "",

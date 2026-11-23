@@ -82,7 +82,21 @@ export default Package.define({
 
     return [\`synced \${office.dir}\`];
   },
-  check: ({ settings }) => [{ level: settings.verbose ? "warning" : "failed", message: "typed" }],
+  check: ({ settings, host }) => [{ level: settings.verbose ? "warning" : "failed", message: \`typed \${host.timers.status().length}\` }],
+  up({ settings, office, entries, host }) {
+    const mode: "host" | "managed-host" | "container" = office.mode;
+
+    void [entries, mode];
+
+    return host.timers.set([{ id: "tick", calendar: "*-*-* 06:00:00 UTC", run: [office.name, String(settings.port)] }]);
+  },
+  down: ({ settings, host }) => [String(settings.port), ...host.timers.clear()],
+});
+
+// \`down\` runs no setup, so it has no registries to read.
+export const downOnly = Package.define({
+  // @ts-expect-error down gets no entries
+  down({ entries }) { void entries; },
 });
 
 export const problems = Package.define({
@@ -99,6 +113,20 @@ export const loose = Package.define({
     const present: SettingValue = ctx.settings.whatever;
 
     void [anything, present];
+  },
+});
+
+// A command has one handler: result returns its text, run acts.
+export const handlers = Package.define({
+  commands: {
+    "text show": { summary: "Show", result: ({ args }) => args.join(" ") },
+    "text later": { summary: "Later", async result({ office }) { return office.name; } },
+    // @ts-expect-error a result is text
+    "text count": { summary: "Count", result: () => 7 },
+    // @ts-expect-error not both
+    "text both": { summary: "Both", result: () => "", run() {} },
+    // @ts-expect-error nor neither
+    "text none": { summary: "None" },
   },
 });
 

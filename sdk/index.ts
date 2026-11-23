@@ -47,6 +47,37 @@ export type Entry<Value> = {
 export type OfficeInfo = {
   /** The office's folder, absolute. */
   readonly dir: string;
+  /** Its name in office.yaml. */
+  readonly name: string;
+  /** Where its OpenCode runs: in its container, or on this machine, managed by office or not. */
+  readonly mode: "host" | "managed-host" | "container";
+  /** The command that runs office here: the executable, or a checkout's bin/office. For a script or a process a package starts. */
+  readonly launcher: string;
+};
+
+/** A timer a package wants: `run` is the words after `office --office <dir>` its service runs. */
+export type Timer = { id: string; calendar: string; run: readonly string[] };
+
+/**
+ * One of a package's installed timers: which of its two unit files are there, what the timer file
+ * says and what systemd reports. With only the service there is no timer: never active, no calendar.
+ */
+export type TimerState = { id: string; files: "pair" | "timer" | "service"; active: boolean; calendar: string; persistent: boolean; next?: string; last?: string };
+
+/** What a package may do on the host. */
+export type Host = {
+  /**
+   * Its own systemd user timers, each named office-<office>-<package>-<id>, persistent, and run in
+   * the environment an unattended run needs. Another package's, and any other unit, are out of reach.
+   */
+  timers: {
+    /** Makes its timers equal the list: removes the others, writes and starts these. Throws in container mode. Returns the lines to print. */
+    set(timers: readonly Timer[]): readonly string[];
+    /** Removes all of its timers. Returns the lines to print. */
+    clear(): readonly string[];
+    /** What is installed for it, wanted or not, including a service left without its timer. Throws when systemd loaded one of its units from another file. */
+    status(): readonly TimerState[];
+  };
 };
 
 /** Returns a registry's entries, each with its owner and folder; every call returns its own copy. */
@@ -57,6 +88,19 @@ export type Lifecycle<Settings = Readonly<Record<string, SettingValue>>> = {
   readonly office: OfficeInfo;
   readonly entries: Entries;
   readonly settings: Settings;
+};
+
+/** What a package's `check` gets: also the host helpers, to read its timers. */
+export type CheckInputs<Settings = Readonly<Record<string, SettingValue>>> = Lifecycle<Settings> & { readonly host: Host };
+
+/** What a package's `up` gets: the office, the registries to read, its settings and the host helpers. */
+export type UpInputs<Settings = Readonly<Record<string, SettingValue>>> = Lifecycle<Settings> & { readonly host: Host };
+
+/** What a package's `down` gets: no registries, since `office down` runs no `setup`. */
+export type DownInputs<Settings = Readonly<Record<string, SettingValue>>> = {
+  readonly office: OfficeInfo;
+  readonly settings: Settings;
+  readonly host: Host;
 };
 
 /** A problem a package's `check` reports: a warning leaves `office check`'s exit status alone; a failure makes it 1. */
@@ -70,15 +114,20 @@ export type CommandInputs<Settings = Readonly<Record<string, SettingValue>>> = L
   readonly args: readonly string[];
 };
 
-/** A command a package declares under its name: `office <name>` runs it. */
+/**
+ * A command a package declares under its name: `office <name>` runs it. It has one handler:
+ * `result` returns the text `office` prints on standard output, or `run` acts with the terminal.
+ */
 export type Command<Settings = Readonly<Record<string, SettingValue>>> = {
   /** One line for `office --help`. */
   summary: string;
   /** What follows the name in help, such as `<path>`; the command parses its own `args`. */
   usage?: string;
   aliases?: readonly string[];
-  run(inputs: CommandInputs<Settings>): void | Promise<void>;
-};
+} & (
+  | { result(inputs: CommandInputs<Settings>): string | Promise<string>; run?: never }
+  | { run(inputs: CommandInputs<Settings>): void | Promise<void>; result?: never }
+);
 
 /** What `setup` gets: the package's validated settings, and the registries to register and add to. */
 export type SetupContext<Settings = Readonly<Record<string, SettingValue>>> = {
@@ -95,19 +144,6 @@ export type OpenCodeContext = {
   serverPlugin(directory: string): void;
   desktopPanel(bundle: string): void;
 };
-
-/** Transitional, until cron is a registry: what `registerCron(ctx)` gets. */
-export type CronContext = {
-  settings: Readonly<Record<string, SettingValue>>;
-  cron: {
-    readonly mode: "managed-host" | "host" | "container";
-    /** false reserves an inapplicable job's override name without scheduling it. */
-    job(localName: string, definition: { schedule: string; script: string } | false): void;
-  };
-};
-
-/** Transitional, until cron is a registry. */
-export type RegisterCron = (ctx: CronContext) => undefined;
 
 // `ctx.settings` from the schema. The keywords below are left to the validator: a property using
 // one is loosely typed, and a root using one makes the whole object loose. A loose object's keys
@@ -159,8 +195,6 @@ export type Settings<Schema> =
 
 type Secret = { generate: "hex" | "base64"; bytes: number; prefix?: string };
 
-type Job = { schedule: string; script: string; when?: "managed-host" | "host" | "container" };
-
 type HostBlock = {
   setting?: string;
   services?: { readonly [id: string]: { description: string; script: string; setting?: string } };
@@ -194,7 +228,18 @@ export type Definition<Schema extends SettingsSchema = NoSettings> = {
    */
   sync?(inputs: Lifecycle<Settings<Schema>>): readonly string[] | void | Promise<readonly string[] | void>;
   /** Runs at `office check` with every selected package loaded, and only reports: it must not write. */
-  check?(inputs: Lifecycle<Settings<Schema>>): readonly Problem[] | Promise<readonly Problem[]>;
+  check?(inputs: CheckInputs<Settings<Schema>>): readonly Problem[] | Promise<readonly Problem[]>;
+  /**
+   * Runs at the end of `office up`, after the office's own work, with every selected package loaded,
+   * in the order packages load. Returns the lines to print. A throw stops the later ones.
+   */
+  up?(inputs: UpInputs<Settings<Schema>>): readonly string[] | void | Promise<readonly string[] | void>;
+  /**
+   * Runs at the start of `office down`, in a shutdown process of its own, with no `setup` run and no
+   * registry to read: it undoes what the package itself installed. Returns the lines to print. The
+   * office's own shutdown runs after it in the `office down` process, whatever happens here.
+   */
+  down?(inputs: DownInputs<Settings<Schema>>): readonly string[] | void | Promise<readonly string[] | void>;
   /** Folders directly under `.office/` that are committed, such as `.office/notes/`: sync leaves each out of its exclude block. */
   committed?: readonly string[];
   /** What its services, volumes and variables are named after, when that isn't its name. */
@@ -203,8 +248,6 @@ export type Definition<Schema extends SettingsSchema = NoSettings> = {
   tools?: { readonly [tool: string]: string };
   host?: HostBlock;
   system?: SystemBlock;
-  cron?: { readonly [job: string]: Job };
-  registerCron?: RegisterCron;
   opencode?(ctx: OpenCodeContext): void;
   executor_app?: { setting?: string };
   spawns?: { label: string };

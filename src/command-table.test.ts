@@ -33,6 +33,29 @@ test("a definition declares commands by name: a name or alias is lowercase words
   expect(parseManifest("draft", { commands: { "Draft Show": { summary: "two\nlines", run } } })).toMatchObject({ ok: false, errors: [expect.stringContaining("invalid route"), expect.stringContaining("single-line")] });
 });
 
+test("a command declares exactly one handler, result or run; sync names the package and the command", async () => {
+  const result = () => "";
+
+  expect(parseManifest("draft", { commands: { "draft text": { summary: "Text", result } } })).toMatchObject({ ok: true, value: { commands: { "draft text": { result } } } });
+  expect(parseManifest("draft", { commands: { "draft both": { summary: "Both", result, run }, "draft none": { summary: "None" }, "draft word": { summary: "Word", result: "text" } } })).toEqual({
+    ok: false,
+    errors: ["commands.draft both: must declare exactly one of result or run", "commands.draft none: must declare exactly one of result or run", "commands.draft word.result: expected a command handler"],
+  });
+
+  const office = mkdtempSync(join(tmpdir(), "office-handlers-"));
+
+  try {
+    writeFileSync(join(office, "office.yaml"), "name: t\npackages:\n  - name: untyped\n");
+    writePackage(join(office, "packages/untyped/office.ts"), definitionText('{commands:{"untyped both":{summary:"Both",result(){return ""},run(){}}}}'));
+    git(["init", "--quiet", office]);
+    const changes = await sync(loadOffice(office), { scope: "packages" });
+
+    expect(changes.filter(line => line.includes("exactly one"))).toEqual(["FAILED package untyped: packages/untyped/office.ts: commands.untyped both: must declare exactly one of result or run"]);
+  } finally {
+    rmSync(office, { recursive: true, force: true });
+  }
+});
+
 test("constructor and prototype are routes like any other, as a name and as an alias", () => {
   const read = parseManifest("draft", { commands: { constructor: { summary: "Build", aliases: ["prototype"], run }, prototype: { summary: "Sketch", run } } });
 

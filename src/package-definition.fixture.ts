@@ -65,7 +65,7 @@ export function definitionFixture({ second = true } = {}) {
     const aws = join(dist, "packages/aws-emulator/office.ts");
     write(aws, read(aws).replace("if (!ctx.settings.source_reference) return;", 'throw Error("changed built-in collector");'));
     const commands = join(dist, "packages/references/office.ts");
-    write(commands, read(commands).replace("run: listReferences }", 'run(inputs) { console.log("variant package handler"); listReferences(inputs); } }'));
+    write(commands, read(commands).replace("result: listReferences }", 'result(inputs) { console.error("variant package handler"); return listReferences(inputs); } }'));
     const changed = join(dist, "packages/artifact-share");
     write(join(changed, "office.ts"), definitionText('{ namespace: title }', 'import title from "./missing.ts";'));
     write(join(changed, "plugin/index.ts"), "// replacement");

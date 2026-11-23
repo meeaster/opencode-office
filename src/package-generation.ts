@@ -135,7 +135,8 @@ function prune(dir: string, current: string) {
   }
 }
 
-function checkDirectories(dir: string) {
+/** Refuses a redirected or non-directory .office, generations or resolved folder; reads, never repairs. */
+export function checkDirectories(dir: string) {
   for (const member of [".office", ".office/generations", ".office/resolved"]) {
     const file = join(dir, member);
     const entry = lstatSync(file, { throwIfNoEntry: false });

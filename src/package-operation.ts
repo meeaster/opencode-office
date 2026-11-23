@@ -1,4 +1,4 @@
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { bindPaths } from "./bound-paths.ts";
@@ -13,11 +13,11 @@ import { materializePackage, readRecord, type ResolvedPackage, resolvePackages, 
 import { lockFile, lockSections, packageLockChanges, readLockSection } from "./versions.ts";
 import { writeAppliedReferences } from "./applied-references.ts";
 import { applyPackages, SyncStopped } from "./commands/sync.ts";
-import { collectJobs } from "../standard/cron/jobs.ts";
 import { claimAssetProblems, destinationProblems } from "../standard/mise-integration/projection.ts";
 import { openCheckoutLease } from "./checkout-lease.ts";
 import { collectAssets } from "../standard/opencode/assets.ts";
 import { renameNoReplace } from "./no-replace.ts";
+import { resultDescriptor } from "./command-stdout.ts";
 
 type Admission = {
   transaction: Candidate;
@@ -72,16 +72,26 @@ export function restoreCallerEnv() {
   else delete process.env.BUN_OPTIONS;
 }
 
-async function run(args: string[], fd: number) {
-  const child = Bun.spawn([...program(), ...args], { env: evaluatorEnv(), stdio: ["inherit", "inherit", "inherit", fd] });
+/**
+ * Runs an evaluator with `descriptors` after the standard three, and its exit status. With a pipe
+ * as descriptor 4 (`resultDescriptor`), also what it wrote there, read while it runs so a large
+ * result can't block it.
+ */
+async function run(args: string[], descriptors: (number | "pipe")[]) {
+  const child = Bun.spawn([...program(), ...args], { env: evaluatorEnv(), stdio: ["inherit", "inherit", "inherit", ...descriptors] });
+  const pipe = child.stdio[resultDescriptor] ?? undefined;
+  const result = pipe === undefined ? undefined : new Response(Bun.file(pipe).stream()).bytes().finally(() => closeSync(pipe));
 
   const stop = () => child.kill("SIGINT");
   process.once("SIGINT", stop);
 
-  try { return await child.exited; } finally { process.off("SIGINT", stop); }
+  try { return { status: await child.exited, result: await result }; } finally { process.off("SIGINT", stop); }
 }
 
-/** Runs `args` in a reader bound to the published package set; undefined when the office has none. */
+/**
+ * Runs `args` in a reader bound to the published package set, and prints a package command's
+ * result once the reader exits 0; undefined when the office has none.
+ */
 export async function runReader(dir: string, args: string[]) {
   using active = pinActive(dir);
 
@@ -90,8 +100,11 @@ export async function runReader(dir: string, args: string[]) {
 
   // An office's first generation holds no selection until the first candidate publishes.
   if (!existsSync(join(folder, "selection.json"))) return;
+  const { status, result } = await run(["--package-reader", dir, active.name, ...args], [active.fd, "pipe"]);
 
-  return run(["--package-reader", dir, active.name, ...args], active.fd);
+  if (status === 0 && result?.length) await Bun.write(Bun.stdout, result);
+
+  return status;
 }
 
 /** Binds this process to generation `name`, recording the packages its last sync rejected, whose copies don't load. */
@@ -311,10 +324,10 @@ export async function publishPackages(office: Office, exclude: boolean, update?:
     writePackageLinks(folder, selection.packages, rejected);
     writeSdk(folder);
     writeFileSync(join(folder, "unavailable.json"), JSON.stringify(rejected));
-    writeFileSync(join(folder, "selection.json"), JSON.stringify(office.packages.map(({ name, settings, cron, source }) => ({ name, settings, cron, ...source }))));
+    writeFileSync(join(folder, "selection.json"), JSON.stringify(office.packages.map(({ name, settings, source }) => ({ name, settings, ...source }))));
     const request: Admission = { office, transaction, yaml, packages: Object.fromEntries(packages), validate, rejected, exclude, tracked: !!update, apply: update?.apply ?? true };
     writeFileSync(join(temporary, "input"), JSON.stringify(request));
-    const code = await run(["--package-admission", temporary], reservation.fd);
+    const { status: code } = await run(["--package-admission", temporary], [reservation.fd]);
 
     if (code !== 0) throw new OfficeError(`package evaluator exited ${code}`);
     const result: Outcome = JSON.parse(readFileSync(join(temporary, "output"), "utf8"));
@@ -334,18 +347,12 @@ export async function publishPackages(office: Office, exclude: boolean, update?:
   }
 }
 
-/** The problems admission finds beyond the gathering's: executable cron registrations, the files claims name, destinations across packages and every command name. */
+/** The problems admission finds beyond the gathering's: the files claims name, destinations across packages and every command name. */
 function admissionProblems(office: Office, packages: GatheredPackage[], names: { owners: string[]; message: string }[]): GatherProblem[] {
   const problems: GatherProblem[] = [];
 
   for (const item of packages) {
     const owner = [item.entry.name];
-
-    if (item.manifest.registerCron) {
-      const cron = collectJobs({ ...office, cron: {} }, { installed: [item], problems: [] });
-
-      if (!cron.ok) problems.push(...cron.errors.map(message => ({ packages: owner, message })));
-    }
 
     problems.push(...claimAssetProblems(item).map(message => ({ packages: owner, message })));
   }
