@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
-import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import * as v from "valibot";
 import { openCheckoutLease, publicationLease } from "./checkout-lease.ts";
@@ -14,15 +13,16 @@ const id = v.pipe(v.string(), v.regex(/^g-[a-f0-9-]{36}$/));
 
 // office.yaml's digests before and after the switch, and those of office.lock's `packages:` section
 // with the section it switches to. Only that section belongs to the publication: other writers may
-// rewrite the rest of office.lock meanwhile. Journals written before office.lock was published lack `lock`.
+// rewrite the rest of office.lock meanwhile.
 const journal = v.strictObject({
   previous: v.nullable(id),
   candidate: id,
   before: v.string(),
   after: v.string(),
-  lock: v.optional(v.strictObject({ before: v.string(), after: v.string(), packages: v.unknown() })),
+  lock: v.strictObject({ before: v.string(), after: v.string(), packages: v.unknown() }),
 });
 
+// The discovery links: each path under .office/ and what it leads to in the active generation.
 const bridges = [
   ["packages", "packages"],
   ["resolved/references.json", "references.json"],
@@ -141,33 +141,18 @@ function checkDirectories(dir: string) {
     const file = join(dir, member);
     const entry = lstatSync(file, { throwIfNoEntry: false });
 
-    if (entry && !entry.isDirectory()) throw new OfficeError(`cannot adopt redirected or non-directory ${file}; move it aside and run office sync --packages`);
+    if (entry && !entry.isDirectory()) throw new OfficeError(`cannot use redirected or non-directory ${file}; move it aside and run office sync --packages`);
   }
-}
-
-export function checkAdoption(dir: string) {
-  checkDirectories(dir);
-
-  for (let parent = realpathSync(dir); ; parent = dirname(parent)) {
-    if (existsSync(join(parent, ".git"))) break;
-
-    if (parent === dirname(parent)) return;
-  }
-
-  const managed = ["current", "generations", "adopting", "generation-ticket", "publishing.json", ...bridges.map(([legacy]) => legacy)];
-  const tracked = execFileSync("git", ["ls-files", "-z", "--", ...managed.map(member => `.office/${member}`)], { cwd: dir, encoding: "utf8" }).split("\0").find(Boolean);
-
-  if (tracked) throw new OfficeError(`cannot adopt managed generations: ${tracked} is tracked in Git. Migrate any CI consumer to restore the pinned renderer, verify its build in a clean clone, then explicitly untrack the managed files and retry. No tracked files were moved`);
 }
 
 /** Check all destinations before creating any missing link. Never follow or
- * replace an entry left by a checkout, a legacy writer, or the owner. */
+ * replace an entry left by a checkout or the owner. */
 function inspectBridges(dir: string) {
   const root = join(dir, ".office");
   const missing: { path: string; link: string }[] = [];
 
-  for (const [legacy, member] of bridges) {
-    const path = join(root, legacy);
+  for (const [at, member] of bridges) {
+    const path = join(root, at);
     const link = relative(dirname(path), join(root, "current", member));
     const entry = lstatSync(path, { throwIfNoEntry: false });
 
@@ -180,73 +165,29 @@ function inspectBridges(dir: string) {
   return { missing };
 }
 
-/** Preflight every legacy member before moving the first. The marker makes the
- * remaining renames restartable if the writer dies part-way through adoption. */
-function adopt(dir: string) {
-  const root = join(dir, ".office");
-  const marker = join(root, "adopting");
-  const current = activeGeneration(dir);
-  const interrupted = existsSync(marker) ? v.parse(id, readFileSync(marker, "utf8")) : null;
+/**
+ * The active generation with every discovery link in place. A fresh office gets its first, empty
+ * generation here. Refuses before changing anything when an entry other than its link is where a
+ * link belongs.
+ */
+function establish(dir: string) {
+  const { conflict, missing } = inspectBridges(dir);
 
-  if (current && !interrupted) {
-    const { conflict, missing } = inspectBridges(dir);
+  if (conflict) throw new OfficeError(conflict);
+  let current = activeGeneration(dir);
 
-    if (conflict) throw new OfficeError(conflict);
-
-    for (const { path, link } of missing) {
-      mkdirSync(dirname(path), { recursive: true });
-      symlinkSync(link, path);
-    }
-
-    return current;
+  if (!current) {
+    current = createGeneration(dir);
+    mkdirSync(join(managedDirectory(dir, current), "packages"));
+    point(dir, current);
   }
 
-  if (current && current !== interrupted) throw new Error("interrupted adoption names a different active generation");
-
-  for (const [legacy, member] of bridges) {
-    const path = join(root, legacy);
-    const entry = lstatSync(path, { throwIfNoEntry: false });
-
-    if (entry && !(member === "packages" ? entry.isDirectory() : entry.isFile())) {
-      if (interrupted && entry.isSymbolicLink() && readlinkSync(path) === relative(dirname(path), join(root, "current", member))) continue;
-      throw new OfficeError(`cannot adopt unexpected ${path}; move it aside and run office sync --packages`);
-    }
-
-    if (entry && interrupted && lstatSync(join(managedDirectory(dir, interrupted), member), { throwIfNoEntry: false })) {
-      throw new OfficeError(`cannot resume adoption: ${path} and its generation copy both exist; move the conflicting entry aside and run office sync --packages`);
-    }
-  }
-
-  const name = interrupted ?? createGeneration(dir);
-
-  if (!interrupted) writeAtomic(marker, name);
-  const folder = managedDirectory(dir, name);
-
-  for (const [legacy, member] of bridges) {
-    const path = join(root, legacy);
-    const target = join(folder, member);
-    const link = relative(dirname(path), join(root, "current", member));
-    const entry = lstatSync(path, { throwIfNoEntry: false });
-
-    if (entry?.isSymbolicLink()) {
-      if (readlinkSync(path) !== link) throw new Error(`cannot adopt unexpected symlink ${path}`);
-      continue;
-    }
-
-    if (entry) {
-      renameSync(path, target);
-    }
-
-    if (member === "packages") mkdirSync(target, { recursive: true });
-
-    if (!activeGeneration(dir)) point(dir, name);
+  for (const { path, link } of missing) {
     mkdirSync(dirname(path), { recursive: true });
     symlinkSync(link, path);
   }
 
-  rmSync(marker);
-
-  return name;
+  return current;
 }
 
 /** `original` and `lock` are office.yaml's and office.lock's text (null: none) when the candidate was reserved. */
@@ -264,11 +205,11 @@ export function recover(dir: string) {
   const intent = v.parse(journal, JSON.parse(readFileSync(path, "utf8")));
   const current = activeGeneration(dir);
   const pins = digest(readFileSync(join(dir, "office.yaml"), "utf8"));
-  const section = intent.lock && lockedDigest(readLockText(dir));
-  const lockAt = (state: "before" | "after") => !intent.lock || section === intent.lock[state];
+  const section = lockedDigest(readLockText(dir));
+  const lockAt = (state: "before" | "after") => section === intent.lock[state];
 
   if (current === intent.previous && pins === intent.after && (lockAt("after") || lockAt("before"))) {
-    if (intent.lock && !lockAt("after")) {
+    if (!lockAt("after")) {
       const packages = parsePackageLock(intent.lock.packages);
 
       if (!packages.ok) throw new Error(`interrupted package publication: ${path} is not valid: ${packages.errors.join("; ")}`);
@@ -284,37 +225,35 @@ export function recover(dir: string) {
 }
 
 function locked<T>(dir: string, action: () => T) {
-  checkAdoption(dir);
+  checkDirectories(dir);
   using lease = openCheckoutLease(dir, publicationLease);
   lease.acquire(publicationBusy);
-  checkAdoption(dir);
+  checkDirectories(dir);
 
   return action();
 }
 
-/** Healthy readers only inspect links and need no write access. Repair and
- * interrupted first adoption use the same preflight and lease as writers. */
+/** Healthy readers only inspect links and need no write access. Repair uses
+ * the same preflight and lease as writers. */
 export function ensureDiscovery(dir: string) {
   checkDirectories(dir);
 
-  if (!existsSync(join(dir, ".office/adopting"))) {
-    if (!activeGeneration(dir)) return;
-    const { conflict, missing } = inspectBridges(dir);
+  if (!activeGeneration(dir)) return;
+  const { conflict, missing } = inspectBridges(dir);
 
-    if (!conflict && !missing.length) return;
-  }
+  if (!conflict && !missing.length) return;
 
-  locked(dir, () => adopt(dir));
+  locked(dir, () => establish(dir));
 }
 
 /** Reserve the final path and protect both the source and candidate during materialization. */
 export function beginGeneration(dir: string) {
   return locked(dir, () => {
-    adopt(dir);
+    establish(dir);
     recover(dir);
     const previous = activeGeneration(dir);
 
-    if (!previous) throw new OfficeError("no active generation after adoption");
+    if (!previous) throw new OfficeError("no active package generation");
     prune(dir, previous);
     const name = createGeneration(dir);
     const original = readFileSync(join(dir, "office.yaml"), "utf8");
@@ -335,7 +274,7 @@ export function beginGeneration(dir: string) {
       using sweep = openCheckoutLease(dir, publicationLease);
 
       if (!tryFileLock(sweep.fd, false) || existsSync(join(dir, ".office/publishing.json"))) return;
-      checkAdoption(dir);
+      checkDirectories(dir);
       const current = activeGeneration(dir);
 
       if (current) prune(dir, current);
@@ -352,7 +291,7 @@ export function publishGeneration({ dir, previous, name, original, lock }: Candi
   const ticket = join(dir, ".office/generation-ticket");
 
   return locked(dir, () => {
-    adopt(dir);
+    establish(dir);
     recover(dir);
 
     const reserved = lockSections(lock).packages;

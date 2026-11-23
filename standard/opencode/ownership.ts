@@ -5,8 +5,8 @@
 // Office's exact text counts as Office's.
 //
 // The rule is deliberately broad: any `<up>packages/<name>/<path>` or `<up>.office/packages/<name>/<path>`
-// plugin link whose entry name equals the package name is Office's, whatever the asset path, and so
-// are the package-skill link forms earlier releases made, whether or not that package is selected.
+// plugin link whose entry name equals the package name is Office's, whatever the asset path,
+// whether or not that package is selected.
 // It can't be narrowed without a ledger: once a package is deselected (or its registration changes
 // its server path), nothing on disk says which path Office linked, so recognizing and withdrawing
 // that link needs the whole shape. Office recreates such a link if the package is selected again.
@@ -30,8 +30,7 @@ export const cloneFolder = ".office/plugins";
  * - plugins: `<up>.office/plugins/<entry>` (a Git clone), and `<up>packages/<entry>/<path>` or
  *   `<up>.office/packages/<entry>/<path>` (a package's server plugin: `plugin` by convention, or
  *   the package-relative directory its `opencode(ctx)` registers).
- * - skills: `<up>skills/<entry>` (a library skill), and `<up>packages/<package>/skills/<entry>` or
- *   `<up>.office/packages/<package>/skills/<entry>` (package skill links earlier releases made).
+ * - skills: `<up>skills/<entry>` (a library skill).
  */
 export function officeTarget(kind: Kind, up: string, entry: string, target: string): boolean {
   if (!name.test(entry) || !target.startsWith(up)) return false;
@@ -43,11 +42,7 @@ export function officeTarget(kind: Kind, up: string, entry: string, target: stri
     return [`packages/${entry}/`, `.office/packages/${entry}/`].some(prefix => rest.startsWith(prefix) && v.is(asset, rest.slice(prefix.length)));
   }
 
-  if (rest === `skills/${entry}`) return true;
-  const parts = rest.split("/");
-  const at = parts[0] === ".office" ? 1 : 0;
-
-  return parts.length === at + 4 && parts[at] === "packages" && name.test(parts[at + 1]) && parts[at + 2] === "skills" && parts[at + 3] === entry;
+  return rest === `skills/${entry}`;
 }
 
 export type Entry = {

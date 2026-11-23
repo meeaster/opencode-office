@@ -20,12 +20,8 @@ export const namedEntry = v.objectWithRest({ name: v.string() }, settingValue);
 const entry = v.pipe(v.strictObject({ id: v.string(), value: namedEntry, contract: v.optional(v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/))) }),
   v.check(row => row.id !== repositories.id || isRepository(row.value), "invalid published reference"));
 
-// Earlier releases saved each command owner's routes and settings under `commands`. Package
-// commands now load the packages on every run, so the key is accepted with any content and
-// dropped unread; it goes when this file does.
-const contributor = v.pipe(v.strictObject({ ...binding, commands: v.optional(v.unknown()), entries: v.array(entry) }),
-  v.check(group => !group.source.startsWith("git:") || group.commit !== undefined || (group.stale && !group.entries.length), "a Git contribution needs its resolved commit"),
-  v.transform(({ commands, ...group }) => group));
+const contributor = v.pipe(v.strictObject({ ...binding, entries: v.array(entry) }),
+  v.check(group => !group.source.startsWith("git:") || group.commit !== undefined || (group.stale && !group.entries.length), "a Git contribution needs its resolved commit"));
 
 const schema = v.strictObject({
   version: v.literal(4, "unsupported references snapshot version (expected 4)"),

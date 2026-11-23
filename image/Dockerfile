@@ -67,9 +67,7 @@ RUN curl -fsSLo /tmp/opencode.tar.gz "https://github.com/anomalyco/opencode/rele
  && echo "${SFW_SHA256}  /usr/local/bin/sfw" | sha256sum -c - \
  && chmod 755 /usr/local/bin/sfw
 
-# The container user keeps uid 1000, which owns the home volume and the office's files. It was
-# `assistant` with home /home/assistant; the entrypoint's `office migrate-home` moves the paths
-# the home volume stored then.
+# The container user has uid 1000, which owns the home volume and the office's files.
 RUN groupadd -g 1000 office && useradd -m -u 1000 -g office -s /bin/bash office \
  && install -d -o office -g office /etc/opencode
 

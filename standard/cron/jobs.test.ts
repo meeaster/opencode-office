@@ -245,7 +245,7 @@ test.each(["deselect", "condition", "reschedule"] as const)("catch-up checks the
   else expect(existsSync(stamp)).toBe(false);
 }));
 
-test("retires legacy and removed timers before enabling new units and never modifies unrelated names", () => {
+test("retires generated timers no longer wanted before enabling new units and never modifies unrelated names", () => {
   const path = process.env.PATH;
   const units = process.env[unitDirVariable];
   const log = join(root, "systemctl.log");

@@ -22,7 +22,7 @@ import { atomicWrite } from "./secrets.ts";
 import { shellQuote } from "./sfw.ts";
 import { editLock, lockFile, readLockSection } from "./versions.ts";
 
-/** A package's folder of seed files. An earlier release read `template/`, which is no longer read. */
+/** A package's folder of seed files. */
 export const seedFolder = "seed";
 /** The seed store, office-relative. */
 export const seedStore = ".office/seeds";

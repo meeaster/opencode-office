@@ -127,7 +127,7 @@ test("a plugin checkout with the wrong origin is not cleaned, fetched or force-c
 test("a plugin checkout with no commit is refused before fetching, even with the declared origin, and exposes nothing", async () => {
   for (const executable of [office, ...(control ? [control] : [])]) {
     const f = fixture(executable === office ? "unborn" : "unborn-control", "http://127.0.0.1:1");
-    // The control clones into .opencode/plugins/, where earlier releases did.
+    // The control clones into .opencode/plugins/, the folder OpenCode discovers.
     const plugin = join(f.dir, executable === office ? ".office/plugins/imported" : ".opencode/plugins/imported");
     // A required smudge filter fails on the last file, after index.js is written.
     const remote = pluginRemote(f, { ".gitattributes": "zz-last filter=fail\n", "index.js": command("exposed"), "zz-last": "last\n" });
@@ -152,12 +152,12 @@ test("a plugin checkout with no commit is refused before fetching, even with the
     expect(existsSync(join(plugin, ".git/FETCH_HEAD"))).toBe(false);
     expect(existsSync(join(f.dir, ".opencode/plugins/imported"))).toBe(false);
 
-    // Where an earlier release cloned, a checkout with no commit is not provably Office's: it stays.
-    const legacy = join(f.dir, ".opencode/plugins/imported");
-    renameSync(plugin, legacy);
-    const kept = snapshot(legacy);
-    expect(await f.run(["sync"], 1)).toContain(".opencode/plugins/imported is a folder office sync can't verify as this plugin's checkout");
-    expect(snapshot(legacy)).toEqual(kept);
+    // The same checkout where the plugin's link belongs is the office's own: it stays.
+    const owner = join(f.dir, ".opencode/plugins/imported");
+    renameSync(plugin, owner);
+    const kept = snapshot(owner);
+    expect(await f.run(["sync"], 1)).toContain(".opencode/plugins/imported is the office's own (not a link office sync made), kept; move it aside or rename the plugins: entry");
+    expect(snapshot(owner)).toEqual(kept);
     expect(existsSync(plugin)).toBe(false);
   }
 }, 60_000);
@@ -165,7 +165,7 @@ test("a plugin checkout with no commit is refused before fetching, even with the
 test("first plugin delivery never replaces an owner's folder, even an empty one or one that appears mid-delivery", async () => {
   const f = fixture("owner-folder", "http://127.0.0.1:1");
   const plugin = join(f.dir, ".office/plugins/imported");
-  const legacy = join(f.dir, ".opencode/plugins/imported");
+  const destination = join(f.dir, ".opencode/plugins/imported");
   const remote = pluginRemote(f, { "index.js": command("delivered") });
   const native = Bun.which("git", { PATH: f.env.PATH });
 
@@ -188,12 +188,12 @@ test("first plugin delivery never replaces an owner's folder, even an empty one 
 
   if (control) {
     // The control publishes over the empty folder where it clones: another inode, staging's 0700 mode.
-    mkdirSync(legacy);
-    const before = statSync(legacy).ino;
+    mkdirSync(destination);
+    const before = statSync(destination).ino;
     await f.run(["sync"], 0, control);
-    expect(statSync(legacy).ino).not.toBe(before);
-    expect(statSync(legacy).mode & 0o777).toBe(0o700);
-    rmSync(legacy, { recursive: true });
+    expect(statSync(destination).ino).not.toBe(before);
+    expect(statSync(destination).mode & 0o777).toBe(0o700);
+    rmSync(destination, { recursive: true });
   }
 
   rmSync(plugin, { recursive: true });
@@ -221,10 +221,10 @@ test("first plugin delivery never replaces an owner's folder, even an empty one 
   expect(gitAt(plugin, f.env, "rev-parse", "HEAD")).toBe(gitAt(remote, f.env, "rev-parse", "HEAD"));
   expect(readFileSync(join(plugin, "index.js"), "utf8")).toBe(command("delivered"));
   expect(readdirSync(join(f.dir, ".office/tmp"))).toEqual([]);
-  expect(readlinkSync(legacy)).toBe("../../.office/plugins/imported");
+  expect(readlinkSync(destination)).toBe("../../.office/plugins/imported");
 }, 60_000);
 
-test("a Git-cloned plugin lives in .office/plugins, is linked after publication and updates in place; an unproven checkout where earlier releases cloned stays", async () => {
+test("a Git-cloned plugin lives in .office/plugins, is linked after publication and updates in place; a checkout where its link belongs stays", async () => {
   const f = fixture("clone-link", "http://127.0.0.1:1");
   const remote = pluginRemote(f, { "index.js": command("cloned-v1") });
   const checkout = join(f.dir, ".office/plugins/imported");
@@ -254,34 +254,32 @@ test("a Git-cloned plugin lives in .office/plugins, is linked after publication 
   expect(statSync(checkout).ino).toBe(identity[0]);
   expect(await f.run(["opencode", "inspect"])).toContain("Office link to a Git clone (declared): .opencode/plugins/imported");
 
-  // Where an earlier release cloned, a checkout that isn't provably this plugin's stays where it is.
+  // A real checkout where the link belongs, even one of this plugin's repository, is the office's own and stays.
   rmSync(link);
   gitAt(f.home, f.env, "clone", "-q", remote, link);
-  gitAt(link, f.env, "remote", "set-url", "origin", join(f.home, "elsewhere"));
-  const unproven = snapshot(link);
-  expect(await f.run(["sync"], 1)).toContain(".opencode/plugins/imported is a folder office sync can't verify as this plugin's checkout");
-  expect(snapshot(link)).toEqual(unproven);
+  const owner = snapshot(link);
+  expect(await f.run(["sync"], 1)).toContain(".opencode/plugins/imported is the office's own (not a link office sync made), kept; move it aside or rename the plugins: entry");
+  expect(snapshot(link)).toEqual(owner);
 }, 60_000);
 
-test("an existing clone is linked before it is fetched, so an unreachable remote leaves a moved or unlinked checkout linked; withdrawn clones are unlinked and listed, never deleted", async () => {
+test("an existing clone is linked before it is fetched, so an unreachable remote leaves an unlinked checkout linked; withdrawn clones are unlinked and listed, never deleted", async () => {
   const f = fixture("clone-offline", "http://127.0.0.1:1");
   const remote = pluginRemote(f, { "index.js": command("cloned-v1") });
   const checkout = join(f.dir, ".office/plugins/imported");
   const link = join(f.dir, ".opencode/plugins/imported");
 
-  // An earlier release's checkout in .opencode/plugins/, moved whole (local work too) and linked
-  // while the remote can't be reached.
-  gitAt(f.home, f.env, "clone", "-q", remote, link);
-  write(join(link, "untracked-note"), "kept\n");
-  const legacy = statSync(link).ino;
-  expect(await f.run(["check"], 1)).toContain(".opencode/plugins/imported/ is where earlier releases cloned plugin imported");
+  // A checkout in .office/plugins/ with local work, not yet linked, is linked as it is while the
+  // remote can't be reached.
+  gitAt(f.home, f.env, "clone", "-q", remote, checkout);
+  write(join(checkout, "untracked-note"), "kept\n");
+  const cloned = statSync(checkout).ino;
+  expect(await f.run(["check"], 1)).toContain("plugin imported is cloned but .opencode/plugins/imported doesn't link to it (office sync links it)");
   renameSync(remote, `${remote}.away`);
-  const migrated = await f.run(["sync"], 1);
-  expect(migrated).toContain("moved the checkout .opencode/plugins/imported to .office/plugins/imported");
-  expect(migrated).toContain("linked .opencode/plugins/imported");
-  expect(migrated).toContain("plugin Git operation failed");
+  const offline = await f.run(["sync"], 1);
+  expect(offline).toContain("linked .opencode/plugins/imported");
+  expect(offline).toContain("plugin Git operation failed");
   expect(readlinkSync(link)).toBe("../../.office/plugins/imported");
-  expect(statSync(checkout).ino).toBe(legacy);
+  expect(statSync(checkout).ino).toBe(cloned);
   expect(readFileSync(join(checkout, "untracked-note"), "utf8")).toBe("kept\n");
 
   // A verified checkout whose link was deleted is linked again, still offline, and then left alone.

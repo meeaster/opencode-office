@@ -176,8 +176,7 @@ const toolKeys = ["minimum_release_age", ...pinnedTools] as const;
 /**
  * The tools an office runs and how old their releases must be. `minimum_release_age` (default
  * 3d) applies to package managers, mise and its tools, and every runtime without its own; each
- * runtime is a version or a mapping with its own age. It replaces `versions`, `upgrades` and
- * `socket_firewall`, which offices before it used and are still read (resolveTools).
+ * runtime is a version or a mapping with its own age.
  */
 const tools = v.nullish(
   v.pipe(
@@ -193,27 +192,6 @@ const tools = v.nullish(
     }),
   ),
 );
-
-// Before `tools`: the versions an office pins, how old a release must be before upgrade-tools takes
-// it (`minimum_release_age`, or a tool's own), and whether Socket Firewall is on.
-const versions = v.optional(
-  v.strictObject(
-    {
-      opencode: v.optional(version),
-      claude: v.optional(version),
-      codex: v.optional(version),
-      executor: v.optional(version),
-      mise: v.optional(version),
-      sfw: v.optional(version),
-    },
-    "must map opencode, claude, codex, executor, mise and sfw to versions",
-  ),
-);
-
-const upgrades = v.nullish(v.record(text, age, "must map minimum_release_age or a tool to an age such as 1d"));
-
-/** The keys `tools` replaced. */
-export const legacyToolKeys = ["versions", "upgrades", "socket_firewall"] as const;
 
 /** A model as OpenCode writes it, `provider/model` with an optional `#variant`, such as openai/gpt-6-luna#low. */
 export const modelReference = v.pipe(
@@ -379,14 +357,8 @@ export const officeSchema = v.pipe(v.strictObject(
     }, mapping)),
     git,
     secrets: v.optional(v.strictObject({ executor_owner: v.optional(text), server: v.optional(text) })),
-    // The Claude gateway (a credential and settings for Claude Code in the container) was removed;
-    // an office.yaml that still has the block is told so instead of hearing of an unknown key.
-    claude: v.optional(v.never("was the Claude gateway, which office no longer has: delete the claude block from office.yaml")),
     tools,
-    versions,
-    upgrades,
     cron: officeCron,
-    socket_firewall: v.optional(v.boolean("must be true or false")),
     references: repositories,
     desks: v.nullish(v.record(v.pipe(name, v.check(key => key !== "executor-apps", "executor-apps is reserved for shared Executor app sources")), desk, "must map desk names to desks"), {}),
     skills,
@@ -394,57 +366,32 @@ export const officeSchema = v.pipe(v.strictObject(
     packages: packageEntries,
   },
   "must be a mapping of name, state, opencode, executor, git, secrets, tools, cron, references, desks, skills, plugins and packages",
-), v.forward(v.check((config) => config.tools === undefined || config.tools === null || legacyKeys(config).length === 0, (issue) => `replaces versions, upgrades and socket_firewall, so office.yaml can't have both: remove ${legacyKeys(issue.input).join(" and ")}`), ["tools"]), v.forward(v.check(({ secrets, opencode }) => secrets?.server === undefined || (opencode !== "container" && opencode.mode === "host" && opencode.managed), "requires opencode.managed: true in host mode"), ["secrets", "server"]));
+), v.forward(v.check(({ secrets, opencode }) => secrets?.server === undefined || (opencode !== "container" && opencode.mode === "host" && opencode.managed), "requires opencode.managed: true in host mode"), ["secrets", "server"]));
 
 export type OfficeConfig = v.InferOutput<typeof officeSchema>;
-
-/** The keys before `tools` that office.yaml sets. */
-function legacyKeys(config: { versions?: unknown; upgrades?: unknown; socket_firewall?: unknown }): string[] {
-  return legacyToolKeys.filter((key) => config[key] !== undefined && config[key] !== null);
-}
 
 /** A runtime as an office runs it: its version (undefined: the tool's default) and how old a release upgrade-tools takes must be. */
 export type Runtime = { version: string | undefined; minimumReleaseAge: string };
 
-/** `tools` from office.yaml, or the keys before it, in one shape. */
+/** `tools` from office.yaml, with its defaults. */
 export type ResolvedTools = {
   /** The age for package managers, mise and mise tools, and each runtime without its own. */
   minimumReleaseAge: string;
   runtimes: Record<PinnedTool, Runtime>;
   /** Whether office.yaml pins versions, which office.lock then verifies; without, the tool's defaults run and upgrade-tools leaves them. */
   pinsVersions: boolean;
-  /** Whether package downloads go through Socket Firewall: on unless sfw's `enabled` (or `socket_firewall`) is false. */
+  /** Whether package downloads go through Socket Firewall: on unless sfw's `enabled` is false. */
   socketFirewall: boolean;
-  /** The keys before `tools` that office.yaml still uses, which `office check` asks to replace. */
-  legacy: string[];
-  /** Ages under `upgrades` for mise tools, which no longer apply: every mise tool takes `minimumReleaseAge`. */
-  ignoredAges: string[];
 };
 
-/**
- * Reads `tools`, or `versions`, `upgrades` and `socket_firewall` from an office before it, into
- * one shape. In an old office.yaml `upgrades.minimum_release_age` was the upgrade job's age, so it
- * becomes the age of each runtime without its own; package managers and mise take the default.
- */
-export function resolveTools(config: Pick<OfficeConfig, "tools" | "versions" | "upgrades" | "socket_firewall">): ResolvedTools {
-  const legacy = legacyKeys(config);
+/** Reads `tools` into one shape, with the default age where office.yaml gives none. */
+export function resolveTools(config: Pick<OfficeConfig, "tools">): ResolvedTools {
+  const entries = config.tools ?? {};
+  const general = entries.minimum_release_age ?? defaultReleaseAge;
+  // SAFETY: each PinnedTool appears exactly once in pinnedTools, the source of this record's keys.
+  const runtimes = Object.fromEntries(pinnedTools.map((tool) => [tool, { version: entries[tool]?.version, minimumReleaseAge: entries[tool]?.minimum_release_age ?? general }])) as Record<PinnedTool, Runtime>;
 
-  if ((config.tools !== undefined && config.tools !== null) || legacy.length === 0) {
-    const entries = config.tools ?? {};
-    const general = entries.minimum_release_age ?? defaultReleaseAge;
-    // SAFETY: each PinnedTool appears exactly once in pinnedTools, the source of this record's keys.
-    const runtimes = Object.fromEntries(pinnedTools.map((tool) => [tool, { version: entries[tool]?.version, minimumReleaseAge: entries[tool]?.minimum_release_age ?? general }])) as Record<PinnedTool, Runtime>;
-
-    return { minimumReleaseAge: general, runtimes, pinsVersions: pinnedTools.some((tool) => entries[tool]?.version !== undefined), socketFirewall: entries.sfw?.enabled ?? true, legacy: [], ignoredAges: [] };
-  }
-
-  const upgradeAges = config.upgrades ?? {};
-  const runtimeAge = upgradeAges.minimum_release_age ?? defaultReleaseAge;
-  // SAFETY: the same exhaustive tuple supplies every key for legacy pins.
-  const runtimes = Object.fromEntries(pinnedTools.map((tool) => [tool, { version: config.versions?.[tool], minimumReleaseAge: upgradeAges[tool] ?? runtimeAge }])) as Record<PinnedTool, Runtime>;
-  const ignoredAges = Object.keys(upgradeAges).filter((key) => key !== "minimum_release_age" && !pinnedTools.some(tool => tool === key));
-
-  return { minimumReleaseAge: defaultReleaseAge, runtimes, pinsVersions: config.versions !== undefined, socketFirewall: config.socket_firewall ?? true, legacy, ignoredAges };
+  return { minimumReleaseAge: general, runtimes, pinsVersions: pinnedTools.some((tool) => entries[tool]?.version !== undefined), socketFirewall: entries.sfw?.enabled ?? true };
 }
 
 /**
@@ -836,9 +783,6 @@ const lockEntry = v.strictObject({
 const lockEntries = { opencode: lockEntry, claude: lockEntry, codex: lockEntry, executor: lockEntry, mise: lockEntry, sfw: lockEntry };
 
 export const lockSchema = v.strictObject(lockEntries);
-
-/** Runtime pins as stored in office.lock and applied.json: those written before sfw was pinned lack it, and the tool's default fills it in. */
-export const storedLockSchema = v.strictObject({ ...lockEntries, sfw: v.optional(lockEntry), codex: v.optional(lockEntry) });
 
 export type Lock = v.InferOutput<typeof lockSchema>;
 

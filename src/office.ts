@@ -6,9 +6,9 @@ import { homedir } from "node:os";
 import { dirname, join, posix, resolve } from "node:path";
 
 import * as v from "valibot";
-import { isMap, isNode, isScalar, isSeq, parse, parseDocument, stringify } from "yaml";
+import { isMap, isNode, isScalar, parse, parseDocument, stringify } from "yaml";
 
-import { check, type OfficeConfig, officeSchema, pinnedTools, type ResolvedTools, resolveTools } from "./schema.ts";
+import { check, type OfficeConfig, officeSchema, type ResolvedTools, resolveTools } from "./schema.ts";
 
 /** Where the office is mounted in the `opencode` container, and so the folder sessions start in. */
 export const containerOfficeDir = "/home/office/workspace";
@@ -162,32 +162,6 @@ export function loadOffice(dir: string, config = readConfig(dir)): Office {
 }
 
 /**
- * The `tools` block that says what `tools` says, as office.yaml would hold it: the general age,
- * then each runtime with a version, an age of its own or sfw turned off, in the short form when it
- * has only a version. `office check` prints it for an office.yaml still on `versions`, `upgrades`
- * and `socket_firewall`.
- */
-export function toolsBlock(tools: ResolvedTools): string {
-  const lines = ["tools:", `  minimum_release_age: ${tools.minimumReleaseAge}`];
-
-  for (const tool of pinnedTools) {
-    const { version, minimumReleaseAge } = tools.runtimes[tool];
-
-    const fields = [
-      ...(version === undefined ? [] : [`version: ${version}`]),
-      ...(minimumReleaseAge === tools.minimumReleaseAge ? [] : [`minimum_release_age: ${minimumReleaseAge}`]),
-      ...(tool === "sfw" && !tools.socketFirewall ? ["enabled: false"] : []),
-    ];
-
-    if (fields.length === 0) continue;
-
-    lines.push(fields.length === 1 && version !== undefined ? `  ${tool}: ${version}` : `  ${tool}: { ${fields.join(", ")} }`);
-  }
-
-  return `${lines.join("\n")}\n`;
-}
-
-/**
  * office.yaml's text with `key.field` set, edited as text so every other line, comment and layout
  * stays as written: a new top-level block goes at the end, a new field after the block's last.
  */
@@ -221,49 +195,8 @@ function setField(text: string, key: string, field: string, value: string): stri
   return `${text.slice(0, at)}\n${" ".repeat(indent)}${line}${text.slice(at)}`;
 }
 
-/** Where `text`'s line holding `at` starts, when only indentation (and `prefix`) comes before `at` on it. */
-function lineStart(text: string, at: number, prefix = ""): number | undefined {
-  const start = text.lastIndexOf("\n", at - 1) + 1;
-
-  return text.slice(start, at).trim() === prefix ? start : undefined;
-}
-
-/** Just past the end of the line `at` is on, its newline included. */
-function lineEnd(text: string, at: number): number {
-  const newline = text.indexOf("\n", at);
-
-  return newline === -1 ? text.length : newline + 1;
-}
-
 function where(path: (string | number)[]): string {
   return path.join(".");
-}
-
-/**
- * office.yaml's text without `keys` in the block mapping at `path`, each removed with its line
- * (and a comment on that line), so every other line stays as written.
- */
-export function withoutKeys(text: string, path: (string | number)[], keys: string[]): string {
-  const map = parseDocument(text).getIn(path, true);
-
-  if (!isMap(map) || map.flow === true) throw new OfficeError(`office.yaml: remove ${keys.join(", ")} from ${where(path)} by hand; it isn't a block mapping`);
-
-  const cuts: [number, number][] = [];
-
-  for (const pair of map.items) {
-    if (!isScalar(pair.key) || !keys.includes(String(pair.key.value))) continue;
-
-    const at = pair.key.range?.[0];
-    const end = isNode(pair.value) ? pair.value.range?.[1] : pair.key.range?.[1];
-    const start = at === undefined ? undefined : lineStart(text, at);
-
-    // A key that shares its line with another (`- repo: ...`) can't go without that one.
-    if (start === undefined || end === undefined) throw new OfficeError(`office.yaml: remove ${String(pair.key.value)} from ${where(path)} by hand`);
-
-    cuts.push([start, lineEnd(text, end)]);
-  }
-
-  return cuts.reduceRight((result, [start, end]) => `${result.slice(0, start)}${result.slice(end)}`, text);
 }
 
 /**
@@ -276,29 +209,6 @@ export function withScalar(text: string, path: (string | number)[], value: strin
   if (!isScalar(node) || node.range === undefined || node.range === null) throw new OfficeError(`office.yaml: set ${where(path)} to ${value} by hand`);
 
   return `${text.slice(0, node.range[0])}${stringify(value).trimEnd()}${text.slice(node.range[1])}`;
-}
-
-/** office.yaml's text without the item `value` of the list at `path`, keeping every other line as written. */
-export function withoutItem(text: string, path: (string | number)[], value: string): string {
-  const list = parseDocument(text).getIn(path, true);
-
-  if (!isSeq(list)) return text;
-
-  const item = list.items.find((candidate) => isScalar(candidate) && candidate.value === value);
-
-  if (!isScalar(item) || item.range === undefined || item.range === null || list.range === undefined || list.range === null) return text;
-
-  if (list.flow === true) {
-    const kept = list.items.flatMap((other) => (other === item || !isNode(other) || other.range === undefined || other.range === null ? [] : [text.slice(other.range[0], other.range[1])]));
-
-    return `${text.slice(0, list.range[0])}[${kept.join(", ")}]${text.slice(list.range[1])}`;
-  }
-
-  const start = lineStart(text, item.range[0], "-");
-
-  if (start === undefined) throw new OfficeError(`office.yaml: remove ${value} from ${where(path)} by hand`);
-
-  return `${text.slice(0, start)}${text.slice(lineEnd(text, item.range[1]))}`;
 }
 
 /**
@@ -338,16 +248,10 @@ export function currentOffice(flags: { office?: string }): Office {
 
 /**
  * The office's one Executor key, `EXECUTOR_TOKEN` and `EXECUTOR_ORGANIZATION`, which OpenCode, `office
- * apps deploy` and the office's own services use. Offices before it kept OpenCode's key as
- * opencode-executor.env; the first command that needs the key renames that file, in one step.
+ * apps deploy` and the office's own services use.
  */
 export function executorEnvFile(office: Office): string {
-  const path = join(office.state, "office-executor.env");
-  const legacy = join(office.state, "opencode-executor.env");
-
-  if (!existsSync(path) && existsSync(legacy)) renameSync(legacy, path);
-
-  return path;
+  return join(office.state, "office-executor.env");
 }
 
 /** Reads KEY=value lines from a state file such as secrets.env; missing file → empty. */

@@ -30,7 +30,6 @@ import { update } from "./commands/update.ts";
 import { upgradeTools } from "./commands/upgrade.ts";
 import { cronCommand } from "../standard/cron/command.ts";
 import { namedJob } from "../standard/cron/discovery.ts";
-import { migrateHome } from "./home-migration.ts";
 import { releaseMachine, serviceEnvironment } from "./machine.ts";
 import { currentOffice, findOffice, type Office, OfficeError } from "./office.ts";
 import { ensureDiscovery, hasPublishedSet } from "./package-generation.ts";
@@ -62,8 +61,8 @@ const usage = `usage: office <command> [--office <dir>]
                                clone and update, scaffold missing desks, copy and link library
                                skills, install, restore and link packages, link a host-mode
                                office's tools into mise's global conf.d, install panels on the
-                               desktop app's machine, migrate old layouts. --release-machine only
-                               removes every file the office wrote on this machine, and its consent.
+                               desktop app's machine. --release-machine only removes every file
+                               the office wrote on this machine, and its consent.
                                --packages applies packages at their declared pins without refreshing
                                 desk repos, references or separately declared plugin clones.
                                 Each package's package.json names its definition (office.definition)
@@ -123,8 +122,6 @@ const usage = `usage: office <command> [--office <dir>]
   cron list | run <job-id>      list applicable jobs or run one by its qualified ID
   cron supercronic | catch-up   container internals: print generated supercronic input or run
                                jobs missed since their last success
-  migrate-home                 the container's start: move sessions and logins stored under
-                               /home/assistant, the old home, to this home
   env --container              print the opencode container's environment file: the Socket
                                 Firewall wrappers on PATH and package managers' and mise's release ages
   env host-service <name> --office <absolute-dir>
@@ -267,7 +264,7 @@ async function main(): Promise<void> {
     if (dir) ensureDiscovery(dir);
 
     // Help and bare `office` list package commands, so they load packages in the reader too.
-    if (dir && (flags.help || command === undefined || !["sync", "refresh", "packages", "sfw-wrappers", "migrate-home", "env"].includes(command))) {
+    if (dir && (flags.help || command === undefined || !["sync", "refresh", "packages", "sfw-wrappers", "env"].includes(command))) {
       const status = await runReader(dir, args);
 
       if (status !== undefined) {
@@ -468,14 +465,12 @@ async function main(): Promise<void> {
     const name = rest[1];
 
     if (rest.length !== 2 || !name || !flags.office || !isAbsolute(flags.office)) {
-      throw new OfficeError("host service startup requires its installed name and absolute office directory; run office up --upgrade to replace an older unit");
+      throw new OfficeError("usage: office env host-service <name> --office <absolute-dir>");
     }
 
     process.stdout.write(serviceEnvironment({ name, dir: flags.office }));
   } else if (command === "sfw-wrappers") {
     for (const path of writeContainerWrappers()) console.log(`office: wrote ${path}`);
-  } else if (command === "migrate-home") {
-    for (const line of migrateHome(homedir())) console.log(`office: ${line}`);
   } else if (command === "apps" && rest[0] === "adopt" && rest.length === 2) {
     await adopt(currentOffice(flags), rest[1]);
   } else if (command === "apps" && rest[0] === "deploy" && rest.length === 1) {

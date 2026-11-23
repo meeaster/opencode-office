@@ -58,7 +58,7 @@ function isRun(value: unknown): value is Run {
 
 /**
  * The OpenCode version the office pins in the nearest office.yaml at or above `from`: `tools.opencode`,
- * a version or a mapping with `version`, or `versions.opencode` in an office.yaml from before `tools`.
+ * a version or a mapping with `version`.
  */
 function officeVersion(from: string): string | undefined {
   for (let dir = resolve(from); ; dir = dirname(dir)) {
@@ -67,8 +67,7 @@ function officeVersion(from: string): string | undefined {
     if (existsSync(file)) {
       const office: unknown = Bun.YAML.parse(readFileSync(file, "utf8"));
       const tools = isRecord(office) ? office.tools : undefined;
-      const versions = isRecord(office) ? office.versions : undefined;
-      const entry = isRecord(tools) ? tools.opencode : isRecord(versions) ? versions.opencode : undefined;
+      const entry = isRecord(tools) ? tools.opencode : undefined;
       const version = isRecord(entry) ? entry.version : entry;
 
       return typeof version === "string" ? version : undefined;

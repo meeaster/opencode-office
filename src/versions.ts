@@ -10,7 +10,7 @@ import { Document, isMap, parse, stringify } from "yaml";
 
 import { openCheckoutLease, publicationLease } from "./checkout-lease.ts";
 import { type Office, OfficeError } from "./office.ts";
-import { check, type HostPlatform, type Lock, type LockedPackage, type PackageLock, type Parsed, parsePackageLock, parseSeedReceipts, type PinnedTool, pinnedTools, storedLockSchema, type SeedReceipts, version } from "./schema.ts";
+import { check, type HostPlatform, type Lock, type LockedPackage, type PackageLock, type Parsed, parsePackageLock, parseSeedReceipts, type PinnedTool, pinnedTools, lockSchema, type SeedReceipts, version } from "./schema.ts";
 import { atomicWrite } from "./secrets.ts";
 
 export type Pin = Lock[PinnedTool];
@@ -93,19 +93,12 @@ export function wantedVersion(office: Office, tool: PinnedTool): string {
 
 export const lockFile = "office.lock";
 
-/** A stored lock with the tool's default sfw where it was written before sfw was pinned. */
-function withDefaults(stored: v.InferOutput<typeof storedLockSchema>): Lock {
-  return { ...stored, sfw: stored.sfw ?? defaultPins.sfw, codex: stored.codex ?? defaultPins.codex };
-}
-
-type StoredPins = v.InferOutput<typeof storedLockSchema>;
-
 function invalidLock(fix: string, errors: string[]): OfficeError {
   return new OfficeError(`${lockFile} is not valid (${fix}):\n${errors.map((line) => `  ${line}`).join("\n")}`);
 }
 
 /** office.lock's sections: runtime pins (undefined: none), Git packages and seed receipts. */
-export type Sections = { runtime: StoredPins | undefined; packages: PackageLock; seeds: SeedReceipts };
+export type Sections = { runtime: Lock | undefined; packages: PackageLock; seeds: SeedReceipts };
 
 /** Each section of office.lock as read, or why it can't be: each section is read on its own. */
 export type ReadSections = { [Key in keyof Sections]: { ok: true; value: Sections[Key] } | { ok: false; error: OfficeError } };
@@ -135,7 +128,7 @@ export function lockSections(text: string | null): ReadSections {
 
   // SAFETY: checked above to be a mapping; each section is validated below.
   const { packages, seeds, ...pins } = document as Record<string, unknown>;
-  const runtime = Object.keys(pins).length === 0 ? { ok: true as const, value: undefined } : check(v.safeParse(storedLockSchema, pins));
+  const runtime = Object.keys(pins).length === 0 ? { ok: true as const, value: undefined } : check(v.safeParse(lockSchema, pins));
 
   const keyed = <T>(key: "packages" | "seeds", value: unknown, parsed: (value: unknown) => Parsed<Map<string, T>>) => {
     const result = value === undefined ? { ok: true as const, value: new Map<string, T>() } : parsed(value);
@@ -294,18 +287,9 @@ export function packageLockChanges(before: PackageLock, after: PackageLock): str
   });
 }
 
-/** office.lock's runtime pins, or undefined when the office has none. A lock from before sfw was pinned gets the tool's default sfw. */
+/** office.lock's runtime pins, or undefined when the office has none. */
 export function readLock(dir: string): Lock | undefined {
-  const stored = readLockSection(dir, "runtime");
-
-  return stored === undefined ? undefined : withDefaults(stored);
-}
-
-/** Whether office.lock exists but was written before sfw was pinned, which `office sync` moves on. */
-export function lockLacksSfw(dir: string): boolean {
-  const stored = readLockSection(dir, "runtime");
-
-  return stored !== undefined && stored.sfw === undefined;
+  return readLockSection(dir, "runtime");
 }
 
 /** Writes office.lock's runtime pins, keeping its other sections; refuses, with that section's message, when one can't be read. */
@@ -347,7 +331,7 @@ export function wantedPins(office: Office): Lock {
  * the opencode image last took current Debian packages (container mode; `office up --refresh`).
  */
 const appliedSchema = v.strictObject({
-  pins: storedLockSchema,
+  pins: lockSchema,
   highest: v.strictObject({ opencode: version, executor: version }),
   refreshed: v.optional(v.pipe(v.string(), v.isoTimestamp())),
 });
@@ -367,8 +351,7 @@ export function readApplied(office: Office): Applied | undefined {
 
   if (!result.ok) throw new OfficeError(`${path} is not valid: ${result.errors.join("; ")}`);
 
-  // An office applied before sfw was pinned builds its next image with the tool's default.
-  return { ...result.value, pins: withDefaults(result.value.pins) };
+  return result.value;
 }
 
 export function writeApplied(office: Office, pins: Lock, refreshed: string | undefined): void {

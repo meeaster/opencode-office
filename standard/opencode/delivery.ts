@@ -2,7 +2,7 @@
 // Desk and repo plugin folders belong to their owners. Office's entries are recognized by their
 // target (ownership.ts); nothing records which links Office made.
 import { randomUUID } from "node:crypto";
-import { lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { RenameError, renameNoReplace } from "../../src/no-replace.ts";
 import { OfficeError, type Office } from "../../src/office.ts";
@@ -109,11 +109,9 @@ export function withPluginPlan(office: Office, installed: InstalledPackages, mod
 
     const problem = office.plugins.some(cloned => cloned.name === entry.name)
       ? `its plugin would be ${at}, where the plugins: entry ${entry.name} is cloned`
-      : taken && entry.name === "office" && legacyPlugin(office, "office")
-        ? `its plugin would be ${at}, where earlier releases of office copied the tool's plugin; office sync replaces that copy with the link`
-        : taken
-          ? `its plugin would be ${at}, which holds a plugin of this office's own (not a link office sync made)`
-          : undefined;
+      : taken
+        ? `its plugin would be ${at}, which holds a plugin of this office's own (not a link office sync made)`
+        : undefined;
 
     if (problem === undefined) plugins.set(entry.name, plugin);
     else problems.push({ packages: [entry.name], message: `${problem}, so it isn't linked; rename one of them` });
@@ -222,7 +220,8 @@ export function linkPlugins(office: Office, installed: ReturnType<typeof withPlu
     if (claim?.state === "declared") validateAssets(office.dir, item.dir, claim.paths);
   }
 
-  const changes = writeDeclarations(office, installed.declarations);
+  writeDeclarations(office, installed.declarations);
+  const changes: string[] = [];
   const { folder, wanted, links } = pluginLinks(office, installed.plugins);
   const cloned = new Set(office.plugins.map(plugin => plugin.name));
 
@@ -244,12 +243,3 @@ export function linkPlugins(office: Office, installed: ReturnType<typeof withPlu
   return changes;
 }
 
-/** Recognize the historical single-file bundles before migrating them. */
-export function legacyPlugin(office: Office, name: "knowledge" | "office"): boolean {
-  const dir = join(office.dir, pluginFolder, name);
-
-  return lstatSync(dir, { throwIfNoEntry: false })?.isDirectory() === true &&
-    readdirSync(dir).join() === "index.js" &&
-    lstatSync(join(dir, "index.js")).isFile() &&
-    readFileSync(join(dir, "index.js"), "utf8").split("\n", 3).includes(`// The office tool's ${name} plugin, bundled from its plugins/${name}/. \`office sync\` replaces this copy; change the tool's.`);
-}

@@ -1,5 +1,5 @@
 // Deliver resolved requirements, tasks, install-once hooks and native bootstrap recipes.
-// Legacy tools, host.install and system declarations use the same writers.
+// A definition's tools, host.install and system declarations use the same writers.
 //
 // - Every package's tools go in one file, `machine.packages.toml` at the office root, beside the
 //   office's own `machine.toml`: a single [tools] table, one line per tool, each with a comment
@@ -25,7 +25,7 @@ import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 
-import { adoptVersion, cliToolsPackage, compareToolVersions, declaredTools, hostApplies, switchedOn, wantedTools } from "../tooling/requirements.ts";
+import { adoptVersion, compareToolVersions, declaredTools, hostApplies, switchedOn, wantedTools } from "../tooling/requirements.ts";
 import { packageDeliveryDir } from "../../src/bound-paths.ts";
 import { toolPins } from "../../src/mise-toml.ts";
 import type { Office } from "../../src/office.ts";
@@ -53,9 +53,8 @@ export function packagesPath(office: Office): string {
 }
 
 // The first line of every fragment sync writes, naming its package: how sync and check tell a
-// package's fragment from one the office wrote itself. Earlier releases started it "The mise tools
-// of package", when the fragment held the package's tools too.
-const marker = /^# The mise (?:setup|tools) of package ([a-z0-9][a-z0-9-]*)\./;
+// package's fragment from one the office wrote itself.
+const marker = /^# The mise setup of package ([a-z0-9][a-z0-9-]*)\./;
 
 function header(name: string): string[] {
   return [
@@ -184,7 +183,7 @@ export function planPackageTools(office: Office, installed: InstalledPackage[], 
     changes.push({ kind: "removed", tool, line: `removed ${tool} from ${packagesFile}, as no package declares it here any more` });
   }
 
-  // An unread legacy owner may have contributed host-only tools. Preserving
+  // An unread owner may have contributed host-only tools. Preserving
   // its pins does not authorize a container to consume a host generation.
   const retained = lines.some(([, line]) => line.packages.some(name => unread.includes(name)));
   const modeMarker = retained && !current?.split("\n\n", 1)[0].split("\n").includes(containerProjection) ? [] : containerMarker(office);
@@ -226,9 +225,9 @@ function installOf(item: InstalledPackage) {
   const typed = item.machine?.install;
 
   if (typed) return { ...typed, creates: typed.ready };
-  const legacy = item.manifest.host?.install;
+  const host = item.manifest.host?.install;
 
-  return legacy && { ...legacy, name: "install" };
+  return host && { ...host, name: "install" };
 }
 
 function installTask(item: InstalledPackage) {
@@ -320,27 +319,6 @@ function hostMarker(item: InstalledPackage): string {
   return `[tasks.${JSON.stringify(installTask(item))}]`;
 }
 
-/**
- * An earlier release's fragment split where its [tools] table ends: the lines up to it (its
- * header and the table), and the package's setup after it, from the first table after [tools] and
- * the comment lines right above that table.
- */
-function splitFragment(text: string) {
-  const lines = text.replace(/\n$/, "").split("\n");
-  const table = lines.findIndex((line) => /^\s*\[tools\]\s*(#.*)?$/.test(line));
-  const after = lines.findIndex((line, index) => index > table && /^\s*\[/.test(line));
-  let cut = table === -1 ? lines.length : after === -1 ? lines.length : after;
-
-  while (cut < lines.length && cut - 1 > table && lines[cut - 1].trimStart().startsWith("#")) cut -= 1;
-
-  return { tools: lines.slice(0, cut), rest: lines.slice(cut) };
-}
-
-/** Whether a fragment still holds a [tools] table, as earlier releases wrote every fragment. */
-function holdsTools(text: string): boolean {
-  return text.split("\n").some((line) => /^\s*\[tools\]\s*(#.*)?$/.test(line));
-}
-
 /** The fragments in `.office/mise/` that sync wrote, by the package each names. */
 function packageFragments(office: Office): Map<string, string> {
   const folder = join(office.dir, fragmentsFolder);
@@ -366,82 +344,6 @@ function removeEmptyFolders(office: Office): void {
 
     if (existsSync(path) && readdirSync(path).length === 0) rmdirSync(path);
   }
-}
-
-/** The fragments an earlier release wrote with a [tools] table, which sync moves to machine.packages.toml. */
-export function fragmentsWithTools(office: Office): string[] {
-  return [...packageFragments(office).keys()].filter((path) => holdsTools(readFileSync(path, "utf8")));
-}
-
-/**
- * Moves the [tools] tables of an earlier release's fragments into machine.packages.toml: each tool
- * at the highest version found across them and the file (so a version the office already bumped
- * stays), its comment naming the fragments' packages. Each fragment keeps only the package's setup,
- * and goes when it held only tools. Sync then fixes the comments, raises a line below a package's
- * version and fixes the links. Nothing to do once no fragment holds tools.
- */
-export function moveFragmentTools(office: Office): string[] {
-  const paths = fragmentsWithTools(office);
-
-  if (paths.length === 0) return [];
-
-  const current = readPackagesFile(office);
-  const merged = new Map<string, { version: string; packages: string[] }>();
-  const moved: string[] = [];
-  const taken: string[] = [];
-  const changes: string[] = [];
-
-  for (const [tool, line] of current === undefined ? [] : packageLines(current)) merged.set(tool, { version: line.version, packages: line.packages });
-
-  // The office package's fragment first, as sync orders the lines.
-  const owners = packageFragments(office);
-  const ordered = [...paths.filter((path) => owners.get(path) === cliToolsPackage), ...paths.filter((path) => owners.get(path) !== cliToolsPackage)];
-
-  for (const path of ordered) {
-    const owner = owners.get(path) ?? "";
-    const pins = toolPins(readFileSync(path, "utf8"));
-
-    for (const pin of pins) {
-      const known = merged.get(pin.tool);
-
-      if (known === undefined) {
-        merged.set(pin.tool, { version: pin.version, packages: [owner] });
-
-        continue;
-      }
-
-      if (!known.packages.includes(owner)) known.packages.push(owner);
-
-      if ((compareToolVersions(pin.version, known.version) ?? 0) > 0) {
-        taken.push(`${packagesFile} takes ${pin.tool} ${pin.version} from ${relative(office.dir, path)} higher than the ${known.version} found before it`);
-        known.version = pin.version;
-      }
-    }
-
-    moved.push(`moved package ${owner}'s tools${pins.length === 0 ? "" : ` (${pins.map((pin) => `${pin.tool} ${pin.version}`).join(", ")})`} from ${relative(office.dir, path)} to ${packagesFile}, where office sync keeps every package's tools`);
-  }
-
-  writeFileSync(packagesPath(office), renderPackages([...merged]));
-  changes.push(...moved, ...taken);
-
-  for (const path of ordered) {
-    const rest = splitFragment(readFileSync(path, "utf8")).rest;
-    const where = relative(office.dir, path);
-
-    if (rest.every((line) => line.trim() === "")) {
-      rmSync(path);
-      changes.push(`deleted ${where}, which held only package ${owners.get(path)}'s tools`);
-
-      continue;
-    }
-
-    writeFileSync(path, fragmentText(owners.get(path) ?? "", rest.join("\n")));
-    changes.push(`${where} now holds only package ${owners.get(path)}'s mise setup`);
-  }
-
-  removeEmptyFolders(office);
-
-  return changes;
 }
 
 /** Why a package's host install isn't in its fragment, for messages. */
@@ -495,13 +397,6 @@ function syncFragments(office: Office, installed: InstalledPackage[], declared: 
       continue;
     }
 
-    // Its tools move to machine.packages.toml first; a fragment that still holds them failed to move.
-    if (current !== undefined && holdsTools(current)) {
-      changes.push(`FAILED package ${name}: ${where} still holds a [tools] table, so office sync doesn't rewrite it; move its tools to ${packagesFile}`);
-
-      continue;
-    }
-
     if (!composed.ok) {
       changes.push(`FAILED package ${name}: ${composed.errors.join("; ")}; ${where} is left as it was`);
 
@@ -544,12 +439,12 @@ function syncFragments(office: Office, installed: InstalledPackage[], declared: 
 }
 
 /**
- * Writes the packages' tools to machine.packages.toml and their setup to their fragments, after
- * moving an earlier release's fragment tools there. `declared` names every package office.yaml
- * lists. Returns one line per change; a refusal starts with FAILED.
+ * Writes the packages' tools to machine.packages.toml and their setup to their fragments.
+ * `declared` names every package office.yaml lists. Returns one line per change; a refusal starts
+ * with FAILED.
  */
 export function syncTools(office: Office, installed: InstalledPackage[], declared: string[]): string[] {
-  return [...moveFragmentTools(office), ...syncPackageTools(office, installed, declared), ...syncFragments(office, installed, declared)];
+  return [...syncPackageTools(office, installed, declared), ...syncFragments(office, installed, declared)];
 }
 
 /** Notes for a package's line in `office check`, and whether its tools and setup are as they should be. */
@@ -623,9 +518,6 @@ function setupNotes(office: Office, item: InstalledPackage, section: string | un
 
   if (fragmentPackage(text) !== item.entry.name) return { ok: false, notes: [`${where} is not the fragment office sync writes for this package; rename it`] };
 
-  // An earlier release's layout, which drift reports once for the office.
-  if (holdsTools(text)) return { ok: true, notes: [] };
-
   if (section === undefined) return { ok: false, notes: [`${where} is left from a mise setup the package no longer has here; office sync deletes it`] };
 
   if (text !== fragmentText(item.entry.name, section, containerMarker(office))) return { ok: false, notes: [`${where} lacks or differs from the package's host install or system setup; office sync rewrites it`] };
@@ -649,10 +541,6 @@ export function fragmentNotes(office: Office, item: InstalledPackage): FragmentR
  */
 export function packagesFileProblems(office: Office, installed: InstalledPackage[], declared: string[]): string[] {
   const current = readPackagesFile(office);
-
-  // An earlier release's fragments still hold the tools; drift reports that.
-  if (fragmentsWithTools(office).length > 0) return [];
-
   const plan = planPackageTools(office, installed, declared);
   const removed = plan.changes.filter((change) => change.kind === "removed").map((change) => change.tool);
   const problems = removed.map((tool) => `${packagesFile} holds ${tool}, which no package declares here; office sync removes it`);
@@ -685,11 +573,6 @@ export function machineBelowFloors(office: Office, installed: InstalledPackage[]
 /** Fragments of packages office.yaml no longer lists, for `office check`. */
 export function orphanFragments(office: Office, declared: string[]): string[] {
   return [...packageFragments(office)].flatMap(([path, owner]) => (declared.includes(owner) ? [] : [`${relative(office.dir, path)} holds the mise setup of package ${owner}, which office.yaml no longer lists (office sync deletes it)`]));
-}
-
-/** The earlier release's fragments that still hold tools, for `office check`. */
-export function oldToolFragments(office: Office): string[] {
-  return fragmentsWithTools(office).map((path) => `${relative(office.dir, path)} holds its package's tools in a [tools] table, as earlier releases wrote it (office sync moves them to ${packagesFile})`);
 }
 
 /**

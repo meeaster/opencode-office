@@ -111,12 +111,12 @@ test("the installed unit keeps its installer identity and no-install policy acro
     expect(readFileSync(join(env.OFFICE_MACHINE_DIR, "env.sh"), "utf8")).toContain("export FROM_CLAIM='ancestor'");
     expect(observe()).toBe("none:0/0:manager-profile");
 
-    // The previous candidate unit called exactly this identity-less form.
-    const legacy = run("env", "host-service");
+    // Without its name and office, the form is refused with its usage.
+    const bare = run("env", "host-service");
 
-    expect(legacy.exitCode).toBe(1);
-    expect(legacy.stdout.toString()).toBe("");
-    expect(legacy.stderr.toString()).toContain("office up --upgrade");
+    expect(bare.exitCode).toBe(1);
+    expect(bare.stdout.toString()).toBe("");
+    expect(bare.stderr.toString()).toContain("usage: office env host-service <name> --office <absolute-dir>");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -42,12 +42,11 @@ export function packageJsonHint(name: string) {
 }
 
 /**
- * What to do about a package with no package.json, by where it comes from: a built-in copy an
- * executable from before package.json wrote is replaced by sync; a Git package's repository needs
- * one; the office's own package gets one added.
+ * What to do about a package with no package.json, by where it comes from: sync replaces a
+ * built-in copy; a Git package's repository needs one; the office's own package gets one added.
  */
 function missingHint(name: string, kind: "local" | "built-in" | "remote") {
-  if (kind === "built-in") return "the copy is from an older office executable; run office sync";
+  if (kind === "built-in") return "the copy isn't this office executable's; run office sync";
 
   if (kind === "remote") return `its repository needs a package.json with "name": "${scope}${name}", an optional "description" and "office": { "definition": … }; then run office packages update`;
 

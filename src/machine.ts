@@ -37,7 +37,6 @@ import { fetchBytes } from "./download.ts";
 import { envFilePath, hostEnvironment, hostLayout, hostWrappers, realMise } from "./host-env.ts";
 import { type ServerPlan, serverUnit, serverUnitPath, userSystemd } from "./host-server.ts";
 import { installedPackages, type InstalledPackages } from "./layout.ts";
-import { oldFragments, oldMiseFiles } from "./migrate.ts";
 import { type Office, OfficeError, readConfig } from "./office.ts";
 import { fragmentOwner, machineFile, machineFiles, packagesFile } from "./package-tools.ts";
 import { platformAsset } from "./releases.ts";
@@ -295,16 +294,6 @@ function sfwDigest(pin: Lock["sfw"]): string | undefined {
 /** What the office wants on the machine, and the problems that kept something out. */
 type WantedFiles = { wanted: Wanted[]; problems: string[] };
 
-/** An older combined env.sh cannot be attributed until every selected definition reads once. */
-export function needsEnvironmentOwners(office: Office, packages: InstalledPackages): boolean {
-  if (office.opencode.mode !== "host" || !packages.unread.size) return false;
-  const current = claim(office);
-
-  if (current.kind !== "ours") return false;
-
-  return current.record.files.some(file => file.kind === "file" && file.path === envFilePath() && file.contributions === undefined);
-}
-
 function wantedFiles(office: Office, record: MachineRecord, packages = installedPackages(office)): WantedFiles {
   const previous = record.files.find(file => file.path === envFilePath());
   const retained = previous?.kind === "file" ? previous.contributions?.filter(item => packages.unread.has(item.name)) : [];
@@ -411,11 +400,6 @@ function removalReason(office: Office, file: MachineFile): string {
   if (file.kind === "link" && file.target === join(office.dir, packagesFile)) return `as ${packagesFile} is gone`;
 
   if (file.path.startsWith(`${hostLayout("").root}/`)) return office.socketFirewall ? "as office no longer writes it" : "as office.yaml turns Socket Firewall off";
-
-  // Earlier releases linked every file in .mise/conf.d/, the office's own fragments too, which are its project config now.
-  if (file.kind === "link" && file.target !== join(office.dir, machineFile) && file.target.startsWith(join(office.dir, oldFragments))) {
-    return `as ${relative(office.dir, file.target)} is the office's project config now: only machine.toml, machine.packages.toml and the packages' fragments in .office/mise/ are linked`;
-  }
 
   return `as ${machineFile} is gone`;
 }
@@ -723,9 +707,6 @@ export function machineReport(office: Office): MachineLine[] {
 
   if (current.kind === "other") return [...lines, { ok: false, name: "machine", detail: ownedElsewhere(current.record) }];
 
-  // Until sync moves an earlier release's files out of .mise/conf.d/, their links look unwanted; sync relinks most of them.
-  const unwanted = oldMiseFiles(office).length > 0 ? "relinks or removes it once it has moved the files out of .mise/conf.d/" : "removes it";
-
   if (current.kind === "free") {
     // mise loads machine.toml, machine.packages.toml and .office/mise/ only through the links, so without them a host-mode office has none of its tools.
     return [...lines, { ok: false, name: "machine", detail: `no consent for this office to manage this machine, so machine.toml and the packages' tools in machine.packages.toml apply nowhere and ${envFilePath()} isn't written; run ${consentCommand}, then office sync` }];
@@ -746,7 +727,7 @@ export function machineReport(office: Office): MachineLine[] {
 
     const want = wanted.find((entry) => entry.file.path === file.path);
 
-    lines.push(isSfw(file) && want !== undefined ? sfwLine(office, file) : fileLine(file, want, unwanted));
+    lines.push(isSfw(file) && want !== undefined ? sfwLine(office, file) : fileLine(file, want));
   }
 
   for (const entry of wanted) {
@@ -762,11 +743,11 @@ export function machineReport(office: Office): MachineLine[] {
 }
 
 /** One recorded file's line: present and as wanted, changed, missing, dangling, or no longer wanted. */
-function fileLine(file: MachineFile, want: Wanted | undefined, unwanted: string): MachineLine {
+function fileLine(file: MachineFile, want: Wanted | undefined): MachineLine {
   const state = fileState(file);
   const target = file.kind === "link" ? ` to ${file.target}` : "";
   const stale = want !== undefined && !same(file, want.file);
-  const repair = want === undefined ? unwanted : stale ? (file.kind === "link" && want.file.kind === "link" ? `relinks it to ${want.file.target}` : "rewrites it") : "restores it";
+  const repair = want === undefined ? "removes it" : stale ? (file.kind === "link" && want.file.kind === "link" ? `relinks it to ${want.file.target}` : "rewrites it") : "restores it";
   const done = file.kind === "link" ? `links${target}` : "written";
 
   const details: Record<FileState, string> = {

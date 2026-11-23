@@ -23,7 +23,7 @@ import { hostTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";
 import { CommandFailed, progress, say, streamChecked, warn } from "../report/index.ts";
 import { displayLines } from "../report/reporter.ts";
-import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
+import { type Office, OfficeError, readEnvFile } from "../office.ts";
 import { hostLayout, hostWrappers } from "../host-env.ts";
 import { markServerStopped, planServer, serverIncumbent, startServer } from "../host-server.ts";
 import { claim, globalConfD, installSfw, removeUnwantedServer, requireServerConsent, stopRecordedServer, writeServerUnit } from "../machine.ts";
@@ -150,9 +150,6 @@ export function composeArguments(office: Office, args: string[]): string[] {
  */
 function prepareState(office: Office): void {
   const secrets = join(office.state, "secrets.env");
-
-  // Compose reads the office's key under its current name; this moves one saved under the old name.
-  executorEnvFile(office);
 
   if (office.opencode.mode === "host") {
     if (readEnvFile(secrets).OPENCODE_PASSWORD === undefined) {

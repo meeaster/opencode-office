@@ -12,7 +12,7 @@ import { toolPins } from "./mise-toml.ts";
 import { loadOffice } from "./office.ts";
 import { localEdits, pulledDir, readRecord } from "./packages.ts";
 import { parseManifest } from "./schema.ts";
-import { compareToolVersions, fragmentNotes, machineBelowFloors, machineFiles, moveFragmentTools, oldToolFragments, orphanFragments, packageLines, packagesFileProblems, strayFragments } from "./package-tools.ts";
+import { compareToolVersions, fragmentNotes, machineBelowFloors, machineFiles, orphanFragments, packageLines, packagesFileProblems, strayFragments } from "./package-tools.ts";
 import { definitionText, writePackage } from "./test-package.ts";
 
 let dir: string;
@@ -415,65 +415,6 @@ test("check reports a fragment sync would rewrite", async () => {
 
   expect(notes().notes).toContain(".office/mise/demo.toml lacks or differs from the package's host install or system setup; office sync rewrites it");
   expect(await sync(loadOffice(office))).toContain("wrote package demo's install of Demo to .office/mise/demo.toml: mise install installs it once, through the link (or mise run demo:install)");
-});
-
-test("an earlier release's fragments move their tools to machine.packages.toml, highest version first, once", async () => {
-  demo('tools:\n  jq: "1.7.1"\n  bun: "1.4.4"\n');
-  pkg("other", 'tools:\n  bun: "1.4.4"\n');
-  write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n  - name: other\n");
-  await sync(loadOffice(office));
-
-  const officeLines = packages().split("\n").filter((line) => line.endsWith("# office")).map((line) => line.replace(/ #.*$/, ""));
-
-  rmSync(join(office, "machine.packages.toml"));
-  // demo's fragment holds a bumped bun and its own comment; other's an older bun, and a system part after it.
-  write(fragment(), '# The mise tools of package demo. office sync owns which tools are here.\n\n[tools]\n# ours\n"jq" = "1.7.1"\n"bun" = "1.5.0"\n');
-  write(join(office, ".office/mise/other.toml"), '# The mise tools of package other. office sync owns which tools are here.\n\n[tools]\n"bun" = "1.4.4"\n\n# Its setup.\n[vars]\nx = "y"\n');
-  write(join(office, ".office/mise/office.toml"), `# The mise tools of package office. office sync owns which tools are here.\n\n[tools]\n${officeLines.join("\n")}\n`);
-
-  expect(oldToolFragments(loadOffice(office))).toEqual([
-    ".office/mise/demo.toml holds its package's tools in a [tools] table, as earlier releases wrote it (office sync moves them to machine.packages.toml)",
-    ".office/mise/office.toml holds its package's tools in a [tools] table, as earlier releases wrote it (office sync moves them to machine.packages.toml)",
-    ".office/mise/other.toml holds its package's tools in a [tools] table, as earlier releases wrote it (office sync moves them to machine.packages.toml)",
-  ]);
-
-  const moved = moveFragmentTools(loadOffice(office));
-
-  expect(moved).toEqual([
-    expect.stringMatching(/^moved package office's tools \(sops .*\) from \.office\/mise\/office\.toml to machine\.packages\.toml, where office sync keeps every package's tools$/),
-    "moved package demo's tools (jq 1.7.1, bun 1.5.0) from .office/mise/demo.toml to machine.packages.toml, where office sync keeps every package's tools",
-    "moved package other's tools (bun 1.4.4) from .office/mise/other.toml to machine.packages.toml, where office sync keeps every package's tools",
-    "deleted .office/mise/office.toml, which held only package office's tools",
-    "deleted .office/mise/demo.toml, which held only package demo's tools",
-    ".office/mise/other.toml now holds only package other's mise setup",
-  ]);
-  expect(lines()).toEqual(['"jq" = "1.7.1" # demo', '"bun" = "1.5.0" # demo, other']);
-  expect(readFileSync(join(office, ".office/mise/other.toml"), "utf8")).toEndWith('so it applies in every folder.\n\n# Its setup.\n[vars]\nx = "y"\n');
-  expect(moveFragmentTools(loadOffice(office))).toEqual([]);
-  expect(oldToolFragments(loadOffice(office))).toEqual([]);
-
-  // other declares no setup, so sync deletes what was left of its fragment.
-  expect(await sync(loadOffice(office))).toEqual([
-    "rewrote the comments of machine.packages.toml, which say who changes what in it and which packages need each tool",
-    "deleted .office/mise/other.toml, as package other has no mise setup here",
-  ]);
-  expect(packages()).toContain("# Projected for container mode.");
-  expect(await sync(loadOffice(office))).toEqual([]);
-});
-
-test("the move keeps a version the office bumped, and sync then raises one below a package's", async () => {
-  demo('tools:\n  jq: "1.7.1"\n');
-  await sync(loadOffice(office));
-  rmSync(join(office, "machine.packages.toml"));
-  write(fragment(), '# The mise tools of package demo. x\n\n[tools]\n"jq" = "1.6.0"\n');
-  demo('tools:\n  jq: "1.7.1"\n  bun: "1.4.4"\n');
-
-  const changes = await sync(loadOffice(office));
-
-  expect(changes).toContain("raised jq from 1.6.0 to 1.7.1 in machine.packages.toml: package demo needs at least 1.7.1");
-  expect(changes).toContain("added bun 1.4.4 to machine.packages.toml, which package demo declares");
-  expect(lines()).toEqual(['"jq" = "1.7.1" # demo', '"bun" = "1.4.4" # demo']);
-  expect(existsSync(fragment())).toBe(false);
 });
 
 test("the required office package, which office.yaml never lists, gets its tools like any package; .office.json is the office's record, so the pulled-in package isn't edited", async () => {

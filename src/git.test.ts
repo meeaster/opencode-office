@@ -221,8 +221,8 @@ test("a fresh clone of a commit holds every seed its receipts name, byte for byt
   expect(storedSeedProblems(clone)).toEqual([]);
 });
 
-// One full sync: the block is written after plugins and skills are both linked, replaces the line an
-// earlier release wrote, and a second sync leaves it alone.
+// One full sync: the block is written after plugins and skills are both linked, after the owner's
+// lines, and a second sync leaves it alone.
 test("sync of an office that is a Git worktree excludes its plumbing in the exclude file its repository shares", async () => {
   const main = join(dir, "main");
   const office = join(dir, "office");
@@ -239,8 +239,7 @@ test("sync of an office that is a Git worktree excludes its plumbing in the excl
   git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "--allow-empty", "-m", "init"], main);
   git(["worktree", "add", "--quiet", office], main);
   mkdirSync(join(main, ".git/info"), { recursive: true });
-  // The owner's line, and one an earlier release wrote for a clone in .opencode/plugins/.
-  writeFileSync(exclude, "# mine\n/.opencode/plugins/demo/\n");
+  writeFileSync(exclude, "# mine\n");
   writeFileSync(join(office, "office.yaml"), `name: t\nplugins: [{ name: demo, repo: ${upstream} }]\nskills: { enabled: [alpha] }\n`);
   mkdirSync(join(office, "skills/alpha"), { recursive: true });
   writeFileSync(join(office, "skills/alpha/SKILL.md"), "---\nname: alpha\ndescription: fixture\n---\n");
@@ -282,7 +281,7 @@ function linkedOffice(office: string) {
   link("../../../skills/alpha", "builder/.opencode/skills/alpha");
 }
 
-test("info/exclude: a malformed block is left alone and reported, CRLF endings are kept, and only declared clones' legacy lines go", () => {
+test("info/exclude: a malformed block is left alone and reported, CRLF endings are kept, and the file is replaced whole", () => {
   const office = join(dir, "office");
   const exclude = join(office, ".git/info/exclude");
   linkedOffice(office);
@@ -313,13 +312,13 @@ test("info/exclude: a malformed block is left alone and reported, CRLF endings a
   expect(plumbing()).toEqual(["excluded /.opencode/plugins/common from commits (info/exclude)"]);
   expect(readFileSync(exclude, "utf8")).toBe(`# mine\r\n/owner\r\n${block("\r\n")}`);
 
-  // Legacy per-clone lines go only for names plugins: declares; the owner's line of that shape stays.
-  writeFileSync(exclude, "/.opencode/plugins/private-wip/\n/.opencode/plugins/imported/\n/.office-plugin-*/\n", { mode: 0o600 });
+  // The owner's lines stay, every one, the block after them.
+  writeFileSync(exclude, "/.opencode/plugins/private-wip/\n", { mode: 0o600 });
   // A common umask, so a narrower mode than 0644 shows (a 077 umask would hide it).
   const umask = process.umask(0o022);
 
   try {
-    expect(plumbing()).toContain("replaced 2 plugin exclude lines earlier releases wrote with the office sync block (info/exclude)");
+    expect(plumbing()).toContain("excluded /.office/* from commits (info/exclude)");
   } finally {
     process.umask(umask);
   }
@@ -341,14 +340,12 @@ test("info/exclude holds Office's plumbing in one block after the owner's lines,
 
   git(["init", "--quiet", office]);
   writeFileSync(join(office, ".gitignore"), "/builder/repos/\n");
-  // The owner's lines, one an earlier release wrote for a clone in .opencode/plugins/, and the block
-  // as the release before the seed store wrote it.
-  writeFileSync(exclude, `# the owner's\n*.log\n/.opencode/plugins/imported/\n${excludeStart}\n/.office/\n${excludeEnd}\n/after\n`);
+  // The owner's lines around a block that holds other lines than office sync wants.
+  writeFileSync(exclude, `# the owner's\n*.log\n${excludeStart}\n/.office/\n${excludeEnd}\n/after\n`);
   const block = (lines: string[]) => [excludeStart, "/.office/*", "!/.office/seeds/", "/packages/node_modules/", ...lines, excludeEnd].join("\n");
   const all = block(["/.opencode/plugins/common", "/.opencode/plugins/imported", "/.opencode/plugins/office", "/.opencode/skills/alpha", "/builder/.opencode/skills/alpha"]);
   const changes = excludePlumbing(loadOffice(office));
 
-  expect(changes).toContain("replaced 1 plugin exclude line earlier releases wrote with the office sync block (info/exclude)");
   expect(changes).toContain("excluded /.office/* from commits (info/exclude)");
   expect(changes).toContain("stopped excluding /.office/seeds/ from commits (info/exclude)");
   expect(changes).toContain("stopped excluding /.office/ from commits (info/exclude)");

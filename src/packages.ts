@@ -34,7 +34,7 @@ import { settingsEnv } from "../standard/compose/services.ts";
 import { gateDefaultProblem, systemSection } from "./package-system.ts";
 import { check, MalformedSettings, officeRelativePath, type PackageManifest, type Parsed, type SettingValue, settingVariable } from "./schema.ts";
 import { applySeeds, seedFolder, settleReceipts, sha256 } from "./seeds.ts";
-import { build, buildCommit, builtinFiles, builtinPackages, toolRepository } from "./tool.ts";
+import { build, buildCommit, builtinFiles, builtinPackages } from "./tool.ts";
 
 /** Where a pulled-in package records where it came from and the hash of each of its files. */
 export const sourceFile = ".source.json";
@@ -53,14 +53,8 @@ export const settingsFile = ".settings.json";
  */
 export const officeFile = ".office.json";
 
-/**
- * Where earlier releases listed the seed files a package handled. Office no longer reads it, but
- * leaves a leftover one in place: it stays out of the content hash and across updates.
- */
-const legacyRecord = ".template.json";
-
 /** The office's own records in a package folder, left out of its file hashes. */
-const records = [sourceFile, settingsFile, legacyRecord, officeFile];
+const records = [sourceFile, settingsFile, officeFile];
 
 /** The name of the SDK every package can import as `@office/sdk`, which no package can have. */
 export const sdkName = "sdk";
@@ -136,21 +130,6 @@ export function localFolders(office: Office): string[] {
   return folders(join(office.dir, "packages")).filter((name) => name !== "node_modules");
 }
 
-/** Whether `repo` is this tool's own repository, which publishes the built-in packages. */
-function isToolRepository(repo: string): boolean {
-  return repo.replace(/\/+$/, "").replace(/\.git$/, "") === `https://github.com/${toolRepository}`;
-}
-
-/** The historical first-party migration is not a claim on names shipped by future executables. */
-function historicalSource(name: string, source: { repo: string; path: string }) {
-  return ["office", "browser", "knowledge", "design", "aws-emulator", "artifact-share"].includes(name)
-    && isToolRepository(source.repo) && source.path === `packages/${name}`;
-}
-
-export function legacyBuiltin(entry: PackageEntry): boolean {
-  return entry.source !== undefined && entry.source.track === undefined && historicalSource(entry.name, entry.source);
-}
-
 function ownershipProblems(office: Pick<Office, "dir" | "packages">, builtins: string[], only?: string, live = false): PackageProblem[] {
   const problems: PackageProblem[] = [];
 
@@ -161,17 +140,14 @@ function ownershipProblems(office: Pick<Office, "dir" | "packages">, builtins: s
 
     const entry = office.packages.find(item => item.name === name);
     const local = localDir(office, name);
-    const record = readRecord(local);
-    const legacy = entry !== undefined && legacyBuiltin(entry);
-    const migratedCopy = legacy && record !== undefined && "repo" in record && record.repo === entry.source?.repo && record.path === entry.source.path;
 
-    if (existsSync(local) && !migratedCopy) problems.push({ packages: [name], message: `built-in package ${name} conflicts with local ${relative(office.dir, local)}; rename one before syncing` });
+    if (existsSync(local)) problems.push({ packages: [name], message: `built-in package ${name} conflicts with local ${relative(office.dir, local)}; rename one before syncing` });
 
-    if (entry?.source && !legacy) problems.push({ packages: [name], message: `built-in package ${name} conflicts with ${entry.source.repo}@${entry.source.ref}:${entry.source.path}; rename one before syncing` });
-    else if (!legacy) {
+    if (entry?.source) problems.push({ packages: [name], message: `built-in package ${name} conflicts with ${entry.source.repo}@${entry.source.ref}:${entry.source.path}; rename one before syncing` });
+    else {
       const installed = readRecord(pulledDir(office, name));
 
-      if (installed && "repo" in installed && !historicalSource(name, installed)) problems.push({ packages: [name], message: `built-in package ${name} conflicts with installed ${installed.repo}@${installed.ref}:${installed.path}; move the existing copy before syncing` });
+      if (installed && "repo" in installed) problems.push({ packages: [name], message: `built-in package ${name} conflicts with installed ${installed.repo}@${installed.ref}:${installed.path}; move the existing copy before syncing` });
 
       // A live load never reads the saved file: such a copy then fails its own source check.
       if (!live && requiredPackages.includes(name) && name !== "office" && !installed && existsSync(pulledDir(office, name))) {
@@ -229,9 +205,6 @@ export function resolvePackages(office: Pick<Office, "dir" | "packages">, only?:
 
       continue;
     }
-
-    // A note, not a failure, for a live load: the package still loads, and check and sync handle the entry.
-    if (entry.source !== undefined && !live) problem(`the entry takes the built-in package ${entry.name} from the tool's repository; office sync drops its repo, path and ref, so it follows this office executable`);
 
     packages.push({ entry, kind: "built-in", dir: pulledDir(office, entry.name) });
   }
@@ -319,7 +292,7 @@ async function replaceFolder<Result>(dir: string, fill: (staging: string) => Res
   try {
     const result = await fill(staging);
 
-    for (const kept of [settingsFile, legacyRecord, officeFile]) {
+    for (const kept of [settingsFile, officeFile]) {
       if (existsSync(join(dir, kept))) copyFileSync(join(dir, kept), join(staging, kept));
     }
 
@@ -941,16 +914,13 @@ export function writePackageSettings(office: Office, installed: InstalledPackage
  * Writes a package's settings file and .office.json, and applies its `seed/` (its seed files): each
  * path with no receipt in office.lock is copied to the same path in the office, unless a file is
  * already there, and from then on the office owns it; a file still unchanged is replaced when the
- * package's seed changes (src/seeds.ts). A `template/` folder, which earlier
- * releases read, is not read; a line says so. Returns one line per change.
+ * package's seed changes (src/seeds.ts). Returns one line per change.
  */
 export function installPackage(office: Office, installed: InstalledPackage): string[] {
   const changes: string[] = [];
   const name = installed.entry.name;
 
   changes.push(...writePackageSettings(office, installed));
-
-  if (existsSync(join(installed.dir, "template"))) changes.push(`package ${name} has a template/ folder, which office no longer reads; rename it ${seedFolder}/ to seed its files`);
 
   const folder = join(installed.dir, seedFolder);
   const files = filesIn(folder);

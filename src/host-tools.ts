@@ -7,8 +7,7 @@
 //   (`office upgrade-tools` bumps them). The CLI runs the version that file pins, as mise installed
 //   it, found through `mise which --tool`: no shims, PATH, link or consent needed, so it works from
 //   cron, systemd timers and CI, in either mode, before office sync has linked anything. Until that
-//   version is installed, the newest copy found anywhere serves: one mise installed, on PATH, or a
-//   private one an earlier release left in host-tools.
+//   version is installed, the newest copy found serves: one mise installed, or one on PATH.
 //
 // `office setup` installs the pinned versions with mise into mise's own install folder (through
 // Socket Firewall where it applies), the same installs a host-mode office's links then select, so
@@ -17,7 +16,7 @@
 // with every version.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -27,7 +26,7 @@ import { fetchBytes } from "./download.ts";
 import { toolPins } from "./mise-toml.ts";
 import { type Office, OfficeError } from "./office.ts";
 import { floors } from "../packages/office/floors.ts";
-import { cliToolsPackage, fragmentPath, packagesFile, packagesPath } from "./package-tools.ts";
+import { packagesFile, packagesPath } from "./package-tools.ts";
 import { newestRelease, type Candidate } from "./releases.ts";
 import { check } from "./schema.ts";
 import { compareVersions } from "./versions.ts";
@@ -90,8 +89,8 @@ function reported(tool: Tool, path: string): InstalledTool | undefined {
   return undefined;
 }
 
-/** The newest of the copy on PATH and the private one in host-tools; PATH wins ties. */
-export function installedTool(tool: Tool): InstalledTool | undefined {
+/** The newest of the mise on PATH and the private one in host-tools; PATH wins ties. */
+export function installedTool(tool: "mise"): InstalledTool | undefined {
   const external = reported(tool, tool);
   const managed = reported(tool, join(hostToolsRoot(), "bin", tool));
 
@@ -160,16 +159,12 @@ function newestMiseInstall(mise: string, command: OfficeCommand): InstalledTool 
   return newest === undefined ? undefined : miseCopy(mise, command, newest);
 }
 
-/**
- * The versions `machine.packages.toml` pins for the office package's tools: the office's own
- * choice. An office an earlier release laid out, until office sync moves them, has them in
- * `.office/mise/office.toml`.
- */
+/** The versions `machine.packages.toml` pins for the office package's tools: the office's own choice. */
 export function officePins(office: Office): Record<string, string> {
-  const path = [packagesPath(office), fragmentPath(office, cliToolsPackage)].find((candidate) => existsSync(candidate));
+  const path = packagesPath(office);
   const tools = Object.keys(startingVersions());
 
-  return path === undefined ? {} : Object.fromEntries(toolPins(readFileSync(path, "utf8")).filter((pin) => tools.includes(pin.tool)).map((pin) => [pin.tool, pin.version]));
+  return !existsSync(path) ? {} : Object.fromEntries(toolPins(readFileSync(path, "utf8")).filter((pin) => tools.includes(pin.tool)).map((pin) => [pin.tool, pin.version]));
 }
 
 /** Embedded floors work even when installed packages cannot load. */
@@ -187,7 +182,7 @@ export type OfficeTool = InstalledTool & { pinned: string | undefined; managed: 
 
 /**
  * A command of the office package's tools: the version `machine.packages.toml` pins, as mise
- * installed it, else the newest copy mise installed, on PATH or in host-tools.
+ * installed it, else the newest copy mise installed or on PATH.
  */
 export function officeTool(office: Office, command: OfficeCommand): OfficeTool | undefined {
   const pinned = officePins(office)[packageTool[command]];
@@ -196,7 +191,7 @@ export function officeTool(office: Office, command: OfficeCommand): OfficeTool |
 
   if (exact !== undefined) return { ...exact, pinned, managed: true };
 
-  const found = [mise === undefined ? undefined : newestMiseInstall(mise, command), installedTool(command)]
+  const found = [mise === undefined ? undefined : newestMiseInstall(mise, command), reported(command, command)]
     .filter((candidate) => candidate !== undefined)
     .sort((left, right) => compareVersions(left.version, right.version))
     .at(-1);
@@ -286,17 +281,6 @@ function relink(link: string, target: string): void {
   }
 }
 
-/** Whether anything, a dangling link included, is at `path`. */
-function occupied(path: string): boolean {
-  try {
-    lstatSync(path);
-
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Where `path` leads, or undefined for a dangling link or nothing. */
 function resolved(path: string): string | undefined {
   try {
@@ -306,40 +290,15 @@ function resolved(path: string): string | undefined {
   }
 }
 
-/**
- * Removes what earlier releases installed privately in host-tools once the office's copy of the
- * same command is installed: their sops, age and age-keygen links, and their own mise folders once
- * nothing links into them. `bin/gh` becomes the link to the office's gh. Returns what it did.
- */
-function retirePrivateCopies(installed: Map<OfficeCommand, InstalledTool>): string[] {
-  const root = hostToolsRoot();
-  const lines: string[] = [];
+/** Points `bin/gh` in host-tools at the office's gh, so git's credential helper keeps one path across versions. */
+function linkGh(installed: Map<OfficeCommand, InstalledTool>): string[] {
   const gh = installed.get("gh");
 
-  if (gh !== undefined && resolved(ghLink()) !== resolved(gh.path)) {
-    relink(ghLink(), gh.path);
-    lines.push(`gh: ${ghLink()} now links to gh ${gh.version}, the office's, so git's credential helper keeps one path across versions`);
-  }
+  if (gh === undefined || resolved(ghLink()) === resolved(gh.path)) return [];
 
-  for (const command of required) {
-    const path = join(root, "bin", command);
+  relink(ghLink(), gh.path);
 
-    if (!installed.has(command) || !occupied(path)) continue;
-
-    rmSync(path);
-    lines.push(`${command}: removed ${path}, a private copy from an earlier release; office runs the office's ${command} ${installed.get(command)?.version}`);
-  }
-
-  const privateMise = join(root, "mise");
-  const bin = join(root, "bin");
-  const linked = existsSync(bin) && readdirSync(bin).some((name) => resolved(join(bin, name))?.startsWith(`${privateMise}/`));
-
-  if (existsSync(privateMise) && !linked) {
-    rmSync(privateMise, { recursive: true, force: true });
-    lines.push(`removed ${privateMise}, where earlier releases installed private copies of these tools`);
-  }
-
-  return lines;
+  return [`gh: ${ghLink()} now links to gh ${gh.version}, the office's, so git's credential helper keeps one path across versions`];
 }
 
 function describe(tool: string, installed: InstalledTool | undefined, version: string): void {
@@ -455,7 +414,7 @@ export async function onboardHostTools(
     }
   }
 
-  for (const line of retirePrivateCopies(installed)) say(line);
+  for (const line of linkGh(installed)) say(line);
 
   if (failed.length === 0 && broken.length === 0) {
     say(`The office's tools: ${names}, installed by mise`);

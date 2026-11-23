@@ -1,4 +1,4 @@
-// A system recipe (or legacy `system` declaration): what it sets up in a host-mode office's
+// A system recipe (or a definition's `system` declaration): what it sets up in a host-mode office's
 // machine with the operating system's package manager, such as the browser package's Google Chrome.
 // It applies only while the package's own setting for it is on (it defaults to off: the office opts
 // in), the office runs OpenCode on the host, and the machine is one of the platforms the block names.

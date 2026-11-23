@@ -13,7 +13,7 @@ import { parseManifest } from "./schema.ts";
 import { wrappedCommands } from "./sfw.ts";
 import { configureStartup } from "./shell-startup.ts";
 import { defaultPins, hostPlatform } from "./versions.ts";
-import { packageJsonText, writePackage } from "./test-package.ts";
+import { writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -247,29 +247,6 @@ test("one failed read and one deselection keep and withdraw their respective mac
   expect(env).toContain("demo-bin");
   expect(env).not.toContain("OTHER_MODE");
   expect(env).not.toContain("other-bin");
-});
-
-test("an older combined environment is kept until sync can record its owners", async () => {
-  makeOffice({ firewall: false, host: "host: {env: {DEMO_MODE: on}}\n" });
-  grantConsent(loadOffice(office));
-  const run = () => sync(loadOffice(office), { scope: "packages" });
-  await run();
-  const record = readMachine();
-
-  if (!record) throw new Error("missing fixture record");
-
-  for (const file of record.files) if (file.kind === "file") delete file.contributions;
-  const path = join(dir, "record/machine.json");
-  write(path, JSON.stringify(record));
-  const before = readFileSync(envFilePath(), "utf8");
-  writePackage(join(office, "packages/demo/office.ts"), "throw Error('conflict')");
-  expect((await run()).join("\n")).toContain("predates package ownership records");
-  expect(readFileSync(envFilePath(), "utf8")).toBe(before);
-  expect(readFileSync(path, "utf8")).toBe(JSON.stringify(record));
-  rmSync(join(office, "packages/demo/office.ts"));
-  write(join(office, "packages/demo/package.json"), packageJsonText("demo", "package.yaml"));
-  expect((await run()).join("\n")).not.toContain("FAILED");
-  expect(readFileSync(path, "utf8")).toContain("DEMO_MODE");
 });
 
 test("a host block's folders and variables are plain: no shell code, PATH separators or variables office sets", () => {

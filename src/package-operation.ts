@@ -81,7 +81,7 @@ export async function runReader(dir: string, args: string[]) {
   if (!active) return;
   const folder = managedDirectory(dir, active.name);
 
-  // An adopted set holds no selection until the first candidate publishes.
+  // An office's first generation holds no selection until the first candidate publishes.
   if (!existsSync(join(folder, "selection.json"))) return;
 
   return run(["--package-reader", dir, active.name, ...args], active.fd);

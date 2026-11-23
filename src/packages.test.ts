@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -9,7 +9,6 @@ import { git } from "./git.ts";
 import { loadOffice } from "./office.ts";
 import { settingsEnv } from "./package-services.ts";
 import { fetchPackage, installPackage, readPackage, resolvePackages } from "./packages.ts";
-import { toolRepository } from "./tool.ts";
 import { recordRequiredBuiltins } from "./test-builtin-record.ts";
 import { readLockSection } from "./versions.ts";
 import { definitionText, settingsSchema, writePackage } from "./test-package.ts";
@@ -481,36 +480,6 @@ test("a pulled-in package deselected before a fresh clone installed it settles i
   expect(storedSeeds(office)).toEqual(seeds);
 });
 
-test("an earlier release's template/ folder isn't read and sync says so; renamed seed/, its files already there are recorded as such, and .template.json stays", () => {
-  const office = join(dir, "office");
-  const record = '["notes/AGENTS.md"]\n';
-
-  write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
-  writePackage(join(office, "packages/demo/package.yaml"), "{}\n");
-  write(join(office, "packages/demo/template/notes/AGENTS.md"), "from the package\n");
-  write(join(office, "packages/demo/template/notes/new.md"), "from the package\n");
-  write(join(office, "packages/demo/.template.json"), record);
-  write(join(office, "notes/AGENTS.md"), "from the package\n");
-
-  const install = () => {
-    const { loaded, result } = read(office, "demo");
-
-    if (!result.ok) throw new Error(result.errors.join("\n"));
-
-    return installPackage(loaded, result.value).filter((line) => !line.startsWith("wrote"));
-  };
-
-  expect(install()).toEqual(["package demo has a template/ folder, which office no longer reads; rename it seed/ to seed its files"]);
-  expect(existsSync(join(office, "notes/new.md"))).toBe(false);
-  expect(receipts(office)).toEqual({});
-
-  renameSync(join(office, "packages/demo/template"), join(office, "packages/demo/seed"));
-  expect(install()).toEqual(["kept notes/AGENTS.md, which was already there, instead of package demo's copy", "created notes/new.md from package demo"]);
-  expect(receipts(office)).toEqual({ "notes/AGENTS.md": { package: "demo", existing: true }, "notes/new.md": { package: "demo", sha256: createHash("sha256").update("from the package\n").digest("hex") } });
-  expect(readFileSync(join(office, "notes/AGENTS.md"), "utf8")).toBe("from the package\n");
-  expect(readFileSync(join(office, "packages/demo/.template.json"), "utf8")).toBe(record);
-});
-
 test("sync locks a Git package's commit in office.lock, keeps the entry when a changed ref fails, and drops it with the package", async () => {
   const repo = join(dir, "repo");
   const office = join(dir, "office");
@@ -605,22 +574,6 @@ test("an entry without repo is built-in when shipped and local otherwise; the re
   ]);
   // A package called sdk would take @office/sdk's place in the package set.
   expect(problems).toEqual([{ packages: ["sdk"], message: "the name sdk is reserved for @office/sdk; rename the package" }]);
-});
-
-test("a live load takes an entry naming the built-in's historical source as a note, not a problem; its copy is still checked", () => {
-  const office = join(dir, "office");
-
-  write(join(office, "office.yaml"), `name: t\npackages:\n  - name: knowledge\n    repo: https://github.com/${toolRepository}.git\n    path: packages/knowledge\n    ref: main\n`);
-  writePackage(join(office, ".office/packages/knowledge/package.yaml"), "# Not the tool's copy.\n{}\n");
-  const loaded = loadOffice(office);
-  const live = resolvePackages(loaded, undefined, true);
-  const knowledge = live.packages.find(item => item.entry.name === "knowledge");
-
-  expect(live.problems).toEqual([]);
-  expect(knowledge?.kind).toBe("built-in");
-  expect(resolvePackages(loaded).problems.map(problem => problem.message)).toEqual([expect.stringContaining("takes the built-in package knowledge from the tool's repository")]);
-  // A copy without its record still fails its source check when it loads.
-  expect(knowledge && readPackage(loaded, knowledge).ok).toBe(false);
 });
 
 test("sync installs the built-in packages from the tool and restores an edited copy, keeping the office's records", async () => {

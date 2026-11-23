@@ -10,7 +10,6 @@ import { installedPackages } from "../layout.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
 import type { InstalledPackage } from "../packages.ts";
 import { ports } from "./compose.ts";
-import { oldExecutorAppDirs } from "../executor-app-layout.ts";
 import { adoptionMarker, adoptCatalog, catalogPlan, installedApps, installMissing, parseExecutor, type ExecutorApp } from "./catalog-apps.ts";
 import { output, progress, say, streamChecked } from "../report/index.ts";
 
@@ -53,10 +52,6 @@ function packageAppFolders(office: Office): AppFolder[] {
 
 /** The Executor app sources shared by the office, local to each desk, and shipped by packages. */
 export function appFolders(office: Office): AppFolder[] {
-  const [old] = oldExecutorAppDirs(office);
-
-  if (old) throw new OfficeError(`${old} still uses the previous Executor app layout; run office sync`);
-
   const folders = [...officeAppFolders(office), ...packageAppFolders(office)];
   const seen = new Map<string, string>();
 

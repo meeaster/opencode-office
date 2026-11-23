@@ -173,13 +173,13 @@ function nextLine(text: string, at: number): number {
 }
 
 /**
- * The edit that sets one runtime's version under `block` (`tools`, or `versions` before it): the
+ * The edit that sets one runtime's version under `tools`: the
  * version's text replaced in the short form (`opencode: 2.3.2`) or in a mapping, flow or block
  * (`{ version: 2.3.2, minimum_release_age: 0d }`), in the quotes it had; a mapping without one gets
  * `version` first; a runtime the block doesn't list is added after its last entry, in the short form.
  */
-function versionEdit(document: Document, text: string, block: "tools" | "versions", tool: PinnedTool, version: string): Edit {
-  const entry = document.getIn([block, tool], true);
+function versionEdit(document: Document, text: string, tool: PinnedTool, version: string): Edit {
+  const entry = document.getIn(["tools", tool], true);
   const scalar = isMap(entry) ? entry.get("version", true) : entry;
 
   if (isScalar(scalar) && scalar.range !== undefined && scalar.range !== null) {
@@ -201,7 +201,7 @@ function versionEdit(document: Document, text: string, block: "tools" | "version
     if (start !== undefined) return { start, end: start, value: `version: ${version}\n${" ".repeat(columnOf(text, start))}` };
   }
 
-  const map = document.get(block, true);
+  const map = document.get("tools", true);
 
   if (entry === undefined && isMap(map) && map.flow !== true && map.items.length > 0) {
     const first = map.items[0].key;
@@ -217,18 +217,16 @@ function versionEdit(document: Document, text: string, block: "tools" | "version
     }
   }
 
-  throw new OfficeError(`set ${block}.${tool} to ${version} in office.yaml by hand`);
+  throw new OfficeError(`set tools.${tool} to ${version} in office.yaml by hand`);
 }
 
 /**
- * Rewrites only the text of each moved version in office.yaml, under `tools` or, in an office.yaml
- * from before it, `versions`, so every comment, quote and the layout stay as the user wrote them.
- * It never moves an office.yaml from `versions` to `tools`.
+ * Rewrites only the text of each moved version under office.yaml's `tools`, so every comment,
+ * quote and the layout stay as the user wrote them.
  */
 export function setVersions(text: string, moves: { tool: PinnedTool; to: string }[]): string {
   const document = parseDocument(text, { keepSourceTokens: true });
-  const block = document.has("tools") ? "tools" : "versions";
-  const edits = moves.map((move) => versionEdit(document, text, block, move.tool, move.to));
+  const edits = moves.map((move) => versionEdit(document, text, move.tool, move.to));
 
   return edits.sort((left, right) => right.start - left.start).reduce((result, edit) => `${result.slice(0, edit.start)}${edit.value}${result.slice(edit.end)}`, text);
 }

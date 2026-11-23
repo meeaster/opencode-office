@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { git } from "./git.ts";
+import { lockSections, packageSectionKey, readLockText } from "./versions.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
 import { definitionText, writePackage } from "./test-package.ts";
 
@@ -88,8 +89,13 @@ test("recovery checks every discovery destination before rolling the pending jou
   rmSync(current);
   symlinkSync(`generations/${previous}`, current);
   const journal = join(dir, ".office/publishing.json");
-  const digest = new Bun.CryptoHasher("sha256").update(read(join(dir, "office.yaml"))).digest("hex");
-  write(journal, JSON.stringify({ previous, candidate, before: digest, after: digest }));
+  const sha256 = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex");
+  const digest = sha256(read(join(dir, "office.yaml")));
+  const locked = lockSections(readLockText(dir)).packages;
+
+  if (!locked.ok) throw locked.error;
+  const section = sha256(packageSectionKey(locked.value));
+  write(journal, JSON.stringify({ previous, candidate, before: digest, after: digest, lock: { before: section, after: section, packages: Object.fromEntries(locked.value) } }));
   const bridge = join(dir, ".office/resolved/references.json");
   rmSync(bridge);
   write(join(bridge, "mine"), "keep");
@@ -109,7 +115,7 @@ test("recovery checks every discovery destination before rolling the pending jou
   expect(read(join(`${bridge}.saved`, "mine"))).toBe("keep");
 });
 
-test("checking out a tracked package tree blocks writers; switching back restores discovery and plugins", () => {
+test("checking out a tracked package tree, a real folder where a discovery link belongs, blocks writers; switching back restores discovery and plugins", () => {
   const { dir, cli } = fixture("tracked-history");
   const yaml = join(dir, "office.yaml");
   write(yaml, "name: history\npackages: []\n");
@@ -126,7 +132,7 @@ test("checking out a tracked package tree blocks writers; switching back restore
   git(["rm", "-qr", ".office/packages"], dir);
   commit(dir);
   git(["checkout", "-q", legacy], dir);
-  expect(cli(1, "sync", "--packages")).toContain("tracked in Git");
+  expect(cli(1, "sync", "--packages")).toContain(`expected ${packages} to link to current/packages; move the conflicting entry aside`);
   expect(read(saved)).toBe("tracked renderer");
   expect(readlinkSync(current)).toBe(before);
   git(["checkout", "-q", "-"], dir);
@@ -321,7 +327,7 @@ test("nothing loads without a published package set: a fresh clone, or a first s
     expect(cli(2, "packages", "bogus"), stage).toBe("Unknown command or options: packages bogus; see office --help\n");
     expect(existsSync(probe), stage).toBe(false);
 
-    // A first sync that refuses its candidate leaves an adopted, empty set.
+    // A first sync that refuses its candidate leaves the first, empty generation.
     writePackage(definition, definitionText(`{commands:{"sync extra":{summary:"Show",run(){}}}}`, `${marker}`));
     expect(cli(1, "sync", "--packages")).toContain("command sync extra is reserved");
     expect(existsSync(join(dir, ".office/current"))).toBe(true);

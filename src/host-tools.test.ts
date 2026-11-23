@@ -191,16 +191,14 @@ test("an authorized setup installs the office's pinned versions with mise, from 
   expect(requests().some((request) => request.args[0] === "install")).toBe(false);
 });
 
-test("the office's pins are its tools in machine.packages.toml only, else an earlier release's .office/mise/office.toml", () => {
+test("the office's pins are its tools in machine.packages.toml, and none without that file", () => {
   expect(officePins(office(pins))).toEqual(pins);
 
   const root = join(dir, "office");
 
   rmSync(join(root, "machine.packages.toml"));
-  mkdirSync(join(root, ".office/mise"), { recursive: true });
-  writeFileSync(join(root, ".office/mise/office.toml"), '# The mise tools of package office.\n[tools]\n"gh" = "2.105.0"\n');
 
-  expect(officePins(loadOffice(root))).toEqual({ gh: "2.105.0" });
+  expect(officePins(loadOffice(root))).toEqual({});
 });
 
 test("before sync writes machine.packages.toml, setup installs the package's starting versions", async () => {
@@ -238,24 +236,15 @@ test("declining keeps compatible tools on PATH, with one prompt and no install",
   expect(officeTool(office(), "sops")?.version).toBe("3.12.0");
 });
 
-test("once the office's copies are installed, an earlier release's private copies in host-tools go, and bin/gh links to the office's gh", async () => {
+test("once the office's gh is installed, bin/gh in host-tools links to it, replacing a link to another gh", async () => {
   fakeMise();
-
-  const privateCopies = join(hostToolsRoot(), "mise/data/installs");
-
+  executable(join(dir, "other/gh"), "gh 2.103.3");
   mkdirSync(join(hostToolsRoot(), "bin"), { recursive: true });
-
-  for (const [command, version] of [["sops", "3.13.0"], ["age", "1.2.0"], ["age-keygen", "1.2.0"], ["gh", "2.103.3"]]) {
-    executable(join(privateCopies, command), `${command} ${version}`);
-    symlinkSync(join(privateCopies, command), join(hostToolsRoot(), "bin", command));
-  }
+  symlinkSync(join(dir, "other/gh"), ghLink());
 
   await onboardHostTools(office(pins), true, undefined, { lookupMise: async () => candidate() });
 
-  for (const command of ["sops", "age", "age-keygen"]) expect(existsSync(join(hostToolsRoot(), "bin", command))).toBe(false);
-
   expect(readlinkSync(ghLink())).toBe(join(installs(), "gh/2.104.0/gh"));
-  expect(existsSync(join(hostToolsRoot(), "mise"))).toBe(false);
 });
 
 test("a required tool mise didn't install fails setup; an optional one only warns", async () => {

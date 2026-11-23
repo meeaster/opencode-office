@@ -243,13 +243,9 @@ test("a group missing a skill at the new tag, edited where it would be replaced,
   expect(read(join(dir, "office/skills/beta/SKILL.md"))).toBe("edited here\n");
   expect(readFileSync(join(dir, "office/skills/alpha/.source.json"), "utf8")).toContain(v100);
 
-  // Undone, the group moves; a copy recorded before hashes were is checked against its commit.
+  // Undone, the group moves.
   write(join(dir, "office/skills/beta/SKILL.md"), skill("beta 1.0"));
 
-  const legacy = JSON.parse(read(join(dir, "office/skills/alpha/.source.json")));
-
-  delete legacy.files;
-  write(join(dir, "office/skills/alpha/.source.json"), JSON.stringify(legacy));
   expect((await update("skills")).ok).toBe(true);
   expect(record("skills/alpha").commit).toBe(v120);
   expect(read(join(dir, "office/office.yaml"))).toContain(`ref: ${v120}`);

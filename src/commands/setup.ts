@@ -22,7 +22,6 @@ import { installingMise, ports, startExecutor, up } from "./compose.ts";
 import { bootstrapExecutor } from "./executor.ts";
 import { summarize, sync } from "./sync.ts";
 import { runReader } from "../package-operation.ts";
-import { checkAdoption } from "../package-generation.ts";
 
 type SetupOptions = {
   ownerEmail?: string;
@@ -47,7 +46,6 @@ async function question(ask: Ask | undefined, text: string): Promise<string> {
  * its stages reports through `reporter`; a stage that fails stops setup there.
  */
 export async function setup(initial: Office, options: SetupOptions, reporter: Reporter): Promise<void> {
-  checkAdoption(initial.dir);
   let office = initial;
   const ask = terminalAsk();
 
@@ -69,7 +67,7 @@ export async function setup(initial: Office, options: SetupOptions, reporter: Re
 
   if (options.generateAgeKey) initializeIdentity(office);
 
-  // Legacy offices with a token need no new secrets configuration. Bootstrap does need portable
+  // An office with a token needs no new secrets configuration. Bootstrap does need portable
   // owner persistence; opt in without replacing unrelated YAML or any existing source.
   const hasToken = readEnvFile(executorEnvFile(office)).EXECUTOR_TOKEN;
 

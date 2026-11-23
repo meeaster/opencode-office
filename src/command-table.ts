@@ -2,7 +2,7 @@ import type { PackageManifest } from "./schema.ts";
 
 // The core CLI owns these command families, including its non-public entrypoints. It matches its
 // own commands by exact shape, so a package name under one of these words would otherwise run.
-const reserved = new Set("help version init setup executor secrets sync skills packages seeds check refresh instructions context up down shell exec pin pair apps gui upgrade-tools update cron migrate-home env sfw-wrappers host-agent-cli-update".split(" "));
+const reserved = new Set("help version init setup executor secrets sync skills packages seeds check refresh instructions context up down shell exec pin pair apps gui upgrade-tools update cron env sfw-wrappers host-agent-cli-update".split(" "));
 
 /** A command a package declares, with its name; the definition's schema checked it. */
 export type RegisteredCommand = PackageManifest["commands"][string] & { name: string };

@@ -77,7 +77,7 @@ test("compiled offline inventory distinguishes scoped declarations, links, clone
     expect(readFileSync(path("builder/.opencode/plugins/independent.js"), "utf8")).toBe(command("native-command"));
     expect(readFileSync(path("builder/.opencode/opencode.jsonc"), "utf8")).toBe(deskConfig);
     expect(readFileSync(path(".opencode/opencode.jsonc"), "utf8")).toBe(edited);
-    // A reserved package name doesn't prove an owner directory is a legacy bundle.
+    // An owner directory with a package's name is the office's own, never replaced.
     rmSync(path(".opencode/plugins/office"));
     write(path(".opencode/plugins/office/index.js"), "// independently authored");
     expect(await f.run(["sync"], 1)).toContain("not a link office sync made");
@@ -119,25 +119,21 @@ test("ownership by target: Office's links are recognized and withdrawn by their 
   // Office's by their text alone, though nothing recorded making them: dangling and hand-made.
   symlinkSync("../../.office/packages/gone/plugin", join(plugins, "gone"));
   symlinkSync("../../.office/plugins/old-clone", join(plugins, "old-clone"));
-  symlinkSync("../../packages/retired/skills/beta", join(skills, "beta"));
   symlinkSync("../../packages/common/plugin", join(plugins, "common"));
   mkdirSync(deskSkills, { recursive: true });
   symlinkSync("../../../skills/alpha", join(deskSkills, "alpha"));
   symlinkSync("../../skills/alpha", join(deskSkills, "wrong-depth"));
   const owner = () => [readlinkSync(join(plugins, "owner-link")), readFileSync(join(plugins, "notes.txt"), "utf8"), readlinkSync(join(skills, "alias")), readlinkSync(join(deskSkills, "wrong-depth")), existsSync(path(".opencode/plugins/owner-plugin/index.js")), existsSync(join(skills, "owner-skill/SKILL.md"))];
   const kept = owner();
-  write(path(".office/resolved/opencode-links.sqlite"), "receipts of an earlier development build");
 
   select("{name: common}", "alpha, beta", "beta");
   const first = await f.run(["sync"]);
-  expect(first).toContain("removed .office/resolved/opencode-links.sqlite, the link receipts of earlier development builds");
   expect(first).toContain("unlinked .opencode/plugins/gone");
   expect(first).toContain("unlinked .opencode/plugins/old-clone");
   expect(first).toContain("unlinked builder/.opencode/skills/alpha");
   expect(first).not.toContain("linked .opencode/plugins/common");
   expect(readlinkSync(join(plugins, "common"))).toBe("../../packages/common/plugin");
   expect(readlinkSync(join(skills, "alpha"))).toBe("../../skills/alpha");
-  // A legacy package skill link is Office's, so the library skill of that name replaces it.
   expect(readlinkSync(join(skills, "beta"))).toBe("../../skills/beta");
   expect(readlinkSync(join(deskSkills, "beta"))).toBe("../../../skills/beta");
   expect(existsSync(join(plugins, "gone")) || existsSync(join(plugins, "old-clone")) || existsSync(join(deskSkills, "alpha"))).toBe(false);
@@ -172,7 +168,6 @@ test("ownership by target: Office's links are recognized and withdrawn by their 
   expect(readdirSync(deskSkills)).toEqual(["wrong-depth"]);
   expect(owner()).toEqual(kept);
   expect(readFileSync(path("builder/.opencode/plugins/independent.js"), "utf8")).toBe(command("native-command"));
-  expect(existsSync(path(".office/resolved/opencode-links.sqlite"))).toBe(false);
 
   // A redirected folder is never followed, for skills as for plugins.
   rmSync(deskSkills, { recursive: true });
@@ -241,13 +236,6 @@ test.skipIf(!launcher)("OpenCode sees the shared command in both desks, the buil
   await f.run(["sync"]);
   expect(readlinkSync(join(f.dir, ".opencode/plugins/cloned"))).toBe("../../.office/plugins/cloned");
   await f.run(["sync", "--packages"]);
-  // Where an earlier release cloned a plugin: a real checkout in .opencode/plugins/, loaded as it is.
-  const legacyRemote = join(f.home, "legacy-remote");
-  write(join(legacyRemote, "index.js"), command("legacy-command"));
-  gitAt(legacyRemote, f.env, "init", "-q");
-  gitAt(legacyRemote, f.env, "add", ".");
-  gitAt(legacyRemote, f.env, "commit", "-qm", "legacy");
-  gitAt(f.home, f.env, "clone", "-q", legacyRemote, join(f.dir, ".opencode/plugins/legacy"));
   const password = crypto.randomUUID();
 
   const server = Bun.spawn([launcher, "serve", "--hostname", "127.0.0.1", "--port", "0"], {
@@ -319,23 +307,17 @@ test.skipIf(!launcher)("OpenCode sees the shared command in both desks, the buil
       }
     };
 
-    // With both remotes unreachable, sync moves the legacy checkout and links it, and links the
-    // clone whose link was deleted, before the fetches fail; both stay loaded in the running server.
-    expect(await loads(f.dir, ["legacy-command"])).toEqual(["legacy-command"]);
+    // With the remote unreachable, sync links the clone whose link was deleted before the fetch
+    // fails; it stays loaded in the running server.
     rmSync(join(f.dir, ".opencode/plugins/cloned"));
     renameSync(remote, `${remote}.away`);
-    renameSync(legacyRemote, `${legacyRemote}.away`);
-    f.select(`packages: [{name: common}]\nplugins: [{name: cloned, repo: ${remote}}, {name: legacy, repo: ${legacyRemote}}]\n`);
-    const offline = await f.run(["sync"], 1);
-    expect(offline).toContain("moved the checkout .opencode/plugins/legacy to .office/plugins/legacy");
-    expect(readlinkSync(join(f.dir, ".opencode/plugins/legacy"))).toBe("../../.office/plugins/legacy");
+    await f.run(["sync"], 1);
     expect(readlinkSync(join(f.dir, ".opencode/plugins/cloned"))).toBe("../../.office/plugins/cloned");
     const fresh = join(f.dir, "sibling/after-offline-sync");
     mkdirSync(fresh);
 
-    for (const folder of [f.dir, join(f.dir, "builder"), fresh]) expect(await loads(folder, ["cloned-command", "legacy-command"])).toEqual(["cloned-command", "legacy-command"]);
+    for (const folder of [f.dir, join(f.dir, "builder"), fresh]) expect(await loads(folder, ["cloned-command"])).toEqual(["cloned-command"]);
     renameSync(`${remote}.away`, remote);
-    renameSync(`${legacyRemote}.away`, legacyRemote);
     f.select("");
     await f.run(["sync", "--packages"]);
     const after = join(f.repo, "after-withdrawal");

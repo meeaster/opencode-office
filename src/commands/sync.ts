@@ -1,11 +1,10 @@
 // `office sync`: makes the office's folders match office.yaml and the tool. It clones and updates,
-// moves an office from an earlier release's layout (src/migrate.ts), scaffolds desks that are
-// declared but missing, copies declared skills into the library, installs, updates, restores and
+// scaffolds desks that are declared but missing, copies declared skills into the library, installs, updates, restores and
 // removes packages, writes the mise tools packages declare into machine.packages.toml and their
 // setup into .office/mise/ (src/package-tools.ts) and, in a host-mode office the user agreed may
 // manage its machine, links them and machine.toml into mise's global conf.d (src/machine.ts), links enabled library skills and package plugins,
-// and installs package panels on the desktop app's machine. A package's skills aren't linked: its plugin registers them, so sync
-// removes the links earlier releases made. Office's links are recognized by their target
+// and installs package panels on the desktop app's machine. A package's skills aren't linked: its plugin registers them.
+// Office's links are recognized by their target
 // (standard/opencode/ownership.ts) and kept out of commits through the repository's info/exclude.
 // It never rewrites AGENTS.md, other hand-written content, an existing app or a file a package's
 // seed created; it deletes such a file only with its package, and only while unchanged.
@@ -18,19 +17,16 @@ import { unresolvedMachineOwner } from "../collect-references.ts";
 import { planReferenceApply } from "../reference-publication.ts";
 import { publishPackages } from "../package-operation.ts";
 import { editorLinks, linkForEditors } from "../package-imports.ts";
-import { checkAdoption } from "../package-generation.ts";
 import type { ReferenceSnapshot } from "../reference-snapshot.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { collectJobs } from "../../standard/cron/jobs.ts";
-import { needsEnvironmentOwners, syncMachine } from "../machine.ts";
+import { syncMachine } from "../machine.ts";
 import { cloneOrFetchStreamed, clonePluginStreamed, existingPluginDestination, git, isClone, PluginCheckoutProblem, referenceGit, referenceOriginProblem, refreshCloneStreamed, verifiedHead } from "../git.ts";
 import { type Clone, clones, type InstalledPackages, skillSelections } from "../layout.ts";
-import { cloneTarget, legacyPlugin, linkPlugins, placeLink, pluginFolder, pluginScope, requirePluginDestination, stagingFolder, withdrawDeselectedPlugins, withPluginPlan } from "../../standard/opencode/delivery.ts";
+import { cloneTarget, linkPlugins, placeLink, pluginFolder, pluginScope, requirePluginDestination, stagingFolder, withdrawDeselectedPlugins, withPluginPlan } from "../../standard/opencode/delivery.ts";
 import { validateAssets } from "../../standard/opencode/assets.ts";
 import { type Declaration, readDeclarations } from "../../standard/opencode/declarations.ts";
 import { cloneFolder, entry as entryAt, officeEntries, requireFolder } from "../../standard/opencode/ownership.ts";
-import { RenameError, renameNoReplace } from "../no-replace.ts";
-import { migrate } from "../migrate.ts";
 import { atomicWrite } from "../secrets.ts";
 import { syncTools } from "../package-tools.ts";
 import { type Desk, type Office, skillGroups } from "../office.ts";
@@ -159,20 +155,6 @@ function linkSkills(office: Office): string[] {
   return changes;
 }
 
-/**
- * Removes the knowledge plugin an earlier `office` wrote into each office, which the knowledge
- * package replaced; without that package declared, it says which entry keeps the listing.
- */
-function removeOldKnowledgePlugin(office: Office): string[] {
-  rmSync(join(office.dir, ".opencode/plugins/knowledge"), { recursive: true });
-
-  const removed = "removed .opencode/plugins/knowledge/, the knowledge plugin earlier releases of office wrote";
-
-  if (office.packages.some((entry) => entry.name === "knowledge")) return [`${removed}; the knowledge package's plugin replaces it`];
-
-  return [`${removed}. Sessions no longer list knowledge/ articles; to keep that, add \`- name: knowledge\` under packages: in office.yaml and run office sync again`];
-}
-
 const fetchSlots = 8;
 const cloneSlots = 4;
 
@@ -196,15 +178,13 @@ function requirePluginCheckout(office: Office, dir: string, url: string) {
 type LinkClaim = {
   /** Office's link to this clone was already there. */
   linked: boolean;
-  /** What moved from where earlier releases cloned. */
-  moved: string[];
+  /** The link made for a present checkout. */
+  notes: string[];
 };
 
 /**
- * Readies `.opencode/plugins/<name>` for a clone: free, or already Office's link to it. An earlier
- * release cloned into that path; such a checkout moves to `.office/plugins/<name>` when Office can
- * verify it is this plugin's (moving first, then linking, is safe while OpenCode runs). Returns
- * whether the link was there, and what moved.
+ * Readies `.opencode/plugins/<name>` for a clone: free, or already Office's link to it. Anything
+ * else there is the office's own and is refused. Returns whether the link was there, and what it linked.
  */
 function claimPluginLink(office: Office, clone: Clone): LinkClaim {
   const at = `${pluginFolder}/${clone.name}`;
@@ -214,33 +194,16 @@ function claimPluginLink(office: Office, clone: Clone): LinkClaim {
     // A present, verified checkout is linked before fetching: a fetch that fails (offline, auth)
     // must not leave it unlinked, and OpenCode then keeps loading it. A first clone is linked after
     // publication instead (linkClone).
-    if (!isClone(clone.dir) || !verifiedCheckout(office, clone.dir, clone.url)) return { linked: false, moved: [] };
+    if (!isClone(clone.dir) || !verifiedCheckout(office, clone.dir, clone.url)) return { linked: false, notes: [] };
 
-    return { linked: true, moved: linkPresent(office, clone) };
+    return { linked: true, notes: linkPresent(office, clone) };
   }
 
-  if (existing.office && existing.target === cloneTarget(clone.name)) return { linked: true, moved: [] };
+  if (existing.office && existing.target === cloneTarget(clone.name)) return { linked: true, notes: [] };
 
   if (existing.office) throw new PluginCheckoutProblem(`${at} links to a package's plugin; a package and a plugins: entry can't share a name, so rename one of them`);
 
-  if (!existing.folder || existing.target !== undefined) throw new PluginCheckoutProblem(`${at} is the office's own (not a link office sync made), kept; move it aside or rename the plugins: entry`);
-  const legacy = join(office.dir, at);
-
-  if (!verifiedCheckout(office, legacy, clone.url)) {
-    throw new PluginCheckoutProblem(`${at} is a folder office sync can't verify as this plugin's checkout (its origin, location and a commit); left unchanged. If an earlier release cloned it, check it and move it to ${cloneFolder}/${clone.name} yourself; otherwise rename one of them`);
-  }
-
-  if (lstatSync(clone.dir, { throwIfNoEntry: false })) throw new PluginCheckoutProblem(`both ${at} and ${cloneFolder}/${clone.name} exist; left unchanged. Remove the one you don't need`);
-  mkdirSync(join(office.dir, cloneFolder), { recursive: true });
-
-  try {
-    renameNoReplace(legacy, clone.dir);
-  } catch (error) {
-    throw new PluginCheckoutProblem(`could not move ${at} to ${cloneFolder}/${clone.name} (${error instanceof RenameError ? error.code : "unavailable"}); left unchanged`);
-  }
-
-  // Linked at once, so a fetch that fails afterwards can't leave the moved plugin unloaded.
-  return { linked: true, moved: [`moved the checkout ${at} to ${cloneFolder}/${clone.name}`, ...linkPresent(office, clone)] };
+  throw new PluginCheckoutProblem(`${at} is the office's own (not a link office sync made), kept; move it aside or rename the plugins: entry`);
 }
 
 /** Whether `dir` is provably this plugin's checkout, with a commit. */
@@ -366,14 +329,14 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
     };
 
     try {
-      let claim: LinkClaim = { linked: false, moved: [] };
+      let claim: LinkClaim = { linked: false, notes: [] };
 
       if (clone.kind === "plugin") {
         requirePluginDestination(office);
 
         if (lstatSync(clone.dir, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("existing symlink kept; move it aside yourself before cloning here");
         claim = claimPluginLink(office, clone);
-        noted(index, claim.moved);
+        noted(index, claim.notes);
       }
 
       const present = isClone(clone.dir);
@@ -470,10 +433,7 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
     },
   };
 
-  if (scope !== "references") {
-    checkAdoption(office.dir);
-    requirePackageOwnership(office);
-  }
+  if (scope !== "references") requirePackageOwnership(office);
 
   if (scope === "packages") {
     await syncPackages(office, changes, stage);
@@ -484,12 +444,7 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
   if (scope === "references") return syncClones(office, "references", stage, verbose);
 
   requirePluginDestination(office);
-  stage.detail("migrating, scaffolding desks, copying skills and installing packages");
-
-  const migrated = migrate(office);
-
-  office = migrated.office;
-  changes.push(...migrated.changes);
+  stage.detail("scaffolding desks, copying skills and installing packages");
 
   for (const desk of office.desks) {
     for (const path of scaffoldDesk(office, desk)) changes.push(`created ${relative(office.dir, path)}`);
@@ -531,14 +486,6 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
 }
 
 export async function applyPackages(office: Office, installed: InstalledPackages, previous: ReferenceSnapshot | undefined, changes: string[], exclude: boolean, withdrawals: string) {
-  if (!installed.unread.has("knowledge") && legacyPlugin(office, "knowledge")) changes.push(...removeOldKnowledgePlugin(office));
-
-  if (needsEnvironmentOwners(office, installed)) {
-    changes.push("FAILED the existing machine environment predates package ownership records; repair the unread packages and sync again before withdrawing packages or rewriting their machine setup");
-
-    return;
-  }
-
   // .office/packages/ holds only what sync pulled in, so a folder no package wants goes. Its panel
   // stays on the app's machine, where other offices may use it.
   const removedPanels: string[] = [];
@@ -650,8 +597,6 @@ export function excludePlumbing(office: Office): string[] {
   }
 
   const wanted = ["/.office/*", `!/${seedStore}/`, `/${dirname(editorLinks)}/`, ...officeEntries(office).map((path) => `/${path}`)];
-  // Lines earlier releases wrote one by one: a declared clone in `.opencode/plugins/<name>/` and first-clone staging.
-  const legacy = new Set(["/.office-plugin-*/", ...office.plugins.map((plugin) => `/${pluginFolder}/${plugin.name}/`)]);
 
   if (existsSync(exclude)) exclude = realpathSync(exclude);
   const text = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
@@ -669,17 +614,15 @@ export function excludePlumbing(office: Office): string[] {
   // The block stays where it is; a file without one gets it at the end.
   const [start, end] = starts.length === 1 ? [starts[0], ends[0]] : [raw.length, raw.length - 1];
   const block = lines.slice(start + 1, end);
-  const kept = (part: string[]) => part.filter((line) => !legacy.has(line.replace(/\r$/, "")));
   const [before, after] = [raw.slice(0, start), raw.slice(end + 1)];
   // Office's lines take the file's line ending: CRLF when all of its lines have one.
   const cr = text.includes("\r\n") && !/(^|[^\r])\n/.test(text) ? "\r" : "";
-  const next = `${[...kept(before), ...[excludeStart, ...wanted, excludeEnd].map((line) => line + cr), ...kept(after)].join("\n")}\n`;
+  const next = `${[...before, ...[excludeStart, ...wanted, excludeEnd].map((line) => line + cr), ...after].join("\n")}\n`;
 
   if (next === text) return [];
 
   atomicWrite(exclude, next, 0o644);
 
-  const dropped = before.length + after.length - kept(before).length - kept(after).length;
   const added = wanted.filter((line) => !block.includes(line));
   const removed = block.filter((line) => !wanted.includes(line));
 
@@ -689,6 +632,5 @@ export function excludePlumbing(office: Office): string[] {
   return [
     ...added.map((line) => describe(line, true)),
     ...removed.map((line) => describe(line, false)),
-    ...(dropped > 0 ? [`replaced ${dropped} plugin exclude ${dropped === 1 ? "line" : "lines"} earlier releases wrote with the office sync block (info/exclude)`] : []),
   ];
 }

@@ -47,29 +47,6 @@ test("an Executor downgrade stays pending and refused, and other tools retain th
   expect(report).toHaveBeenCalledWith("warn", "tested versions", expect.stringMatching(/^sfw 1\.0\.0 is outside/));
 });
 
-test("an office.yaml from before tools gets a warning with the tools block to write in place of the old keys", () => {
-  writeFileSync(join(dir, "office.yaml"), "name: t\nversions:\n  opencode: 2.3.2\n  claude: 2.1.327\n  executor: 2.0.0-beta.49\n  mise: 2026.11.9\n  sfw: 1.16.0\nupgrades:\n  minimum_release_age: 1d\n  executor: 7d\n  npm:wrangler: 2d\n");
-
-  expect(toolsNotes(loadOffice(dir))).toEqual([
-    `office.yaml uses versions and upgrades, which tools: replaces; it still reads as before, but put this in place of them:
-tools:
-  minimum_release_age: 3d
-  opencode: { version: 2.3.2, minimum_release_age: 1d }
-  claude: { version: 2.1.327, minimum_release_age: 1d }
-  codex: { minimum_release_age: 1d }
-  executor: { version: 2.0.0-beta.49, minimum_release_age: 7d }
-  mise: { version: 2026.11.9, minimum_release_age: 1d }
-  sfw: { version: 1.16.0, minimum_release_age: 1d }`,
-    "upgrades gives npm:wrangler an age of its own, which no longer applies: every mise tool waits the office's 3d",
-  ]);
-
-  writeFileSync(join(dir, "office.yaml"), "name: t\nsocket_firewall: false\n");
-  expect(toolsNotes(loadOffice(dir))).toEqual(["office.yaml uses socket_firewall, which tools: replaces; it still reads as before, but put this in place of it:\ntools:\n  minimum_release_age: 3d\n  sfw: { enabled: false }"]);
-
-  writeFileSync(join(dir, "office.yaml"), "name: t\ntools:\n  opencode: 2.3.2\n");
-  expect(toolsNotes(loadOffice(dir))).toEqual([]);
-});
-
 test("a mise minimum_release_age setting in machine.toml or mise.toml other than the office's is noted, since the environment wins", () => {
   writeFileSync(join(dir, "office.yaml"), "name: t\ntools:\n  minimum_release_age: 1d\n");
   writeFileSync(join(dir, "machine.toml"), '[settings]\nminimum_release_age = "24h"\n');

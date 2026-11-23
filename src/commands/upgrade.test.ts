@@ -74,14 +74,6 @@ test("a runtime tools doesn't list is added after its last entry, in the short f
   expect(setVersions("name: t\ntools:\n    opencode: 2.3.2", [{ tool: "sfw", to: "1.17.0" }])).toBe("name: t\ntools:\n    opencode: 2.3.2\n    sfw: 1.17.0\n");
 });
 
-test("an office.yaml from before tools keeps its versions block, and a tool it lacks is added there", () => {
-  const text = "name: t\n# The versions.\nversions:\n  opencode: 2.3.2  # pinned\n  sfw: 1.16.0\n# After.\nupgrades:\n  minimum_release_age: 1d\n";
-  const result = setVersions(text, [{ tool: "opencode", to: "2.3.5" }, { tool: "codex", to: "0.171.0" }]);
-
-  expect(result).toBe("name: t\n# The versions.\nversions:\n  opencode: 2.3.5  # pinned\n  sfw: 1.16.0\n  codex: 0.171.0\n# After.\nupgrades:\n  minimum_release_age: 1d\n");
-  expect(result).not.toContain("tools:");
-});
-
 test("a tools block the writer can't edit safely is left for the user", () => {
   expect(() => setVersions("name: t\ntools: { opencode: 2.3.2 }\n", [{ tool: "sfw", to: "1.17.0" }])).toThrow("set tools.sfw to 1.17.0 in office.yaml by hand");
 });

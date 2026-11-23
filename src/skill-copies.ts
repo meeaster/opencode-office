@@ -4,7 +4,6 @@
 // that would be replaced must still be the copy its record describes, so edits are never lost.
 // `office sync` applies a group's pin; `office skills update` applies a pin it has just resolved.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import * as v from "valibot";
@@ -19,8 +18,7 @@ const skillRecord = v.object({
   ref: v.nullable(v.string()),
   path: v.string(),
   commit: v.string(),
-  // Copies made before groups lack the hashes; their edits are found against the recorded commit.
-  files: v.optional(v.record(v.string(), v.string())),
+  files: v.record(v.string(), v.string()),
 });
 
 type SkillRecord = v.InferOutput<typeof skillRecord>;
@@ -50,34 +48,13 @@ export function skillDir(office: Office, name: string): string {
   return join(office.dir, "skills", name);
 }
 
-/**
- * The edits to the copy at `dir` against what its record says was copied, read from the commit
- * the record names when the record has no file hashes. Throws when that can't be told.
- */
+/** The edits to the copy at `dir` against what its record says was copied. Throws when that can't be told. */
 function editsOf(dir: string, name: string): string[] {
   const record = readSkillRecord(dir);
 
   if (record === undefined) throw new Error(`skills/${name} has no readable ${sourceFile}, so office can't tell whether it was edited; move it aside, then run the update again`);
 
-  if (record.files !== undefined) return localEdits(dir, { files: record.files });
-
-  const label = `${record.repo}@${record.commit}`;
-
-  try {
-    return withCheckout(record.repo, record.commit, (checkout) => {
-      const original = mkdtempSync(join(tmpdir(), "office-skill-original-"));
-
-      try {
-        copyFolder(checkout, record.path, join(original, name), "SKILL.md", label);
-
-        return localEdits(dir, { files: fileHashes(join(original, name)) });
-      } finally {
-        rmSync(original, { recursive: true, force: true });
-      }
-    });
-  } catch (error) {
-    throw new Error(`can't tell whether skills/${name} was edited, as its copy of ${label} can't be read: ${error instanceof Error ? error.message.trim() : String(error)}`, { cause: error });
-  }
+  return localEdits(dir, { files: record.files });
 }
 
 /** A group's copies, staged: `apply` swaps them into the library, `discard` drops them. */

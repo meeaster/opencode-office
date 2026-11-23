@@ -67,7 +67,7 @@ test("a package.json that can't name the definition says what is wrong, naming t
 
   // The advice for a missing package.json depends on where the package comes from.
   const old = folder("old", { "office.ts": valid });
-  expect(readPackageJson(old, "old", "built-in")).toEqual({ ok: false, errors: ["no package.json; the copy is from an older office executable; run office sync"] });
+  expect(readPackageJson(old, "old", "built-in")).toEqual({ ok: false, errors: ["no package.json; the copy isn't this office executable's; run office sync"] });
   expect(readPackageJson(old, "old", "remote")).toEqual({ ok: false, errors: ['no package.json; its repository needs a package.json with "name": "@office/old", an optional "description" and "office": { "definition": … }; then run office packages update'] });
 });
 

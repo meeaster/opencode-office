@@ -15,10 +15,6 @@ office env --container --office "$office" > "$env_file.new" && mv "$env_file.new
 # shellcheck source=/dev/null
 . "$env_file"
 
-# Before OpenCode opens its database: sessions stored while the home was /home/assistant move to
-# /home/office. A failure stops here, so OpenCode never starts beside half-moved sessions.
-office migrate-home
-
 # The container user's git defaults (GIT_CONFIG_SYSTEM points here): the office's commit identity
 # and, when the host's gh login is shared, gh as the HTTPS credential helper. ~/.gitconfig and a
 # repository's own config override them.

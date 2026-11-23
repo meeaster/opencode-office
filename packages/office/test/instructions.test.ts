@@ -25,10 +25,6 @@ test("sessions are told the office's minimum release age while Socket Firewall i
   writeFileSync(join(dir, "office.yaml"), "name: t\ntools:\n  minimum_release_age: 0d\n");
   expect(officeInstructions(dir)).toContain("Package managers take new releases as soon as they're published.");
 
-  // An office.yaml from before tools: package managers wait the default, whatever upgrades says.
-  writeFileSync(join(dir, "office.yaml"), "name: t\nupgrades:\n  minimum_release_age: 1d\n");
-  expect(officeInstructions(dir)).toContain("at least 3d old");
-
   writeFileSync(join(dir, "office.yaml"), "name: t\ntools:\n  sfw: { enabled: false }\n");
   expect(officeInstructions(dir)).not.toContain("Socket Firewall");
 });

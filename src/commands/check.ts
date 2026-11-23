@@ -22,12 +22,10 @@ import { hookNote, hookState } from "../hook.ts";
 import { planServer, serverReport } from "../host-server.ts";
 import { officeCommands, officePins, officeTool, officeToolNamed, required } from "../host-tools.ts";
 import { clones, installedPackages, library, skillSelections } from "../layout.ts";
-import { cloneTarget, legacyPlugin, pluginClones, pluginLinks, pluginScope, restartNotice, withPluginPlan } from "../../standard/opencode/delivery.ts";
+import { cloneTarget, pluginClones, pluginLinks, pluginScope, restartNotice, withPluginPlan } from "../../standard/opencode/delivery.ts";
 import { cloneFolder, entry as entryAt } from "../../standard/opencode/ownership.ts";
-import { editedOfficeSkill, executorEntryState, hasOldOfficePlugin, officeSkillState, oldMiseFiles, pulledLocalFolders, versionsLackSfw } from "../migrate.ts";
-import { oldExecutorAppDirs } from "../executor-app-layout.ts";
 import { packageLockProblems } from "../package-operation.ts";
-import { executorEnvFile, type Office, readEnvFile, skillGroups, toolsBlock } from "../office.ts";
+import { executorEnvFile, type Office, readEnvFile, skillGroups } from "../office.ts";
 import { isCurrent, readSkillRecord, skillDir } from "../skill-copies.ts";
 import { appliedServices, appliedSpawns, packageComposeFile, parseCompose, serviceStatus, sharedNamespaces } from "../package-services.ts";
 import { listSpawned, planSweep, sweepIsEmpty } from "../package-spawns.ts";
@@ -37,14 +35,14 @@ import { claim, machineReport, matchesServerUnit, requireServerConsent } from ".
 import { wrappedCommands } from "../sfw.ts";
 import { toolPins } from "../mise-toml.ts";
 import { destinationProblems } from "../../standard/mise-integration/projection.ts";
-import { fragmentNotes, machineBelowFloors, machineFile, oldToolFragments, orphanFragments, packagesFile, packagesFileProblems, strayFragments } from "../package-tools.ts";
+import { fragmentNotes, machineBelowFloors, machineFile, orphanFragments, packagesFile, packagesFileProblems, strayFragments } from "../package-tools.ts";
 import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, requiredPackages, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
 import { describeIgnoredSkills, ignoredSkills, readIgnoredFolders } from "../../packages/office/plugin/ignored-skills.ts";
 import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces, shadowing, withLoaded } from "../outside.ts";
 import { pinnedTools } from "../schema.ts";
 import { seedReceiptProblems, storedSeedProblems } from "../seeds.ts";
 import { builtinFiles, builtinPackages, version } from "../tool.ts";
-import { changes, defaultPins, describeMove, executorImage, isTested, lockFile, lockLacksSfw, readApplied, readLockSection, tested, toolsFor, wantedPins } from "../versions.ts";
+import { changes, defaultPins, describeMove, executorImage, isTested, readApplied, readLockSection, tested, toolsFor, wantedPins } from "../versions.ts";
 import { appFolders, deployedFrameworks } from "./apps.ts";
 import { compose, officeImage, ports, runningPins } from "./compose.ts";
 import { keyOrganization } from "./executor.ts";
@@ -60,8 +58,6 @@ async function drift(office: Office): Promise<string[]> {
   const declared = new Set(office.desks.map((desk) => desk.name));
 
   problems.push(...claudeFiles(office.dir));
-
-  for (const old of oldExecutorAppDirs(office)) problems.push(`${old}/ uses the previous Executor app layout; run office sync`);
 
   for (const desk of office.desks) {
     const app = `executor-apps/${desk.name}`;
@@ -95,28 +91,8 @@ async function drift(office: Office): Promise<string[]> {
     }
   }
 
-  // What an office laid out by an earlier release still holds; `office sync` moves it on.
-  if (hasOldOfficePlugin(office)) problems.push(".opencode/plugins/office/ is the copy of the tool's plugin earlier releases wrote (office sync replaces it with the office package's plugin)");
-
-  const skill = officeSkillState(office);
-
-  if (skill === "shipped") problems.push("skills/office/ is the copy of the office skill earlier releases wrote, which the office package provides now (office sync removes it)");
-  else if (skill === "edited") problems.push(editedOfficeSkill);
-
-  const executor = executorEntryState(office);
-
-  if (executor.state === "template") problems.push(".opencode/opencode.jsonc declares the office-executor MCP server, which the office package registers now (office sync removes the entry)");
-  else if (executor.state === "differs") problems.push(".opencode/opencode.jsonc declares office-executor differently from the entry office init wrote; the office package registers that server now, so remove the entry yourself");
-  else if (executor.state === "unreadable") problems.push(`.opencode/opencode.jsonc can't be read: ${executor.error}`);
-
-  const pulledLocal = pulledLocalFolders(office);
-
-  for (const name of pulledLocal) problems.push(`packages/${name}/ was pulled in from a repository (office sync moves it to .office/packages/${name}/)`);
-
   const loaded = withPluginPlan(office, installedPackages(office));
   const plugins = pluginLinks(office, loaded.plugins);
-
-  if (!loaded.unread.has("knowledge") && legacyPlugin(office, "knowledge")) problems.push(".opencode/plugins/knowledge/ is the knowledge plugin earlier releases of office wrote, which the knowledge package replaced (office sync removes it)");
 
   for (const [name, target] of plugins.links) {
     const wanted = plugins.wanted.get(name);
@@ -130,8 +106,7 @@ async function drift(office: Office): Promise<string[]> {
   for (const clone of pluginClones(office)) {
     const link = entryAt(pluginScope(office), clone.name);
 
-    if (link?.folder && link.target === undefined) problems.push(`.opencode/plugins/${clone.name}/ is where earlier releases cloned plugin ${clone.name} (office sync moves it to ${cloneFolder}/${clone.name} and links it, once it can verify the checkout)`);
-    else if (existsSync(join(clone.dir, ".git")) && !(link?.office && link.target === cloneTarget(clone.name))) problems.push(`plugin ${clone.name} is cloned but .opencode/plugins/${clone.name} doesn't link to it${link ? " (an entry of the office's own is there)" : " (office sync links it)"}`);
+    if (existsSync(join(clone.dir, ".git")) && !(link?.office && link.target === cloneTarget(clone.name))) problems.push(`plugin ${clone.name} is cloned but .opencode/plugins/${clone.name} doesn't link to it${link ? " (an entry of the office's own is there)" : " (office sync links it)"}`);
   }
 
   for (const group of skillGroups(office)) {
@@ -161,8 +136,6 @@ async function drift(office: Office): Promise<string[]> {
   const builtins = builtinPackages();
 
   for (const folder of localFolders(office)) {
-    if (pulledLocal.includes(folder)) continue;
-
     if (builtins.includes(folder)) problems.push(`packages/${folder}/ has the name of a built-in package, which an entry without repo always means; rename the folder and the package name in its definition and office.yaml`);
     else if (!packages.some((item) => item.kind === "local" && item.entry.name === folder)) problems.push(`packages/${folder}/ is not a package in office.yaml, so its plugin isn't linked`);
   }
@@ -173,16 +146,9 @@ async function drift(office: Office): Promise<string[]> {
 
   const listed = [...loaded.selected];
 
-  problems.push(...orphanFragments(office, listed), ...strayFragments(office), ...oldToolFragments(office), ...packagesFileProblems(office, loaded.installed, listed));
-
-  if (versionsLackSfw(office)) problems.push("office.yaml's versions don't pin sfw (Socket Firewall), which earlier releases didn't pin, so the tool's default applies (office sync pins it)");
-  else if (office.tools.runtimes.sfw.version === defaultPins.sfw.version && lockLacksSfw(office.dir)) problems.push(`${lockFile} has no sfw entry, as earlier releases wrote it (office sync adds it)`);
+  problems.push(...orphanFragments(office, listed), ...strayFragments(office), ...packagesFileProblems(office, loaded.installed, listed));
 
   problems.push(...packageLockProblems(office), ...seedReceiptProblems(office.dir, new Set([...requiredPackages, ...office.packages.map((entry) => entry.name)])));
-
-  for (const { from, to } of oldMiseFiles(office)) {
-    problems.push(`${relative(office.dir, from)} is where earlier releases kept it, and mise loads it there as the office's project config (office sync moves it to ${relative(office.dir, to)})`);
-  }
 
   return problems;
 }
@@ -331,7 +297,7 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
       notes.push(`${relative(office.dir, officePath)} doesn't say opencode: ${office.opencode.mode}; office sync writes it`);
     }
 
-    // Skills reach OpenCode only through the package's plugin; earlier releases linked them.
+    // Skills reach OpenCode only through the package's plugin.
     // A failed or stale authored registration keeps its prior link, so loading is unknown, not absent.
     if (item.skills.length > 0 && !item.plugin && !loaded.unread.has(entry.name)) {
       ok = false;
@@ -816,24 +782,12 @@ function hours(age: string): number | undefined {
 }
 
 /**
- * Notes on office.yaml's `tools`, none a failure: an office.yaml still on `versions`, `upgrades` and
- * `socket_firewall`, with the block to write in their place; ages `upgrades` gave mise tools, which
- * no longer apply; and a `[settings] minimum_release_age` in the office's machine.toml or mise.toml
+ * Notes on office.yaml's `tools`, none a failure: a `[settings] minimum_release_age` in the office's machine.toml or mise.toml
  * other than the office's, which MISE_MINIMUM_RELEASE_AGE in the office's environment overrides.
  */
 export function toolsNotes(office: Office): string[] {
   const { tools } = office;
   const notes: string[] = [];
-
-  if (tools.legacy.length > 0) {
-    const keys = tools.legacy.length === 1 ? tools.legacy[0] : `${tools.legacy.slice(0, -1).join(", ")} and ${tools.legacy.at(-1)}`;
-
-    notes.push(`office.yaml uses ${keys}, which tools: replaces; it still reads as before, but put this in place of ${tools.legacy.length === 1 ? "it" : "them"}:\n${toolsBlock(tools).trimEnd()}`);
-  }
-
-  if (tools.ignoredAges.length > 0) {
-    notes.push(`upgrades gives ${tools.ignoredAges.join(", ")} an age of ${tools.ignoredAges.length === 1 ? "its" : "their"} own, which no longer applies: every mise tool waits the office's ${tools.minimumReleaseAge}`);
-  }
 
   for (const name of ["machine.toml", "mise.toml"]) {
     const path = join(office.dir, name);

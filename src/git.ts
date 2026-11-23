@@ -70,7 +70,7 @@ function recordReference(dir: string, origin: string, ref: string, commit: strin
   gitOutput(["config", "--local", "--replace-all", appliedReference, JSON.stringify({ origin, ref, commit })], dir, checkoutFd);
 }
 
-/** Older ref-only or pair-only records cannot prove the commit in this worktree. */
+/** Only a recorded origin, ref and commit matching HEAD proves what this worktree applied. */
 export function appliedReferenceProblem(dir: string, origin: string, ref = "HEAD"): string | undefined {
   const missing = `desired ${origin} @ ${ref}, no unambiguous applied origin and ref with a verified commit; run a healthy reference sync`;
 
