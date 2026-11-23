@@ -341,18 +341,26 @@ packages:
   expect(failed.out).toContain(`package tagged: v1.0.0 still at ${pkgTwo.slice(0, 12)} (tag v1.0.0)`);
   expect(read(join(dir, "office/office.yaml"))).toContain(`ref: ${pkgTwo}`);
   expect(record(".office/packages/demo").commit).toBe(pkgTwo);
+});
 
-  // A lock entry gone while the copy is already at the tag's commit: the entry is published again, from the installed copy.
-  const { tagged: _tagged, ...untagged } = readPackageLock(join(dir, "office"));
+test("packages update publishes a missing lock entry again from the installed copy already at the tag's commit", async () => {
+  const pkg = join(dir, "package-repo");
+  const pkgOne = commit(pkg, { "tagged/package.json": packageJsonText("tagged", "package.yaml"), "tagged/package.yaml": "# Tagged.\n{}\n" }, "v1.0.0");
+
+  write(join(dir, "office/office.yaml"), `name: t\nstate: ${join(dir, "state")}\npackages:\n  - { name: tagged, repo: ${pkg}, path: tagged, ref: v1.0.0 }\n`);
+  await synced();
+  expect(readPackageLock(join(dir, "office"))).toEqual({ tagged: { repo: pkg, path: "tagged", ref: "v1.0.0", commit: pkgOne } });
+
   const copied = record(".office/packages/tagged");
 
   editLock(join(dir, "office"), (sections) => {
-    sections.packages = new Map(Object.entries(untagged));
+    sections.packages = new Map();
   });
   const relocked = await update("packages");
 
-  expect(relocked.out).toContain(`package tagged: locked (none) → ${pkgTwo} (tag v1.0.0; office.yaml unchanged)`);
-  expect(readPackageLock(join(dir, "office")).tagged).toEqual({ ...locked.tagged, commit: pkgTwo });
+  expect(relocked.ok).toBe(true);
+  expect(relocked.out).toContain(`package tagged: locked (none) → ${pkgOne} (tag v1.0.0; office.yaml unchanged)`);
+  expect(readPackageLock(join(dir, "office"))).toEqual({ tagged: { repo: pkg, path: "tagged", ref: "v1.0.0", commit: pkgOne } });
   expect(record(".office/packages/tagged")).toEqual(copied);
 });
 

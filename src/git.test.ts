@@ -69,7 +69,9 @@ test("sync reports each clone as a part while it runs, keeps git's error for one
   git(["init", "--quiet", office]);
 
   const lines: string[] = [];
-  const reporter = new PlainReporter("office sync", false, (line) => lines.push(line), (line) => lines.push(line));
+  // A part that takes 500 ms or more ends with its elapsed time, like " (1s)"; drop it so a slow clone still matches.
+  const capture = (line: string) => lines.push(line.replace(/ \((\d+m )?\d+s\)$/, ""));
+  const reporter = new PlainReporter("office sync", false, capture, capture);
   const stage = reporter.stage("Repositories and packages", { key: "repos" });
   const changes = await sync(loadOffice(office), { scope: "references", stage });
 
@@ -85,7 +87,10 @@ test("sync reports each clone as a part while it runs, keeps git's error for one
   }
 
   // Four at once: the fifth starts only after one of the first four has finished.
-  expect(lines.indexOf("repos: cloning references/e")).toBeGreaterThan(lines.findIndex((line) => / cloned$/.test(line)));
+  const firstCloned = lines.findIndex((line) => / cloned$/.test(line));
+
+  expect(firstCloned).toBeGreaterThan(-1);
+  expect(lines.indexOf("repos: cloning references/e")).toBeGreaterThan(firstCloned);
   expect(lines.find((line) => line.startsWith("repos: references/missing: FAILED: Command failed: git fetch"))).toBeDefined();
   // The failing clone's own last lines follow, git's error among them.
   expect(lines.some((line) => line.startsWith("repos: | references/missing: ") && line.includes("nowhere"))).toBe(true);
@@ -98,7 +103,10 @@ test("sync reports each clone as a part while it runs, keeps git's error for one
 
   expect(await sync(loadOffice(office), { scope: "references", stage: reporter.stage("Repositories and packages", { key: "repos" }) })).toEqual([]);
   expect(lines.slice(1, 9)).toEqual(existing.slice(0, 8).map(name => `repos: updating references/${name}`));
-  expect(lines.indexOf("repos: updating references/i")).toBeGreaterThan(lines.findIndex(line => line.endsWith(": current")));
+  const firstCurrent = lines.findIndex(line => line.endsWith(": current"));
+
+  expect(firstCurrent).toBeGreaterThan(-1);
+  expect(lines.indexOf("repos: updating references/i")).toBeGreaterThan(firstCurrent);
   expect(lines.filter(line => line.endsWith(": current"))).toHaveLength(9);
   expect(summarize([])).toBe("already in sync");
 });
