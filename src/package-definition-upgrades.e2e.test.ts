@@ -5,7 +5,7 @@ import { git } from "./git.ts";
 import { loadOffice } from "./office.ts";
 import { preparePackageServices } from "./package-services.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
-import { writePackage } from "./test-package.ts";
+import { definitionText, writePackage } from "./test-package.ts";
 
 const { root, bin, marker, write, read, commit, fixture, collector } = definitionFixture();
 
@@ -16,7 +16,7 @@ test("tracked updates validate the consuming settings and staged assets before p
   const installed = join(dir, ".office/packages/shared");
   const link = join(dir, ".opencode/plugins/shared");
   git(["init", "-q", "-b", "main", repo]);
-  const definition = 'export default {name:"shared",description:"Shared",setup(ctx){ctx.command({name:"edition",summary:"Current edition",run(){console.log("original edition")}})},settings:{title:{description:"Title",required:true}}}';
+  const definition = definitionText('{commands:{edition:{summary:"Current edition",run(){console.log("original edition")}}},settings:{type:"object",additionalProperties:false,required:["title"],properties:{title:{type:"string"}}}}');
   writePackage(join(source, "office.ts"), definition);
   write(join(source, "compose.yaml"), "services:\n  shared:\n    image: example/shared\n    env_file: ./base.env\n");
   write(join(source, "base.env"), "FEATURE=original\n");
@@ -35,11 +35,13 @@ test("tracked updates validate the consuming settings and staged assets before p
   rmSync(join(source, "base.env"));
 
   for (const [candidate, reason] of [
-    ['export default {name:"shared",description:"New"}', "settings.title"],
-    ['export default {name:"shared",description:"New",setup(c){c.booleanSetting("active",{default:true,description:"Active"})}}', "settings.title"],
-    ['export default {name:"shared",description:"New",setup(c){c.booleanSetting("title",{default:true,description:"Title"})}}', "settings.title: must be true or false"],
-    ['export default {name:"shared",description:"New",setup(c){c.scalarSetting("title",{default:"ok",description:"Title"});c.scalarSetting("new_key",{default:"can\'t",description:"Not an env literal"})}}', "setting new_key holds a quote"],
-    ['export default {name:"shared",description:"New",setup(c){c.scalarSetting("title",{default:"fallback",description:"Title"})},opencode(c){if(c.settings.title==="Mine")c.serverPlugin("missing")}}', "existing directory"],
+    [definitionText('{}'), "settings.title"],
+    [definitionText('{settings:{type:"object",additionalProperties:false,properties:{active:{type:"boolean",default:true}}}}'), "settings.title"],
+    [definitionText('{settings:{type:"object",additionalProperties:false,properties:{title:{type:"boolean",default:true}}}}'), "settings.title: must be boolean"],
+    [definitionText('{settings:{type:"object",additionalProperties:false,properties:{title:{type:"string",default:"ok"},new_key:{type:"string",default:"can\'t"}}}}'), "setting new_key holds a quote"],
+    [definitionText('{settings:{type:"object",additionalProperties:false,properties:{title:{type:"string",default:"fallback"}}},opencode(c){if(c.settings.title==="Mine")c.serverPlugin("missing")}}'), "existing directory"],
+    // A removed setup call is a call to something that isn't there.
+    [definitionText('{settings:{type:"object",additionalProperties:false,properties:{title:{type:"string"}}},setup(c){c.booleanSetting("active",{default:true,description:"Active"})}}'), "booleanSetting"],
     [definition.replace("settings:", 'cron:{job:{script:"missing.sh",schedule:"@daily"}},settings:'), "missing.sh"],
     [definition.replace("settings:", 'registerCron(ctx){ctx.cron.job("job",{script:"missing.sh",schedule:"@daily"})},settings:'), "missing.sh"],
     [definition.replace("settings:", 'registerCron(ctx){ctx.cron.job("job",false);throw Error("interrupted replacement")},settings:'), "interrupted replacement"],
@@ -55,12 +57,12 @@ test("tracked updates validate the consuming settings and staged assets before p
 
   // Only the new revision declares `enabled`; staging setup also needs a published sibling.
   write(join(source, "base.env"), "FEATURE=updated\n");
-  writePackage(join(source, "office.ts"), `export default {name:"shared",description:"New",async setup(c){
-    if(c.booleanSetting("enabled",{default:false,description:"Enabled"})){
+  writePackage(join(source, "office.ts"), definitionText(`{settings:{type:"object",additionalProperties:false,properties:{enabled:{type:"boolean",default:false}}},async setup(c){
+    if(c.settings.enabled){
       const {repositories}=await import("@office/references/repositories");
       c.add(repositories,{name:"enabled",url:"new-revision"});
     }
-  }}`);
+  }}`));
   // The new revision also changes both seeds: the unchanged file is replaced, the edited one offered.
   write(join(source, "seed/shared.md"), "updated seed");
   write(join(source, "seed/edited.md"), "updated seed\n");
@@ -124,7 +126,7 @@ test("down uses the applied Compose inputs and marked unit without importing the
   const { dir, home, probe, cli, select } = fixture("teardown");
   select("  - name: notes\nstate: ./state\n");
   const pkg = join(dir, "packages/notes");
-  writePackage(join(pkg, "office.ts"), 'export default { name:"notes",description:"Notes",spawns:{label:"test=notes-${OFFICE_NAME}"}}');
+  writePackage(join(pkg, "office.ts"), definitionText('{ spawns:{label:"test=notes-${OFFICE_NAME}"}}'));
   write(join(pkg, "compose.yaml"), "services: {notes: {image: example/notes}}\n");
   cli(0, "sync", "--packages");
   (await preparePackageServices(loadOffice(dir), false)).apply();
@@ -221,7 +223,7 @@ test("the executable installs a TS-only Git package at its locked commit, repair
 
   git(["init", "-q", repo]);
   write(join(repo, "packages/shared/title.ts"), sibling);
-  writePackage(join(repo, "packages/shared/office.ts"), 'import { title } from "./title.ts"; export default { name: "shared", description: "Shared", settings: { title: { description: "Title", default: title } } }');
+  writePackage(join(repo, "packages/shared/office.ts"), definitionText('{ settings: { type: "object", additionalProperties: false, properties: { title: { type: "string", default: title } } } }', 'import { title } from "./title.ts";'));
   const first = commit(repo);
 
   git(["tag", "v1"], repo);

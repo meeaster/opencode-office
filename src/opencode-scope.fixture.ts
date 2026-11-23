@@ -10,8 +10,10 @@ import { writePackage } from "./test-package.ts";
 
 /** Opt-in: an absolute OpenCode V2 launcher for the native check. */
 export const launcher = process.env.OFFICE_TEST_OPENCODE;
+
 /** Opt-in: the compiled CLI from before authored registration, as a control. */
 export const groundwork = process.env.OFFICE_TEST_PRE_ASSETS;
+
 /** Opt-in control: the compiled CLI from before plugin delivery refused owner folders (567252f). */
 export const control = process.env.OFFICE_TEST_PLUGIN_CONTROL;
 
@@ -106,7 +108,7 @@ export function scopeFixture() {
     const yaml = `name: sample\nstate: ${home}/office-state\nopencode: {mode: host, url: ${endpoint}}\ndesks: {builder: {app: false}, sibling: {app: false}}\n`;
     const select = (selection: string) => write(join(dir, "office.yaml"), yaml + selection);
     select("packages: [{name: common}]\n");
-    writePackage(join(dir, "packages/common/package.yaml"), "name: common\ndescription: Scope fixture\n");
+    writePackage(join(dir, "packages/common/package.yaml"), "# Scope fixture\n{}\n");
     write(join(dir, "packages/common/plugin/index.js"), command("shared-command"));
     write(join(dir, ".opencode/opencode.jsonc"), rootConfig);
     write(join(dir, "builder/.opencode/opencode.jsonc"), deskConfig);

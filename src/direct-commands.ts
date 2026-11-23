@@ -1,24 +1,34 @@
-// Package commands and their help: every run loads each package office.yaml selects, runs its
-// setup, and works from what it registered in this process. Nothing is read from the saved
-// references file. Runs only in a reader bound to the office's published package set.
+// Package commands and their help: every run loads each package office.yaml selects, and works
+// from what the definitions declare and what their setups registered in this process. Nothing is
+// read from the saved references file. Runs only in a reader bound to the office's published package set.
+//
+// Two phases: every definition is read and every package's settings checked first; only when no
+// settings are invalid does any setup run. Then every setup finishes before an entry is parsed.
 import * as v from "valibot";
-import type { Collection, CollectionEntry, CommandInputs } from "../packages/office/package-context.ts";
+import type { CommandInputs, Registry, RegistryEntry, SettingValue } from "../sdk/index.ts";
 import { repositories } from "../packages/references/repositories.ts";
-import { commandNames, nameProblems, type NameProblem, type RegisteredCommand } from "./command-table.ts";
-import { loadOffice, type Office, OfficeError } from "./office.ts";
-import { definitionGate, problemLine, readPackage, type ResolvedPackage, resolvePackages } from "./packages.ts";
+import { definitionRoot } from "./bound-paths.ts";
+import { commandNames, declaredCommands, nameProblems, type NameProblem, type RegisteredCommand } from "./command-table.ts";
+import { loadOffice, OfficeError } from "./office.ts";
+import { definitionGate, problemLine, readPackage, resolvePackages } from "./packages.ts";
 import { type Registered, registerPackage } from "./package-setup.ts";
 import { namedEntry } from "./reference-snapshot.ts";
 
 /** A reader process: the office it is bound to (`bindReader` recorded the set's rejected packages). */
 export type Reader = { dir: string };
 
-type Entry = { id: string; value: CollectionEntry; owner: string };
+type Entry = { id: string; value: RegistryEntry; owner: string; folder: string };
+
+/** A command a definition declares, with its package and that package's settings in this run (undefined when they are invalid). */
+export type DeclaredCommand = { owner: string; command: RegisteredCommand; settings?: Record<string, SettingValue> };
+
+/** A package whose setup ran: its name, the folder its definition loaded from, and what it registered. */
+export type SetUp = { name: string; folder: string; registered: Registered };
 
 export type CommandLoad = {
-  /** Commands of the packages that loaded, with their owners. */
-  commands: { owner: string; command: RegisteredCommand }[];
-  /** One line per package that failed to load, naming it. */
+  /** The commands the loaded definitions declare, with their owners. */
+  commands: DeclaredCommand[];
+  /** One line per package that failed to load or set up, naming it. */
   failures: string[];
   /** Names that break the naming rule. */
   names: NameProblem[];
@@ -29,62 +39,63 @@ export type CommandLoad = {
   read: CommandInputs["read"];
 };
 
-/**
- * Load one resolved package, checked with the rest of the selection, and run its setup. Undefined
- * for a package with no setup; throws, naming what failed, when it can't load.
- */
-export async function loadPackage(office: Office, item: ResolvedPackage): Promise<Registered | undefined> {
-  const read = readPackage(office, item);
-
-  if (!read.ok) throw new Error(read.errors.join("; "));
-  const { manifest, settings } = read.value;
-
-  if (!manifest.setup) return undefined;
-  const registered = await registerPackage({ name: item.entry.name, manifest, overrides: item.entry.settings ?? {}, settings });
-
-  if (registered.invalid.length) throw new Error(registered.invalid.join("; "));
-
-  return registered;
-}
-
-/** Load every package office.yaml selects and combine what they registered. */
+/** Load every package office.yaml selects: read and check each, then, when every package's settings are valid, set each up. */
 async function loadForCommands({ dir }: Reader): Promise<CommandLoad> {
   const office = loadOffice(dir);
   const resolved = resolvePackages(office, undefined, true);
   const failures = resolved.problems.map(problemLine);
-  const loaded: { name: string; registered: Registered }[] = [];
 
   // A package the last sync rejected, and every copy, package.json, declared dependency and link,
   // is checked before the first import.
   const problems = definitionGate(office, resolved.packages).map(problemLine);
 
-  if (problems.length) return { ...combine(office.references, [], [...failures, ...problems]), blocked: problems };
+  if (problems.length) return { ...combine(office, [], [...new Set([...failures, ...problems])]), blocked: problems };
+
+  const commands: DeclaredCommand[] = [];
+  const ready = [];
+  let invalidSettings = false;
 
   for (const item of resolved.packages) {
-    try {
-      const registered = await loadPackage(office, item);
+    const read = readPackage(office, item);
+    const manifest = read.ok ? read.value.manifest : read.manifest;
 
-      if (registered) loaded.push({ name: item.entry.name, registered });
+    if (manifest) commands.push(...declaredCommands(manifest).map(command => ({ owner: item.entry.name, command, settings: read.ok ? read.value.settings : undefined })));
+
+    if (read.ok) ready.push({ item, installed: read.value });
+    else {
+      failures.push(`package ${item.entry.name}: ${read.errors.join("; ")}`);
+
+      if (read.settings?.length) invalidSettings = true;
+    }
+  }
+
+  // With any invalid settings, no setup runs: commands and help still see what definitions declare.
+  if (invalidSettings) return combine(office, [], failures, commands);
+
+  const setUp: SetUp[] = [];
+
+  for (const { item, installed } of ready) {
+    try {
+      setUp.push({ name: item.entry.name, folder: definitionRoot(office.dir, item), registered: await registerPackage({ name: item.entry.name, manifest: installed.manifest, settings: installed.settings }) });
     } catch (error) {
       failures.push(`package ${item.entry.name}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  return combine(office.references, loaded, failures);
+  return combine(office, setUp, failures, commands);
 }
 
 /**
- * Parse each package's additions with their provider and gather the commands. The office's own
+ * Parse each package's additions with their provider, once every setup has run. The office's own
  * references come first, owned by office.yaml. A package whose additions fail is a failure too.
  */
-export function combine(references: readonly CollectionEntry[], loaded: { name: string; registered: Registered }[], failures: string[] = []): CommandLoad {
-  const providers = new Map<string, Collection<CollectionEntry>>();
+export function combine(office: { dir: string; references: readonly RegistryEntry[] }, setUp: SetUp[], failures: string[] = [], commands: DeclaredCommand[] = []): CommandLoad {
+  const providers = new Map<string, Registry<RegistryEntry>>();
 
-  for (const { registered } of loaded) for (const [id, handle] of registered.collections) providers.set(id, handle);
-  const entries: Entry[] = references.map(value => ({ id: repositories.id, value: structuredClone(value), owner: "office.yaml" }));
-  const commands: CommandLoad["commands"] = [];
+  for (const { registered } of setUp) for (const [id, handle] of registered.registries) providers.set(id, handle);
+  const entries: Entry[] = office.references.map(value => ({ id: repositories.id, value: structuredClone(value), owner: "office.yaml", folder: office.dir }));
 
-  for (const { name, registered } of loaded) {
+  for (const { name, folder, registered } of setUp) {
     try {
       const parsed = registered.additions.map(({ id, value }) => {
         const provider = providers.get(id);
@@ -94,11 +105,10 @@ export function combine(references: readonly CollectionEntry[], loaded: { name: 
 
         if (!v.is(namedEntry, entry)) throw new Error(`${id}: expected a named JSON record`);
 
-        return { id, value: structuredClone(entry), owner: `package ${name}` };
+        return { id, value: structuredClone(entry), owner: name, folder };
       });
 
       entries.push(...parsed);
-      commands.push(...registered.commands.map(command => ({ owner: name, command })));
     } catch (error) {
       failures.push(`package ${name}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -106,24 +116,25 @@ export function combine(references: readonly CollectionEntry[], loaded: { name: 
 
   const conflicts: string[] = [];
   const claimed = new Map<string, string>();
+  const claimant = (owner: string) => owner === "office.yaml" ? owner : `package ${owner}`;
 
   for (const { id, value, owner } of entries) {
     const key = JSON.stringify([id, providers.get(id)?.identity === "package" ? owner : null, value.name]);
     const first = claimed.get(key);
 
     if (first === undefined) claimed.set(key, owner);
-    else conflicts.push(id === repositories.id ? `reference ${value.name} claimed by both ${first} and ${owner}; select one claimant` : `${id} ${value.name} claimed by both ${first} and ${owner}`);
+    else conflicts.push(id === repositories.id ? `reference ${value.name} claimed by both ${claimant(first)} and ${claimant(owner)}; select one claimant` : `${id} ${value.name} claimed by both ${claimant(first)} and ${claimant(owner)}`);
   }
 
   return {
     commands, failures, conflicts,
     names: nameProblems(commands),
     // SAFETY: the caller's handle has the ID its provider registered; the entry is that provider's parser output.
-    read: <T extends CollectionEntry>(collection: Collection<T>) => entries.flatMap(({ id, value, owner }) => id === collection.id ? [{ value: structuredClone(value) as T, owner, stale: false }] : []),
+    read: <T extends RegistryEntry>(registry: Registry<T>) => entries.flatMap(({ id, value, owner, folder }) => id === registry.id ? [{ value: structuredClone(value) as T, owner, folder }] : []),
   };
 }
 
-/** Help's lines for package commands: one per command, per failed package and per problem. */
+/** Help's lines for package commands: one per declared command, per failed package and per problem. */
 export async function commandHelp(reader: Reader): Promise<string[]> {
   const load = await loadForCommands(reader);
 
@@ -150,14 +161,14 @@ export async function dispatchCommand(reader: Reader, words: string[]): Promise<
   const matches = load.commands.filter(({ command }) => commandNames(command).includes(requested));
 
   if (!matches.length) return { found: false, failures: load.failures };
-
-  if (load.failures.length || load.conflicts.length) throw new OfficeError(`${requested}: ${[...load.failures, ...load.conflicts].join("; ")}`);
   const claimed = new Set(matches.flatMap(({ command }) => commandNames(command)));
-  const problems = new Set(load.names.filter(problem => claimed.has(problem.name)).map(problem => problem.message));
+  const names = new Set(load.names.filter(problem => claimed.has(problem.name)).map(problem => problem.message));
+  const problems = [...load.failures, ...load.conflicts, ...names];
 
-  if (problems.size) throw new OfficeError(`${requested}: ${[...problems].join("; ")}`);
+  if (problems.length) throw new OfficeError(`${requested}: ${problems.join("; ")}`);
+  const [{ command, settings = {} }] = matches;
 
-  await matches[0].command.run({ read: load.read });
+  await command.run({ read: load.read, settings: structuredClone(settings) });
 
   return { found: true };
 }

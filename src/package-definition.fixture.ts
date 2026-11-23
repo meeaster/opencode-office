@@ -7,10 +7,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { compile } from "./build.ts";
 import { git } from "./git.ts";
-import { writePackage } from "./test-package.ts";
+import { definitionText, writePackage } from "./test-package.ts";
 import type officePlugin from "../packages/office/plugin/index.ts";
 
-export function definitionFixture() {
+/** `second: false` skips building the second distribution, for a file that never runs `variant` or `newer`. */
+export function definitionFixture({ second = true } = {}) {
   // Each test spawns the compiled office many times; under a parallel run it gets 30s, not Bun's 5s.
   setDefaultTimeout(30_000);
 
@@ -51,20 +52,22 @@ export function definitionFixture() {
 
     for (const name of ["sops", "age", "age-keygen"]) write(join(bin, name), '#!/bin/sh\n[ "$1" = --version ] && echo 1.0.0\n', 0o755);
 
+    if (!second) return;
+
     // Build a second distribution, without modifying the checkout's packages or template.
     const dist = join(root, "distribution");
     const checkout = dirname(import.meta.dir);
     git(["init", "-q", dist]);
 
-    for (const path of ["src", "standard", "packages", "template", "image", "compose.yaml", "LICENSE", "package.json"]) cpSync(join(checkout, path), join(dist, path), { recursive: true });
-    writePackage(join(dist, "packages/arrival/office.ts"), `${marker} export default { name: "arrival", description: "Newly shipped" }`);
-    writePackage(join(dist, "packages/legacy/package.yaml"), "name: legacy\ndescription: Legacy YAML fixture\n");
+    for (const path of ["src", "standard", "packages", "sdk", "template", "image", "compose.yaml", "LICENSE", "package.json", "tsconfig.json"]) cpSync(join(checkout, path), join(dist, path), { recursive: true });
+    writePackage(join(dist, "packages/arrival/office.ts"), definitionText(`{}`, `${marker}`));
+    writePackage(join(dist, "packages/legacy/package.yaml"), "{}\n");
     const aws = join(dist, "packages/aws-emulator/office.ts");
-    write(aws, read(aws).replace("if (!includeSource) return;", 'throw Error("changed built-in collector");'));
+    write(aws, read(aws).replace("if (!ctx.settings.source_reference) return;", 'throw Error("changed built-in collector");'));
     const commands = join(dist, "packages/references/office.ts");
-    write(commands, read(commands).replace("ctx.command(listing)", 'ctx.command({ ...listing, run(inputs) { console.log("variant package handler"); listing.run(inputs) } })'));
+    write(commands, read(commands).replace("run: listReferences }", 'run(inputs) { console.log("variant package handler"); listReferences(inputs); } }'));
     const changed = join(dist, "packages/artifact-share");
-    write(join(changed, "office.ts"), 'import title from "./missing.ts"; export default {name:"artifact-share", description:title}');
+    write(join(changed, "office.ts"), definitionText('{ namespace: title }', 'import title from "./missing.ts";'));
     write(join(changed, "plugin/index.ts"), "// replacement");
     const template = join(dist, "template/office/office.yaml");
     write(template, `${read(template)}  - name: artifact-share\n`);
@@ -153,6 +156,7 @@ export function definitionFixture() {
    */
   function published(dir: string) {
     type Row = { name: string; url: string; ref?: string };
+
     const saved: { owner: Row[]; contributors: { name: string; stale: boolean; entries: { id: string; value: Row }[] }[] } = JSON.parse(read(join(dir, ".office/resolved/references.json")));
     const line = (row: Row, owner: string) => `${row.name}\t${row.url}${row.ref ? ` @ ${row.ref}` : ""}\t${owner}`;
 
@@ -162,10 +166,13 @@ export function definitionFixture() {
     ].map(row => `${row}\n`).join("");
   }
 
+  /** A handle with the references registry's id: handles match by id. */
+  const references = 'const repositories = {id: "references.repository", parse: entry => entry};';
+
   function collector(url: string, ref = "main", after = "") {
     const value = JSON.stringify({ name: "docs", url, ref });
 
-    return `export default {name:"docs",description:"Docs",async setup({add}) {add({registry:"references.repository",value:${value}});${after}}}`;
+    return definitionText(`{async setup({add}) {add(repositories,${value});${after}}}`, references);
   }
 
   /** Pause this invocation after real Git finished each network fetch, before Office can apply. */

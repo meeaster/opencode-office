@@ -3,12 +3,12 @@ import { homedir } from "node:os";
 import { join, resolve, relative } from "node:path";
 import * as v from "valibot";
 import { installs, recipes, tasks, type Install, type Task } from "../../packages/mise-integration/claims.ts";
-import type { CollectionEntry } from "../../packages/office/package-context.ts";
+import type { RegistryEntry } from "../../sdk/index.ts";
 import { requirements, type Requirement } from "../../packages/tooling/requirements.ts";
 import type { Office } from "../../src/office.ts";
 import type { InstalledPackage } from "../../src/packages.ts";
-import { systemApplies, systemSection } from "../../src/package-system.ts";
-import { bootstrapFile, settingValue, type SettingValue, systemBlock } from "../../src/schema.ts";
+import { gateDefaultProblem, systemApplies, systemSection } from "../../src/package-system.ts";
+import { bootstrapFile, defaultOffSetting, settingValue, type SettingValue, systemBlock } from "../../src/schema.ts";
 
 export function machineCollection(id: string) {
   return [requirements.id, installs.id, recipes.id, tasks.id].includes(id);
@@ -23,7 +23,7 @@ function asset(item: InstalledPackage, file: string) {
 }
 
 /** Decode the same rows at collection, replacement validation and inventory boundaries. */
-export function project(item: InstalledPackage, rows: readonly { id: string; value: CollectionEntry }[], validateAssets = false) {
+export function project(item: InstalledPackage, rows: readonly { id: string; value: RegistryEntry }[], validateAssets = false) {
   const claims: MachineClaims = { tools: [], tasks: [] };
   const names = new Set<string>();
   let system = item.manifest.system;
@@ -60,8 +60,10 @@ export function project(item: InstalledPackage, rows: readonly { id: string; val
 
       system = v.parse(systemBlock, { ...recipe, ready: [...new Set([...recipe.ready, ...present])] });
 
-      if (item.manifest.settings[system.setting]?.default !== false) throw new Error(`${name}: system recipe needs a default-off setting`);
+      if (!defaultOffSetting(item.manifest.settings, system.setting)) throw new Error(`system recipe ${name}: its setting ${system.setting} must be declared type: boolean with default: false, so it defaults to off`);
+      const problem = gateDefaultProblem(item.entry, item.settings, system.setting);
 
+      if (problem) throw new Error(`system recipe ${name}: ${problem}`);
     }
   }
 

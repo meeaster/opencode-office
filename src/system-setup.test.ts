@@ -51,12 +51,8 @@ function makeOffice({ demo = true, machine = "", mode = "host" } = {}): void {
   write(join(office, "machine.toml"), `[tools]\n${machine}`);
   writePackage(
     join(office, "packages/demo/package.yaml"),
-    `name: demo
-description: A demo package.
-settings:
-  on:
-    description: On
-    default: false
+    `# A demo package.
+settings: {type: object, additionalProperties: false, properties: {on: {type: boolean, default: false}}}
 system:
   setting: on
   description: Demo Browser

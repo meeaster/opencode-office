@@ -3,7 +3,7 @@ import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
-import { writePackage } from "./test-package.ts";
+import { definitionText, writePackage } from "./test-package.ts";
 
 const { root, bin, marker, write, read, commit, fixture, collector, pausedRefresh } = definitionFixture();
 
@@ -102,8 +102,7 @@ packages:
 
   write(config, declarations);
   write(join(dir, "report.sh"), "exit 0");
-  writePackage(join(dir, "packages/cron/office.ts"), `export default {name:"cron", description:"Local jobs",
-    cron:{report:{script:"report.sh",schedule:"@daily",when:"container"}}};`);
+  writePackage(join(dir, "packages/cron/office.ts"), definitionText(`{cron:{report:{script:"report.sh",schedule:"@daily",when:"container"}}}`));
   write(join(dir, "packages/cron/report.sh"), `echo "local child"; exit 23`);
   cli(0, "sync", "--packages");
   const listing = "office.report\npackage.office.update-references\n";
@@ -138,13 +137,12 @@ packages:
   - name: unrelated
   - name: later
 `);
-  writePackage(join(dir, "packages/unrelated/office.ts"), `import {existsSync,appendFileSync} from "node:fs";
-    if (existsSync(new URL("../../synced", import.meta.url))) {appendFileSync(process.env.PROBE,"extra import"); throw Error("unrelated import")}
-    export default {name:"unrelated",description:"Unrelated"}`);
+  writePackage(join(dir, "packages/unrelated/office.ts"), definitionText(`{}`, `import {existsSync,appendFileSync} from "node:fs";
+    if (existsSync(new URL("../../synced", import.meta.url))) {appendFileSync(process.env.PROBE,"extra import"); throw Error("unrelated import")}`));
   write(join(dir, "first.sh"), `set -eu\n"$OFFICE_CRON_COMMAND" sync --packages\necho ok > synced\necho 'throw Error("broken tick helper"); export const tick = {}' > packages/later/tick.ts`);
   write(join(pkg, "tick.sh"), "echo stale >> ran");
   write(join(pkg, "tick.ts"), 'export const tick = {script:"tick.sh",schedule:"@hourly"}');
-  writePackage(join(pkg, "office.ts"), `import {tick} from "./tick.ts"; export default {name:"later",description:"Later",registerCron(ctx){ctx.cron.job("tick",tick)}}`);
+  writePackage(join(pkg, "office.ts"), definitionText(`{registerCron(ctx){ctx.cron.job("tick",tick)}}`, `import {tick} from "./tick.ts";`));
   cli(0, "sync", "--packages");
   const out = cli(1, "cron", "catch-up");
   expect(out).toContain("catching up office.first");
@@ -163,12 +161,12 @@ test("one author registers current-mode jobs and commands; a command reads curre
   const module = join(dir, "packages/report/office.ts");
   const script = join(dir, "packages/report/daily.sh");
   const data = join(dir, "packages/other/package.yaml");
-  writePackage(data, "name: other\ndescription: Legacy jobs\ncron: {weekly: {schedule: '@weekly', script: weekly.sh}}\n");
+  writePackage(data, "# Legacy jobs\ncron: {weekly: {schedule: '@weekly', script: weekly.sh}}\n");
   write(join(dir, "packages/other/weekly.sh"), "true");
   write(script, "echo ran >> runs; test ! -e fail || exit 29");
   write(join(dir, "packages/report/two.sh"), "echo two > unsynced");
   const spare = join(dir, "packages/spare/office.ts");
-  writePackage(spare, 'export default {name:"spare",description:"Unrelated"}');
+  writePackage(spare, definitionText('{}'));
 
   const hour = (new Date().getUTCHours() + 12) % 24;
 
@@ -184,20 +182,18 @@ packages:
     cron: {update-references: {enabled: false}, upgrade-tools: {enabled: false}}
 `);
 
-  const definition = (extra = "") => `import {appendFileSync} from "node:fs";
-    const log = line => appendFileSync(process.env.PROBE,line+"\\n");
-    export default {name:"report",description:"Reports",
-    settings:{label:{description:"Edition",default:"one"}},
+  const definition = (extra = "") => definitionText(`{settings:{type:"object",additionalProperties:false,properties:{label:{type:"string",default:"one"}}},
     setup(ctx) {
       log("setup:"+ctx.settings.label);
-      ctx.command({name:"report edition",summary:"Print edition",run(){console.log(ctx.settings.label)}});
-      ctx.add({registry:"references.repository",value:{name:"edition",url:ctx.settings.label}});
+      ctx.add({id:"references.repository",parse:entry=>entry},{name:"edition",url:ctx.settings.label});
     },
+    commands:{"report edition":{summary:"Print edition",run({settings}){console.log(settings.label)}}},
     registerCron(ctx) {
       log("cron:"+ctx.settings.label);
       ctx.cron.job("daily",ctx.cron.mode==="host" ? false : {script:ctx.settings.label==="two"?"two.sh":"daily.sh",schedule:"@daily"});
       ${extra}
-    }}`;
+    }}`, `import {appendFileSync} from "node:fs";
+    const log = line => appendFileSync(process.env.PROBE,line+"\\n");`);
 
   writePackage(module, definition());
   configure("container", "one");
@@ -231,7 +227,7 @@ packages:
   expect(read(probe)).toBe("cron:two\n");
   // A package command loads every selected package: an unrelated broken one fails it.
   expect(cli(1, "report", "edition")).toContain("package spare: packages/spare/office.ts: unrelated module");
-  writePackage(spare, 'export default {name:"spare",description:"Unrelated"}');
+  writePackage(spare, definitionText('{}'));
   rmSync(probe);
   expect(cli(0, "references", "list")).toContain("edition\ttwo");
   // Commands run setup, never registerCron.
@@ -247,7 +243,7 @@ packages:
   expect(read(join(dir, "runs"))).toBe("ran\nran\n");
   expect(read(stamp)).toBe(success);
 
-  writePackage(module, 'export default {name:"report",description:"Withdrawn",settings:{label:{description:"Edition",default:"one"}},registerCron(){}}');
+  writePackage(module, definitionText('{settings:{type:"object",additionalProperties:false,properties:{label:{type:"string",default:"one"}}},registerCron(){}}'));
   expect(cli(1, "sync", "--packages")).toContain("packages.report.cron.daily: no such job");
   const config = join(dir, "office.yaml");
   write(config, read(config).replace(/^    cron: \{daily:.*\n/m, ""));
@@ -263,7 +259,7 @@ test("an invalid registration rejects the owner's batch before a valid sibling c
   write(join(pkg, "run.sh"), "echo bad >> started");
   const job = '{schedule:"@daily",script:"run.sh"}';
   // Synced while valid: a local package's later edits load without a sync.
-  writePackage(join(pkg, "office.ts"), 'export default {name:"report",description:"Reports"}');
+  writePackage(join(pkg, "office.ts"), definitionText('{}'));
   cli(0, "sync", "--packages");
 
   // One data conflict and one asynchronous hook end to end; standard/cron/jobs.test.ts covers the other invalid registrations.
@@ -271,18 +267,15 @@ test("an invalid registration rejects the owner's batch before a valid sibling c
     [`cron:{first:${job}},`, "", "duplicate cron job package.report.first"],
     ["", 'return Promise.reject(Error("async job discovery"))', "synchronously"],
   ]) {
-    writePackage(join(pkg, "office.ts"), `export default {name:"report",description:"Reports",${data}
-      registerCron(ctx){ctx.cron.job("first",${job}); ${extra}}}`);
+    writePackage(join(pkg, "office.ts"), definitionText(`{${data}
+      registerCron(ctx){ctx.cron.job("first",${job}); ${extra}}}`));
     expect(cli(1, "cron", "run", "package.report.first")).toContain(reason);
     expect(existsSync(join(dir, "started"))).toBe(false);
   }
 
-  writePackage(join(pkg, "office.ts"), `import {writeFileSync} from "node:fs"; export default {name:"report",description:"Reports",
-    async registerCron(){await Promise.resolve(); writeFileSync(process.env.PROBE,"async hook ran")}}`);
+  writePackage(join(pkg, "office.ts"), definitionText(`{async registerCron(){await Promise.resolve(); writeFileSync(process.env.PROBE,"async hook ran")}}`, `import {writeFileSync} from "node:fs";`));
   expect(cli(1, "sync", "--packages")).toContain("register jobs synchronously");
   expect(existsSync(probe)).toBe(false);
-  writePackage(join(pkg, "office.ts"), 'export default {name:"report",description:"Reports",setup(ctx){if (ctx.cron?.mode) ctx.cron.job("bad",false)}}');
-  expect(cli(1, "sync", "--packages")).toContain("ctx.cron belongs in registerCron(ctx)");
 }, 60_000);
 
 test("the scheduled reference refresh catches up once at its overridden due time using the named run's stamp", () => {

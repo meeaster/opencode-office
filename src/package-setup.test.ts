@@ -1,32 +1,27 @@
 import { expect, test } from "bun:test";
 import * as v from "valibot";
+import type { RegistryEntry } from "../sdk/index.ts";
 import { registerPackage } from "./package-setup.ts";
 import { type PackageManifest, packageManifestSchema } from "./schema.ts";
 
-const manifest = (setup: PackageManifest["setup"]) => v.parse(packageManifestSchema, { name: "catalog", description: "Catalog", setup });
-const items = { id: "catalog.items", parse: (input: { name: string }) => input };
+const manifest = (setup: PackageManifest["setup"]) => v.parse(packageManifestSchema("catalog"), { setup });
+const items = { id: "catalog.items", parse: (input: RegistryEntry) => input };
+const input = { name: "catalog", settings: {} };
 
-test("one package's setup returns its collections, unparsed additions and commands", async () => {
-  const run = () => {};
-
-  const registered = await registerPackage({ name: "catalog", overrides: {}, settings: {}, manifest: manifest(ctx => {
-    ctx.collection(items);
+test("one package's setup returns its registries and its unparsed additions", async () => {
+  const registered = await registerPackage({ ...input, manifest: manifest(ctx => {
+    ctx.registry(items);
     ctx.add(items, { name: "first" });
-    // The one-argument form earlier definitions use.
-    (ctx.add as unknown as (row: unknown) => void)({ registry: "references.repository", value: { name: "docs", url: "u" } });
-    ctx.command({ name: "items show", aliases: ["items"], summary: "Show", run });
-    ctx.command({ name: "Bad Name", summary: "Show", run });
+    ctx.add({ id: "references.repository", parse: entry => entry }, { name: "docs", url: "u" });
   }) });
 
-  expect([...registered.collections.keys()]).toEqual(["catalog.items"]);
+  expect([...registered.registries.keys()]).toEqual(["catalog.items"]);
   expect(registered.additions).toEqual([{ id: "catalog.items", value: { name: "first" } }, { id: "references.repository", value: { name: "docs", url: "u" } }]);
-  expect(registered.commands).toEqual([{ name: "items show", aliases: ["items"], summary: "Show", run }]);
-  expect(registered.invalid.join("\n")).toContain('package catalog: command: name: invalid route "Bad Name"');
 });
 
-test("a setup that throws, or registers another package's collection, fails the call", async () => {
-  const input = { name: "catalog", overrides: {}, settings: {} };
-
+test("a setup that throws, registers another package's registry or adds an unnamed entry fails the call", async () => {
   await expect(registerPackage({ ...input, manifest: manifest(() => { throw new Error("setup failed"); }) })).rejects.toThrow("setup failed");
-  await expect(registerPackage({ ...input, manifest: manifest(ctx => ctx.collection({ id: "other.items", parse: i => i })) })).rejects.toThrow("invalid or duplicate collection other.items");
+  await expect(registerPackage({ ...input, manifest: manifest(ctx => ctx.registry({ id: "other.items", parse: entry => entry })) })).rejects.toThrow("invalid or duplicate registry other.items");
+  // An untyped JavaScript definition can pass anything (JSON.parse's result is untyped); the entry is checked at runtime.
+  await expect(registerPackage({ ...input, manifest: manifest(ctx => ctx.add(items, JSON.parse('{"title":"x"}'))) })).rejects.toThrow("expected a named registry entry");
 });

@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, readlinkSync, rmSync } from "nod
 import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
-import { writePackage } from "./test-package.ts";
+import { definitionText, writePackage } from "./test-package.ts";
 
 const { root, exe, marker, write, read, commit, fixture } = definitionFixture();
 
@@ -14,7 +14,7 @@ for (const kind of ["local", "tracked"]) {
     const pkg = kind === "local" ? join(dir, "packages/arrival") : join(repo, "arrival");
     const installed = kind === "local" ? pkg : join(dir, ".office/packages/arrival");
     const link = join(dir, ".opencode/plugins/arrival");
-    writePackage(join(pkg, "office.ts"), `${marker} export default {name:"arrival",description:"Original"}`);
+    writePackage(join(pkg, "office.ts"), definitionText(`{}`, `${marker}`));
     write(join(pkg, "plugin/index.ts"), "// original plugin");
     write(join(pkg, "seed/arrival.md"), "seed");
     let identity = "packages/arrival";
@@ -56,18 +56,18 @@ test("reads return the provider's parsed values, a copy each; sync admits no bat
   const contract = join(dir, "packages/catalog/items.ts");
   const saved = join(dir, ".office/resolved/references.json");
   const rows = () => JSON.stringify(JSON.parse(read(saved)).contributors.find((group: { name: string }) => group.name === "alpha"));
-  const author = 'import {items} from "@office/catalog/items";export default {name:"alpha",description:"author",setup(c){c.add(items,{name:"first",count:1})}}';
+  const author = definitionText('{setup(c){c.add(items,{name:"first",count:1})}}', 'import {items} from "@office/catalog/items";');
   const shares = { exports: { "./items": "./items.ts" } };
   const uses = { dependencies: ["catalog"] };
-  const provider = 'import {items} from "./items.ts";export default {name:"catalog",description:"provider",setup(c){c.collection(items);}}';
+  const provider = definitionText('{setup(c){c.registry(items);}}', 'import {items} from "./items.ts";');
   select("  - {name: alpha}\n  - {name: beta}\n  - {name: catalog}\n");
   writePackage(path("alpha"), author, uses);
   writePackage(path("catalog"), provider, shares);
   write(contract, 'export const items={id:"catalog.items",parse(i){if(!Number.isFinite(i.count))throw Error("expected count");return {...i,count:i.count+1}}}');
-  writePackage(path("beta"), `export default {name:"beta",description:"reader",setup(c){c.command({name:"items",summary:"items",run(i){
+  writePackage(path("beta"), definitionText(`{commands:{items:{summary:"items",run(i){
     const handle={id:"catalog.items",parse(){throw Error("reader parser ran")}};
     const first=i.read(handle); if(first.length)first[0].value.count=99;console.log(JSON.stringify(i.read(handle)));
-  }})}}`);
+  }}}}`));
   cli(0, "sync", "--packages");
   // Normalized once by the provider, not by the reader's handle; changing one read leaves the next alone.
   expect(cli(0, "items")).toContain('"count":2');
@@ -82,7 +82,7 @@ test("reads return the provider's parsed values, a copy each; sync admits no bat
   expect(cli(1, "sync", "--packages")).toContain("provider contract changed");
   expect(rows()).toContain('"entries":[]');
   writePackage(path("alpha"), author.replace("count:1", 'count:"valid"'), uses);
-  writePackage(path("catalog"), provider.replace("c.collection(items);", 'c.collection(items);c.add(items,{name:"bad",count:1});'), shares);
+  writePackage(path("catalog"), provider.replace("c.registry(items);", 'c.registry(items);c.add(items,{name:"bad",count:1});'), shares);
   expect(cli(1, "sync", "--packages")).toContain("provider of catalog.items failed");
   expect(rows()).toContain('"entries":[]');
   expect(cli(1, "items")).toContain("package catalog: expected text");
@@ -95,12 +95,11 @@ test("a reader uses the provider as it is now; sync keeps a changed provider's l
   const writer = join(packages, "alpha/office.ts");
   const add = 'c.add(items,{name:"x",value:12});';
   const uses = { dependencies: ["catalog"] };
-  const author = (body: string) => `import {items} from "@office/catalog/items";export default {name:"alpha",description:"author",setup(c){${body}}}`;
+  const author = (body: string) => definitionText(`{setup(c){${body}}}`, `import {items} from "@office/catalog/items";`);
   select("  - name: alpha\n  - name: catalog\n  - name: beta\n");
   write(contract, 'export const items={id:"catalog.items",parse:i=>i};export const display=i=>i.value.toFixed(0)');
-  writePackage(join(packages, "catalog/office.ts"), 'import {items} from "./items.ts";export default {name:"catalog",description:"provider",setup(c){c.collection(items)}}', { exports: { "./items": "./items.ts" } });
-  writePackage(join(packages, "beta/office.ts"), `import {items,display} from "@office/catalog/items";export default {name:"beta",description:"reader",
-    setup(c){c.command({name:"display",summary:"display",run(i){console.log(i.read(items).map(row=>display(row.value)).join(",") || "empty")}})}}`, uses);
+  writePackage(join(packages, "catalog/office.ts"), definitionText('{setup(c){c.registry(items)}}', 'import {items} from "./items.ts";'), { exports: { "./items": "./items.ts" } });
+  writePackage(join(packages, "beta/office.ts"), definitionText(`{commands:{display:{summary:"display",run(i){console.log(i.read(items).map(row=>display(row.value)).join(",") || "empty")}}}}`, `import {items,display} from "@office/catalog/items";`), uses);
   writePackage(writer, author(add), uses);
   cli(0, "sync", "--packages");
   expect(cli(0, "display")).toContain("12");
@@ -136,14 +135,12 @@ for (const order of [["alpha", "catalog"], ["catalog", "alpha"]]) {
     const consumer = join(repo, "alpha/office.ts");
     write(join(repo, "alpha/compose.yaml"), "services: {alpha: {image: example/alpha}}\n");
     write(join(repo, "alpha/exports/expected.ts"), `export const expected="metres"`);
-    writePackage(consumer, `import {items,unit} from "@office/catalog/items";import {expected} from "./exports/expected.ts";
-      if(unit!==expected)throw Error("incompatible revisions");
-      export default {name:"alpha",description:"author",setup(c){if(c.booleanSetting("enabled",{default:false,description:"use catalog"})){
-      c.add(items,{name:"sample"});}}}`, { exports: { "./expected": "./exports/expected.ts" }, dependencies: ["catalog"] });
-    writePackage(join(repo, "catalog/office.ts"), `import {items,unit} from "./exports/items.ts";import {expected} from "@office/alpha/expected";
-      if(expected!==unit)throw Error("incompatible revisions");
-      export default {name:"catalog",description:"provider",setup(c){
-      c.collection(items);c.command({name:"measure",summary:"measure",run(i){console.log(i.read(items)[0].value.unit)}})}}`, { exports: { "./items": "./exports/items.ts" }, dependencies: ["alpha"] });
+    writePackage(consumer, definitionText(`{settings:{type:"object",additionalProperties:false,properties:{enabled:{type:"boolean",default:false}}},setup(c){if(c.settings.enabled){
+      c.add(items,{name:"sample"});}}}`, `import {items,unit} from "@office/catalog/items";import {expected} from "./exports/expected.ts";
+      if(unit!==expected)throw Error("incompatible revisions");`), { exports: { "./expected": "./exports/expected.ts" }, dependencies: ["catalog"] });
+    writePackage(join(repo, "catalog/office.ts"), definitionText(`{setup(c){c.registry(items)},
+      commands:{measure:{summary:"measure",run(i){console.log(i.read(items)[0].value.unit)}}}}`, `import {items,unit} from "./exports/items.ts";import {expected} from "@office/alpha/expected";
+      if(expected!==unit)throw Error("incompatible revisions");`), { exports: { "./items": "./exports/items.ts" }, dependencies: ["alpha"] });
     contract("metres");
     const first = commit(repo);
     select(order.map(name => `  - {name: ${name}, repo: ${repo}, ref: ${first}, path: ${name}, track: main${name === "alpha" ? ", settings: {enabled: true}" : ""}}\n`).join(""));
@@ -165,11 +162,10 @@ test("a suspended reader retains its generation beyond the previous set", async 
   const { dir, cli, env, select } = fixture("leased-reader");
   const repo = join(root, "leased-reader-source");
   git(["init", "-qb", "main", repo]);
-  writePackage(join(repo, "pkg/office.ts"), `import {readFileSync} from "node:fs";
-    export default {name:"leased",description:"Reader",setup(c){c.command({name:"read edition",summary:"Edition",async run(){
+  writePackage(join(repo, "pkg/office.ts"), definitionText(`{commands:{"read edition":{summary:"Edition",async run(){
       if(process.env.WAIT_FOR_FLIPS){console.log("ready");await Bun.stdin.text()}
       console.log(readFileSync(new URL("./edition",import.meta.url),"utf8"))
-    }})}}`, { name: "leased" });
+    }}}}`, `import {readFileSync} from "node:fs";`), { name: "leased" });
 
   const pin = (value: string) => {
     write(join(repo, "pkg/edition"), value);

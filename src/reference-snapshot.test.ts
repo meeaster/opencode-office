@@ -6,7 +6,7 @@ import { sync } from "./commands/sync.ts";
 import { git } from "./git.ts";
 import { loadOffice } from "./office.ts";
 import { readSnapshot } from "./reference-snapshot.ts";
-import { writePackage } from "./test-package.ts";
+import { definitionText, writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -43,7 +43,7 @@ test("an earlier release's command rows are read and dropped unread, whatever th
 test("a sync rewrites a file holding command rows without them", async () => {
   const office = join(dir, "office");
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: notes\n");
-  writePackage(join(office, "packages/notes/office.ts"), 'export default {name:"notes",description:"Notes",setup(ctx){ctx.command({name:"notes show",summary:"Show",run(){}})}}');
+  writePackage(join(office, "packages/notes/office.ts"), definitionText('{commands:{"notes show":{summary:"Show",run(){}}}}'));
   git(["init", "--quiet", office]);
   await sync(loadOffice(office), { scope: "packages" });
   const published = JSON.parse(readFileSync(saved(office), "utf8"));

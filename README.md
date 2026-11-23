@@ -383,20 +383,18 @@ Schedules are five-field UTC cron expressions or time macros such as `@daily`. T
 An `office.ts` author can register a shell script in ordinary TypeScript. For example, put this in `packages/reports/office.ts` (with a `package.json` naming it, as "Packages" shows), put `printf 'report from %s\n' "$PWD"` in `packages/reports/scripts/report.sh`, and select `reports` in `office.yaml`:
 
 ```ts
-import type { CronContext } from "@office/office/context";
+import { type CronContext, Package } from "@office/sdk";
 
-export default {
-  name: "reports",
-  description: "Run this office's scheduled report",
-  settings: { enabled: { description: "Schedule the report", default: true } },
+export default Package.define({
+  settings: { type: "object", additionalProperties: false, properties: { enabled: { type: "boolean", default: true, description: "Schedule the report" } } },
   registerCron(ctx: CronContext): undefined {
     const active = ctx.settings.enabled === true && ctx.cron.mode !== "container";
     ctx.cron.job("report", active ? { schedule: "15 9 * * *", script: "scripts/report.sh" } : false);
   },
-};
+});
 ```
 
-Run `office sync --packages`, then `office cron list`. On a host, `office cron run package.reports.report` reads the named owner's `registerCron` and runs the script. Register commands and references separately in `setup(ctx)`; named cron execution never calls it. `registerCron` must return synchronously, without a return value. It runs as trusted package code, including during validation. Put work in the script: rejecting a registration cannot undo external effects its author started.
+Run `office sync --packages`, then `office cron list`. On a host, `office cron run package.reports.report` reads the named owner's `registerCron` and runs the script. Declare commands under `commands` and add references in `setup(ctx)`; named cron execution calls neither. `CronContext` and `registerCron` are transitional: they become a registry the cron package owns. `registerCron` must return synchronously, without a return value. It runs as trusted package code, including during validation. Put work in the script: rejecting a registration cannot undo external effects its author started.
 
 `ctx.cron.mode` is `"host"`, `"managed-host"` or `"container"`. `ctx.settings` is validated against the **current** package entry. An unsynced settings edit may therefore select a different script even while the package's `.settings.json` still holds the last synced settings (package commands read the current entry too). Run `office sync --packages` to bring these inputs together; `office up` applies the resulting schedules.
 
@@ -497,6 +495,7 @@ Every package has a `package.json`. It is npm's format, but office never fetches
 ```json
 {
   "name": "@office/notes",
+  "description": "Publish office notes",
   "private": true,
   "exports": { "./format": "./format.ts" },
   "office": {
@@ -506,83 +505,76 @@ Every package has a `package.json`. It is npm's format, but office never fetches
 }
 ```
 
-- `name` is `@office/<name>`, the name `office.yaml` selects it under.
+- `name` is `@office/<name>`, the name `office.yaml` selects it under, and `description`, optional, says what it is for. The definition states neither. No package can be called `sdk`: that name is `@office/sdk`'s.
 - `office.definition` is the path of its definition inside the package: a module (any file name) or a `package.yaml`. Office looks for no file by name; a package without a `package.json`, or whose `office.definition` is missing or leads outside the package, doesn't load, and the error says what to add.
 - `exports` is its public API: what another package may import, as `@office/notes` (the `"."` entry) or `@office/notes/format`. An import of a path it doesn't list fails with Bun's own error. `"exports": {}` shares nothing; a package that leaves `exports` out makes no promise, and its files can be imported by path.
-- `office.dependencies` lists the `@office/<name>` packages it imports, type-only imports included. Each must be selected (the required `office`, `tooling`, `references` and `mise-integration` always are); a missing one stops sync and every package command before any package loads, naming both and saying to add it to `office.yaml`. Declaring a dependency doesn't select it, and an import that isn't declared isn't checked yet. Package managers ignore the `office` key, so nothing asks a registry for an `@office` name.
+- `office.dependencies` lists the `@office/<name>` packages it imports, type-only imports included. Each must be selected (the required `office`, `tooling`, `references` and `mise-integration` always are); a missing one stops sync and every package command before any package loads, naming both and saying to add it to `office.yaml`. Declaring a dependency doesn't select it, and an import that isn't declared isn't checked yet. `@office/sdk` is always available and is never listed: listing it is a problem that stops sync and every package command. Package managers ignore the `office` key, so nothing asks a registry for an `@office` name.
 - A package may keep its own `devDependencies` and `node_modules` for its tests, plugin and tools. Its definition and the modules it shares import only `@office/…` packages, Node's built-ins and its own files: a library pnpm installs doesn't resolve its own dependencies when a definition loads.
 
-Sync links each package it loads as `node_modules/@office/<name>` in the package set it publishes, and the compiled `office` loads every definition through that link, so a package's `@office/…` imports resolve inside the set it belongs to: on the first sync, while sync checks a new set, and afterwards. For editors it links `packages/node_modules/@office` to the published set (kept out of Git; a real folder there is yours and is left alone), so TypeScript follows the same imports with no generated configuration: the template's `tsconfig.json` just includes `packages`. Running from source (`bin/office`) resolves a local package's imports through that editor link, against the published set rather than the one being checked; offices run the compiled `office`.
+Sync links each package it loads as `node_modules/@office/<name>` in the package set it publishes, and the compiled `office` loads every definition through that link, so a package's `@office/…` imports resolve inside the set it belongs to: on the first sync, while sync checks a new set, and afterwards. Beside the links it writes `node_modules/@office/sdk`, the SDK's own source, as types for editors and `tsc`: its runtime entry throws, since a package office loads always gets the executable's SDK. For editors it links `packages/node_modules/@office` to the published set (kept out of Git; a real folder there is yours and is left alone), so TypeScript follows the same imports with no generated configuration: the template's `tsconfig.json` just includes `packages`. Running from source (`bin/office`) resolves a local package's imports through that editor link, against the published set rather than the one being checked; offices run the compiled `office`.
 
-`office.ts` default-exports a plain object:
+A module definition's default export is `Package.define({...})` from `@office/sdk`, the one thing a package imports to be a package. Anything else fails to load, naming the package and saying to use `Package.define`; so does a key or a `setup` call the SDK doesn't have. `@office/sdk` is the executable's own copy whatever is on disk, in every process that loads a definition, and has named exports only: `Package`, `Registry` and the types.
 
 ```ts
 // packages/notes/office.ts
+import { Package } from "@office/sdk";
 import { defaultTitle } from "./defaults.ts"; // a sibling exporting a string
-
-export default {
-  name: "notes",
-  description: "Publish office notes",
-  settings: { title: { description: "Page title", default: defaultTitle } },
-};
-```
-
-Office loads the module synchronously as trusted code when it reads the package, including during `check`. Ship its relative imports in the package; consumers need no SDK, build step or dependency install. The export accepts the same data fields, defaults and validation as `package.yaml`. OpenCode still loads `plugin/` separately, and Compose still reads `compose.yaml`.
-
-To add a direct CLI command, register a function in `office.ts`:
-
-```ts
-// packages/notes/office.ts
-import type { PackageContext } from "@office/office/context";
 import { showTitle } from "./commands/title.ts"; // export function showTitle(title: string) { console.log(title) }
 
-export default {
-  name: "notes",
-  description: "Publish office notes",
-  settings: { title: { description: "Page title", default: "Notebook" } },
-  setup(ctx: PackageContext) {
-    const title = ctx.settings.title;
-    if (typeof title !== "string") throw new Error("title must be text");
-    ctx.command({ name: "notes title", aliases: ["notes heading"], summary: "Print the page title", run: () => showTitle(title) });
+export default Package.define({
+  settings: {
+    type: "object",
+    additionalProperties: false,
+    properties: { title: { type: "string", default: defaultTitle, description: "Page title" } },
   },
-};
+  commands: {
+    "notes title": { summary: "Print the page title", aliases: ["notes heading"], run: ({ settings }) => showTitle(settings.title) },
+  },
+});
 ```
 
-Select `notes`, run `office sync --packages`, then `office --help` and `office notes title`. Routes and aliases are exact sequences of lowercase words (digits and dashes allowed), with no package-defined options or trailing arguments yet. A name or alias whose first word is one of the CLI's own commands (such as `sync`, `apps` or `seeds`), or `opencode inspect` and names under it, is reserved; each name has one owner. Handlers receive `{ read }`; [the built-in listing](packages/references/office.ts) registers an imported handler directly.
+Office loads the module synchronously as trusted code when it reads the package, including during `check`. Ship its relative imports in the package; consumers need no build step or dependency install. A `package.yaml` definition has the same data keys, without the functions, and needs no SDK. OpenCode still loads `plugin/` separately, and Compose still reads `compose.yaml`.
 
-A package command, `office --help` and bare `office` load every package `office.yaml` selects on each run: each `setup` runs with the entry's current settings, and the command runs on what was registered in that run. Nothing is read from the saved references file, so an edit to a package, a setting, a name or an alias shows at once, and a command can differ from what sync last applied until the next sync. Imports between packages still follow the last sync: definitions load through the published set's `node_modules/@office/<name>` links, so a newly selected package, local ones included, loads only after `office sync`. Keep `setup` to registrations and actions inside the handler. Before importing any package, every run that reads definitions (package commands and help, `office check`, `office up`, cron, `office gui dev` and the others) checks the whole selection: every built-in or Git copy against its record (`office sync` restores an edited one), every `package.json`, every declared dependency, that the published set links every selected package to its folder, and that no selected package is one the last sync rejected or has no copy yet. With any problem, no package's code runs: a package command fails naming each problem (and saying the command may be unknown, since no package loaded to tell), help lists the built-in commands and the problems, `office check` reports each problem as a failure, and cron and `office gui dev` fail naming them. A local package loads as it is. Past that check, one package that fails to load fails every package command, naming it; help still lists what loaded and adds a line per failed package and per reserved or duplicate name, which never runs. Sync checks the same names and rejects the whole candidate on a problem, references included.
+A definition declares:
+
+| Key | |
+|---|---|
+| `settings` | One JSON Schema for the package's settings; see "Settings". Without it, the package accepts none |
+| `commands` | Its CLI commands by name: `{ summary, aliases?, run }`. `run` receives `{ read, settings }`: the registries to read and the package's settings as `office.yaml` has them in that run. A package with only `commands` works |
+| `setup(ctx)` | Optional. `ctx.settings` (validated, defaults applied), `ctx.registry(handle)` to register a registry the package owns, `ctx.add(handle, value)` to add to one |
+| `namespace`, `secrets`, `tools`, `host`, `system`, `cron`, `registerCron`, `opencode`, `executor_app`, `spawns` | As below and in their sections |
+
+Select `notes`, run `office sync --packages`, then `office --help` and `office notes title`. Routes and aliases are exact sequences of lowercase words (digits and dashes allowed), with no package-defined options or trailing arguments yet. A name or alias whose first word is one of the CLI's own commands (such as `sync`, `apps` or `seeds`), or `opencode inspect` and names under it, is reserved; each name has one owner. [The built-in listing](packages/references/office.ts) declares an imported handler directly.
+
+A package command, `office --help` and bare `office` load every package `office.yaml` selects on each run, in two phases. First every definition is read and every package's settings checked against its schema; with any invalid setting no `setup` runs: a package command fails naming each package and setting, and help lists the built-in commands, every command the definitions declare, and each problem. Otherwise every `setup` runs with the entry's current settings, every `setup` finishes before any entry is parsed, and the command runs on what was registered in that run. Nothing is read from the saved references file, so an edit to a package, a setting, a name or an alias shows at once, and a command can differ from what sync last applied until the next sync. Imports between packages still follow the last sync: definitions load through the published set's `node_modules/@office/<name>` links, so a newly selected package, local ones included, loads only after `office sync`. Keep `setup` to registrations and actions inside the handler. Before importing any package, every run that reads definitions (package commands and help, `office check`, `office up`, cron, `office gui dev` and the others) checks the whole selection: every built-in or Git copy against its record (`office sync` restores an edited one), every `package.json`, every declared dependency, that the published set links every selected package to its folder, and that no selected package is one the last sync rejected or has no copy yet. With any problem, no package's code runs: a package command fails naming each problem (and saying the command may be unknown, since no package loaded to tell), help lists the built-in commands and the problems, `office check` reports each problem as a failure, and cron and `office gui dev` fail naming them. A local package loads as it is. Past that check, one package that fails to load fails every package command, naming it; help still lists what the definitions that loaded declare, and adds a line per failed package and per reserved or duplicate name, which never runs. Sync checks the same names and settings and rejects the whole candidate on a problem, references included: with an invalid setting it sets up nothing and publishes no package set.
 
 Packages load only in an office with a published package set: an active `.office/current` holding a selection, as sync leaves it. In a fresh clone, or after a first sync that stopped before publishing, help shows the built-in commands and a package command says to run `office sync`; commands such as `office check` that run without a set report the required built-ins as not synced yet and load no package. This only checks that a set is available; it doesn't show that this machine trusts the office, since a copied office passes it too.
 
 To contribute a reference from `packages/notes/office.ts`:
 
 ```ts
-import type { PackageContext } from "@office/office/context";
+import { Package } from "@office/sdk";
 import { repositories } from "@office/references/repositories";
 
-export default {
-  name: "notes",
-  description: "Notes format and examples",
-  setup(ctx: PackageContext) {
+export default Package.define({
+  setup(ctx) {
     ctx.add(repositories, {
       name: "notes-manual", url: "https://example.org/notes.git", ref: "main",
       description: "Notes format and examples.",
     });
   },
-};
+});
 ```
 
-`references` exports the `repositories` handle (a stable `id` and a `parse` function), registers it with `ctx.collection(repositories)`, and calls `inputs.read(repositories)` in its list handler. Each row has a typed `value`, `owner` and `stale` flag. Another package can define a collection of named JSON records the same way: use `<package>.<collection>` as its ID and validate the entry in `parse`. The registered provider's parser validates and normalizes each addition whenever packages load, at sync and on each package command; every read returns its own copy of the parsed value. Within a collection each entry name must be unique.
+`references` exports the `repositories` handle, made with `Registry.define({ id: "references.repository", parse })`, registers it with `ctx.registry(repositories)`, and calls `inputs.read(repositories)` in its list handler. Each entry read has a typed `value`, its `owner` (the adding package's name, or `office.yaml` for the office's own references) and the `folder` that package's definition was loaded from in that run (the office's folder for `office.yaml`); `references list` prints the owner as `package <name>`. Another package can define a registry of named JSON records the same way: its ID is `<package>.<name>`, starting with its own name, and `parse` validates each entry. Handles match by ID, so a consumer's own handle object with the provider's ID adds to the same registry; an entry added to a registry no selected package registered fails the run, naming the adding package and the ID. The registered provider's parser validates and normalizes each addition whenever packages load, at sync and on each package command, once every `setup` has finished; every read returns its own copy of the parsed value. Within a registry each entry name must be unique (until registries take other shapes).
 
 A command in a different package can import that same handle and read the entries as the provider, loaded in the same run, parsed them.
 
-In a local collection provider, symlinks may point to files or directories inside the package. Their resolved package-relative targets are part of the contract: switching the public handle to a different file requires a new sync even if both files were already present. Dangling links, loops, and links outside the package or to office-managed records cannot establish a provider contract. This check covers the provider tree, not arbitrary imports or other runtime inputs outside it.
+In a local registry provider, symlinks may point to files or directories inside the package. Their resolved package-relative targets are part of the contract: switching the public handle to a different file requires a new sync even if both files were already present. Dangling links, loops, and links outside the package or to office-managed records cannot establish a provider contract. This check covers the provider tree, not arbitrary imports or other runtime inputs outside it.
 
 A definition imports what another selected package lists in its `package.json` `exports` as `@office/<package>/<subpath>`. A provider can use ordinary relative imports and read assets beside its own modules (`import.meta.dir` is its folder as linked in the package set). Importing an optional provider does not select it. Earlier releases wrote `.office/tsconfig.contracts.json` for editors; an office `tsconfig.json` that extends it replaces that line with `"include": ["packages"]`, and a leftover `.office/tsconfig.contracts.json` link can be deleted.
 
 Managed packages and the references file are published under `.office/generations/`; `.office/current` selects them together and `.office/packages` follows it. Local `packages/` stay editable. After an interrupted tracked update, run `office sync --packages` to finish the recorded switch and reconcile external files. Office retains the current and preceding generation, plus any held by a running CLI reader or the required Office server plugin. Shipped plugins read current settings and assets through the discovery path. A settings reload is not a code upgrade: reload OpenCode to load new plugin code. A process that opens package files independently of Office does not acquire a reader lease.
-
-For a setup-only boolean, call `ctx.booleanSetting("source_reference", { default: true, description: "Include the Floci source checkout in references/" })`. To deliver a setting to plugins and native Compose, use `ctx.scalarSetting("port", { default: 4566, description: "AWS endpoint port" })`. It accepts the same string, finite number or boolean as a static scalar setting, without coercion. Sync writes the resolved value to `.settings.json`; `office up` resolves the office's selections before applying the package service environment (here `FLOCI_PORT`). Use the return value inside setup. A package command runs setup with `office.yaml`'s current values.
 
 `setup` receives the package's resolved `settings` and may return a promise. Full sync and `sync --packages` collect the complete list before publishing `.office/resolved/references.json`. Sync keeps `.office/` out of Git through `info/exclude`, all but the seed store `.office/seeds/`; a fresh clone recreates it with `office sync --packages`. Owner references retain their YAML order, followed by package name and registration order. Before first collection, readers use just `office.yaml`. Afterwards `instructions`, the office plugin, `office check` and `sync --references` all read the same versioned list without executing contributors; `references list` loads the packages instead. Run package or full sync after editing either source.
 
@@ -611,12 +603,12 @@ Office reads a managed replacement in a staging directory with the consuming off
 On a managed host, the machine record keeps each package's applied environment entries. An unread selected package keeps its last applied environment alongside its mise fragment and link. Deselecting another package withdraws its entries, fragment and link in the same sync. An older machine record needs one successful read of all selected packages to establish ownership; until then sync reports the unread owners and defers withdrawal. `office down` reads applied Compose files and office-owned units without loading selected definitions.
 
 ```yaml
-name: artifact-share
-description: What it does
-settings:
-  url:
-    description: What the setting means
-    required: true     # or `default: <value>`
+settings:              # one JSON Schema; see "Settings" below
+  type: object
+  additionalProperties: false
+  required: [url]
+  properties:
+    url: { type: string, description: What the setting means }
 namespace: share       # optional, for a package with services: what they're named after; see "Services"
 secrets:               # generated once, for a package with services; see "Services"
 tools:                 # mise tools it needs, at the exact version it was tested with; see "Tools"
@@ -626,18 +618,27 @@ spawns:                # for a package with services: the label on Docker resour
   label: share_owner=office-${OFFICE_NAME}-share
 ```
 
-For structured settings, declare `settings_schema` **instead of** `settings`. This is a synchronous JSON Schema (draft 2020-12) for the entire settings mapping. For example, in YAML:
+### Settings
 
-```yaml
-settings_schema:
-  type: object
-  additionalProperties: false
-  properties:
-    enabled: { type: boolean, default: true }
-    reviewers: { type: array, items: { type: string }, minItems: 1 }
+A package declares the settings it accepts as one JSON Schema (draft 2020-12, synchronous) under `settings`, whose root has `type: "object"`; a root that is only a `$ref` isn't accepted. This is the only way to declare settings, and `office.yaml` keeps them under the package's entry:
+
+```ts
+settings: {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    port:    { type: "integer", default: 4566, description: "The loopback port" },
+    storage: { enum: ["memory", "persistent"], default: "memory", description: "Storage mode" },
+    source_reference: { type: "boolean", default: true, description: "Include the source checkout" },
+  },
+},
 ```
 
-`office sync` and `office check` validate the settings. Property defaults fill missing values; input types are not coerced. Use `$defs` and local `$ref`s for reuse; schemas are not fetched from the network. `format` is an annotation. Lists, nested objects and null stay in `.settings.json`; only top-level scalar strings, numbers and booleans reach a service's settings environment.
+- **Checked before any setup.** Every selected package's settings are checked against its schema, with its defaults applied, before any package's `setup` runs; `office sync`, `office check` and every package command check them. A value is checked against its declared type and never coerced (a quoted `"4600"` for an integer setting is refused), a setting the schema doesn't name is refused when it has `additionalProperties: false`, and a `required` one left out is named. A `settings` that isn't a JSON object (`null` included), a root without `type: "object"`, or a schema that doesn't compile, is a settings problem too: no package is set up, and help still lists the commands. Use `$defs` and local `$ref`s for reuse; schemas are not fetched from the network. `format` is an annotation.
+- **Typed.** `Package.define` types `ctx.settings` and a command's `settings` from the schema with no annotation or `as const`. The supported shapes are booleans, numbers, text, enumerations, and lists (`items`) and objects (`properties`) of those. A property with a top-level `default` or listed in `required` is present; one with neither may be undefined, and a `default` inside a condition doesn't count. Anything else is loosely typed, as any setting value: a property using `$ref`, conditions or combinators on its own, a list with `prefixItems` as a list of any values, and a root using one of them, or an object without `properties`, as an object whose every key may be absent. A package that declares no settings has none to read. Either way the values are the validated ones.
+- **Delivered.** Sync writes the resolved settings, booleans included, to the package's `.settings.json`. Each top-level setting whose value is text, a number or true/false reaches the package's compose file as `<NAMESPACE>_<NAME>` (here `FLOCI_PORT`), in capitals with other characters as `_`; lists, objects and null don't. A value holding a single quote or a line feed fails, naming the package and the setting.
+- **Gates.** A setting named by `host.setting`, `host.services.<id>.setting` or `executor_app.setting` must be declared `type: boolean`. One named by a system setup, the package's own `system` block or a recipe it contributes, must also have `default: false`: an office opts in. Only `true` set in `office.yaml` turns a system setup on, and a schema that resolves the setting to `true` when `office.yaml` doesn't set it (a default in a condition or a combinator) is refused.
+- A secret can't have the variable of a setting the schema declares, whether `office.yaml` sets it or not.
 
 `office.yaml` lists the packages, each with its settings:
 
@@ -889,14 +890,14 @@ While building a local package's panel, `office gui dev <name>` watches its bund
 A package can add containers to the office: a `compose.yaml` at its root is what gives it services, and nothing goes in `package.yaml` for it. `office up` adds each package's file to the compose project `office-<name>`, in either mode, after the tool's files and before the office's own `compose.yaml`, in package-name order, so the office's file can override a package's service.
 
 ```yaml
-# packages/notes/package.yaml
-name: notes
+# packages/notes/package.yaml: its name and description are in its package.json
 # namespace: notes             # what services, volumes and variables are named after; the name by default
-description: A notes app with its own database
 settings:
-  title:
-    description: The app's title
-    default: Notes
+  type: object
+  additionalProperties: false
+  properties:
+    title: { type: string, default: Notes, description: The app's title }
+    port: { type: integer, default: 41500, description: The loopback port the app is published on }
 secrets:
   NOTES_AUTH_SECRET:
     generate: hex
@@ -918,7 +919,7 @@ services:
       TITLE: ${NOTES_TITLE}
       OPENCODE_URL: ${OFFICE_OPENCODE_URL}
     ports:
-      - "127.0.0.1:${NOTES_PORT:-41500}:3000"
+      - "127.0.0.1:${NOTES_PORT}:3000"
   notes-db:
     image: postgres:18
     volumes:

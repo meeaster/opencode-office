@@ -4,13 +4,12 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import * as v from "valibot";
 
 import { sync } from "./commands/sync.ts";
 import { envFilePath, hostWrappers, machineDirVariable, sourcedBy, sourceLine } from "./host-env.ts";
 import { globalConfD, grantConsent, installSfw, machineRecordVariable, machineReport, miseConfigVariable, readMachine, releaseMachine } from "./machine.ts";
 import { loadOffice } from "./office.ts";
-import { check, packageManifestSchema } from "./schema.ts";
+import { parseManifest } from "./schema.ts";
 import { wrappedCommands } from "./sfw.ts";
 import { configureStartup } from "./shell-startup.ts";
 import { defaultPins, hostPlatform } from "./versions.ts";
@@ -54,7 +53,7 @@ function write(path: string, content: string): void {
 /** A host-mode office with consent, a local package `demo` whose host block declares `host`, and the firewall as `firewall` says. */
 function makeOffice({ firewall = true, host = "", tools = "" } = {}): void {
   write(join(office, "office.yaml"), `name: t\nopencode:\n  mode: host\n  url: http://127.0.0.1:49999\n${firewall ? tools : `tools:\n${tools.replace(/^tools:\n/, "")}  sfw: { enabled: false }\n`}packages:\n  - name: demo\n`);
-  writePackage(join(office, "packages/demo/package.yaml"), `name: demo\ndescription: A demo package.\n${host}`);
+  writePackage(join(office, "packages/demo/package.yaml"), host || "{}\n");
 }
 
 const data = () => join(dir, "data");
@@ -215,7 +214,7 @@ test("a package's host block adds folders and variables to the environment file;
   write(manifest, json);
 
   write(join(office, "office.yaml"), `${readFileSync(join(office, "office.yaml"), "utf8")}  - name: other\n`);
-  writePackage(join(office, "packages/other/package.yaml"), "name: other\ndescription: Another.\nhost:\n  env:\n    DEMO_MODE: off\n");
+  writePackage(join(office, "packages/other/package.yaml"), "host:\n  env:\n    DEMO_MODE: off\n");
 
   expect(await sync(loadOffice(office))).toContain(`FAILED packages demo and other both set DEMO_MODE in their host or system block, so ${envFilePath()} sets neither; remove it from one`);
   expect(readFileSync(envFilePath(), "utf8")).not.toContain("DEMO_MODE");
@@ -227,7 +226,7 @@ test("one failed read and one deselection keep and withdraw their respective mac
   const config = join(office, "office.yaml");
   const initial = readFileSync(config, "utf8");
   write(config, `${initial}  - name: other\n`);
-  writePackage(join(office, "packages/other/package.yaml"), `name: other\ndescription: Other\n${host("other")}`);
+  writePackage(join(office, "packages/other/package.yaml"), `${host("other")}`);
 
   for (const name of ["demo", "other"]) write(join(office, `packages/${name}/install.ts`), "");
   grantConsent(loadOffice(office));
@@ -275,7 +274,7 @@ test("an older combined environment is kept until sync can record its owners", a
 
 test("a host block's folders and variables are plain: no shell code, PATH separators or variables office sets", () => {
   const errors = (host: string) => {
-    const result = check(v.safeParse(packageManifestSchema, Bun.YAML.parse(`name: bad\ndescription: Bad.\nhost:\n${host}`)));
+    const result = parseManifest("bad", Bun.YAML.parse(`host:\n${host}`));
 
     return result.ok ? [] : result.errors;
   };

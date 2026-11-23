@@ -3,7 +3,6 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import * as v from "valibot";
 
 import { withVersion } from "./commands/upgrade.ts";
 import { sync } from "./commands/sync.ts";
@@ -12,9 +11,9 @@ import { globalConfD, grantConsent, machineRecordPath } from "./machine.ts";
 import { toolPins } from "./mise-toml.ts";
 import { loadOffice } from "./office.ts";
 import { localEdits, pulledDir, readRecord } from "./packages.ts";
-import { check, packageManifestSchema } from "./schema.ts";
+import { parseManifest } from "./schema.ts";
 import { compareToolVersions, fragmentNotes, machineBelowFloors, machineFiles, moveFragmentTools, oldToolFragments, orphanFragments, packageLines, packagesFileProblems, strayFragments } from "./package-tools.ts";
-import { writePackage } from "./test-package.ts";
+import { definitionText, writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -36,7 +35,7 @@ function write(path: string, content: string): void {
 
 /** A local package `name` declaring `tools`. */
 function pkg(name: string, tools: string): void {
-  writePackage(join(office, `packages/${name}/package.yaml`), `name: ${name}\ndescription: A ${name} package.\n${tools}`);
+  writePackage(join(office, `packages/${name}/package.yaml`), tools || "{}\n");
 }
 
 /** A local package `demo` declaring `tools`, listed in office.yaml. */
@@ -262,10 +261,7 @@ test("sync refuses to write a package's setup over a fragment it didn't write", 
   expect(readFileSync(fragment(), "utf8")).toBe('[hooks]\npostinstall = "true"\n');
 });
 
-const hostManifest = `settings:
-  extra:
-    description: Whether host offices get the demo install
-    default: true
+const hostManifest = `settings: {type: object, additionalProperties: false, properties: {extra: {type: boolean, default: true}}}
 tools:
   jq: "1.7.1"
 host:
@@ -366,7 +362,7 @@ test("an install with executable: false creates a regular file: the hook tests -
 
 /** What package.yaml's schema says of a demo manifest. */
 function manifestErrors(manifest: string): string[] {
-  const result = check(v.safeParse(packageManifestSchema, Bun.YAML.parse(`name: demo\ndescription: A demo package.\n${manifest}`)));
+  const result = parseManifest("demo", Bun.YAML.parse(manifest));
 
   return result.ok ? [] : result.errors;
 }
@@ -374,7 +370,7 @@ function manifestErrors(manifest: string): string[] {
 test("host.install.executable must be true or false, and host.setting must name a true/false setting", () => {
   expect(manifestErrors(hostManifest)).toEqual([]);
   expect(manifestErrors(hostManifest.replace("    script: scripts/install.ts\n", "    script: scripts/install.ts\n    executable: maybe\n"))).toEqual(["host.install.executable: must be true or false"]);
-  expect(manifestErrors(hostManifest.replace("setting: extra", "setting: missing"))).toEqual(["host.setting: must name one of the package's settings whose default is true or false"]);
+  expect(manifestErrors(hostManifest.replace("setting: extra", "setting: missing"))).toEqual(["host.setting: must name one of the package's settings declared type: boolean"]);
 });
 
 test("switching to container mode or turning the setting off removes the host tools and the fragment, and keeps the office's versions", async () => {
@@ -498,10 +494,9 @@ test("setup requirements share a floor with external manifests; failed collectio
   pkg("external", 'tools: {bun: "1.5.0"}');
   const author = join(office, "packages/author/office.ts");
 
-  const code = `import { requirements } from "@office/tooling/requirements";
-  export default { name: "author", description: "Uses Bun", settings:{ floor:{ description:"Tool floor",default:"1.4.4" } }, setup(ctx) {
+  const code = definitionText(`{ settings:{type:"object",additionalProperties:false,properties:{floor:{type:"string",default:"1.4.4"}}}, setup(ctx) {
     ctx.add(requirements, {name:"bun", minimumVersion:ctx.settings.floor});
-  }};`;
+  }}`, `import { requirements } from "@office/tooling/requirements";`);
 
   const run = () => sync(loadOffice(office), { scope: "packages" });
   // From source, a local package resolves its @office imports through the published set.
@@ -524,10 +519,9 @@ test("exclusive install roots are independent of task and readiness names", asyn
   const run = () => sync(loadOffice(office), { scope: "packages" });
 
   for (const name of ["first", "second"]) {
-    writePackage(join(office, `packages/${name}/office.ts`), `import { installs } from "@office/mise-integration/claims";
-    export default {name:"${name}", description:"Install", setup(ctx){
+    writePackage(join(office, `packages/${name}/office.ts`), definitionText(`{setup(ctx){
       ctx.add(installs,{name:"${name}", description:"Install", script:"run.ts", destination:"~/.local/share/release", ready:"~/.local/share/${name}.json", executable:false});
-    }}`, { dependencies: ["mise-integration"] });
+    }}`, `import { installs } from "@office/mise-integration/claims";`), { dependencies: ["mise-integration"] });
     write(join(office, `packages/${name}/run.ts`), 'throw Error("setup must not execute me")');
   }
 
@@ -552,10 +546,9 @@ test("a rejected publication cannot retain host consent or a deselected plugin",
   const run = () => sync(loadOffice(office), { scope: "packages" });
 
   for (const name of ["first", "second"]) {
-    writePackage(join(office, `packages/${name}/office.ts`), `import {repositories} from "@office/references/repositories";
-    export default {name:"${name}",description:"Reference",setup(c){
+    writePackage(join(office, `packages/${name}/office.ts`), definitionText(`{setup(c){
       c.add(repositories,{name:"guide",url:"https://example.invalid/guide"})
-    }}`, { dependencies: ["references"] });
+    }}`, `import {repositories} from "@office/references/repositories";`), { dependencies: ["references"] });
   }
 
   // From source, a local package resolves its @office imports through the published set.

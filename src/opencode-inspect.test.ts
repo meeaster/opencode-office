@@ -34,7 +34,7 @@ test("inspect lists a desktop panel only by this office's own record, and a bund
   const office = join(root, "office");
   const bundle = join(office, "packages/common/gui/dist/gui-experimental.cjs");
   write(join(office, "office.yaml"), "name: sample\npackages: [{name: common}]\n");
-  writePackage(join(office, "packages/common/package.yaml"), "name: common\ndescription: Inspect fixture\n");
+  writePackage(join(office, "packages/common/package.yaml"), "# Inspect fixture\n{}\n");
   write(bundle, "module.exports = {}");
   const where = locate();
 

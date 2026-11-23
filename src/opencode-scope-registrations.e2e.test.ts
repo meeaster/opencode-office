@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { command, gitAt, groundwork, scopeFixture, write } from "./opencode-scope.fixture.ts";
-import { writePackage } from "./test-package.ts";
+import { definitionText, writePackage } from "./test-package.ts";
 
 const { office, fixture } = scopeFixture();
 
@@ -17,10 +17,9 @@ test("typed registrations replace both conventions: one owned link, isolated pan
   write(join(pkg, "desktop/built.cjs"), "// custom panel");
   write(join(pkg, "gui/dist/gui-experimental.cjs"), "// convention must not win");
   rmSync(join(pkg, "package.yaml"));
-  writePackage(join(pkg, "office.ts"), `import type {OpenCodeContext} from "@office/office/context";
-    import {appendFileSync} from "node:fs";
-    export default {name:"common",description:"fixture",settings:{edition:{description:"edition",default:"both"}},
-      setup(ctx) { appendFileSync(process.env.SCOPE_IMPORTS,"setup\\n"); ctx.command({name:"folio edition",summary:"fixture",run(){console.log("fiction")}}); },
+  writePackage(join(pkg, "office.ts"), definitionText(`{settings:{type:"object",additionalProperties:false,properties:{edition:{type:"string",default:"both"}}},
+      setup(ctx) { appendFileSync(process.env.SCOPE_IMPORTS,"setup\\n"); },
+      commands:{"folio edition":{summary:"fixture",run(){console.log("fiction")}}},
       opencode(ctx:OpenCodeContext) {
         appendFileSync(process.env.SCOPE_IMPORTS, "collected\\n");
         if(ctx.settings.edition === "none") return;
@@ -29,7 +28,8 @@ test("typed registrations replace both conventions: one owned link, isolated pan
         if(ctx.settings.edition === "throw") throw Error("fixture failure after first claim");
         if(ctx.settings.edition === "escape") ctx.desktopPanel("../outside.cjs");
         else if(ctx.settings.edition === "both") ctx.desktopPanel("desktop/built.cjs");
-      }};`);
+      }}`, `import type {OpenCodeContext} from "@office/sdk";
+    import {appendFileSync} from "node:fs";`));
   const sync = ["sync", "--packages"];
   const change = (edition: string) => f.select(`packages: [{name: common, settings: {edition: ${edition}}}]\n`);
   await f.run(sync);
@@ -154,7 +154,7 @@ test("a convention package with a symlinked gui/dist keeps its link and panel; a
   }
 
   rmSync(join(pkg, "package.yaml"));
-  writePackage(join(pkg, "office.ts"), `export default {name:"common",description:"fixture",opencode(ctx){ctx.serverPlugin("plugin"); ctx.desktopPanel("gui/dist/gui-experimental.cjs")}};`);
+  writePackage(join(pkg, "office.ts"), definitionText(`{opencode(ctx){ctx.serverPlugin("plugin"); ctx.desktopPanel("gui/dist/gui-experimental.cjs")}}`));
   expect(await f.run(["sync", "--packages"], 1)).toContain("without redirected paths");
   expect(readlinkSync(join(f.dir, ".opencode/plugins/common"))).toBe(link);
   expect(readFileSync(join(f.env.OFFICE_APP_PANELS_DIR, "common/gui-experimental.cjs"), "utf8")).toBe(panel);
@@ -168,12 +168,12 @@ test("check and inspect report authored registrations as declared: no deletion a
   write(join(pkg, "skills/helper/SKILL.md"), "---\nname: helper\ndescription: fixture\n---\nHelper.\n");
   write(join(pkg, "desktop/built.cjs"), "// authored panel");
   rmSync(join(pkg, "package.yaml"));
-  writePackage(join(pkg, "office.ts"), `export default {name:"common",description:"fixture",settings:{edition:{description:"edition",default:"both"}},
+  writePackage(join(pkg, "office.ts"), definitionText(`{settings:{type:"object",additionalProperties:false,properties:{edition:{type:"string",default:"both"}}},
     opencode(ctx) {
       if (ctx.settings.edition === "throw") throw Error("fixture failure");
       if (ctx.settings.edition !== "panel") ctx.serverPlugin("plugin");
       if (ctx.settings.edition !== "server") ctx.desktopPanel("desktop/built.cjs");
-    }};`);
+    }}`));
   const change = (edition: string) => f.select(`packages: [{name: common, settings: {edition: ${edition}}}]\n`);
   await f.run(["sync", "--packages"]);
   let check = await f.run(["check"], 1);
@@ -209,7 +209,7 @@ test("an authored-only pinned package repairs the bound revision and rejects an 
   const pulled = join(f.dir, ".office/packages/folio");
   const git = (...args: string[]) => gitAt(upstream, f.env, ...args);
   const select = (ref: string) => f.select(`packages: [{name: folio, repo: ${upstream}, path: pkg, ref: '${ref}'}]\n`);
-  const definition = `export default {name:"folio", description:"fixture", opencode(ctx){ctx.serverPlugin("src/server"); ctx.desktopPanel("dist/panel.cjs")}};`;
+  const definition = definitionText(`{opencode(ctx){ctx.serverPlugin("src/server"); ctx.desktopPanel("dist/panel.cjs")}}`);
   writePackage(join(pkg, "office.ts"), definition, { name: "folio" });
   write(join(pkg, "src/server/index.js"), command("bound-asset"));
   write(join(pkg, "dist/panel.cjs"), "// edition A");
@@ -239,7 +239,7 @@ test("deselecting a pulled authored package notes its retained panel at the auth
   const f = fixture("authored-deselect", "http://127.0.0.1:1");
   const upstream = join(f.home, "upstream");
   const git = (...args: string[]) => gitAt(upstream, f.env, ...args);
-  writePackage(join(upstream, "pkg/office.ts"), `export default {name:"folio", description:"fixture", opencode(ctx){ctx.desktopPanel("dist/panel.cjs")}};`, { name: "folio" });
+  writePackage(join(upstream, "pkg/office.ts"), definitionText(`{opencode(ctx){ctx.desktopPanel("dist/panel.cjs")}}`), { name: "folio" });
   write(join(upstream, "pkg/dist/panel.cjs"), "// authored only");
   git("init", "-q");
   git("add", ".");

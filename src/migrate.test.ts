@@ -113,7 +113,7 @@ test("one sync moves an office from the earlier layout, a second changes nothing
   write(join(office, "skills/office/SKILL.md"), "---\nname: office\ndescription: The office's own version.\n---\n");
   write(join(office, ".opencode/opencode.jsonc"), config(`${executorEntry}${browserEntry}`));
   write(join(office, ".opencode/plugins/office/index.js"), "// @bun\n// The office tool's office plugin, bundled from its plugins/office/. `office sync` replaces this copy; change the tool's.\n");
-  const manifest = "name: knowledge\ndescription: An older copy.\n";
+  const manifest = "# An older copy.\n{}\n";
   const files = { "package.yaml": new Bun.CryptoHasher("sha256").update(manifest).digest("hex") };
 
   write(join(knowledge, "package.yaml"), manifest);

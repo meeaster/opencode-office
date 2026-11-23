@@ -8,6 +8,7 @@ import { join, relative } from "node:path";
 import { type Office, type Repository } from "./office.ts";
 import { builtinSource, definitionGate, gitSelection, readRecord, type InstalledPackage, type PackageProblem, readPackage, requiredPackages, resolvePackages } from "./packages.ts";
 import { readSnapshot } from "./reference-snapshot.ts";
+import type { PackageManifest } from "./schema.ts";
 import { machineCollection, project } from "../standard/mise-integration/projection.ts";
 import { pluginClones } from "../standard/opencode/delivery.ts";
 import { entries, scope, type Scope } from "../standard/opencode/ownership.ts";
@@ -48,13 +49,19 @@ export function installedPackages(office: Office, rejected: ReadonlySet<string> 
   const unread = new Set(selected);
   const blocked = definitionGate(office, resolved.packages, rejected);
 
-  if (blocked.length) return { selected, installed, problems: [...problems, ...blocked], unread, blocked };
+  // resolvePackages already names a package called sdk.
+  if (blocked.length) return { selected, installed, problems: [...problems, ...blocked.filter(problem => !problems.some(known => known.message === problem.message))], unread, blocked, invalidSettings: [], definitions: new Map() };
 
   const snapshot = publishedMachine ? readSnapshot(office.dir) : undefined;
+  const invalidSettings: PackageProblem[] = [];
+  const definitions = new Map<string, PackageManifest>();
 
   for (const item of resolved.packages) {
     if (rejected.has(item.entry.name)) continue;
     const read = readPackage(office, item);
+    const manifest = read.ok ? read.value.manifest : read.manifest;
+
+    if (manifest) definitions.set(item.entry.name, manifest);
 
     if (read.ok) {
       try {
@@ -74,10 +81,13 @@ export function installedPackages(office: Office, rejected: ReadonlySet<string> 
 
       installed.push(read.value);
       unread.delete(item.entry.name);
-    } else problems.push(...read.errors.map((message) => ({ packages: [item.entry.name], message })));
+    } else {
+      problems.push(...read.errors.map((message) => ({ packages: [item.entry.name], message })));
+      invalidSettings.push(...(read.settings ?? []).map((message) => ({ packages: [item.entry.name], message })));
+    }
   }
 
-  return { selected, installed, problems, unread };
+  return { selected, installed, problems, unread, invalidSettings, definitions };
 }
 
 export type InstalledPackages = {
@@ -88,6 +98,10 @@ export type InstalledPackages = {
   unread: Set<string>;
   /** The problems `definitionGate` found; with any, no package loaded. */
   blocked?: PackageProblem[];
+  /** Settings in office.yaml that a package's schema refuses (also in `problems`); with any, no setup may run. */
+  invalidSettings: PackageProblem[];
+  /** The definition of each package that loaded, read or not: its declared commands are claimed either way. */
+  definitions: Map<string, PackageManifest>;
 };
 
 export type SkillSelection = {

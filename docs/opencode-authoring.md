@@ -1,32 +1,32 @@
 # Register a package's OpenCode assets
 
-A package definition (`office.ts`, or whatever file its `package.json` names) can declare a server plugin directory and a desktop bundle in code. Here is the Tracks consumer in a local office. Its `package.json` names the definition and declares the package it imports from:
+A package definition (`office.ts`, or whatever file its `package.json` names) can declare a server plugin directory and a desktop bundle in code. Here is the Tracks consumer in a local office. Its `package.json` names the definition and describes the package; `@office/sdk` is always available, so it lists no dependency:
 
 ```json
 {
   "name": "@office/tracks",
+  "description": "Tracks work in this office.",
   "private": true,
   "exports": {},
   "office": {
-    "definition": "./office.ts",
-    "dependencies": ["@office/office"]
+    "definition": "./office.ts"
   }
 }
 ```
 
 ```ts
 // office.ts
-import type { OpenCodeContext } from "@office/office/context";
+import { type OpenCodeContext, Package } from "@office/sdk";
 
-export default {
-  name: "tracks",
-  description: "Tracks work in this office.",
+export default Package.define({
   opencode(ctx: OpenCodeContext) {
     ctx.serverPlugin("plugin");
     ctx.desktopPanel("gui/dist/gui-experimental.cjs");
   },
-};
+});
 ```
+
+`opencode(ctx)` and `OpenCodeContext` are transitional: they become registries the agents package owns.
 
 The callback **itself** selects explicit registration for both parts. Omit it to use the existing conventions (`plugin/`, `gui/dist/gui-experimental.cjs`) in either TS or YAML. Providing it with zero, one or two claims is meaningful. For example:
 

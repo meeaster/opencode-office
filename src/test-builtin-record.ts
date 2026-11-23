@@ -9,7 +9,7 @@ export function recordRequiredFixtures(officePackage: string) {
     const dir = join(dirname(officePackage), name);
     mkdirSync(dir, { recursive: true });
 
-    if (dir !== officePackage && !existsSync(join(dir, "package.json"))) writePackage(join(dir, "package.yaml"), `name: ${name}\ndescription: fixture\n`);
+    if (dir !== officePackage && !existsSync(join(dir, "package.json"))) writePackage(join(dir, "package.yaml"), `# fixture\n{}\n`);
     writeFileSync(join(dir, sourceFile), JSON.stringify({ office: "fixture", commit: "fixture", files: fileHashes(dir) }));
   }
 }
@@ -18,6 +18,6 @@ export function recordRequiredFixtures(officePackage: string) {
 export function recordRequiredBuiltins(office: string) {
   const officePackage = join(office, ".office/packages/office");
 
-  if (!existsSync(join(officePackage, "package.json"))) writePackage(join(officePackage, "package.yaml"), "name: office\ndescription: fixture\n");
+  if (!existsSync(join(officePackage, "package.json"))) writePackage(join(officePackage, "package.yaml"), "# fixture\n{}\n");
   recordRequiredFixtures(officePackage);
 }

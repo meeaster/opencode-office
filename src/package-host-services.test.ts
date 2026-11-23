@@ -62,13 +62,13 @@ test("package units are applied once, upgraded explicitly, and removed when dese
   const root = mkdtempSync(join(tmpdir(), "office-host-service-"));
   const previous = { ...process.env };
   const dir = join(root, "packages/demo");
-  const manifest = "name: demo\ndescription: test\nhost:\n  services:\n    first:\n      description: first service\n      script: start.sh\n";
+  const manifest = "# test\nhost:\n  services:\n    first:\n      description: first service\n      script: start.sh\n";
   const unit = join(root, "units/office-test-pkg-demo.first.service");
 
   try {
     mkdirSync(dir, { recursive: true });
     mkdirSync(join(root, ".office/packages/office"), { recursive: true });
-    writePackage(join(root, ".office/packages/office/package.yaml"), "name: office\ndescription: fixture\n");
+    writePackage(join(root, ".office/packages/office/package.yaml"), "# fixture\n{}\n");
     recordRequiredFixtures(join(root, ".office/packages/office"));
     writeFileSync(join(root, "office.yaml"), "name: test\nopencode: { mode: host, url: http://localhost:4096 }\npackages: [{ name: demo }]\n");
     writePackage(join(dir, "package.yaml"), manifest);
@@ -86,7 +86,7 @@ test("package units are applied once, upgraded explicitly, and removed when dese
     expect(readFileSync(unit, "utf8")).toContain("Description=first service");
     reconcileHostServices(office, "upgrade");
     expect(readFileSync(unit, "utf8")).toContain("Description=new description");
-    writePackage(join(dir, "package.yaml"), "name: demo\ndescription: test\n");
+    writePackage(join(dir, "package.yaml"), "# test\n{}\n");
     reconcileHostServices(office, "up");
     expect(existsSync(unit)).toBe(false);
     expect(readFileSync(join(root, "calls"), "utf8")).toContain("--user disable --now office-test-pkg-demo.first.service");

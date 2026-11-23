@@ -5,13 +5,13 @@ import { git } from "./git.ts";
 import { sources } from "./github.ts";
 import { loadOffice } from "./office.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
-import { writePackage } from "./test-package.ts";
+import { definitionText, writePackage } from "./test-package.ts";
 
 const { root, exe, marker, write, read, commit, fixture, collector, published } = definitionFixture();
 
 test("a built-in's bytes and a Git contributor's resolved commit survive separate executable processes", () => {
   const { dir, env, cli, newer, probe, select } = fixture("reference-repair");
-  select("  - {name: aws-emulator, settings: {port: '14566', storage: hybrid}}\n");
+  select("  - {name: aws-emulator, settings: {port: 14566, storage: hybrid}}\n");
   cli(0, "sync", "--packages");
   const delivered = ["office.ts", ".settings.json", ".source.json", "compose.yaml"].map(path => join(dir, ".office/packages/aws-emulator", path));
   const before = delivered.map(read);
@@ -104,6 +104,7 @@ test("an overlapping or interrupted collector cannot republish an explicitly wit
     if (i === 250) throw new Error("the killed sync's processes did not exit");
     await Bun.sleep(20);
   }
+
   const old = await pause();
 
   try {
@@ -120,7 +121,7 @@ test("an overlapping or interrupted collector cannot republish an explicitly wit
 
   // Even identical YAML can produce a newer explicit empty result after editing office.ts.
   select("  - name: docs\n");
-  const empty = 'export default {name:"docs",description:"withdrawn",setup(){}}';
+  const empty = definitionText('{setup(){}}');
   const paused = read(module);
   writePackage(module, empty);
   cli(0, "sync", "--packages");
@@ -179,10 +180,10 @@ test("the executable syncs mixed definitions and keeps applied state when a sele
   const pkg = join(dir, "packages/notes");
   const link = join(dir, ".opencode/plugins/notes");
   const pins = join(dir, "machine.packages.toml");
-  const module = 'import { count } from "./defaults.ts"; export default { name: "notes", description: "Notes", settings: { count: { description: "Count", default: count } }, tools: { jq: "1.7.1" } }';
+  const module = definitionText('{ settings: { type: "object", additionalProperties: false, properties: { count: { type: "integer", default: count } } }, tools: { jq: "1.7.1" } }', 'import { count } from "./defaults.ts";');
 
   select("  - name: legacy\n  - name: notes\n");
-  writePackage(join(dir, "packages/legacy/package.yaml"), "name: legacy\ndescription: Legacy\nsettings: { label: { description: Label, default: old } }\n");
+  writePackage(join(dir, "packages/legacy/package.yaml"), "# Legacy\nsettings: { type: object, additionalProperties: false, properties: { label: { type: string, default: old } } }\n");
   writePackage(join(pkg, "office.ts"), module);
   write(join(pkg, "defaults.ts"), "export const count: number = 3;");
   write(join(pkg, "plugin/index.ts"), 'export default { id: "notes", setup() {} }');

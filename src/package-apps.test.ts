@@ -26,7 +26,7 @@ function write(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
-const manifest = "name: demo\nnamespace: widget\ndescription: A demo package.\nsettings:\n  app:\n    description: Deploy the app\n    default: false\nexecutor_app:\n  setting: app\n";
+const manifest = "namespace: widget\nsettings: {type: object, additionalProperties: false, properties: {app: {type: boolean, default: false}}}\nexecutor_app:\n  setting: app\n";
 
 /** A local package `demo` shipping an Executor app, listed in office.yaml with `entry` appended. */
 function demo(entry = "", packageYaml = manifest): void {
@@ -62,5 +62,5 @@ test("a package's app can't share a slug with one of the office's own", async ()
 test("executor_app.setting must name a true/false setting", async () => {
   demo("", manifest.replace("setting: app", "setting: missing"));
 
-  expect(await sync(loadOffice(office))).toContain("FAILED package demo: packages/demo/package.yaml: executor_app.setting: must name one of the package's settings whose default is true or false");
+  expect(await sync(loadOffice(office))).toContain("FAILED package demo: packages/demo/package.yaml: executor_app.setting: must name one of the package's settings declared type: boolean");
 });

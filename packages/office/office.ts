@@ -1,11 +1,9 @@
+import { type CronContext, Package } from "@office/sdk";
 import { requirements } from "@office/tooling/requirements";
 import { floors } from "./floors.ts";
-import type { CronContext, PackageContext } from "./package-context.ts";
 
-export default {
-  name: "office",
-  description: "What every office needs from OpenCode, given by its plugin; the guidance for a session's folder, the office skill and the office-executor MCP server; and the tools the office CLI itself runs.",
-  settings_schema: {
+export default Package.define({
+  settings: {
     type: "object",
     additionalProperties: false,
     properties: {
@@ -23,7 +21,7 @@ export default {
       },
     },
   },
-  setup(ctx: PackageContext) {
+  setup(ctx) {
     for (const [name, minimumVersion] of Object.entries(floors)) ctx.add(requirements, { name, minimumVersion });
   },
   registerCron(ctx: CronContext): undefined {
@@ -32,4 +30,4 @@ export default {
 
     ctx.cron.job("update-agent-clis", ctx.cron.mode === "managed-host" ? { schedule: "30 7 * * *", script: "scripts/update-agent-clis.sh" } : false);
   },
-};
+});

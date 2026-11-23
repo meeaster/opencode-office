@@ -4,7 +4,7 @@
     "module": "preserve",
     "moduleResolution": "bundler",
     "paths": {
-      "@office/office/context": ["./packages/office/package-context.ts"],
+      "@office/sdk": ["./sdk/index.ts"],
       "@office/references/repositories": ["./packages/references/repositories.ts"],
       "@office/tooling/requirements": ["./packages/tooling/requirements.ts"],
       "@office/mise-integration/claims": ["./packages/mise-integration/claims.ts"]
@@ -18,7 +18,7 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["src", "standard", "packages", "bin/office"],
+  "include": ["src", "standard", "packages", "sdk", "bin/office"],
   // Executor app sources a package ships: `office apps deploy` type-checks them against the `apps`
   // version Executor serves.
   "exclude": ["packages/*/executor-app"]

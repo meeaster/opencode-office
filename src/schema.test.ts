@@ -4,7 +4,7 @@ import * as v from "valibot";
 import { parse } from "yaml";
 
 import { toolsBlock } from "./office.ts";
-import { check, officeSchema, pinnedTools, type ResolvedTools, resolveTools } from "./schema.ts";
+import { check, officeSchema, parseManifest, pinnedTools, type ResolvedTools, resolveTools, type SettingValue } from "./schema.ts";
 
 /** The schema's errors for an office.yaml named t with `rest` after its name. */
 function errors(rest: string): string[] {
@@ -108,4 +108,37 @@ test("an office.yaml from before tools reads as the tools block office check pri
   // No versions: nothing pinned, as before.
   expect(tools("socket_firewall: true\n").pinsVersions).toBe(false);
   expect(tools("versions:\n  opencode: 2.3.2\n").pinsVersions).toBe(true);
+});
+
+test("a setting that gates a host block, a host service or an Executor app is a boolean; one that gates a system setup also defaults to off", () => {
+  const settings = { type: "object", properties: { on: { type: "boolean", default: true }, off: { type: "boolean", default: false }, text: { type: "string", default: "x" } } };
+  const system = (setting: string) => ({ setting, description: "D", platforms: ["ubuntu-24.04-amd64-wsl"], bootstrap: "system/b.toml", ready: ["/usr/bin/d"] });
+
+  const gates = {
+    "host.setting": (setting: string) => ({ host: { setting } }),
+    "host.services": (setting: string) => ({ host: { services: { watch: { description: "Watch", script: "watch.sh", setting } } } }),
+    "executor_app.setting": (setting: string) => ({ executor_app: { setting } }),
+  };
+
+  const problems = (definition: Record<string, SettingValue>) => {
+    const read = parseManifest("demo", { settings, ...definition });
+
+    return read.ok ? [] : read.errors;
+  };
+
+  for (const [path, gate] of Object.entries(gates)) {
+    expect(problems(gate("on"))).toEqual([]);
+    expect(problems(gate("text"))).toEqual([expect.stringMatching(new RegExp(`^${path.replace(".", "\\.")}: .*declared type: boolean`))]);
+    expect(problems(gate("missing"))).toHaveLength(1);
+  }
+
+  expect(problems({ system: system("off") })).toEqual([]);
+  expect(problems({ system: system("on") })).toEqual(["system.setting: must name one of the package's settings declared type: boolean with default: false: an office opts in"]);
+  expect(problems({ system: system("text") })).toHaveLength(1);
+});
+
+test("a secret can't share a variable with a setting the schema declares, set in office.yaml or not", () => {
+  const read = parseManifest("demo", { settings: { type: "object", properties: { key: { type: "string" } } }, secrets: { DEMO_KEY: { generate: "hex", bytes: 16 } } });
+
+  expect(read).toEqual({ ok: false, errors: ["secrets: DEMO_KEY is also the variable of the setting key"] });
 });

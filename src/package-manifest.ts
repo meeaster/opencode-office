@@ -1,5 +1,5 @@
-// A package's package.json: where its definition is, which office packages it depends on and
-// what it shares. Office reads it here, once, for sync, the command path and the dependency check.
+// A package's package.json: its name and description, where its definition is, which office
+// packages it depends on and what it shares. Office reads it here, once, for sync, the command path and the dependency check.
 // Bun enforces `exports` when another package imports this one; office passes it through.
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, relative, sep } from "node:path";
@@ -9,6 +9,8 @@ import { check, type Parsed } from "./schema.ts";
 export const scope = "@office/";
 
 export type PackageJson = {
+  /** What the package is for, when it says. */
+  description?: string;
   /** The definition's path inside the package, normalized (`office.ts`, `src/definition.ts`). */
   definition: string;
   /** The office packages it declares, by name without the scope. */
@@ -22,6 +24,7 @@ const definitionMessage = "must give the definition's path inside the package";
 
 const schema = v.looseObject({
   name: v.string("must be a string"),
+  description: v.optional(v.string("must be a string")),
   exports: v.optional(v.unknown()),
   office: v.looseObject({
     definition: v.string(definitionMessage),
@@ -35,7 +38,7 @@ function outside(path: string) {
 
 /** What to add, for a package with no usable package.json. */
 export function packageJsonHint(name: string) {
-  return `add a package.json with "name": "${scope}${name}" and "office": { "definition": "./office.ts" }`;
+  return `add a package.json with "name": "${scope}${name}", an optional "description" and "office": { "definition": "./office.ts" }`;
 }
 
 /**
@@ -46,7 +49,7 @@ export function packageJsonHint(name: string) {
 function missingHint(name: string, kind: "local" | "built-in" | "remote") {
   if (kind === "built-in") return "the copy is from an older office executable; run office sync";
 
-  if (kind === "remote") return `its repository needs a package.json with "name": "${scope}${name}" and "office": { "definition": … }; then run office packages update`;
+  if (kind === "remote") return `its repository needs a package.json with "name": "${scope}${name}", an optional "description" and "office": { "definition": … }; then run office packages update`;
 
   return packageJsonHint(name);
 }
@@ -80,7 +83,7 @@ function readChecked(dir: string, name: string, kind: "local" | "built-in" | "re
   const read = check(v.safeParse(schema, document));
 
   if (!read.ok) return { ok: false, errors: read.errors.map(error => `package.json: ${error}`) };
-  const { name: found, office, exports } = read.value;
+  const { name: found, description, office, exports } = read.value;
 
   if (found !== `${scope}${name}`) return fail(`package.json names ${found}; expected ${scope}${name}`);
   const definition = normalize(office.definition);
@@ -92,5 +95,9 @@ function readChecked(dir: string, name: string, kind: "local" | "built-in" | "re
 
   if (outside(relative(realpathSync(dir), realpathSync(file)))) return fail(`office.definition ${office.definition} links outside the package`);
 
-  return { ok: true, value: { definition, dependencies: (office.dependencies ?? []).map(entry => entry.slice(scope.length)), exports } };
+  const value: PackageJson = { definition, dependencies: (office.dependencies ?? []).map(entry => entry.slice(scope.length)), exports };
+
+  if (description !== undefined) value.description = description;
+
+  return { ok: true, value };
 }

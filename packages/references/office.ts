@@ -1,12 +1,12 @@
-import type { PackageContext } from "@office/office/context";
-import { listing } from "./commands/list.ts";
+import { Package } from "@office/sdk";
+import { listReferences } from "./commands/list.ts";
 import { repositories } from "./repositories.ts";
 
-export default {
-  name: "references",
-  description: "List the office's resolved reference checkouts and their sources.",
-  setup(ctx: PackageContext) {
-    ctx.collection(repositories);
-    ctx.command(listing);
+export default Package.define({
+  commands: {
+    "references list": { summary: "Show desired references and their claimants without fetching", run: listReferences },
   },
-};
+  setup(ctx) {
+    ctx.registry(repositories);
+  },
+});

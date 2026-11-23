@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import * as v from "valibot";
 import { check, type OfficeConfig, type Parsed, repository, settingValue } from "./schema.ts";
 import { isRepository, repositories } from "../packages/references/repositories.ts";
-import type { Collection, CollectionEntry } from "../packages/office/package-context.ts";
+import type { Registry, RegistryEntry } from "../sdk/index.ts";
 
 export const referenceFile = ".office/resolved/references.json";
 
@@ -90,7 +90,7 @@ export function readSnapshot(dir: string): Parsed<ReferenceSnapshot | undefined>
 
 export type ClaimedReference = v.InferOutput<typeof repository> & { owner: string; stale: boolean };
 
-export function publishedCollection<T extends CollectionEntry>(snapshot: Pick<ReferenceSnapshot, "owner" | "contributors">, collection: Collection<T>, verify?: (contract?: string) => void) {
+export function publishedCollection<T extends RegistryEntry>(snapshot: Pick<ReferenceSnapshot, "owner" | "contributors">, collection: Registry<T>, verify?: (contract?: string) => void) {
   const entries = [];
 
   if (collection.id === repositories.id) {
@@ -112,7 +112,7 @@ export function publishedCollection<T extends CollectionEntry>(snapshot: Pick<Re
 
 // The provider's parser ran on admission. The stable public handle identifies that type
 // across separate imports; readers receive their own copy, never a second normalization.
-function canonical<T extends CollectionEntry>(value: CollectionEntry): T {
+function canonical<T extends RegistryEntry>(value: RegistryEntry): T {
   // SAFETY: callers matched the published row's collection ID to its typed public handle.
   // The snapshot stores the registered parser's output (and checks YAML repository rows).
   return structuredClone(value) as T;

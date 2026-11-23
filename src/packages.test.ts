@@ -10,8 +10,9 @@ import { loadOffice } from "./office.ts";
 import { settingsEnv } from "./package-services.ts";
 import { fetchPackage, installPackage, readPackage, resolvePackages } from "./packages.ts";
 import { toolRepository } from "./tool.ts";
+import { recordRequiredBuiltins } from "./test-builtin-record.ts";
 import { readLockSection } from "./versions.ts";
-import { writePackage } from "./test-package.ts";
+import { definitionText, settingsSchema, writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -55,17 +56,24 @@ function storedSeeds(office: string): Record<string, string> {
   return Object.fromEntries(readdirSync(store).map((name) => [name, readFileSync(join(store, name), "utf8")]));
 }
 
-const manifest = "name: demo\ndescription: A demo package.\nsettings:\n  url:\n    description: Where it publishes\n    required: true\n  title:\n    description: The index title\n    default: Shared\n";
+const manifest = "settings: {type: object, additionalProperties: false, properties: {url: {type: string}, title: {type: string, default: Shared}}, required: [url]}\n";
 
-test("package-defined schemas validate nested settings and write defaults without flattening lists into environment variables", () => {
+test("settings are one JSON Schema, checked with its defaults applied: types, unknown and required settings, nested $defs, and none when undeclared", () => {
   const path = join(dir, "packages/demo/package.yaml");
+  const config = (settings: string) => write(join(dir, "office.yaml"), `name: t\npackages:\n  - name: demo\n    settings: ${settings}\n`);
 
-  const schema = `name: demo
-description: Demo
-settings_schema:
+  const errors = (settings: string) => {
+    config(settings);
+    const { result } = read(dir, "demo");
+
+    return result.ok ? [] : result.errors;
+  };
+
+  const nested = `settings:
   type: object
   additionalProperties: false
   properties:
+    port: { type: integer, default: 4566 }
     enabled: { type: boolean, default: true }
     roles:
       type: object
@@ -75,44 +83,98 @@ settings_schema:
     model: { enum: [fast, deep] }
 `;
 
-  const config = (models: string) => write(join(dir, "office.yaml"), `name: t\npackages:\n  - name: demo\n    settings: { roles: { review: ${models} } }\n`);
-
-  writePackage(path, schema);
-  config("[fast, deep]");
+  writePackage(path, nested);
+  config("{ port: 4600, roles: { review: [fast, deep] } }");
 
   const { loaded, result } = read(dir, "demo");
 
   if (!result.ok) throw new Error(result.errors.join("\n"));
 
   installPackage(loaded, result.value);
-  expect(JSON.parse(readFileSync(join(dir, "packages/demo/.settings.json"), "utf8"))).toEqual({ enabled: true, roles: { review: ["fast", "deep"] } });
-  expect(settingsEnv(result.value)).toBe("DEMO_ENABLED='true'\n");
-  config("[other]");
-  expect(read(dir, "demo").result).toMatchObject({ ok: false, errors: [expect.stringContaining("demo.settings/roles/review/0")] });
-  write(path, `${schema}settings: {}\n`);
-  expect(read(dir, "demo").result).toMatchObject({ ok: false, errors: [expect.stringContaining("not both")] });
-  write(path, schema.replace("type: boolean", "type: invalid"));
-  expect(read(dir, "demo").result).toMatchObject({ ok: false, errors: [expect.stringContaining("package.yaml: settings_schema")] });
+  expect(JSON.parse(readFileSync(join(dir, "packages/demo/.settings.json"), "utf8"))).toEqual({ port: 4600, enabled: true, roles: { review: ["fast", "deep"] } });
+  // Lists and objects don't reach a compose file.
+  expect(settingsEnv(result.value)).toBe("DEMO_PORT='4600'\nDEMO_ENABLED='true'\n");
+  expect(errors("{ roles: { review: [other] } }")).toEqual(["packages.demo.settings.roles.review.0: must be equal to one of the allowed values"]);
+  // A quoted port is text, not an integer.
+  expect(errors('{ port: "4600" }')).toEqual(["packages.demo.settings.port: must be integer"]);
+  expect(errors("{ colour: blue }")).toEqual(["packages.demo.settings.colour: the package declares no such setting; remove it from office.yaml"]);
+
+  writePackage(path, manifest);
+  expect(errors("{}")).toEqual(["packages.demo.settings.url: is required; add it to office.yaml"]);
+  expect(errors("{ url: https://example.com/site }")).toEqual([]);
+  expect(read(dir, "demo").result).toMatchObject({ ok: true, value: { settings: { url: "https://example.com/site", title: "Shared" } } });
+
+  // A package that declares no settings accepts none.
+  writePackage(path, "{}\n");
+  expect(errors("{ label: x }")).toEqual(["packages.demo.settings.label: the package declares no such setting; remove it from office.yaml"]);
+
+  // The root is an object schema; a removed key is an unknown one; an invalid schema names the file.
+  const root = 'its root must have type: "object"';
+
+  writePackage(path, "settings: { type: array }\n");
+  expect(errors("{}")).toEqual([`packages/demo/package.yaml: settings: ${root}`]);
+  writePackage(path, "settings: { $ref: '#/$defs/all' }\n");
+  expect(errors("{}")).toEqual([`packages/demo/package.yaml: settings: ${root}`]);
+  // Settings that aren't a mapping are a settings problem too, reported before a check of the package's folder.
+  writePackage(path, "settings: null\nhost: {services: {svc: {description: Service, script: missing.sh}}}\n");
+  expect(read(dir, "demo").result).toMatchObject({ ok: false, errors: ["packages/demo/package.yaml: settings: must be a JSON Schema object"], settings: ["packages/demo/package.yaml: settings: must be a JSON Schema object"] });
+  writePackage(path, "settings_schema: { type: object }\n");
+  expect(errors("{}")).toEqual([expect.stringMatching(/^packages\/demo\/package\.yaml: settings_schema: must be a mapping of /)]);
+  writePackage(path, nested.replace("type: boolean", "type: invalid"));
+  expect(errors("{}")).toEqual([expect.stringContaining("packages/demo/package.yaml: settings: schema is invalid")]);
 });
 
-test("settings the package doesn't declare, and required ones left out, are named; defaults fill the rest", () => {
+test("two packages' schemas with the same $id each validate, with their own $refs and defaults", () => {
+  const schema = (type: string, value: string) => `settings: {$id: "https://example.com/settings", type: object, additionalProperties: false, properties: {size: {$ref: "#/$defs/size"}, label: {type: string, default: ${value}}}, $defs: {size: {type: ${type}}}}\n`;
+
+  writePackage(join(dir, "packages/one/package.yaml"), schema("integer", "one"));
+  writePackage(join(dir, "packages/two/package.yaml"), schema("string", "two"));
+  write(join(dir, "office.yaml"), "name: t\npackages:\n  - name: one\n    settings: {size: 3}\n  - name: two\n    settings: {size: large}\n");
+
+  expect(read(dir, "one").result).toMatchObject({ ok: true, value: { settings: { size: 3, label: "one" } } });
+  expect(read(dir, "two").result).toMatchObject({ ok: true, value: { settings: { size: "large", label: "two" } } });
+  write(join(dir, "office.yaml"), "name: t\npackages:\n  - name: one\n    settings: {size: large}\n  - name: two\n    settings: {size: 3}\n");
+  expect(read(dir, "one").result).toMatchObject({ ok: false, errors: ["packages.one.settings.size: must be integer"] });
+  expect(read(dir, "two").result).toMatchObject({ ok: false, errors: ["packages.two.settings.size: must be string"] });
+});
+
+test("a replacement's worker runs no setup while a peer's settings are invalid", async () => {
+  const repo = join(dir, "repo");
   const office = join(dir, "office");
+  const marker = join(dir, "alpha-setup");
 
-  writePackage(join(office, "packages/demo/package.yaml"), manifest);
-  write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n    settings:\n      colour: blue\n");
+  const commit = (text: string) => {
+    writePackage(join(repo, "alpha/office.ts"), definitionText(`{setup(){appendFileSync(${JSON.stringify(marker)},"${text}\\n")}}`, 'import {appendFileSync} from "node:fs";'));
+    git(["add", "-A"], repo);
+    git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "-m", text], repo);
 
-  const invalid = read(office, "demo").result;
+    return git(["rev-parse", "HEAD"], repo);
+  };
 
-  expect(invalid).toEqual({
-    ok: false,
-    errors: ["settings.colour: demo has no such setting (it accepts url, title); remove it from the entry in office.yaml", "settings.url is required; add it to the entry in office.yaml: Where it publishes"],
-  });
+  git(["init", "--quiet", repo]);
+  const first = commit("one");
+  const second = commit("two");
+  const config = (ref: string, port: string) => write(join(office, "office.yaml"), `name: t\npackages:\n  - {name: alpha, repo: ${repo}, path: alpha, ref: ${ref}}\n  - {name: bravo, settings: {port: ${port}}}\n`);
+  const fetch = (ref: string) => fetchPackage(loadOffice(office), loadOffice(office).packages[0], { repo, path: "alpha", ref, track: undefined });
 
-  write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n    settings:\n      url: https://example.com/site\n");
+  writePackage(join(office, "packages/bravo/package.yaml"), "settings: {type: object, additionalProperties: false, properties: {port: {type: integer}}}\n");
+  recordRequiredBuiltins(office);
+  config(first, "4600");
+  expect(await fetch(first)).toEqual([`installed .office/packages/alpha from ${repo} at ${first}`]);
 
-  const valid = read(office, "demo").result;
+  // Replacing the copy goes through the worker, whose admission reads every peer before any setup.
+  config(second, '"4600"');
+  const [rejected] = await fetch(second);
 
-  expect(valid.ok && valid.value.settings).toEqual({ url: "https://example.com/site", title: "Shared" });
+  expect(rejected).toStartWith("FAILED .office/packages/alpha");
+  expect(rejected).toContain("packages.bravo.settings.port: must be integer; sync the selected peers before updating");
+  expect(existsSync(marker)).toBe(false);
+  expect(readFileSync(join(office, ".office/packages/alpha/office.ts"), "utf8")).toContain('"one\\n"');
+
+  // With the peer valid, the same worker sets the candidate up.
+  config(second, "4600");
+  expect(await fetch(second)).toEqual([`updated .office/packages/alpha from ${repo} alpha at ${first.slice(0, 12)} (ref ${first}) to ${second} (${second})`]);
+  expect(readFileSync(marker, "utf8")).toBe("two\n");
 });
 
 test("an install ignores the source office's records, an update by full commit SHA replaces the package, an edited copy is restored, and seed copies are left alone", async () => {
@@ -137,6 +199,9 @@ test("an install ignores the source office's records, an update by full commit S
   const first = commit("one");
 
   write(join(repo, "pkgs/demo/scripts/run.sh"), "echo two\n");
+  // The replacement is validated in its worker, which loads a module definition with its own SDK.
+  rmSync(join(repo, "pkgs/demo/package.yaml"));
+  writePackage(join(repo, "pkgs/demo/office.ts"), definitionText(`{settings:${settingsSchema({ title: "Shared" }, { url: "string" })}}`));
 
   const second = commit("two");
   const entry = (ref: string) => `name: t\npackages:\n  - name: demo\n    repo: ${repo}\n    path: pkgs/demo\n    ref: ${ref}\n    settings: { url: https://example.com }\n`;
@@ -174,13 +239,50 @@ test("an install ignores the source office's records, an update by full commit S
   expect(readFileSync(join(office, "out/AGENTS.md"), "utf8")).toBe("the office's own\n");
 });
 
+test("a replacement is checked in the selection it joins before its definition is imported", async () => {
+  const repo = join(dir, "repo");
+  const office = join(dir, "office");
+  const imported = join(dir, "imported");
+
+  const commit = () => {
+    git(["add", "-A"], repo);
+    git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "-m", "fixture"], repo);
+
+    return git(["rev-parse", "HEAD"], repo);
+  };
+
+  writePackage(join(repo, "pkgs/demo/package.yaml"), "{}\n");
+  git(["init", "--quiet", repo]);
+  const first = commit();
+
+  rmSync(join(repo, "pkgs/demo/package.yaml"));
+  // Importing it would leave a marker; it depends on a package the office doesn't select.
+  writePackage(join(repo, "pkgs/demo/office.ts"), definitionText("{}", `import {writeFileSync} from "node:fs"; writeFileSync(${JSON.stringify(imported)}, "x");`), { dependencies: ["absent"] });
+  const second = commit();
+  const entry = (ref: string) => `name: t\npackages:\n  - name: demo\n    repo: ${repo}\n    path: pkgs/demo\n    ref: ${ref}\n`;
+
+  write(join(office, "office.yaml"), entry(first));
+  const loaded = loadOffice(office);
+  const source = { repo, path: "pkgs/demo", ref: first, track: undefined };
+
+  expect(await fetchPackage(loaded, loaded.packages[0], source)).toEqual([`installed .office/packages/demo from ${repo} at ${first}`]);
+  write(join(office, "office.yaml"), entry(second));
+  const [failed] = await fetchPackage(loadOffice(office), loaded.packages[0], { ...source, ref: second });
+
+  expect(failed).toStartWith("FAILED .office/packages/demo");
+  expect(failed).toContain("package demo: depends on @office/absent, which isn't selected; add it to office.yaml");
+  expect(existsSync(imported)).toBe(false);
+  // The installed copy is untouched.
+  expect(existsSync(join(office, ".office/packages/demo/package.yaml"))).toBe(true);
+});
+
 test("a package plugin is linked while declared, gives way to a plugins: entry of its name without git running through the link, and is unlinked when the entry goes", async () => {
   const office = join(dir, "office");
   const cloned = join(dir, "cloned");
   const link = join(office, ".opencode/plugins/demo");
   const declared = "name: t\npackages:\n  - name: demo\n";
 
-  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  writePackage(join(office, "packages/demo/package.yaml"), "{}\n");
   write(join(office, "packages/demo/plugin/index.ts"), "export default { id: \"demo\", async setup() {} };\n");
   write(join(office, "office.yaml"), declared);
   git(["init", "--quiet", office]);
@@ -223,7 +325,7 @@ test("a seed file is created once: one the office deletes stays deleted, also on
   };
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
-  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  writePackage(join(office, "packages/demo/package.yaml"), "{}\n");
   write(join(office, "packages/demo/seed/notes/README.md"), "from the package\n");
   write(join(office, "packages/demo/seed/notes/AGENTS.md"), "from the package\n");
   write(join(office, "notes/AGENTS.md"), "the office's own\n");
@@ -263,7 +365,7 @@ test("sync removes a copied package whose entry is gone, even an edited copy, wi
   write(join(office, "out/my-page/index.md"), "the office's own\n");
   write(join(office, ".github/dependabot.yml"), "version: 2\n");
   writePackage(join(office, ".office/packages/demo/package.yaml"), `${manifest}# edited\n`);
-  writePackage(join(office, "packages/own/package.yaml"), "name: own\ndescription: Written here.\n");
+  writePackage(join(office, "packages/own/package.yaml"), "{}\n");
   write(join(office, "office.yaml"), "name: t\n");
 
   const changes = await sync(loadOffice(office));
@@ -289,7 +391,7 @@ test("sync changes no seeded file or receipt of a package it can't read, even on
   const office = join(dir, "office");
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
-  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  writePackage(join(office, "packages/demo/package.yaml"), "{}\n");
   write(join(office, "packages/demo/seed/changed.md"), "v1\n");
   write(join(office, "packages/demo/seed/gone.md"), "v1\n");
   git(["init", "--quiet", office]);
@@ -310,7 +412,7 @@ test("sync changes no seeded file or receipt of a package it can't read, even on
   expect(readFileSync(join(office, "office.lock"), "utf8")).toBe(lock);
 
   // Read again, the package's changes apply.
-  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  writePackage(join(office, "packages/demo/package.yaml"), "{}\n");
   expect((await sync(loadOffice(office))).filter((line) => line.includes(".md"))).toEqual(["updated changed.md to package demo's new seed, as the file was unchanged", "kept gone.md, which package demo no longer seeds, and dropped its receipt"]);
 });
 
@@ -318,7 +420,7 @@ test("a seed path the seeds: section couldn't hold is refused before copying, an
   const office = join(dir, "office");
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
-  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  writePackage(join(office, "packages/demo/package.yaml"), "{}\n");
   write(join(office, "packages/demo/seed/back\\slash.md"), "odd\n");
   write(join(office, "packages/demo/seed/plain.md"), "plain\n");
 
@@ -384,7 +486,7 @@ test("an earlier release's template/ folder isn't read and sync says so; renamed
   const record = '["notes/AGENTS.md"]\n';
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
-  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  writePackage(join(office, "packages/demo/package.yaml"), "{}\n");
   write(join(office, "packages/demo/template/notes/AGENTS.md"), "from the package\n");
   write(join(office, "packages/demo/template/notes/new.md"), "from the package\n");
   write(join(office, "packages/demo/.template.json"), record);
@@ -470,7 +572,7 @@ test("sync locks a Git package's commit in office.lock, keeps the entry when a c
   expect(existsSync(lock)).toBe(false);
 });
 
-test("an entry without repo is built-in when shipped and local otherwise; the required office package appears only once and a built-in can't come from another repository", () => {
+test("an entry without repo is built-in when shipped and local otherwise; the required office package appears only once, a built-in can't come from another repository and no package is called sdk", () => {
   const office = join(dir, "office");
 
   write(
@@ -485,6 +587,7 @@ test("an entry without repo is built-in when shipped and local otherwise; the re
       "    repo: https://example.com/shared.git",
       "    path: packages/shared",
       "    ref: main",
+      "  - name: sdk",
       "",
     ].join("\n"),
   );
@@ -500,14 +603,15 @@ test("an entry without repo is built-in when shipped and local otherwise; the re
     ["mine", "local", "packages/mine"],
     ["shared", "remote", ".office/packages/shared"],
   ]);
-  expect(problems).toEqual([]);
+  // A package called sdk would take @office/sdk's place in the package set.
+  expect(problems).toEqual([{ packages: ["sdk"], message: "the name sdk is reserved for @office/sdk; rename the package" }]);
 });
 
 test("a live load takes an entry naming the built-in's historical source as a note, not a problem; its copy is still checked", () => {
   const office = join(dir, "office");
 
   write(join(office, "office.yaml"), `name: t\npackages:\n  - name: knowledge\n    repo: https://github.com/${toolRepository}.git\n    path: packages/knowledge\n    ref: main\n`);
-  writePackage(join(office, ".office/packages/knowledge/package.yaml"), "name: knowledge\ndescription: Not the tool's copy.\n");
+  writePackage(join(office, ".office/packages/knowledge/package.yaml"), "# Not the tool's copy.\n{}\n");
   const loaded = loadOffice(office);
   const live = resolvePackages(loaded, undefined, true);
   const knowledge = live.packages.find(item => item.entry.name === "knowledge");
@@ -566,10 +670,10 @@ test("the required office package ignores the Claude app's synced skills unless 
   expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ ignore_claude_synced_skills: false, ignore_skill_folders: ["~/other/skills"] });
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: office\n    settings:\n      ignore_skill_folders: ~/.claude/skills/synced\n");
-  expect(read(office, "office").result).toEqual({ ok: false, errors: ["office.settings/ignore_skill_folders: must be array"] });
+  expect(read(office, "office").result).toMatchObject({ ok: false, errors: ["packages.office.settings.ignore_skill_folders: must be array"] });
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: office\n    settings:\n      ignored: []\n");
-  expect(read(office, "office").result).toEqual({ ok: false, errors: ["office.settings: must NOT have additional properties: ignored"] });
+  expect(read(office, "office").result).toMatchObject({ ok: false, errors: ["packages.office.settings.ignored: the package declares no such setting; remove it from office.yaml"] });
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: office\n    repo: https://example.com/fork.git\n    path: packages/office\n    ref: main\n");
   expect(() => loadOffice(office)).toThrow("the required office package is built in: its entry can only configure settings and cron");

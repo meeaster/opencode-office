@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
-import { writePackage } from "./test-package.ts";
+import { definitionText, writePackage } from "./test-package.ts";
 
 const { root, exe, variant, marker, write, read, commit, fixture, collector } = definitionFixture();
 
@@ -55,11 +55,11 @@ test("sync doesn't publish while the references bridge is replaced, and sets it 
   const before = readlinkSync(current);
   const packages = join(dir, ".office/packages");
   const pkg = join(dir, "packages/notes/office.ts");
-  const command = 'ctx.command({name:"notes bye",summary:"bye",run(){console.log("updated")}})';
+  const command = 'commands:{"notes bye":{summary:"bye",run(){console.log("updated")}}}';
   select("  - name: notes\n");
   // Simulate the old executable's atomic replacement during collection, after reservation.
-  writePackage(pkg, `import {renameSync,writeFileSync} from "node:fs"; export default {name:"notes",description:"notes",setup(ctx){
-    writeFileSync(${JSON.stringify(`${bridge}.tmp`)}, "owner bytes"); renameSync(${JSON.stringify(`${bridge}.tmp`)}, ${JSON.stringify(bridge)}); ${command}}}`);
+  writePackage(pkg, definitionText(`{setup(ctx){
+    writeFileSync(${JSON.stringify(`${bridge}.tmp`)}, "owner bytes"); renameSync(${JSON.stringify(`${bridge}.tmp`)}, ${JSON.stringify(bridge)})}, ${command}}`, `import {renameSync,writeFileSync} from "node:fs";`));
   expect(cli(1, "sync", "--packages")).toContain(bridge);
   expect(readlinkSync(current)).toBe(before);
   rmSync(packages);
@@ -71,7 +71,7 @@ test("sync doesn't publish while the references bridge is replaced, and sets it 
   expect(cli(1, "sync", "--packages")).toContain(bridge);
   expect(readlinkSync(current)).toBe(before);
   rmSync(bridge);
-  writePackage(pkg, `export default {name:"notes",description:"notes",setup(ctx){${command}}}`);
+  writePackage(pkg, definitionText(`{${command}}`));
   cli(0, "sync", "--packages");
   expect(readlinkSync(bridge)).toBe("../current/references.json");
   expect(readlinkSync(packages)).toBe("current/packages");
@@ -141,11 +141,10 @@ test("a symlinked office resolves public imports after it moves, and a definitio
   const { dir, run, select } = fixture("alias-seed");
   select("  - name: consumer\n  - name: provider\n");
 
-  const definition = `import {requirements} from "@office/tooling/requirements"; import {token} from "@office/provider/token";
-    export default {name:"consumer",description:"consumer",setup(ctx){ctx.command({name:"consumer show",summary:"show",run(){console.log(requirements.id,token)}})}}`;
+  const definition = definitionText(`{commands:{"consumer show":{summary:"show",run(){console.log(requirements.id,token)}}}}`, `import {requirements} from "@office/tooling/requirements"; import {token} from "@office/provider/token";`);
 
   writePackage(join(dir, "packages/consumer/office.ts"), definition, { dependencies: ["provider", "tooling"] });
-  writePackage(join(dir, "packages/provider/office.ts"), 'export default {name:"provider",description:"provider"}', { exports: { "./token": "./lib/token.ts" } });
+  writePackage(join(dir, "packages/provider/office.ts"), definitionText('{}'), { exports: { "./token": "./lib/token.ts" } });
   write(join(dir, "packages/provider/lib/token.ts"), 'import {readFileSync} from "node:fs"; export const token=readFileSync(new URL("../asset",import.meta.url),"utf8");');
   write(join(dir, "packages/provider/asset"), "source-relative");
   const nested = join(root, "deep/a/b");
@@ -185,16 +184,18 @@ test("a package command runs from the packages as they are now: edits, settings,
   const ink = join(dir, "packages/ink");
   const repo = join(root, "press-source");
   const saved = join(dir, ".office/resolved/references.json");
-  const route = (name: string, aliases: string[]) => `ctx.command({name:${JSON.stringify(name)}, aliases:${JSON.stringify(aliases)}, summary:"Print edition", run:() => print(ctx.settings.label)});`;
+  // The handler prints the setting it is given: office.yaml's value in this run.
+  const route = (name: string, aliases: string[]) => `${JSON.stringify(name)}:{aliases:${JSON.stringify(aliases)}, summary:"Print edition", run:({settings}) => print(settings.label)}`;
 
-  const module = (body: string) => `import {print} from "./edition.ts"; export default {
-    name:"ink",description:"Ink",settings:{label:{description:"Label",default:"old"}},
-    setup(ctx) {if (ctx.booleanSetting("paper",{description:"Add paper",default:true})) ctx.add({registry:"references.repository",value:{name:"paper",url:"local"}}); ${body}}}`;
+  const module = (commands: string, body = "") => definitionText(`{
+    settings:{type:"object",additionalProperties:false,properties:{label:{type:"string",default:"old"},paper:{type:"boolean",default:true}}},
+    commands:{${commands}},
+    setup(ctx) {if (ctx.settings.paper) ctx.add({id:"references.repository",parse:e=>e},{name:"paper",url:"local"}); ${body}}}`, `import {print} from "./edition.ts";`);
 
   writePackage(join(ink, "office.ts"), module(route("folio show", ["folio read"])));
   write(join(ink, "edition.ts"), 'export function print(label: string) { console.log("first:" + label) }');
   git(["init", "-q", repo]);
-  writePackage(join(repo, "pkg/office.ts"), 'import {edition} from "./edition.ts"; export default {name:"press",description:"Press",setup({command}){command({name:"issue read",summary:"Print issue",run:edition})}}', { name: "press" });
+  writePackage(join(repo, "pkg/office.ts"), definitionText('{commands:{"issue read":{summary:"Print issue",run:edition}}}', 'import {edition} from "./edition.ts";'), { name: "press" });
   write(join(repo, "pkg/edition.ts"), 'export function edition(){console.log("from Git")}');
   const press = `  - {name: press, repo: ${repo}, ref: ${commit(repo)}, path: pkg}\n`;
   select(`${press}  - name: ink\n`);
@@ -211,7 +212,7 @@ test("a package command runs from the packages as they are now: edits, settings,
 
   // A renamed command, a new alias and a new entry; the old name is gone.
   select(`${press}  - {name: ink, settings: {label: new}}\n`);
-  writePackage(join(ink, "office.ts"), module(`${route("folio print", ["folio out"])} ctx.add({registry:"references.repository",value:{name:"ink-new",url:"added"}});`));
+  writePackage(join(ink, "office.ts"), module(route("folio print", ["folio out"]), 'ctx.add({id:"references.repository",parse:e=>e},{name:"ink-new",url:"added"});'));
   expect(cli(0, "references", "list")).toContain("ink-new\tadded\tpackage ink");
   expect(cli(0, "folio", "print")).toContain("edited:new");
   expect(cli(0, "folio", "out")).toContain("edited:new");
@@ -230,11 +231,12 @@ test("a package command runs from the packages as they are now: edits, settings,
   write(saved, synced);
 
   // A failed package fails every command and is named; an unknown command names it too.
-  writePackage(join(ink, "office.ts"), module('throw Error("ink setup failed")'));
+  writePackage(join(ink, "office.ts"), module(route("folio print", []), 'throw Error("ink setup failed")'));
   const failed = cli(1, "issue", "read");
   expect(failed).toMatch(/package ink: .*ink setup failed/);
   expect(failed).not.toContain("from Git");
-  expect(cli(2, "folio", "print")).toMatch(/Unknown command or options: folio print; .*package ink: .*ink setup failed/);
+  // Its own declared command is found, and fails the same way.
+  expect(cli(1, "folio", "print")).toMatch(/package ink: .*ink setup failed/);
   expect(cli(0, "--help")).toMatch(/issue read    Print issue\n[\s\S]*package ink: .*ink setup failed/);
 
   // A package that isn't always selected: deselected, its command is unknown at once.
@@ -247,7 +249,7 @@ test("an edited pulled-in copy, or a file it imports, is refused before any of i
   const { dir, cli, select, probe } = fixture("edited-copies");
   const repo = join(root, "edited-source");
   git(["init", "-q", repo]);
-  writePackage(join(repo, "pkg/office.ts"), 'import {edition} from "./edition.ts"; export default {name:"press",description:"Press",setup(ctx){ctx.command({name:"press show",summary:"Show",run:edition})}}', { name: "press" });
+  writePackage(join(repo, "pkg/office.ts"), definitionText('{commands:{"press show":{summary:"Show",run:edition}}}', 'import {edition} from "./edition.ts";'), { name: "press" });
   write(join(repo, "pkg/edition.ts"), 'export function edition(){console.log("edition A")}');
   select(`  - {name: press, repo: ${repo}, ref: ${commit(repo)}, path: pkg}\n`);
   cli(0, "sync", "--packages");
@@ -271,8 +273,7 @@ test("an edited pulled-in copy, or a file it imports, is refused before any of i
 
 test("a name is the CLI's own or has one owner, on every run: such a command never runs", () => {
   const { dir, cli, select, probe } = fixture("names");
-  const pkg = (name: string, route: string) => writePackage(join(dir, "packages", name, "office.ts"), `import {appendFileSync} from "node:fs";
-    export default {name:"${name}",description:"d",setup(ctx){ctx.command({name:"${route}",summary:"Run",run(){appendFileSync(process.env.PROBE,"ran ${name}\\n")}})}}`);
+  const pkg = (name: string, route: string) => writePackage(join(dir, "packages", name, "office.ts"), definitionText(`{commands:{"${route}":{summary:"Run",run(){appendFileSync(process.env.PROBE,"ran ${name}\\n")}}}}`, `import {appendFileSync} from "node:fs";`));
   select("  - name: alpha\n  - name: beta\n");
   pkg("alpha", "demo run");
   pkg("beta", "beta run");
@@ -306,7 +307,7 @@ test("nothing loads without a published package set: a fresh clone, or a first s
   const { dir, cli, select, probe, run } = fixture("unpublished");
   select("  - name: notes\n");
   const definition = join(dir, "packages/notes/office.ts");
-  writePackage(definition, `${marker} export default {name:"notes",description:"d",setup(ctx){ctx.command({name:"notes show",summary:"Show",run(){}})}}`);
+  writePackage(definition, definitionText(`{commands:{"notes show":{summary:"Show",run(){}}}}`, `${marker}`));
   rmSync(join(dir, ".office"), { recursive: true });
   const builtins = cli(0, "--help");
 
@@ -321,7 +322,7 @@ test("nothing loads without a published package set: a fresh clone, or a first s
     expect(existsSync(probe), stage).toBe(false);
 
     // A first sync that refuses its candidate leaves an adopted, empty set.
-    writePackage(definition, `${marker} export default {name:"notes",description:"d",setup(ctx){ctx.command({name:"sync extra",summary:"Show",run(){}})}}`);
+    writePackage(definition, definitionText(`{commands:{"sync extra":{summary:"Show",run(){}}}}`, `${marker}`));
     expect(cli(1, "sync", "--packages")).toContain("command sync extra is reserved");
     expect(existsSync(join(dir, ".office/current"))).toBe(true);
     rmSync(probe);

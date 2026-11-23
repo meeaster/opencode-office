@@ -1,12 +1,10 @@
-import type { PackageContext } from "@office/office/context";
+import { Package } from "@office/sdk";
 import { installs, recipes, tasks } from "./claims.ts";
 
-export default {
-  name: "mise-integration",
-  description: "Deliver namespaced tasks, host installs and opt-in native system recipes to mise.",
-  setup(ctx: PackageContext) {
-    ctx.collection(tasks);
-    ctx.collection(installs);
-    ctx.collection(recipes);
+export default Package.define({
+  setup(ctx) {
+    ctx.registry(tasks);
+    ctx.registry(installs);
+    ctx.registry(recipes);
   },
-};
+});

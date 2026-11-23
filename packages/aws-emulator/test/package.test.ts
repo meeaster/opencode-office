@@ -3,13 +3,11 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import * as v from "valibot";
 import { parse } from "yaml";
 
 import { composeProblems } from "../../../src/package-services.ts";
-import { runPackageSetup } from "../../../src/package-definition.ts";
 import { spawnsLabel } from "../../../src/package-spawns.ts";
-import { check, packageManifestSchema, settingVariable } from "../../../src/schema.ts";
+import { parseManifest, settingProperties, settingVariable } from "../../../src/schema.ts";
 import definition from "../office.ts";
 
 const packageDir = join(import.meta.dir, "..");
@@ -23,7 +21,7 @@ type Compose = { services: { floci: { environment: Record<string, string>; netwo
 
 const compose: Compose = parse(composeText);
 
-const manifest = check(v.safeParse(packageManifestSchema, definition));
+const manifest = parseManifest("aws-emulator", definition);
 
 test("office accepts the manifest and the compose file", () => {
   if (!manifest.ok) throw new Error(manifest.errors.join("\n"));
@@ -39,13 +37,15 @@ test("the spawns label is the namespace Floci labels what it starts with, so off
   expect(spawnsLabel(manifest.value.spawns?.label ?? "", "personal")).toBe("floci_namespace=office-personal-floci");
 });
 
-test("the compose file uses only the package's settings and the office's name", async () => {
+test("the compose file uses only the package's settings and the office's name", () => {
   if (!manifest.ok) throw new Error(manifest.errors.join("\n"));
 
-  const { scalars: serviceSettings } = await runPackageSetup(manifest.value, {}, { settings: {}, add() {}, collection() {}, command() {} });
+  const { namespace, settings } = manifest.value;
   const used = new Set([...composeText.matchAll(/\$\{([A-Z0-9_]+)/g)].map((match) => match[1]));
 
-  expect([...used].sort()).toEqual([...Object.keys(serviceSettings).map(key => settingVariable(manifest.value.namespace, key)), "OFFICE_NAME"].sort());
+  // source_reference reaches the compose file's environment too, but no service needs it.
+  expect([...used].sort()).toEqual([...["port", "ui_port", "storage"].map(key => settingVariable(namespace, key)), "OFFICE_NAME"].sort());
+  expect(Object.keys(settingProperties(settings)).sort()).toEqual(["port", "source_reference", "storage", "ui_port"]);
 });
 
 type Settings = { port: number | string; ui_port: number | string; storage: string };

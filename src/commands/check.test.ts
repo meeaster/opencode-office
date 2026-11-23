@@ -117,7 +117,7 @@ test("pending seeds are one warning with their count, never a failure, and check
   writeFileSync(join(dir, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
   recordRequiredBuiltins(dir);
   mkdirSync(seed, { recursive: true });
-  writePackage(join(dir, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  writePackage(join(dir, "packages/demo/package.yaml"), "# A demo package.\n{}\n");
 
   for (const file of ["a.md", "b.md", "c.md"]) writeFileSync(join(seed, file), "laid down\n");
   expect(applySeeds(dir, "demo", seed, ["a.md", "b.md", "c.md"])).toHaveLength(3);

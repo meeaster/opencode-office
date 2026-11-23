@@ -14,9 +14,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { packageDeliveryDir } from "../../src/bound-paths.ts";
-import type { Office } from "../../src/office.ts";
+import type { Office, PackageEntry } from "../../src/office.ts";
 import type { InstalledPackage } from "../../src/packages.ts";
-import type { Parsed } from "../../src/schema.ts";
+import type { Parsed, SettingValue } from "../../src/schema.ts";
 
 /** Overrides the machine's platform, for tests and scratch offices; empty for a machine no block supports. */
 export const systemPlatformVariable = "OFFICE_SYSTEM_PLATFORM";
@@ -74,12 +74,23 @@ function covers(platform: string, machine: string): boolean {
 /** Whether a package's system block applies here, and why not when it doesn't. */
 export type SystemState = { applies: true } | { applies: false; reason: string; opted: boolean };
 
+/**
+ * The problem with a system setup's gate that a schema resolves to true while office.yaml doesn't
+ * set it (a default in a condition or a composition): such a gate doesn't default to off.
+ */
+export function gateDefaultProblem(entry: Pick<PackageEntry, "name" | "settings">, settings: Record<string, SettingValue>, setting: string): string | undefined {
+  if (Object.hasOwn(entry.settings ?? {}, setting) || settings[setting] !== true) return undefined;
+
+  return `packages.${entry.name}.settings.${setting}: resolves to true though office.yaml doesn't set it; the setting of a system setup must default to off, so an office opts in`;
+}
+
 export function systemState(office: Office, item: InstalledPackage): SystemState | undefined {
   const system = item.manifest.system;
 
   if (system === undefined) return undefined;
 
-  const opted = String(item.settings[system.setting]) === "true";
+  // Only the office's own `true` opts in, whatever the schema resolved.
+  const opted = item.entry.settings?.[system.setting] === true;
 
   if (!opted) return { applies: false, reason: `its ${system.setting} setting is off`, opted };
 

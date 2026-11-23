@@ -4,10 +4,10 @@
 import * as v from "valibot";
 import { isAsyncFunction } from "node:util/types";
 
-import type { OpenCodeContext, PackageContext, RegisterCron, SettingValue } from "../packages/office/package-context.ts";
+import type { CommandInputs, JsonValue, OpenCodeContext, RegisterCron, SettingValue, SetupContext } from "../sdk/index.ts";
 import { validSchedule } from "../standard/cron/schedule.ts";
 
-export type { SettingValue } from "../packages/office/package-context.ts";
+export type { SettingValue } from "../sdk/index.ts";
 
 const name = v.pipe(v.string("must be a name"), v.regex(/^[a-z0-9][a-z0-9-]*$/, "must be lowercase letters, digits and dashes"));
 
@@ -447,12 +447,6 @@ export function resolveTools(config: Pick<OfficeConfig, "tools" | "versions" | "
   return { minimumReleaseAge: defaultReleaseAge, runtimes, pinsVersions: config.versions !== undefined, socketFirewall: config.socket_firewall ?? true, legacy, ignoredAges };
 }
 
-/** A setting a package accepts: what it means, and a default or `required: true`. */
-const packageSetting = v.pipe(
-  v.strictObject({ description: text, default: v.optional(scalarSetting), required: v.optional(v.literal(true, "must be true, or left out with a default")) }, mapping),
-  v.check((setting) => (setting.default === undefined) !== (setting.required === undefined), "needs a default or required: true, not both"),
-);
-
 /**
  * How `office up` generates one of a package's secrets, once: `bytes` random bytes as `hex` or
  * `base64`, after an optional fixed `prefix`. The prefix is kept to characters an env file holds unquoted.
@@ -481,10 +475,6 @@ const miseTool = v.pipe(v.string(), v.regex(/^[A-Za-z0-9_.:@/-]+$/, "must be a m
 
 /** An exact version to start a mise tool at, such as 0.43.0: never a range, a prefix or `latest`. */
 const miseVersion = v.pipe(v.string("must be an exact version such as 0.43.0"), v.regex(/^v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?$/, "must be an exact version such as 0.43.0"));
-
-function isTrueOrFalse(value: string | number | boolean | undefined): value is boolean {
-  return value === true || value === false;
-}
 
 const miseTools = v.nullish(v.record(miseTool, miseVersion, "must map mise tool names to exact versions"), {});
 
@@ -628,71 +618,162 @@ function spawnsNamesNamespace(label: string, namespace: string): boolean {
   return new RegExp(`(?:^|[-_.\\0])${namespace}(?:$|[-_.\\0])`).test(value);
 }
 
-/** A package's package.yaml: what can't be discovered from its folders. */
-export const packageManifestSchema = v.pipe(
-  v.strictObject(
-    {
-      name,
-      // What its services, volumes and variables are named after, when that isn't its name.
-      namespace: v.optional(name),
-      description: text,
-      setup: v.optional(v.custom<(ctx: PackageContext) => void | Promise<void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
-      opencode: v.optional(v.custom<(ctx: OpenCodeContext) => void>(value => v.is(v.function(), value), "must be a synchronous registration function in office.ts")),
-      settings: v.optional(v.record(v.string(), packageSetting, "must map setting names to settings")),
-      settings_schema: v.optional(v.union([v.boolean(), v.record(v.string(), settingValue)])),
-      secrets: v.nullish(v.record(v.pipe(v.string(), v.regex(/^[A-Z][A-Z0-9_]*$/, "must be an environment variable name in capitals")), packageSecret, "must map variable names to how each is generated"), {}),
-      // mise tools the package needs, each at the version it was tested with: `office sync` writes
-      // them to the office's machine.packages.toml at that version, whose versions are the office's
-      // from then on, and raises one only to keep it at or above what a package declares.
-      tools: miseTools,
-      host: v.optional(hostBlock),
-      system: v.optional(systemBlock),
-      cron: packageCron,
-      registerCron: v.optional(v.pipe(
-        v.custom<RegisterCron>(value => v.is(v.function(), value), "must be a function in office.ts"),
-        v.check(hook => !isAsyncFunction(hook), "must register jobs synchronously"),
-      )),
-      executor_app: v.optional(executorAppBlock),
-      // The label on Docker resources its services create themselves, which `office down` removes.
-      spawns: v.optional(spawnsBlock),
-    },
-    "must be a mapping of name, namespace, description, settings or settings_schema, secrets, tools, host, system, cron, registerCron, executor_app and spawns",
-  ),
-  v.check((manifest) => manifest.settings === undefined || manifest.settings_schema === undefined, "choose settings or settings_schema, not both"),
-  v.transform((manifest) => ({ ...manifest, settings: manifest.settings ?? {}, namespace: manifest.namespace ?? manifest.name })),
-  v.forward(
-    v.check((manifest) => manifest.settings_schema !== undefined || manifest.host?.setting === undefined || isTrueOrFalse(manifest.settings[manifest.host.setting]?.default), "must name one of the package's settings whose default is true or false"),
-    ["host", "setting"],
-  ),
-  v.forward(
-    v.check((manifest) => manifest.settings_schema !== undefined || manifest.executor_app?.setting === undefined || isTrueOrFalse(manifest.settings[manifest.executor_app.setting]?.default), "must name one of the package's settings whose default is true or false"),
-    ["executor_app", "setting"],
-  ),
-  // A system setup runs as root on the user's machine, so a package offers it and the office opts in.
-  v.forward(
-    v.check((manifest) => manifest.settings_schema !== undefined || manifest.system === undefined || manifest.settings[manifest.system.setting]?.default === false, "must name one of the package's settings whose default is false: an office opts in"),
-    ["system", "setting"],
-  ),
-  v.forward(
-    v.check((manifest) => manifest.system === undefined || manifest.host === undefined || Object.keys(manifest.system.env).every((name) => !Object.hasOwn(manifest.host?.env ?? {}, name)), "sets a variable the host block also sets"),
-    ["system", "env"],
-  ),
-  // Every compose file of the office is interpolated with the same process environment, which wins
-  // over a package's own values, so a package's secrets carry its namespace.
-  v.forward(
-    v.check((manifest) => Object.keys(manifest.secrets).every((key) => key.startsWith(packageVariablePrefix(manifest.namespace))), "each name must start with the package's namespace (its name unless it sets namespace:) in capitals and _ for -, such as DOOP_"),
-    ["secrets"],
-  ),
-  v.forward(
-    v.check((manifest) => Object.keys(manifest.settings).every((setting) => manifest.secrets[settingVariable(manifest.namespace, setting)] === undefined), "a name is also the variable of one of the package's settings"),
-    ["secrets"],
-  ),
-  // Two packages of an office can't share a label: namespaces are unique.
-  v.forward(
-    v.check((manifest) => manifest.spawns === undefined || spawnsNamesNamespace(manifest.spawns.label, manifest.namespace), "its value must name the package's namespace (its name unless it sets namespace:) as a part between - _ or ., such as office-${OFFICE_NAME}-tool"),
-    ["spawns", "label"],
-  ),
+/** The settings of a package that declares none: it accepts none. */
+const noSettings = { type: "object", additionalProperties: false } satisfies Record<string, SettingValue>;
+
+/** A settings schema as a definition writes it (readonly) or office reads it. */
+type SchemaSource = { readonly [keyword: string]: JsonValue };
+
+/**
+ * A definition's `settings` that isn't a JSON-compatible mapping (`null`, `false`, a number, text,
+ * a list, or a value JSON can't hold). Kept, rather than failing the definition, so its commands
+ * still read; reading the settings reports `problem` and stops every setup.
+ */
+export class MalformedSettings {
+  readonly problem = "must be a JSON Schema object";
+}
+
+/** A definition's settings schema as read: a mapping, or what stands for one that isn't. */
+export type DeclaredSettings = SchemaSource | MalformedSettings;
+
+function isMapping(value: JsonValue | undefined): value is SchemaSource {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The top-level properties a settings schema declares, by name; a malformed one declares none. */
+export function settingProperties(schema: DeclaredSettings): SchemaSource {
+  return !(schema instanceof MalformedSettings) && isMapping(schema.properties) ? schema.properties : {};
+}
+
+/** The top-level setting `name` when the schema declares it `type: "boolean"`. */
+function booleanProperty(schema: DeclaredSettings, name: string): SchemaSource | undefined {
+  const property = settingProperties(schema)[name];
+
+  return isMapping(property) && property.type === "boolean" ? property : undefined;
+}
+
+/** Whether `name` is a top-level setting the schema declares `type: "boolean"`; a malformed schema is reported when the settings are read, not here. */
+function booleanSetting(schema: DeclaredSettings, name: string): boolean {
+  return schema instanceof MalformedSettings || booleanProperty(schema, name) !== undefined;
+}
+
+/** Whether `name` is a top-level boolean setting whose default is false: what gates a machine's system setup, so an office opts in. */
+export function defaultOffSetting(schema: DeclaredSettings, name: string): boolean {
+  return booleanProperty(schema, name)?.default === false;
+}
+
+/** A package command's name or alias: lowercase words separated by spaces. */
+export const commandRoute = v.pipe(v.string(), v.regex(/^[a-z][a-z0-9-]*(?: [a-z][a-z0-9-]*)*$/, issue => `invalid route ${JSON.stringify(issue.input)}; expected lowercase command words separated by spaces`));
+
+/** What a package declares under one command name: its one-line summary, aliases and handler. */
+const packageCommand = v.strictObject({
+  summary: v.pipe(v.string(), v.nonEmpty(), v.regex(/^[^\p{Cc}]+$/u, "expected a single-line command summary")),
+  aliases: v.optional(v.array(commandRoute), []),
+  run: v.custom<(inputs: CommandInputs) => void | Promise<void>>(value => v.is(v.function(), value), "expected a command handler"),
+}, mapping);
+
+/**
+ * The commands a package declares, by name. Read as a map of its own entries: Valibot's record
+ * parser would silently drop the valid routes `constructor` and `prototype`.
+ */
+const packageCommands = v.pipe(
+  v.custom<Record<string, unknown>>(value => typeof value === "object" && value !== null && !Array.isArray(value), "must map command names to commands"),
+  v.transform(commands => new Map(Object.entries(commands))),
+  v.map(commandRoute, packageCommand),
+  v.transform(commands => Object.fromEntries(commands)),
 );
+
+/** The settings a schema declares whose compose variable is also one of the package's secrets. */
+function shadowedSettings(manifest: { namespace: string; settings: DeclaredSettings; secrets: Record<string, v.InferOutput<typeof packageSecret>> }) {
+  return Object.keys(settingProperties(manifest.settings)).filter((setting) => manifest.secrets[settingVariable(manifest.namespace, setting)] !== undefined);
+}
+
+const booleanGate = "must name one of the package's settings declared type: boolean";
+
+// Its shape, its root's type and its validity are settings problems, checked when the settings are
+// read (packages.ts), so the rest of the definition, its commands included, still reads. An absent
+// `settings` is the package declaring none; an explicit null is malformed.
+const settingsSchema = v.union([
+  v.custom<SchemaSource>(value => jsonValue(value) && isMapping(value)),
+  v.pipe(v.unknown(), v.transform(() => new MalformedSettings())),
+]);
+
+/**
+ * The definition of the package named `name`: what can't be discovered from its folders. Its name
+ * and description are in its package.json; the namespace defaults to the name.
+ */
+export function packageManifestSchema(packageName: string) {
+  return v.pipe(
+    v.strictObject(
+      {
+        // What its services, volumes and variables are named after, when that isn't its name.
+        namespace: v.optional(name),
+        setup: v.optional(v.custom<(ctx: SetupContext) => void | Promise<void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
+        opencode: v.optional(v.custom<(ctx: OpenCodeContext) => void>(value => v.is(v.function(), value), "must be a synchronous registration function in office.ts")),
+        settings: v.optional(settingsSchema),
+        commands: v.optional(packageCommands, {}),
+        secrets: v.nullish(v.record(v.pipe(v.string(), v.regex(/^[A-Z][A-Z0-9_]*$/, "must be an environment variable name in capitals")), packageSecret, "must map variable names to how each is generated"), {}),
+        // mise tools the package needs, each at the version it was tested with: `office sync` writes
+        // them to the office's machine.packages.toml at that version, whose versions are the office's
+        // from then on, and raises one only to keep it at or above what a package declares.
+        tools: miseTools,
+        host: v.optional(hostBlock),
+        system: v.optional(systemBlock),
+        cron: packageCron,
+        registerCron: v.optional(v.pipe(
+          v.custom<RegisterCron>(value => v.is(v.function(), value), "must be a function in office.ts"),
+          v.check(hook => !isAsyncFunction(hook), "must register jobs synchronously"),
+        )),
+        executor_app: v.optional(executorAppBlock),
+        // The label on Docker resources its services create themselves, which `office down` removes.
+        spawns: v.optional(spawnsBlock),
+      },
+      "must be a mapping of namespace, settings, commands, setup, secrets, tools, host, system, cron, registerCron, opencode, executor_app and spawns",
+    ),
+    v.transform((manifest) => ({ ...manifest, settings: manifest.settings ?? noSettings, namespace: manifest.namespace ?? packageName })),
+    v.forward(
+      v.check((manifest) => manifest.host?.setting === undefined || booleanSetting(manifest.settings, manifest.host.setting), booleanGate),
+      ["host", "setting"],
+    ),
+    v.forward(
+      v.check((manifest) => Object.values(manifest.host?.services ?? {}).every((service) => service.setting === undefined || booleanSetting(manifest.settings, service.setting)), `each service's setting ${booleanGate}`),
+      ["host", "services"],
+    ),
+    v.forward(
+      v.check((manifest) => manifest.executor_app?.setting === undefined || booleanSetting(manifest.settings, manifest.executor_app.setting), booleanGate),
+      ["executor_app", "setting"],
+    ),
+    // A system setup runs as root on the user's machine, so a package offers it and the office opts in.
+    v.forward(
+      v.check((manifest) => manifest.system === undefined || manifest.settings instanceof MalformedSettings || defaultOffSetting(manifest.settings, manifest.system.setting), "must name one of the package's settings declared type: boolean with default: false: an office opts in"),
+      ["system", "setting"],
+    ),
+    v.forward(
+      v.check((manifest) => manifest.system === undefined || manifest.host === undefined || Object.keys(manifest.system.env).every((name) => !Object.hasOwn(manifest.host?.env ?? {}, name)), "sets a variable the host block also sets"),
+      ["system", "env"],
+    ),
+    // Every compose file of the office is interpolated with the same process environment, which wins
+    // over a package's own values, so a package's secrets carry its namespace.
+    v.forward(
+      v.check((manifest) => Object.keys(manifest.secrets).every((key) => key.startsWith(packageVariablePrefix(manifest.namespace))), "each name must start with the package's namespace (its name unless it sets namespace:) in capitals and _ for -, such as DOOP_"),
+      ["secrets"],
+    ),
+    v.forward(
+      v.check((manifest) => shadowedSettings(manifest).length === 0, (issue) => `${shadowedSettings(issue.input).map((setting) => `${settingVariable(issue.input.namespace, setting)} is also the variable of the setting ${setting}`).join("; ")}`),
+      ["secrets"],
+    ),
+    // Two packages of an office can't share a label: namespaces are unique.
+    v.forward(
+      v.check((manifest) => manifest.spawns === undefined || spawnsNamesNamespace(manifest.spawns.label, manifest.namespace), "its value must name the package's namespace (its name unless it sets namespace:) as a part between - _ or ., such as office-${OFFICE_NAME}-tool"),
+      ["spawns", "label"],
+    ),
+  );
+}
+
+/** The definition `document` of the package named `name`, checked, with its defaults. */
+export function parseManifest(name: string, document: unknown) {
+  return check(v.safeParse(packageManifestSchema(name), document));
+}
 
 /**
  * A published port, read as whether it binds only 127.0.0.1: the short syntax binds every
@@ -731,7 +812,7 @@ export const composeFileSchema = v.looseObject(
 
 export type ComposeFile = v.InferOutput<typeof composeFileSchema>;
 
-export type PackageManifest = v.InferOutput<typeof packageManifestSchema>;
+export type PackageManifest = v.InferOutput<ReturnType<typeof packageManifestSchema>>;
 
 
 const digest = v.pipe(v.string(), v.regex(/^sha256:[0-9a-f]{64}$/, "must be sha256:<64 hex digits>"));

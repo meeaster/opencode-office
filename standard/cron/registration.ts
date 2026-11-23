@@ -1,5 +1,5 @@
 import * as v from "valibot";
-import type { CronContext } from "../../packages/office/package-context.ts";
+import type { CronContext } from "../../sdk/index.ts";
 import type { Office } from "../../src/office.ts";
 import type { InstalledPackage } from "../../src/packages.ts";
 import { check, registeredJob, registeredJobName, type PackageManifest, type Parsed } from "../../src/schema.ts";

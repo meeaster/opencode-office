@@ -3,17 +3,19 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import * as v from "valibot";
 
 import { sync } from "./commands/sync.ts";
 import { envFilePath } from "./host-env.ts";
 import { installedPackages } from "./layout.ts";
 import { grantConsent } from "./machine.ts";
 import { loadOffice } from "./office.ts";
-import { machinePlatform, systemPlatformVariable } from "./package-system.ts";
+import { machinePlatform, systemApplies, systemPlatformVariable } from "./package-system.ts";
+import { readPackage, resolvePackages } from "./packages.ts";
+import { project } from "../standard/mise-integration/projection.ts";
+import { recipes } from "../packages/mise-integration/claims.ts";
 import { fragmentNotes } from "./package-tools.ts";
-import { check, packageManifestSchema } from "./schema.ts";
-import { writePackage } from "./test-package.ts";
+import { parseManifest } from "./schema.ts";
+import { definitionText, writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -48,15 +50,7 @@ const ready = () => join(dir, "root/usr/bin/demo-browser");
 function demo(extra = ""): void {
   writePackage(
     join(office, "packages/demo/package.yaml"),
-    `name: demo
-description: A demo package.
-settings:
-  host:
-    description: Whether host offices get the demo install
-    default: true
-  system:
-    description: Whether a supported host gets the demo system setup
-    default: false
+    `settings: {type: object, additionalProperties: false, properties: {host: {type: boolean, default: true}, system: {type: boolean, default: false}}}
 tools:
   jq: "1.7.1"
 host:
@@ -100,16 +94,20 @@ test("native directories allow children; absent and conditional files own paths 
   await run();
   // Convert the native recipe to the typed author; keep its explicit readiness marker.
   rmSync(manifest);
-  writePackage(join(office, "packages/demo/office.ts"), `import {recipes} from "@office/mise-integration/claims";
-  export default {name:"demo",description:"fixture",settings:{system:{default:false,description:"use"}},setup(c){
+  writePackage(join(office, "packages/demo/office.ts"), definitionText(`{settings:{type:"object",additionalProperties:false,properties:{system:{type:"boolean",default:false}}},setup(c){
     c.add(recipes,{name:"demo",setting:"system",description:"Example",platforms:["ubuntu-24.04-amd64-wsl"],bootstrap:"system/bootstrap.toml",ready:[${JSON.stringify(ready())}],env:{}})
-  }}`, { dependencies: ["mise-integration"] });
+  }}`, `import {recipes} from "@office/mise-integration/claims";`), { dependencies: ["mise-integration"] });
   expect((await run()).join("\n")).not.toContain("FAILED");
   expect(notes().notes).toContain("Example is set up on this machine");
   const original = fragment();
   const target = join(dir, "home/.config/demo/old");
   write(file, `${readFileSync(file, "utf8")}[bootstrap.directories.${JSON.stringify(target)}]\nmode="0755"\n`);
   expect((await run()).join("\n")).toContain(`${target} claimed by both`);
+  expect(fragment()).toBe(original);
+  // A contributed recipe's setting must default to off too.
+  write(file, readFileSync(file, "utf8").replace(`[bootstrap.directories.${JSON.stringify(target)}]\nmode="0755"\n`, ""));
+  write(join(office, "packages/demo/office.ts"), readFileSync(join(office, "packages/demo/office.ts"), "utf8").replace('system:{type:"boolean",default:false}', 'system:{type:"boolean",default:true}'));
+  expect((await run()).join("\n")).toContain("system recipe demo: its setting system must be declared type: boolean with default: false, so it defaults to off");
   expect(fragment()).toBe(original);
 });
 
@@ -233,7 +231,7 @@ test("the bootstrap file holds only [bootstrap.…] tables without hooks, and th
   );
 
   const errors = (system: string) => {
-    const result = check(v.safeParse(packageManifestSchema, Bun.YAML.parse(`name: bad\ndescription: Bad.\nsettings:\n  on:\n    description: On.\n    default: false\n  yes:\n    description: Yes.\n    default: true\nsystem:\n${system}`)));
+    const result = parseManifest("bad", Bun.YAML.parse(`settings: {type: object, additionalProperties: false, properties: {on: {type: boolean, default: false}, yes: {type: boolean, default: true}}}\nsystem:\n${system}`));
 
     return result.ok ? [] : result.errors;
   };
@@ -241,7 +239,7 @@ test("the bootstrap file holds only [bootstrap.…] tables without hooks, and th
   const valid = "  setting: on\n  description: D\n  platforms: [ubuntu-24.04-amd64-wsl]\n  bootstrap: system/b.toml\n  ready: [/usr/bin/d]\n";
 
   expect(errors(valid)).toEqual([]);
-  expect(errors(valid.replace("setting: on", "setting: yes"))).toEqual(["system.setting: must name one of the package's settings whose default is false: an office opts in"]);
+  expect(errors(valid.replace("setting: on", "setting: yes"))).toEqual(["system.setting: must name one of the package's settings declared type: boolean with default: false: an office opts in"]);
   expect(errors(valid.replace("system/b.toml", "../b.toml"))).toEqual([expect.stringContaining("system.bootstrap: ")]);
   expect(errors(`${valid}  prepare: scripts/p.ts\n`)).toEqual([expect.stringContaining("system.prepare: must be a .sh file in the package")]);
   expect(errors(valid.replace("ubuntu-24.04-amd64-wsl", "Ubuntu 24.04"))).toEqual([expect.stringContaining("must be a platform such as ubuntu-24.04-amd64-wsl")]);
@@ -295,4 +293,47 @@ test("the machine's platform comes from os-release and the kernel, unless the va
 
   if (process.platform === "linux") expect(detected).toMatch(/^[a-z0-9]+-[0-9.]+-(?:amd64|arm64)(?:-wsl)?$/);
   else expect(detected).toBeUndefined();
+});
+
+test("a system setup applies only when office.yaml sets its setting to true, and a gate that resolves to true otherwise is refused, declared or contributed", () => {
+  // The schema says default: false, but a composition turns it on when office.yaml is silent.
+  const composed = (yaml: string) => yaml.replace("system: {type: boolean, default: false}}}", "system: {type: boolean, default: false}}, allOf: [{properties: {system: {default: true}}}]}");
+
+  const read = (name: string) => {
+    const loaded = loadOffice(office);
+    const item = resolvePackages(loaded).packages.find(candidate => candidate.entry.name === name);
+
+    if (item === undefined) throw new Error(`no package ${name}`);
+
+    return { loaded, result: readPackage(loaded, item) };
+  };
+
+  demo();
+  const manifest = join(office, "packages/demo/package.yaml");
+
+  write(manifest, composed(readFileSync(manifest, "utf8")));
+  mode("host");
+  const problem = "packages.demo.settings.system: resolves to true though office.yaml doesn't set it; the setting of a system setup must default to off, so an office opts in";
+
+  expect(read("demo").result).toMatchObject({ ok: false, settings: [problem] });
+  // Turned on by office.yaml, it reads, and applies.
+  mode("host", on);
+  const opted = read("demo");
+
+  if (!opted.result.ok) throw new Error(opted.result.errors.join("\n"));
+  expect(systemApplies(opted.loaded, opted.result.value)).toBe(true);
+  // Whatever the resolved settings say, only office.yaml's own true opts in.
+  opted.result.value.entry.settings = { system: "true" };
+  expect(systemApplies(opted.loaded, opted.result.value)).toBe(false);
+
+  // A contributed recipe: the gate is known once its setup's rows are projected.
+  writePackage(join(office, "packages/giver/package.yaml"), "settings: {type: object, additionalProperties: false, properties: {system: {type: boolean, default: false}}, allOf: [{properties: {system: {default: true}}}]}\n");
+  write(join(office, "packages/giver/system/bootstrap.toml"), '[bootstrap.packages]\n"apt:demo-browser" = "latest"\n');
+  write(join(office, "office.yaml"), "name: t\nopencode:\n  mode: host\n  url: http://127.0.0.1:49999\npackages:\n  - name: giver\n");
+  const giver = read("giver").result;
+
+  if (!giver.ok) throw new Error(giver.errors.join("\n"));
+  const row = { id: recipes.id, value: { name: "giver", setting: "system", description: "Giver", platforms: ["ubuntu-24.04-amd64-wsl"], bootstrap: "system/bootstrap.toml", ready: [ready()], env: {} } };
+
+  expect(() => project(giver.value, [row])).toThrow(`system recipe giver: ${problem.replaceAll("demo", "giver")}`);
 });

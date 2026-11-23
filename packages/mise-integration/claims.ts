@@ -1,4 +1,4 @@
-import type { Collection, CollectionEntry } from "@office/office/context";
+import { Registry, type RegistryEntry } from "@office/sdk";
 
 export type Task = { name: string; script: string; description: string };
 
@@ -14,20 +14,20 @@ function homePath(path: string) {
   return path.startsWith("~/") && packagePath(path.slice(2)) && !path.split("/").includes(".");
 }
 
-export const tasks = {
+export const tasks = Registry.define<Task>({
   identity: "package",
   id: "mise-integration.tasks",
-  parse({ name, script, description }: CollectionEntry): Task {
+  parse({ name, script, description }: RegistryEntry): Task {
     if (!/^[a-z][a-z0-9-]*$/.test(name) || typeof script !== "string" || !packagePath(script) || !/\.(sh|ts)$/.test(script) || typeof description !== "string" || !description.trim() || /[\r\n]/.test(description)) throw new Error(`invalid task ${name}`);
 
     return { name, script, description };
   },
-} satisfies Collection<Task>;
+});
 
-export const installs = {
+export const installs = Registry.define<Install>({
   identity: "package",
   id: "mise-integration.installs",
-  parse(input: CollectionEntry): Install {
+  parse(input: RegistryEntry): Install {
     const task = tasks.parse(input);
     const { destination, ready, executable } = input;
 
@@ -35,20 +35,20 @@ export const installs = {
 
     return { ...task, destination, ready, executable };
   },
-} satisfies Collection<Install>;
+});
 
-function strings(value: CollectionEntry[string]): value is string[] {
+function strings(value: RegistryEntry[string]): value is string[] {
   return Array.isArray(value) && value.every(item => typeof item === "string");
 }
 
-function variables(value: CollectionEntry[string]): value is Record<string, string> {
+function variables(value: RegistryEntry[string]): value is Record<string, string> {
   return value !== null && typeof value === "object" && !Array.isArray(value) && Object.values(value).every(item => typeof item === "string");
 }
 
-export const recipes = {
+export const recipes = Registry.define<Recipe>({
   identity: "package",
   id: "mise-integration.recipes",
-  parse({ name, setting, description, platforms, prepare, verify, bootstrap, ready, env }: CollectionEntry): Recipe {
+  parse({ name, setting, description, platforms, prepare, verify, bootstrap, ready, env }: RegistryEntry): Recipe {
     if (typeof setting !== "string" || typeof description !== "string" || !strings(platforms) || (prepare !== undefined && typeof prepare !== "string") || (verify !== undefined && typeof verify !== "string") || typeof bootstrap !== "string" || !strings(ready) || !variables(env)) throw new Error(`invalid system recipe ${name}`);
 
     const recipe: Recipe = { name, setting, description, platforms, bootstrap, ready, env };
@@ -59,4 +59,4 @@ export const recipes = {
 
     return recipe;
   },
-} satisfies Collection<Recipe>;
+});

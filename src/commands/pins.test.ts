@@ -12,7 +12,7 @@ import { silentStage, type Stage } from "../report/index.ts";
 import { editLock, readLockSection } from "../versions.ts";
 import { updatePackages, updateSkills } from "./pins.ts";
 import { sync } from "./sync.ts";
-import { packageJsonText } from "../test-package.ts";
+import { definitionText, packageJsonText } from "../test-package.ts";
 
 /** office.lock's `packages:` section in the office at `dir`, as an object. */
 const readPackageLock = (dir: string) => Object.fromEntries(readLockSection(dir, "packages"));
@@ -96,8 +96,8 @@ const skill = (text: string) => `---\nname: x\ndescription: ${text}\n---\n${text
 
 test("refresh keeps both updated pins through full sync and stops before up on a failed reference", () => {
   const repo = join(dir, "upstream");
-  const old = commit(repo, { "demo/package.json": packageJsonText("demo", "package.yaml"), "demo/package.yaml": "name: demo\ndescription: Before\n", "x/SKILL.md": skill("Before") });
-  const next = commit(repo, { "demo/package.yaml": "name: demo\ndescription: After\n", "x/SKILL.md": skill("After") });
+  const old = commit(repo, { "demo/package.json": packageJsonText("demo", "package.yaml"), "demo/package.yaml": "# Before\n{}\n", "x/SKILL.md": skill("Before") });
+  const next = commit(repo, { "demo/package.yaml": "# After\n{}\n", "x/SKILL.md": skill("After") });
 
   write(join(dir, "office/office.yaml"), `name: test\nstate: ${dir}/state\npackages:\n  - { name: demo, repo: ${repo}, ref: ${old}, track: main, path: demo }\nskills:\n  copied:\n    - { repo: ${repo}, ref: ${old}, track: main, skills: [x] }\nreferences: [{ name: missing, url: ${dir}/missing }]\n`);
   const result = office("refresh");
@@ -130,7 +130,7 @@ test("skills update moves each tracked group along its tags or branch, all its c
   commit(skills, { "skills/alpha/SKILL.md": skill("alpha 3") }, "v3.0.0");
 
   const gammaOne = commit(other, { "tools/gamma-skill/SKILL.md": skill("gamma one") });
-  const pkgOne = commit(pkg, { "demo/package.json": packageJsonText("demo", "package.yaml"), "demo/package.yaml": "name: demo\ndescription: Demo.\n" }, "v1.0.0");
+  const pkgOne = commit(pkg, { "demo/package.json": packageJsonText("demo", "package.yaml"), "demo/package.yaml": "# Demo.\n{}\n" }, "v1.0.0");
   const pinned = commit(skills, {});
 
   commit(reference, { "README.md": "one\n" });
@@ -176,7 +176,7 @@ packages:
 
   const gammaTwo = commit(other, { "tools/gamma-skill/SKILL.md": skill("gamma two") });
 
-  commit(pkg, { "demo/package.yaml": "name: demo\ndescription: Demo two.\n" }, "v1.1.0");
+  commit(pkg, { "demo/package.yaml": "# Demo two.\n{}\n" }, "v1.1.0");
   commit(reference, { "README.md": "two\n" });
 
   const referenceHead = git(["rev-parse", "HEAD"], join(dir, "office/references/ref"));
@@ -268,8 +268,8 @@ test("a group missing a skill at the new tag, edited where it would be replaced,
 test("packages update advances tracked packages to a full SHA and moves untracked tags in office.lock, applying them as sync does, leaving full-SHA pins, skill pins and failed packages alone", async () => {
   const pkg = join(dir, "package-repo");
   const skills = join(dir, "skills-repo");
-  const manifest = (text: string) => `name: demo\ndescription: ${text}\nsettings:\n  greeting:\n    description: A greeting\n    default: hi\n`;
-  const pkgOne = commit(pkg, { "demo/package.json": packageJsonText("demo", "package.yaml"), "fixed/package.json": packageJsonText("fixed", "package.yaml"), "tagged/package.json": packageJsonText("tagged", "package.yaml"), "demo/package.yaml": manifest("one"), "fixed/package.yaml": "name: fixed\ndescription: Fixed.\n", "tagged/package.yaml": "name: tagged\ndescription: Tagged.\n" }, "v1.0.0");
+  const manifest = (text: string) => `# ${text}\nsettings: {type: object, additionalProperties: false, properties: {greeting: {type: string, default: hi}}}\n`;
+  const pkgOne = commit(pkg, { "demo/package.json": packageJsonText("demo", "package.yaml"), "fixed/package.json": packageJsonText("fixed", "package.yaml"), "tagged/package.json": packageJsonText("tagged", "package.yaml"), "demo/package.yaml": manifest("one"), "fixed/package.yaml": "# Fixed.\n{}\n", "tagged/package.yaml": "# Tagged.\n{}\n" }, "v1.0.0");
   const skillOne = commit(skills, { "alpha/SKILL.md": skill("alpha one") }, "v1.0.0");
 
   write(
@@ -301,7 +301,7 @@ packages:
 
   expect(readPackageLock(join(dir, "office"))).toEqual(locked);
 
-  const pkgTwo = commit(pkg, { "demo/package.yaml": manifest("two"), "demo/seed/notes/DEMO.md": "from demo\n", "tagged/package.yaml": "name: tagged\ndescription: Tagged two.\n" }, "v1.1.0");
+  const pkgTwo = commit(pkg, { "demo/package.yaml": manifest("two"), "demo/seed/notes/DEMO.md": "from demo\n", "tagged/package.yaml": "# Tagged two.\n{}\n" }, "v1.1.0");
 
   // The untracked tag moves to the new commit.
   git([...identity, "tag", "-f", "-a", "v1.0.0", "-m", "moved"], pkg);
@@ -362,11 +362,10 @@ test("a pending peer setting and duplicate requirements reject the staged tree; 
   const yaml = join(root, "office.yaml");
   const names = ["alpha", "bravo"];
 
-  const installer = (name: string, destination: string, extra = "") => `import {installs} from "@office/mise-integration/claims"; import {requirements} from "@office/tooling/requirements";
-  export default {name:"${name}",description:"fixture",setup(c){
+  const installer = (name: string, destination: string, extra = "") => definitionText(`{setup(c){
     c.add(installs,{name:"install",description:"Install",script:"run.ts",destination:"${destination}",ready:"${destination}",executable:false});
     ${extra}
-  }}`;
+  }}`, `import {installs} from "@office/mise-integration/claims"; import {requirements} from "@office/tooling/requirements";`);
 
   const alpha = installer("alpha", "~/.local/alpha");
   const dependencies = ["mise-integration", "tooling"];
@@ -420,7 +419,7 @@ test("help names both update commands, and office.yaml refuses a track without a
 test.each([true, false])("packages update holds back a package that declares a dependency on a rejected one (declared: %p)", async (declared) => {
   const repo = join(dir, "pair");
   const yaml = join(dir, "office", "office.yaml");
-  const manifest = (name: string, text: string) => `name: ${name}\ndescription: ${text}\n`;
+  const manifest = (name: string, text: string) => `# ${text}\n{}\n`;
   const json = packageJsonText("good", "package.yaml", { dependencies: declared ? ["bad"] : [] });
   const first = commit(repo, { "good/package.json": json, "good/package.yaml": manifest("good", "One."), "bad/package.json": packageJsonText("bad", "package.yaml"), "bad/package.yaml": manifest("bad", "One.") });
   write(yaml, `name: test\npackages:\n${["good", "bad"].map(name => `  - {name: ${name}, repo: ${repo}, ref: ${first}, track: main, path: ${name}}`).join("\n")}\n`);
@@ -446,7 +445,7 @@ test.each([true, false])("packages update holds back a package that declares a d
 test("packages update holds back only the package whose newer commit fails the check before loading", async () => {
   const repo = join(dir, "checked");
   const yaml = join(dir, "office", "office.yaml");
-  const manifest = (name: string, text: string) => `name: ${name}\ndescription: ${text}\n`;
+  const manifest = (name: string, text: string) => `# ${text}\n{}\n`;
   const first = commit(repo, Object.fromEntries(["alpha", "beta"].flatMap(name => [[`${name}/package.json`, packageJsonText(name, "package.yaml")], [`${name}/package.yaml`, manifest(name, "One.")]])));
   write(yaml, `name: test\npackages:\n${["alpha", "beta"].map(name => `  - {name: ${name}, repo: ${repo}, ref: ${first}, track: main, path: ${name}}`).join("\n")}\n`);
   await synced("packages");

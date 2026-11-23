@@ -3,7 +3,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rea
 import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
-import { writePackage } from "./test-package.ts";
+import { definitionText, writePackage } from "./test-package.ts";
 
 const { root, bin, exe, variant, marker, write, read, commit, prompt, fixture, collector, pausedRefresh, published } = definitionFixture();
 
@@ -30,8 +30,8 @@ packages: [${packages.join(", ")}]
 
   const aws = "{name: aws-emulator}";
   const manual = "{name: manual}";
-  const definition = (body: string) => writePackage(local, `${marker} export default {name:"manual",description:"Manual",async setup({add}) {${body}}}`);
-  const add = (name: string, url = wanted) => `add({registry:"references.repository",value:{name:"${name}",url:"${url}"}});`;
+  const definition = (body: string) => writePackage(local, definitionText(`{async setup({add}) {${body}}}`, `${marker}`));
+  const add = (name: string, url = wanted) => `add({id:"references.repository",parse:e=>e},{name:"${name}",url:"${url}"});`;
   const broken = () => definition(`${add("partial")} await Promise.resolve(); throw Error("collector interrupted");`);
   const list = () => published(dir);
   const head = (repo: string) => git(["rev-parse", "HEAD"], repo);
@@ -125,7 +125,7 @@ packages: [${packages.join(", ")}]
   expect(cli(1, "sync", "--references")).toContain(`expected origin ${wanted}, found ../../foreign`);
   git(["remote", "set-url", "origin", wanted], checkout);
 
-  definition(`add({registry:"references.repository",value:{name:"manual",url:"${wanted}",ref:"${first}"}});`);
+  definition(`add({id:"references.repository",parse:e=>e},{name:"manual",url:"${wanted}",ref:"${first}"});`);
   cli(0, "sync", "--packages");
   broken();
   cli(1, "sync", "--packages");
@@ -169,10 +169,10 @@ test("a different pin of a Git contributor cannot inherit the old pin's claims",
   const { dir, cli, select } = fixture("source-change");
   const repo = join(root, "source-change-repo");
   const module = join(repo, "pkg/office.ts");
-  const setup = `add({registry:"references.repository",value:{name:"remote-docs",url:"../../local"}});`;
+  const setup = `add({id:"references.repository",parse:e=>e},{name:"remote-docs",url:"../../local"});`;
 
   const publish = (body: string) => {
-    writePackage(module, `export default {name:"docs",description:"Docs",setup({add}){${body}}}`, { name: "docs" });
+    writePackage(module, definitionText(`{setup({add}){${body}}}`), { name: "docs" });
     select(`  - {name: docs, repo: ${repo}, path: pkg, ref: ${commit(repo)}}\n`);
   };
 
@@ -188,7 +188,7 @@ test("a different pin of a Git contributor cannot inherit the old pin's claims",
   // The installed copy is still the old pin's: the command doesn't load it under the new pin.
   expect(cli(1, "references", "list")).toContain("package docs: ");
   expect(existsSync(join(dir, "node_modules"))).toBe(false);
-  publish('add({registry:"references.repository",value:{name:"../outside",url:"../../local"}});');
+  publish('add({id:"references.repository",parse:e=>e},{name:"../outside",url:"../../local"});');
   expect(cli(1, "sync", "--packages")).toContain("value.name:");
   expect(published(dir)).not.toContain("../outside");
   expect(cli(0, "instructions", dir)).not.toContain("../outside");

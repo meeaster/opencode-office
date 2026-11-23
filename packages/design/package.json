@@ -1,5 +1,6 @@
 {
   "name": "@office/design",
+  "description": "A self-hosted Doop design canvas (https://github.com/kgoedecke/doop) in the office's compose project, connected to every session as the doop MCP server.",
   "private": true,
   "exports": {},
   "office": {

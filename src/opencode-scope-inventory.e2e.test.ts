@@ -84,7 +84,7 @@ test("compiled offline inventory distinguishes scoped declarations, links, clone
     expect(readFileSync(path(".opencode/plugins/office/index.js"), "utf8")).toBe("// independently authored");
     // A redirected plugin folder is never followed, even for a selected package.
     rmSync(path("packages/common/office.ts"));
-    writePackage(path("packages/common/package.yaml"), "name: common\ndescription: Scope fixture\n");
+    writePackage(path("packages/common/package.yaml"), "# Scope fixture\n{}\n");
     f.select("packages: [{name: common}]\n");
     rmSync(path(".opencode/plugins"), { recursive: true });
     symlinkSync(f.env.OFFICE_APP_CONFIG_DIR, path(".opencode/plugins"));
@@ -197,7 +197,7 @@ test("a package plugin that changes location is relinked with a restart notice; 
   const f = fixture("retarget", "http://127.0.0.1:1");
   const upstream = join(f.home, "upstream");
   const link = join(f.dir, ".opencode/plugins/press");
-  writePackage(join(upstream, "pkg/package.yaml"), "name: press\ndescription: fixture\n", { name: "press" });
+  writePackage(join(upstream, "pkg/package.yaml"), "# fixture\n{}\n", { name: "press" });
   write(join(upstream, "pkg/plugin/index.js"), command("press"));
   gitAt(upstream, f.env, "init", "-q");
   gitAt(upstream, f.env, "add", ".");
@@ -207,7 +207,7 @@ test("a package plugin that changes location is relinked with a restart notice; 
   expect(readlinkSync(link)).toBe("../../.office/packages/press/plugin");
 
   // The owner takes the package local: same name, another directory.
-  writePackage(join(f.dir, "packages/press/package.yaml"), "name: press\ndescription: fixture\n");
+  writePackage(join(f.dir, "packages/press/package.yaml"), "# fixture\n{}\n");
   write(join(f.dir, "packages/press/plugin/index.js"), command("press"));
   f.select("packages: [{name: press}]\n");
   // The published set still links press to its pulled-in copy, so nothing loads until sync.

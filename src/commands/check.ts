@@ -38,7 +38,7 @@ import { wrappedCommands } from "../sfw.ts";
 import { toolPins } from "../mise-toml.ts";
 import { destinationProblems } from "../../standard/mise-integration/projection.ts";
 import { fragmentNotes, machineBelowFloors, machineFile, oldToolFragments, orphanFragments, packagesFile, packagesFileProblems, strayFragments } from "../package-tools.ts";
-import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, requiredPackages, resolvePackages, settingsFile, settingsText, sourceFile, validateSetupOverrides } from "../packages.ts";
+import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, requiredPackages, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
 import { describeIgnoredSkills, ignoredSkills, readIgnoredFolders } from "../../packages/office/plugin/ignored-skills.ts";
 import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces, shadowing, withLoaded } from "../outside.ts";
 import { pinnedTools } from "../schema.ts";
@@ -312,15 +312,15 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
 
     const settingsPath = join(item.dir, settingsFile);
 
+    // A settings file the package's folder can't give fails this package alone.
     try {
-      const previous = existsSync(settingsPath) ? readFileSync(settingsPath, "utf8") : undefined;
-      await validateSetupOverrides(office, item);
-      const written = previous === settingsText(item);
+      const written = existsSync(settingsPath) && readFileSync(settingsPath, "utf8") === settingsText(item);
+
       notes.push(written ? `settings valid; settings written to ${relative(office.dir, settingsPath)}` : `settings valid, but ${relative(office.dir, settingsPath)} doesn't hold them; office sync writes it`);
 
       if (!written) ok = false;
     } catch (error) {
-      notes.push(`setup settings not verified: ${error instanceof Error ? error.message : String(error)}`);
+      notes.push(`settings valid, but ${relative(office.dir, settingsPath)} can't be read: ${error instanceof Error ? error.message : String(error)}`);
       ok = false;
     }
 

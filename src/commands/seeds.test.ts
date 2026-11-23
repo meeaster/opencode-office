@@ -37,7 +37,7 @@ const seed = () => join(dir, "packages/demo/seed");
 function office() {
   write(join(dir, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
   recordRequiredBuiltins(dir);
-  writePackage(join(dir, "packages/demo/package.yaml"), "name: demo\ndescription: A demo package.\n");
+  writePackage(join(dir, "packages/demo/package.yaml"), "# A demo package.\n{}\n");
 
   for (const file of ["notes/AGENTS.md", "notes/README.md", "mine.md"]) write(join(seed(), file), laid);
   write(join(dir, "mine.md"), "the office's own\n");

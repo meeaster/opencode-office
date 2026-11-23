@@ -17,22 +17,22 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import { basename, dirname, join, relative } from "node:path";
 import { Worker } from "node:worker_threads";
 
-import { Ajv2020 } from "ajv/dist/2020.js";
+import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
 import * as v from "valibot";
 
-import { project, type MachineClaims } from "../standard/mise-integration/projection.ts";
-import type { CollectionEntry } from "../packages/office/package-context.ts";
+import type { MachineClaims } from "../standard/mise-integration/projection.ts";
 import { panelBundle } from "./desktop.ts";
 import { collectAssets } from "../standard/opencode/assets.ts";
 import { copyFromRepository } from "./git.ts";
 import { type Office, OfficeError, type PackageEntry } from "./office.ts";
-import { readDefinition, runPackageSetup } from "./package-definition.ts";
+import { readDefinition } from "./package-definition.ts";
 import { readPackageJson, scope } from "./package-manifest.ts";
 import { readSnapshot } from "./reference-snapshot.ts";
 import { collectJobs } from "../standard/cron/jobs.ts";
-import { composeProblems, packageComposeFile, settingsEnv } from "./package-services.ts";
-import { systemSection } from "./package-system.ts";
-import { check, officeRelativePath, type PackageManifest, type Parsed, scalarSetting, type SettingValue, settingVariable } from "./schema.ts";
+import { composeProblems, packageComposeFile } from "./package-services.ts";
+import { settingsEnv } from "../standard/compose/services.ts";
+import { gateDefaultProblem, systemSection } from "./package-system.ts";
+import { check, MalformedSettings, officeRelativePath, type PackageManifest, type Parsed, type SettingValue, settingVariable } from "./schema.ts";
 import { applySeeds, seedFolder, settleReceipts, sha256 } from "./seeds.ts";
 import { build, buildCommit, builtinFiles, builtinPackages, toolRepository } from "./tool.ts";
 
@@ -61,6 +61,11 @@ const legacyRecord = ".template.json";
 
 /** The office's own records in a package folder, left out of its file hashes. */
 const records = [sourceFile, settingsFile, legacyRecord, officeFile];
+
+/** The name of the SDK every package can import as `@office/sdk`, which no package can have. */
+export const sdkName = "sdk";
+
+const sdkReserved = `the name ${sdkName} is reserved for ${scope}${sdkName}; rename the package`;
 
 /** The built-in packages every office has, without an entry in office.yaml. */
 export const requiredPackages = ["tooling", "mise-integration", "office", "references"];
@@ -212,6 +217,12 @@ export function resolvePackages(office: Pick<Office, "dir" | "packages">, only?:
     const problem = (message: string) => problems.push({ packages: [entry.name], message });
 
     if ((only !== undefined && entry.name !== only) || requiredPackages.includes(entry.name) || excluded.has(entry.name)) continue;
+
+    // Its link would take the SDK's place in the package set.
+    if (entry.name === sdkName) {
+      problem(sdkReserved);
+      continue;
+    }
 
     if (!builtins.includes(entry.name)) {
       packages.push({ entry, kind: entry.source === undefined ? "local" : "remote", dir: entry.source === undefined ? localDir(office, entry.name) : pulledDir(office, entry.name) });
@@ -556,7 +567,6 @@ export function removePackage(office: Office, name: string, retained?: string): 
   }
 
   if (!retained) rmSync(dir, { recursive: true });
-  rmSync(scalarReceipt(office, name), { force: true });
 
   return [...changes, `removed ${where}/, which office.yaml no longer lists`];
 }
@@ -632,7 +642,8 @@ export function selectionProblems(office: Pick<Office, "packages">, packages: Re
     }
 
     for (const dependency of json.value.dependencies) {
-      if (!selected.has(dependency)) fail(`depends on ${scope}${dependency}, which isn't selected; add it to office.yaml`);
+      if (dependency === sdkName) fail(`lists ${scope}${sdkName} in office.dependencies; ${scope}${sdkName} is always available, so remove it`);
+      else if (!selected.has(dependency)) fail(`depends on ${scope}${dependency}, which isn't selected; add it to office.yaml`);
     }
   }
 
@@ -640,12 +651,13 @@ export function selectionProblems(office: Pick<Office, "packages">, packages: Re
 }
 
 /**
- * The check every reader of definitions runs before its first import: the packages the bound
- * set's sync rejected, `selectionProblems`, and, in a process bound to a set, a package the set
- * has no link (or a wrong link) for. With any problem, the reader imports nothing. A package in
- * `skip` (admission's own rejections, already reported) isn't checked.
+ * The check every reader of definitions runs before its first import: a package named `sdk`, the
+ * packages the bound set's sync rejected, `selectionProblems`, and, in a process bound to a set, a
+ * package the set has no link (or a wrong link) for. With any problem, the reader imports nothing.
+ * A package in `skip` (admission's own rejections, already reported) isn't checked.
  */
 export function definitionGate(office: Pick<Office, "dir" | "packages">, packages: ResolvedPackage[], skip: ReadonlySet<string> = new Set()): PackageProblem[] {
+  const reserved = office.packages.some(entry => entry.name === sdkName) ? [{ packages: [sdkName], message: sdkReserved }] : [];
   const rejected = rejectedPackages(packages, boundUnavailable(office.dir)).filter(pkg => !skip.has(pkg.entry.name));
   const unchecked = new Set([...skip, ...rejected.map(pkg => pkg.entry.name)]);
 
@@ -656,6 +668,7 @@ export function definitionGate(office: Pick<Office, "dir" | "packages">, package
   });
 
   return [
+    ...reserved,
     ...rejected.map(pkg => ({ packages: [pkg.entry.name], message: "rejected by the last sync; run office sync" })),
     ...selectionProblems(office, packages, unchecked),
     ...links,
@@ -674,111 +687,169 @@ export function requireLoadable(office: Office) {
   if (problems.length) throw new OfficeError(`no package loaded: ${problems.map(problemLine).join("; ")}`);
 }
 
+/**
+ * The package's settings in office.yaml checked against its schema, with the schema's defaults
+ * applied: one problem per invalid setting, each naming its path in office.yaml, or the problem
+ * with the schema itself. A setting that reaches the package's compose file must hold no single
+ * quote or line feed, and a system setup's setting must stay off unless office.yaml turns it on.
+ */
+function resolveSettings({ entry, dir }: ResolvedPackage, manifest: PackageManifest, file: string): Parsed<Record<string, SettingValue>> {
+  const validator = settingsValidator(manifest, file);
+
+  if (!validator.ok) return validator;
+  const validate = validator.value;
+  const settings = structuredClone(entry.settings ?? {});
+  const path = `packages.${entry.name}.settings`;
+
+  if (!validate(settings)) {
+    return { ok: false, errors: (validate.errors ?? []).map(issue => {
+      const at = `${path}${issue.instancePath.replaceAll("/", ".")}`;
+
+      if (issue.keyword === "additionalProperties") return `${at}.${String(issue.params.additionalProperty)}: the package declares no such setting; remove it from office.yaml`;
+
+      if (issue.keyword === "required") return `${at}.${String(issue.params.missingProperty)}: is required; add it to office.yaml`;
+
+      return `${at}: ${issue.message}`;
+    }) };
+  }
+
+  const errors = Object.keys(settings).flatMap(key => manifest.secrets[settingVariable(manifest.namespace, key)] ? [`${path}.${key}: conflicts with a package secret`] : []);
+  const gate = manifest.system && gateDefaultProblem(entry, settings, manifest.system.setting);
+
+  if (gate) errors.push(gate);
+
+  if (errors.length) return { ok: false, errors };
+
+  try {
+    if (existsSync(join(dir, packageComposeFile))) settingsEnv({ name: entry.name, namespace: manifest.namespace, dir, settings });
+  } catch (error) {
+    return { ok: false, errors: [error instanceof Error ? error.message : String(error)] };
+  }
+
+  return { ok: true, value: settings };
+}
+
+// One Ajv for every package's settings schema. It registers no schema under its `$id`, so two
+// packages can use the same one, and a `$ref` reaches only within its own schema, as with an Ajv
+// of its own. Compiled validators are kept by schema text, so reading a package again reuses one.
+const settingsAjv = new Ajv2020({ useDefaults: true, allErrors: true, ownProperties: true, strict: false, validateFormats: false, addUsedSchema: false });
+const settingsValidators = new Map<string, ValidateFunction>();
+
+/** The validator of a package's settings schema, or the problem, naming the file, with a root that isn't an object or an invalid schema. */
+function settingsValidator(manifest: PackageManifest, file: string): Parsed<ValidateFunction> {
+  if (manifest.settings instanceof MalformedSettings) return { ok: false, errors: [`${file}: settings: ${manifest.settings.problem}`] };
+
+  if (manifest.settings.type !== "object") return { ok: false, errors: [`${file}: settings: its root must have type: "object"`] };
+  const text = JSON.stringify(manifest.settings);
+
+  try {
+    const validate = settingsValidators.get(text) ?? settingsAjv.compile(manifest.settings);
+
+    if ("$async" in validate) throw new Error("must be a synchronous schema");
+    settingsValidators.set(text, validate);
+
+    return { ok: true, value: validate };
+  } catch (error) {
+    return { ok: false, errors: [`${file}: settings: ${error instanceof Error ? error.message : String(error)}`] };
+  }
+}
+
+/**
+ * A package that didn't read. `manifest` is its definition whenever that loaded, so its declared
+ * commands can still be listed. `settings` holds the problems with its settings or their schema
+ * (also in `errors`): with any, no package may be set up.
+ */
+export type ReadFailure = { ok: false; errors: string[]; manifest?: PackageManifest; settings?: string[] };
+
 /** Validate this office's current entry settings against the installed definition. */
-export function readPackage(office: Office, resolved: ResolvedPackage): Parsed<InstalledPackage> {
+export function readPackage(office: Office, resolved: ResolvedPackage): { ok: true; value: InstalledPackage } | ReadFailure {
   const { entry, dir } = resolved;
   const read = installedDefinition(office, resolved);
 
   if (!read.ok) return read;
 
   const { manifest, file } = read.value;
-  const accepted = Object.keys(manifest.settings);
-  const errors = manifest.name === entry.name ? [] : [`${file} names the package ${manifest.name}, not ${entry.name}`];
-  const settings = structuredClone(entry.settings ?? {});
+  const errors: string[] = [];
 
   for (const key of Object.keys(entry.cron)) {
     if (!manifest.registerCron && !Object.hasOwn(manifest.cron, key)) errors.push(`packages.${entry.name}.cron.${key}: no such job in ${file}`);
   }
 
-  if (manifest.settings_schema !== undefined) {
-    try {
-      const ajv = new Ajv2020({ useDefaults: true, allErrors: true, ownProperties: true, strict: false, validateFormats: false });
-      const validate = ajv.compile(manifest.settings_schema);
+  const settings = resolveSettings(resolved, manifest, file);
 
-      if ("$async" in validate) throw new Error("must be a synchronous schema");
+  // Before the checks below that read the package's folder, so a failing one can't hide it.
+  if (!settings.ok) return { ok: false, errors: [...errors, ...settings.errors], manifest, settings: settings.errors };
 
-      if (!validate(settings)) {
-        for (const issue of validate.errors ?? []) {
-          errors.push(`${entry.name}.settings${issue.instancePath}: ${issue.message}${issue.keyword === "additionalProperties" ? `: ${issue.params.additionalProperty}` : ""}`);
-        }
+  try {
+    for (const [id, service] of Object.entries(manifest.host?.services ?? {})) {
+      const script = join(dir, service.script);
+
+      if (!statSync(script, { throwIfNoEntry: false })?.isFile() || relative(realpathSync(dir), realpathSync(script)).startsWith("..")) {
+        errors.push(`${entry.name}: host.services.${id}: ${service.script} must be a file inside the package`);
       }
-    } catch (error) {
-      errors.push(`${file}: settings_schema: ${error instanceof Error ? error.message : String(error)}`);
     }
 
-    for (const key of Object.keys(settings)) {
-      if (manifest.secrets[settingVariable(manifest.namespace, key)]) errors.push(`${entry.name}.settings.${key}: conflicts with a package secret`);
-    }
+    if (errors.length > 0) return { ok: false, errors, manifest };
 
-    const gate = manifest.host?.setting;
+    const skillsDir = join(dir, "skills");
 
-    if (gate !== undefined && !v.is(v.boolean(), settings[gate])) errors.push(`${entry.name}.settings.${gate}: host.setting requires a boolean`);
+    const skills = existsSync(skillsDir)
+      ? readdirSync(skillsDir, { withFileTypes: true })
+          .filter((item) => item.isDirectory() && existsSync(join(skillsDir, item.name, "SKILL.md")))
+          .map((item) => item.name)
+      : [];
 
-    const systemGate = manifest.system?.setting;
+    const panel = join(dir, panelBundle);
 
-    if (systemGate !== undefined && !v.is(v.boolean(), settings[systemGate])) errors.push(`${entry.name}.settings.${systemGate}: system.setting requires a boolean`);
+    return { ok: true, value: { ...resolved, manifest, settings: settings.value, skills, plugin: !manifest.opencode && existsSync(join(dir, "plugin")), panel: !manifest.opencode && existsSync(panel) ? panel : undefined } };
+  } catch (error) {
+    // A file the package's folder can't give (a skills/ that isn't a folder, an unreadable script) fails this package alone.
+    return { ok: false, errors: [`${file}: ${error instanceof Error ? error.message : String(error)}`], manifest };
+  }
+}
 
-    const appGate = manifest.executor_app?.setting;
+/**
+ * What must pass before a candidate is imported: in the selection with the candidate in its
+ * entry's place, the copy, package.json and declared dependencies of the candidate and of every
+ * package it can import through them. A staged candidate has no link in the package set yet.
+ */
+function candidateProblems(office: Pick<Office, "dir" | "packages">, candidate: ResolvedPackage): PackageProblem[] {
+  const name = candidate.entry.name;
+  const effective = { ...office, packages: office.packages.map(entry => entry.name === name ? candidate.entry : entry) };
+  const peers = new Map(resolvePackages(effective).packages.map(peer => [peer.entry.name, peer]));
+  const reached = new Map<string, ResolvedPackage>();
+  const queue = [candidate];
 
-    if (appGate !== undefined && !v.is(v.boolean(), settings[appGate])) errors.push(`${entry.name}.settings.${appGate}: executor_app.setting requires a boolean`);
-  } else {
-    for (const [key, value] of Object.entries(settings)) {
-      // Setup can consume additional overrides. Do not deliver unvalidated input to services or plugins.
-      if (!accepted.includes(key) && manifest.setup) {
-        delete settings[key];
-        continue;
-      }
+  for (const pkg of queue) {
+    if (reached.has(pkg.entry.name)) continue;
+    reached.set(pkg.entry.name, pkg);
+    const json = readPackageJson(pkg.dir, pkg.entry.name, pkg.kind);
 
-      if (!accepted.includes(key)) errors.push(`settings.${key}: ${entry.name} has no such setting (it accepts ${accepted.join(", ") || "none"}); remove it from the entry in office.yaml`);
-      else if (!v.is(scalarSetting, value)) errors.push(`settings.${key}: must be text, a number or true/false`);
-    }
+    for (const dependency of json.ok ? json.value.dependencies : []) {
+      const peer = dependency === name ? undefined : peers.get(dependency);
 
-    for (const [key, setting] of Object.entries(manifest.settings)) {
-      if (Object.hasOwn(settings, key)) continue;
-
-      if (setting.default === undefined) errors.push(`settings.${key} is required; add it to the entry in office.yaml: ${setting.description}`);
-      else settings[key] = setting.default;
+      if (peer) queue.push(peer);
     }
   }
 
-  for (const [id, service] of Object.entries(manifest.host?.services ?? {})) {
-    if (service.setting !== undefined && !v.is(v.boolean(), settings[service.setting])) errors.push(`${entry.name}: host.services.${id}.setting requires a boolean setting`);
-
-    const script = join(dir, service.script);
-
-    if (!statSync(script, { throwIfNoEntry: false })?.isFile() || relative(realpathSync(dir), realpathSync(script)).startsWith("..")) {
-      errors.push(`${entry.name}: host.services.${id}: ${service.script} must be a file inside the package`);
-    }
-  }
-
-  if (errors.length > 0) return { ok: false, errors };
-
-  const skillsDir = join(dir, "skills");
-
-  const skills = existsSync(skillsDir)
-    ? readdirSync(skillsDir, { withFileTypes: true })
-        .filter((item) => item.isDirectory() && existsSync(join(skillsDir, item.name, "SKILL.md")))
-        .map((item) => item.name)
-    : [];
-
-  const panel = join(dir, panelBundle);
-
-  return { ok: true, value: { ...resolved, manifest, settings, skills, plugin: !manifest.opencode && existsSync(join(dir, "plugin")), panel: !manifest.opencode && existsSync(panel) ? panel : undefined } };
+  return selectionProblems(effective, [...reached.values()]);
 }
 
 /** Validate a candidate against the consuming entry before any live path points at its files. */
 export async function validateReplacement(office: Office, resolved: ResolvedPackage, resolveSetup: boolean, expectedBuiltins?: ReadonlyMap<string, string>) {
+  const problems = candidateProblems(office, resolved);
+
+  if (problems.length) throw new Error(problems.map(problemLine).join("; "));
   const read = readPackage(office, resolved);
 
   if (!read.ok) throw new Error(read.errors.join("; "));
 
   const item = read.value;
 
-  if (resolveSetup) {
-    if (item.kind === "remote" && (item.manifest.setup || item.manifest.system || item.manifest.host?.install)) {
-      const { admitReplacement } = await import("./collect-references.ts");
-      await admitReplacement(office, item, expectedBuiltins);
-    } else await resolveSetupSettings(office, item, true);
+  // Its setup runs with its peers', which admission reads first: a peer with invalid settings stops it.
+  if (resolveSetup && (item.manifest.setup || item.manifest.system || item.manifest.host?.install)) {
+    const { admitReplacement } = await import("./collect-references.ts");
+    await admitReplacement(office, item, expectedBuiltins);
   }
 
   if (item.manifest.opencode) collectAssets(office.dir, item);
@@ -803,8 +874,8 @@ export async function validateReplacement(office: Office, resolved: ResolvedPack
   if (existsSync(compose)) {
     const problems = composeProblems(item.manifest.namespace, readFileSync(compose, "utf8"));
 
+    // readPackage has already checked that its settings can reach it.
     if (problems.length) throw new Error(`${packageComposeFile}: ${problems.join("; ")}`);
-    settingsEnv(item);
   }
 
   return item;
@@ -833,37 +904,6 @@ async function validateStaged(office: Office, resolved: ResolvedPackage, replaci
     worker.once("message", resolve);
     worker.once("exit", code => reject(new Error(`candidate validator exited (${code}) before completing`)));
   }).finally(() => worker.terminate());
-}
-
-export function applyScalarSettings(item: InstalledPackage, scalars: Record<string, string | number | boolean>) {
-  const settings = { ...item.settings, ...scalars };
-
-  if (existsSync(join(item.dir, packageComposeFile))) settingsEnv({ ...item, settings });
-  item.settings = settings;
-}
-
-async function resolveSetupSettings(office: Office, item: InstalledPackage, validateMachine = false) {
-  const overrides = item.entry.settings ?? {};
-
-  if (!item.manifest.setup) return;
-  const rows: { id: string; value: CollectionEntry }[] = [];
-
-  const { scalars } = await runPackageSetup(item.manifest, overrides, { settings: structuredClone(item.settings), command() {}, collection() {}, add(handle, value) {
-    if (validateMachine) rows.push({ id: handle.id, value });
-  } });
-
-  if (validateMachine) project(item, rows, true);
-  applyScalarSettings(item, scalars);
-}
-
-// Inventory must know whether setup supplies defaults independently of the delivery
-// it is checking. Keep this receipt outside package bytes and the saved references file.
-function scalarReceipt(office: Office, name: string) {
-  return join(office.dir, ".office/resolved/scalar-settings", name);
-}
-
-export async function validateSetupOverrides(office: Office, item: InstalledPackage) {
-  if (!item.manifest.settings_schema && (existsSync(scalarReceipt(office, item.entry.name)) || Object.keys(item.entry.settings ?? {}).some(key => !Object.hasOwn(item.manifest.settings, key)))) await resolveSetupSettings(office, item);
 }
 
 /** `.office.json`'s content: what the office declares to its packages. */
@@ -907,13 +947,6 @@ export function writePackageSettings(office: Office, installed: InstalledPackage
 export function installPackage(office: Office, installed: InstalledPackage): string[] {
   const changes: string[] = [];
   const name = installed.entry.name;
-  const receipt = scalarReceipt(office, name);
-  const usesScalars = !installed.manifest.settings_schema && Object.keys(installed.settings).some(key => !Object.hasOwn(installed.manifest.settings, key));
-
-  if (usesScalars && !existsSync(receipt)) {
-    mkdirSync(dirname(receipt), { recursive: true });
-    writeFileSync(receipt, "setup supplies scalar settings\n");
-  } else if (!usesScalars && existsSync(receipt)) rmSync(receipt);
 
   changes.push(...writePackageSettings(office, installed));
 

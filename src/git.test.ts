@@ -157,7 +157,7 @@ test("packages-only sync applies changed settings and plugin links without visit
   const upstream = join(dir, "unavailable");
 
   mkdirSync(join(pkg, "plugin"), { recursive: true });
-  writePackage(join(pkg, "package.yaml"), "name: demo\ndescription: Demo\nsettings:\n  title: { description: Title, default: Before }\n");
+  writePackage(join(pkg, "package.yaml"), "# Demo\nsettings: { type: object, additionalProperties: false, properties: { title: { type: string, default: Before } } }\n");
   writeFileSync(join(dir, "office.yaml"), `name: demo\npackages: [{ name: demo, settings: { title: After } }]\nreferences: [{ name: docs, url: ${upstream} }]\ndesks: { work: { repos: [{ name: example, url: ${upstream} }] } }\nplugins: [{ name: other, repo: ${upstream} }]\n`);
 
   const changes = await sync(loadOffice(dir), { scope: "packages" });
@@ -175,7 +175,7 @@ test("a fresh clone of a commit holds every seed its receipts name, byte for byt
   const committer = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "core.autocrlf=true"];
 
   mkdirSync(join(office, "packages/demo/seed/notes"), { recursive: true });
-  writePackage(join(office, "packages/demo/package.yaml"), "name: demo\ndescription: Demo\n");
+  writePackage(join(office, "packages/demo/package.yaml"), "# Demo\n{}\n");
   // Git would turn the CRLF file's endings to LF at add, and the LF file's to CRLF at checkout.
   writeFileSync(join(office, "packages/demo/seed/notes/AGENTS.md"), "# Notes\r\n\r\nWindows endings.\r\n");
   writeFileSync(join(office, "packages/demo/seed/notes/README.md"), "# Notes\n\nUnix endings.\n");
@@ -188,6 +188,7 @@ test("a fresh clone of a commit holds every seed its receipts name, byte for byt
   const receipts = [...readLockSection(office, "seeds").values()].flatMap(receipt => ("sha256" in receipt ? [receipt.sha256] : []));
 
   expect(receipts).toHaveLength(2);
+
   // A sync with no seed to copy still restores an edited or removed guard.
   for (const edit of [() => writeFileSync(join(office, ".office/seeds/.gitattributes"), "* text\n"), () => rmSync(join(office, ".office/seeds/.gitattributes"))]) {
     edit();
@@ -207,6 +208,7 @@ test("a fresh clone of a commit holds every seed its receipts name, byte for byt
   const cloned = [...readLockSection(clone, "seeds").values()].flatMap(receipt => ("sha256" in receipt ? [receipt.sha256] : []));
 
   expect(cloned.sort()).toEqual(receipts.sort());
+
   for (const hash of cloned) expect(sha256(execFileSync("git", ["show", `HEAD:.office/seeds/${hash}`], { cwd: clone }))).toBe(hash);
   expect(storedSeedProblems(clone)).toEqual([]);
 });

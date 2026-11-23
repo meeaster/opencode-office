@@ -1,11 +1,11 @@
 {
   "name": "@office/aws-emulator",
+  "description": "A local AWS emulator, Floci (https://github.com/floci-io/floci), with its web console, in the office's compose project, for testing against AWS APIs without a real account; agents use it through the AWS CLI the package installs and the floci skill.",
   "private": true,
   "exports": {},
   "office": {
     "definition": "./office.ts",
     "dependencies": [
-      "@office/office",
       "@office/references",
       "@office/tooling"
     ]

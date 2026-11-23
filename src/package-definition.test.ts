@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { readDefinition } from "./package-definition.ts";
 import { readPackageJson } from "./package-manifest.ts";
-import { packageJsonText } from "./test-package.ts";
+import { definitionText, packageJsonText } from "./test-package.ts";
 
 let root: string;
 
@@ -26,24 +26,24 @@ function folder(name: string, files: Record<string, string>) {
 }
 
 const definition = (name: string, files: Record<string, string>) => readDefinition(folder(name, files), name, `packages/${name}`);
-const valid = 'export default { name: "notes", description: "Notes" }';
+const valid = definitionText('{}');
 
-type Json = { exports?: Record<string, string>; private?: boolean; office?: { definition: string; dependencies: string[] } };
+type Json = { exports?: Record<string, string>; private?: boolean; description?: string; office?: { definition: string; dependencies: string[] } };
 
 const json = (name: string, definition: string, extra: Json = {}) => JSON.stringify({ name: `@office/${name}`, office: { definition }, ...extra });
 
-test("package.json names the definition, the declared dependencies and what the package shares", () => {
+test("package.json names the definition, the declared dependencies, what the package shares and, optionally, its description", () => {
   const exports = { "./token": "./lib/token.ts" };
-  const dir = folder("case", { "package.json": json("case", "./src/definition.ts", { exports, private: true, office: { definition: "./src/definition.ts", dependencies: ["@office/tooling"] } }), "src/definition.ts": valid });
+  const dir = folder("case", { "package.json": json("case", "./src/definition.ts", { exports, private: true, description: "Notes for the office", office: { definition: "./src/definition.ts", dependencies: ["@office/tooling"] } }), "src/definition.ts": valid });
 
-  expect(readPackageJson(dir, "case")).toEqual({ ok: true, value: { definition: "src/definition.ts", dependencies: ["tooling"], exports } });
+  expect(readPackageJson(dir, "case")).toEqual({ ok: true, value: { description: "Notes for the office", definition: "src/definition.ts", dependencies: ["tooling"], exports } });
 });
 
 test("a package.json that can't name the definition says what is wrong, naming the path or the names", () => {
   const outside = folder("outside", { "office.ts": valid });
 
   for (const [name, files, reason] of [
-    ["missing", { "office.ts": valid }, 'no package.json; add a package.json with "name": "@office/missing" and "office": { "definition": "./office.ts" }'],
+    ["missing", { "office.ts": valid }, 'no package.json; add a package.json with "name": "@office/missing", an optional "description" and "office": { "definition": "./office.ts" }'],
     ["invalid", { "package.json": "{" }, "package.json: JSON Parse error: Expected '}'"],
     ["renamed", { "package.json": json("other", "./office.ts"), "office.ts": valid }, "package.json names @office/other; expected @office/renamed"],
     ["undefined", { "package.json": JSON.stringify({ name: "@office/undefined", office: {} }) }, "package.json: office.definition: must give the definition's path inside the package"],
@@ -68,18 +68,25 @@ test("a package.json that can't name the definition says what is wrong, naming t
   // The advice for a missing package.json depends on where the package comes from.
   const old = folder("old", { "office.ts": valid });
   expect(readPackageJson(old, "old", "built-in")).toEqual({ ok: false, errors: ["no package.json; the copy is from an older office executable; run office sync"] });
-  expect(readPackageJson(old, "old", "remote")).toEqual({ ok: false, errors: ['no package.json; its repository needs a package.json with "name": "@office/old" and "office": { "definition": … }; then run office packages update'] });
+  expect(readPackageJson(old, "old", "remote")).toEqual({ ok: false, errors: ['no package.json; its repository needs a package.json with "name": "@office/old", an optional "description" and "office": { "definition": … }; then run office packages update'] });
 });
 
-test("a definition loads from the path package.json names, as a module or a package.yaml", () => {
-  expect(definition("module", { "package.json": packageJsonText("module", "src/definition.ts"), "src/definition.ts": valid })).toMatchObject({ ok: true, value: { file: "packages/module/src/definition.ts", manifest: { name: "notes" } } });
-  expect(definition("yaml", { "package.json": packageJsonText("yaml", "package.yaml"), "package.yaml": "name: notes\ndescription: YAML\n", "office.ts": 'throw new Error("not the definition")' })).toMatchObject({ ok: true, value: { file: "packages/yaml/package.yaml", manifest: { description: "YAML" } } });
+test("a definition loads from the path package.json names, as Package.define's result or a package.yaml; a plain module object doesn't", () => {
+  // No entrypoint is imported here: readDefinition registers the executable's SDK itself. Neither
+  // package.json has a description.
+  expect(definition("module", { "package.json": packageJsonText("module", "src/definition.ts"), "src/definition.ts": valid })).toMatchObject({ ok: true, value: { file: "packages/module/src/definition.ts", manifest: { namespace: "module" } } });
+  expect(definition("yaml", { "package.json": packageJsonText("yaml", "package.yaml"), "package.yaml": "namespace: notes\n", "office.ts": 'throw new Error("not the definition")' })).toMatchObject({ ok: true, value: { file: "packages/yaml/package.yaml", manifest: { namespace: "notes" } } });
+  expect(definition("plain", { "package.json": packageJsonText("plain"), "office.ts": 'export default {}' })).toEqual({
+    ok: false, errors: ["packages/plain/office.ts: the definition must be the result of Package.define from @office/sdk"],
+  });
 });
 
 test("a definition that cannot be read names its file and reason, whatever went wrong", () => {
   for (const [name, files, reason] of [
     ["thrown", { "package.json": packageJsonText("thrown"), "office.ts": 'throw new Error("bad notes import")' }, "packages/thrown/office.ts: bad notes import"],
-    ["shape", { "package.json": packageJsonText("shape"), "office.ts": 'export default { name: "notes", description: "Notes", setup: "handler.ts" }' }, "packages/shape/office.ts: setup:"],
+    ["shape", { "package.json": packageJsonText("shape"), "office.ts": definitionText('{ setup: "handler.ts" }') }, "packages/shape/office.ts: setup:"],
+    ["named", { "package.json": packageJsonText("named"), "office.ts": definitionText('{ name: "named" }') }, "packages/named/office.ts: name: must be a mapping of"],
+    ["described", { "package.json": packageJsonText("described", "package.yaml"), "package.yaml": "description: Notes\n" }, "packages/described/package.yaml: description: must be a mapping of"],
     ["none", { "office.ts": valid }, "packages/none: no package.json; add a package.json with \"name\": \"@office/none\""],
   ] as const) {
     const read = definition(name, files);

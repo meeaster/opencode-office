@@ -1,15 +1,15 @@
 import * as v from "valibot";
-import type { Collection, CollectionEntry } from "../packages/office/package-context.ts";
+import type { Registry, RegistryEntry } from "../sdk/index.ts";
 import { project, destinationProblems, machineCollection } from "../standard/mise-integration/projection.ts";
 import { collectJobs } from "../standard/cron/jobs.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { changesSetup, fragmentPath } from "./package-tools.ts";
 import { registerPackage } from "./package-setup.ts";
-import { nameProblems, type RegisteredCommand } from "./command-table.ts";
+import { declaredCommands, nameProblems, type RegisteredCommand } from "./command-table.ts";
 import { installedPackages, type InstalledPackages } from "./layout.ts";
 import type { Office, PackageEntry } from "./office.ts";
-import { applyScalarSettings, builtinSource, collectionContract, gitSelection, providerFiles, readRecord, resolvePackages, type InstalledPackage, type ResolvedPackage } from "./packages.ts";
+import { builtinSource, collectionContract, gitSelection, providerFiles, readRecord, resolvePackages, type InstalledPackage, type ResolvedPackage } from "./packages.ts";
 import { claims, inputHash, namedEntry, readSnapshot, referenceFile, type ReferenceSnapshot } from "./reference-snapshot.ts";
 import type { ReferencePublication } from "./reference-publication.ts";
 
@@ -105,8 +105,8 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
   const candidate: ReferenceSnapshot = { version: 4, inputs: inputHash(office), owner: office.references, contributors: [] };
   const available = new Map(installed.installed.map(item => [item.entry.name, item]));
   const errors: string[] = [];
-  const definitions = new Map<string, { handle: Collection<CollectionEntry>; owner: string; contract: string }>();
-  const pending = new Map<string, { id: string; value: CollectionEntry }[]>();
+  const definitions = new Map<string, { handle: Registry<RegistryEntry>; owner: string; contract: string }>();
+  const pending = new Map<string, { id: string; value: RegistryEntry }[]>();
   const commands = new Map<string, RegisteredCommand[]>();
 
   function fail(group: ReferenceSnapshot["contributors"][number], message?: string) {
@@ -114,13 +114,15 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
     const last = previous?.contributors.find(item => item.name === group.name && item.source === group.source && item.commit === group.commit);
     group.stale = true;
     group.entries = last?.entries ?? [];
-    // A contributor that failed collection provides no commands.
-    commands.delete(group.name);
   }
 
   for (const item of selected.toSorted((a, b) => a.entry.name.localeCompare(b.entry.name))) {
     const name = item.entry.name;
     const pkg = available.get(name);
+    const definition = pkg?.manifest ?? installed.definitions.get(name);
+
+    // Commands come from the definition, whether or not it has a setup, read or set up.
+    if (definition) commands.set(name, declaredCommands(definition));
 
     if (pkg && !pkg.manifest.setup && !pkg.manifest.registerCron && !pkg.manifest.opencode) continue;
 
@@ -140,11 +142,7 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
           if (!cron.ok) throw new Error(cron.errors.join("; "));
         }
 
-        const { collections: provided, additions, commands: registered, invalid, scalars } = await registerPackage({
-          name, manifest: pkg.manifest, overrides: item.entry.settings ?? {}, settings: pkg.settings,
-        });
-
-        applyScalarSettings(pkg, scalars);
+        const { registries: provided, additions } = await registerPackage({ name, manifest: pkg.manifest, settings: pkg.settings });
 
         if (provided.size) {
           const files = providerFiles(item);
@@ -157,13 +155,11 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
         }
 
         pending.set(name, additions);
-        commands.set(name, registered);
         candidate.contributors.push({ name, ...source, stale: false, entries: [] });
-        errors.push(...invalid);
         continue;
       } catch (error) {
         changes.push(`FAILED package ${name}: collecting references (${source.source}${source.commit ? ` @ ${source.commit}` : ""}): ${error instanceof Error ? error.message : String(error)}`);
-        // Setup did not resolve a complete settings file. Keep last-good package deliveries.
+        // Setup failed: keep last-good package deliveries.
         installed.installed = installed.installed.filter(current => current !== pkg);
         installed.unread.add(name);
       }
@@ -264,7 +260,10 @@ export async function collectReferences(office: Office, selected: ResolvedPackag
 
   const combined = claims(candidate);
 
-  errors.push(...nameProblems([...commands].flatMap(([owner, registered]) => registered.map(command => ({ owner, command })))).map(problem => problem.message));
+  for (const problem of nameProblems([...commands].flatMap(([owner, registered]) => registered.map(command => ({ owner, command }))))) {
+    conflict?.(...problem.owners);
+    errors.push(problem.message);
+  }
 
   if (!combined.ok) errors.push(...combined.errors);
 

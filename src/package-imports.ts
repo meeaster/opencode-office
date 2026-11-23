@@ -1,11 +1,12 @@
 // How packages reach each other: one directory link per package in a package set's
 // node_modules/@office, so `@office/<name>/…` resolves by ordinary node_modules lookup with the
 // package's package.json `exports` enforced by Bun. And which packages an update must move together.
-import { existsSync, lstatSync, mkdirSync, readlinkSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { packageLinks } from "./bound-paths.ts";
 import { readPackageJson } from "./package-manifest.ts";
-import type { ResolvedPackage } from "./packages.ts";
+import { type ResolvedPackage, sdkName } from "./packages.ts";
+import { toolFiles, toolPath, writeToolFile } from "./tool.ts";
 
 /**
  * Links each package as `<folder>/node_modules/@office/<name>`, relative, so the office can move;
@@ -20,6 +21,17 @@ export function writePackageLinks(folder: string, packages: ResolvedPackage[], r
     const link = join(links, pkg.entry.name);
     symlinkSync(relative(dirname(link), pkg.dir), link);
   }
+}
+
+/**
+ * Writes the SDK's source as `<folder>/node_modules/@office/sdk`, beside the package links, so
+ * editors and tsc resolve a package's `@office/sdk` import. It is types only: its runtime entry
+ * throws, since a package office loads gets the executable's own SDK.
+ */
+export function writeSdk(folder: string) {
+  const target = join(packageLinks(folder), sdkName);
+
+  for (const file of toolFiles("sdk")) writeToolFile(join(target, file), readFileSync(toolPath(`sdk/${file}`), "utf8"));
 }
 
 export const editorLinks = "packages/node_modules/@office";
@@ -69,7 +81,8 @@ function declaredDependencies(packages: ResolvedPackage[]) {
     const read = readPackageJson(pkg.dir, pkg.entry.name);
 
     if (!read.ok) throw new Error(read.errors.join("; "));
-    graph.set(pkg.entry.name, new Set(read.value.dependencies));
+    // @office/sdk is no package, so it couples nothing.
+    graph.set(pkg.entry.name, new Set(read.value.dependencies.filter(name => name !== sdkName)));
   }
 
   return graph;

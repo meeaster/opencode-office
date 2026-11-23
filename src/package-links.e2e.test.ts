@@ -5,17 +5,16 @@ import { existsSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
-import { writePackage } from "./test-package.ts";
+import { definitionText, writePackage } from "./test-package.ts";
 
 const { root, write, read, commit, fixture, published } = definitionFixture();
 
 /** A consumer that adds a reference named after what it imports, and prints it from a command. */
 function consumer(imports: string, value: string) {
-  return `import {repositories} from "@office/references/repositories"; ${imports}
-    export default {name:"consumer",description:"consumer",setup(ctx){
+  return definitionText(`{setup(ctx){
       ctx.add(repositories,{name:${value},url:"https://example.invalid/r.git"});
-      ctx.command({name:"consumer show",summary:"show",run(){console.log("value", ${value})}});
-    }}`;
+    },
+    commands:{"consumer show":{summary:"show",run(){console.log("value", ${value})}}}}`, `import {repositories} from "@office/references/repositories"; ${imports}`);
 }
 
 const dependencies = ["provider", "references"];
@@ -26,8 +25,7 @@ test("a first sync resolves local packages through the new set's links, and expo
   rmSync(join(dir, ".office"), { recursive: true });
   select("  - name: consumer\n  - name: provider\n");
   // The provider has libraries of its own (devDependencies, a node_modules folder) and imports a built-in's export.
-  write(join(provider, "office.ts"), `import {requirements} from "@office/tooling/requirements";
-    export default {name:"provider",description:"provider",setup(ctx){ctx.command({name:"provider show",summary:"show",run(){console.log("requirements", typeof requirements)}})}}`);
+  write(join(provider, "office.ts"), definitionText(`{commands:{"provider show":{summary:"show",run(){console.log("requirements", typeof requirements)}}}}`, `import {requirements} from "@office/tooling/requirements";`));
   write(join(provider, "package.json"), JSON.stringify({ name: "@office/provider", private: true, exports: { ".": "./index.ts", "./token": "./lib/token.ts" }, devDependencies: { typescript: "5.9.3" }, office: { definition: "./office.ts", dependencies: ["@office/tooling"] } }));
   write(join(provider, "node_modules/typescript/package.json"), '{"name":"typescript"}');
   write(join(provider, "index.ts"), 'export const value = "first";');
@@ -53,7 +51,7 @@ test("an update resolves a local consumer against the provider of the set it che
   const repo = join(root, "update-provider");
   const provider = join(repo, "provider");
   git(["init", "-q", "-b", "main", repo]);
-  writePackage(join(provider, "office.ts"), 'export default {name:"provider",description:"provider"}', { exports: { ".": "./index.ts" } });
+  writePackage(join(provider, "office.ts"), definitionText('{}'), { exports: { ".": "./index.ts" } });
   write(join(provider, "index.ts"), 'export const value = "one";');
   commit(repo);
   select(`  - {name: provider, repo: ${repo}, path: provider, ref: main}\n  - name: consumer\n`);
@@ -70,7 +68,7 @@ test("an update resolves a local consumer against the provider of the set it che
   expect(cli(0, "references", "list")).toContain("two\thttps://example.invalid/r.git\tpackage consumer");
 
   // The consumer already imports an export only the newer provider has.
-  writePackage(join(provider, "office.ts"), 'export default {name:"provider",description:"provider"}', { exports: { ".": "./index.ts", "./extra": "./extra.ts" } });
+  writePackage(join(provider, "office.ts"), definitionText('{}'), { exports: { ".": "./index.ts", "./extra": "./extra.ts" } });
   write(join(provider, "extra.ts"), 'export const extra = "three";');
   commit(repo);
   writePackage(join(dir, "packages/consumer/office.ts"), consumer('import {extra} from "@office/provider/extra";', "extra"), { dependencies });
@@ -81,14 +79,13 @@ test("an update resolves a local consumer against the provider of the set it che
 test("a provider's shared module is evaluated once in a run, and a definition reads a file beside it", () => {
   const { dir, probe, cli, select } = fixture("one-evaluation");
   select("  - name: provider\n  - name: left\n  - name: right\n");
-  writePackage(join(dir, "packages/provider/office.ts"), 'export default {name:"provider",description:"provider"}', { exports: { "./count": "./count.ts" } });
+  writePackage(join(dir, "packages/provider/office.ts"), definitionText('{}'), { exports: { "./count": "./count.ts" } });
   write(join(dir, "packages/provider/count.ts"), 'import {appendFileSync} from "node:fs"; appendFileSync(process.env.PROBE, "evaluated\\n"); export const counter = {n: 0};');
 
   for (const side of ["left", "right"]) {
-    writePackage(join(dir, `packages/${side}/office.ts`), `import {counter} from "@office/provider/count"; import {readFileSync} from "node:fs";
-      export default {name:"${side}",description:"${side}",setup(ctx){counter.n++;
-        const note = readFileSync(new URL("./note.txt", import.meta.url), "utf8").trim();
-        ctx.command({name:"${side} count",summary:"count",run(){console.log("${side}", counter.n, note)}})}}`, { dependencies: ["provider"] });
+    writePackage(join(dir, `packages/${side}/office.ts`), definitionText(`{setup(){counter.n++},
+        commands:{"${side} count":{summary:"count",run(){console.log("${side}", counter.n, note)}}}}`, `import {counter} from "@office/provider/count"; import {readFileSync} from "node:fs";
+        const note = readFileSync(new URL("./note.txt", import.meta.url), "utf8").trim();`), { dependencies: ["provider"] });
     write(join(dir, `packages/${side}/note.txt`), `${side} note\n`);
   }
 
@@ -104,7 +101,7 @@ test("the editor link stays out of Git without a node_modules rule, and check re
   const gitignore = join(dir, ".gitignore");
   write(gitignore, read(gitignore).replace("node_modules/\n", ""));
   select("  - name: consumer\n  - name: provider\n");
-  writePackage(join(dir, "packages/provider/office.ts"), 'export default {name:"provider",description:"provider"}', { exports: { ".": "./index.ts" } });
+  writePackage(join(dir, "packages/provider/office.ts"), definitionText('{}'), { exports: { ".": "./index.ts" } });
   write(join(dir, "packages/provider/index.ts"), 'export const value = "checked";');
   writePackage(join(dir, "packages/consumer/office.ts"), consumer('import {value} from "@office/provider";', "value"), { dependencies });
   cli(0, "sync", "--packages");
@@ -119,11 +116,12 @@ test("the editor link stays out of Git without a node_modules rule, and check re
   expect(check).not.toContain("node_modules");
 
   // The template's tsconfig.json follows the same imports through the editor link, and leaves desks out.
-  write(join(dir, "packages/consumer/types.ts"), 'import type { CollectionEntry } from "@office/office/context"; import { value } from "@office/provider"; export const typed: CollectionEntry = { name: value };');
+  // A local package's typed definition: Package from @office/sdk, a handle from another package.
+  write(join(dir, "packages/consumer/typed.ts"), 'import { Package } from "@office/sdk"; import { repositories } from "@office/references/repositories"; import { value } from "@office/provider";\nexport default Package.define({ settings: { type: "object", additionalProperties: false, properties: { url: { type: "string", default: "u" } } }, setup(ctx) { ctx.add(repositories, { name: value, url: ctx.settings.url }); } });\n');
   write(join(dir, "example/repos/demo/broken.ts"), 'const broken: number = "not a number";');
   const checkout = dirname(import.meta.dir);
-  // The fixtures' definitions are untyped JavaScript-style TS, so implicit any is allowed; resolution and scope are what matter.
-  const tsc = () => Bun.spawnSync([join(checkout, "node_modules/.bin/tsc"), "--noEmit", "--noImplicitAny", "false", "-p", join(dir, "tsconfig.json")], { cwd: dir });
+  // With the template's own strict settings, nothing relaxed.
+  const tsc = () => Bun.spawnSync([join(checkout, "node_modules/.bin/tsc"), "--noEmit", "-p", join(dir, "tsconfig.json")], { cwd: dir });
   // A deliberate type error in the local package is reported, so tsc checked it; fixed, tsc passes.
   write(join(dir, "packages/consumer/wrong.ts"), 'import { value } from "@office/provider"; export const wrong: number = value;');
   const failing = tsc();
@@ -137,7 +135,7 @@ test("the editor link stays out of Git without a node_modules rule, and check re
 test("a package with an empty exports map shares nothing, even a file that exists", () => {
   const { dir, probe, cli, select } = fixture("empty-exports");
   select("  - name: consumer\n  - name: provider\n");
-  write(join(dir, "packages/provider/definition.ts"), 'export default {name:"provider",description:"provider"}');
+  write(join(dir, "packages/provider/definition.ts"), definitionText('{}'));
   write(join(dir, "packages/provider/package.json"), JSON.stringify({ name: "@office/provider", exports: {}, office: { definition: "./definition.ts" } }));
   write(join(dir, "packages/provider/office.ts"), `import {appendFileSync} from "node:fs"; appendFileSync(process.env.PROBE, "office.ts\\n"); export default {};`);
   writePackage(join(dir, "packages/consumer/office.ts"), consumer('import shared from "@office/provider/office.ts";', "String(shared)"), { dependencies });

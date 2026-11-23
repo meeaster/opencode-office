@@ -1,5 +1,6 @@
 {
   "name": "@office/artifact-share",
+  "description": "Shares what the user asks to share as pages in the office's artifacts/ folder, published to a GitHub Pages site with an index.",
   "private": true,
   "exports": {},
   "office": {

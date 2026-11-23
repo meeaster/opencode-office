@@ -1,9 +1,8 @@
 {
   "name": "@office/office",
+  "description": "What every office needs from OpenCode, given by its plugin; the guidance for a session's folder, the office skill and the office-executor MCP server; and the tools the office CLI itself runs.",
   "private": true,
-  "exports": {
-    "./context": "./package-context.ts"
-  },
+  "exports": {},
   "office": {
     "definition": "./office.ts",
     "dependencies": [

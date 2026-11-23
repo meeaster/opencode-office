@@ -1,13 +1,11 @@
 {
   "name": "@office/mise-integration",
+  "description": "Deliver namespaced tasks, host installs and opt-in native system recipes to mise.",
   "private": true,
   "exports": {
     "./claims": "./claims.ts"
   },
   "office": {
-    "definition": "./office.ts",
-    "dependencies": [
-      "@office/office"
-    ]
+    "definition": "./office.ts"
   }
 }

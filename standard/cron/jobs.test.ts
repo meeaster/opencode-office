@@ -14,7 +14,7 @@ import { catchUpJob, supercronicInput } from "./container.ts";
 import { namedJob, requireJobs } from "./discovery.ts";
 import { cronTimers, installTimers, removeTimers, staleTimerUnits } from "./host.ts";
 import { executeJob } from "./jobs.ts";
-import { writePackage } from "../../src/test-package.ts";
+import { definitionText, writePackage } from "../../src/test-package.ts";
 
 let root: string;
 
@@ -44,13 +44,13 @@ function fixtures(): void {
   write("cron/office.sh", "printf '%s\\n' \"$PWD\" >> office-runs");
   write("cron/crontab", "0 6 * * * touch obsolete-input-ran\n");
   write(".office/packages/office/package.yaml", [
-    "name: office", "description: Required package", "cron:",
+    "cron:",
     "  update: { schedule: '30 7 * * *', script: updater.sh, when: managed-host }",
   ].join("\n"));
   write(".office/packages/office/updater.sh", "true");
   recordRequiredFixtures(join(root, ".office/packages/office"));
   write("packages/demo/package.yaml", [
-    "name: demo", "description: Demo", "cron:",
+    "cron:",
     "  digest: { schedule: '15 6 * * *', script: digest.sh }",
     "  container: { schedule: '@daily', script: digest.sh, when: container }",
     "  host: { schedule: '*/20 * * * MON', script: digest.sh, when: host }",
@@ -115,7 +115,7 @@ test("refuses malformed declarations and unknown overrides, even when the job wo
     expect(check(v.safeParse(officeSchema, parse(`name: test\n${entry}`))).ok).toBe(false);
   }
 
-  write(".office/packages/office/package.yaml", "name: office\ndescription: test\ncron: {update: {schedule: '@daily', script: updater.sh, when: external}}\n");
+  write(".office/packages/office/package.yaml", "# test\ncron: {update: {schedule: '@daily', script: updater.sh, when: external}}\n");
   recordRequiredFixtures(join(root, ".office/packages/office"));
   config();
   expect(() => requireJobs(loadOffice(root))).toThrow("cron.update.when");
@@ -186,7 +186,7 @@ test("an invalid registration rejects its owner's whole batch, so even a valid s
   ]) {
     write(`packages/${name}/run.sh`, "true");
     symlinkSync(join(root, "outside.sh"), join(root, `packages/${name}/linked.sh`));
-    write(`packages/${name}/office.ts`, `export default {name:"${name}",description:"Reports",registerCron(ctx){ctx.cron.job("first",${job}); ${extra}}}`);
+    write(`packages/${name}/office.ts`, definitionText(`{registerCron(ctx){ctx.cron.job("first",${job}); ${extra}}}`));
     config("", `  - name: ${name}\n`);
     expect(() => namedJob(loadOffice(root), `package.${name}.first`)).toThrow(reason);
   }
@@ -223,10 +223,10 @@ test.each(["deselect", "condition", "reschedule"] as const)("catch-up checks the
   write("packages/later/tick.sh", "echo stale >> ran");
 
   if (change === "condition") {
-    write("packages/later/office.ts", `export default {name:"later",description:"Later",settings:{active:{description:"Enable",default:true}},
-      registerCron(ctx){if (ctx.settings.active) ctx.cron.job("tick",{script:"tick.sh",schedule:"@hourly"})}}`);
+    write("packages/later/office.ts", definitionText(`{settings:{type:"object",additionalProperties:false,properties:{active:{type:"boolean",default:true}}},
+      registerCron(ctx){if (ctx.settings.active) ctx.cron.job("tick",{script:"tick.sh",schedule:"@hourly"})}}`));
   } else {
-    write("packages/later/package.yaml", "name: later\ndescription: Later\ncron: {tick: {script: tick.sh, schedule: '@hourly'}}");
+    write("packages/later/package.yaml", "# Later\ncron: {tick: {script: tick.sh, schedule: '@hourly'}}");
   }
 
   // Three hours ago: the hourly job is due, the rescheduled one (last due 18:00 yesterday) is not.

@@ -54,7 +54,7 @@ function staged(name: string, record: StagedRecord | undefined): void {
   const folder = join(dir, "packages", name);
 
   mkdirSync(folder, { recursive: true });
-  writePackage(join(folder, "package.yaml"), `name: ${name}\ndescription: Staged.\n`);
+  writePackage(join(folder, "package.yaml"), `# Staged.\n{}\n`);
 
   if (record) writeFileSync(join(folder, ".source.json"), JSON.stringify({ ...record, files: fileHashes(folder) }));
 }

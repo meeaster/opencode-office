@@ -1,11 +1,11 @@
 // The check before loading, in the compiled office: with any problem in the selection, no
 // package's code runs, and a command, help and sync each name it.
 import { expect, test } from "bun:test";
-import { existsSync, readdirSync, readlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
-import { writePackage } from "./test-package.ts";
+import { definitionText, writePackage } from "./test-package.ts";
 
 const { root, exe, marker, write, commit, fixture } = definitionFixture();
 
@@ -13,12 +13,11 @@ test("a consumer earlier in the selection never runs a pulled-in provider's edit
   const { dir, probe, cli, select } = fixture("edited-provider");
   const repo = join(root, "edited-provider-source");
   git(["init", "-q", "-b", "main", repo]);
-  writePackage(join(repo, "provider/office.ts"), 'export default {name:"provider",description:"provider"}', { exports: { ".": "./index.ts" } });
+  writePackage(join(repo, "provider/office.ts"), definitionText('{}'), { exports: { ".": "./index.ts" } });
   write(join(repo, "provider/index.ts"), 'export const value = "clean";');
   commit(repo);
   select(`  - name: consumer\n  - {name: provider, repo: ${repo}, path: provider, ref: main}\n`);
-  writePackage(join(dir, "packages/consumer/office.ts"), `import {value} from "@office/provider";
-    export default {name:"consumer",description:"consumer",setup(ctx){ctx.command({name:"consumer show",summary:"show",run(){console.log(value)}})}}`, { dependencies: ["provider"] });
+  writePackage(join(dir, "packages/consumer/office.ts"), definitionText(`{commands:{"consumer show":{summary:"show",run(){console.log(value)}}}}`, `import {value} from "@office/provider";`), { dependencies: ["provider"] });
   cli(0, "sync", "--packages");
   expect(cli(0, "consumer", "show")).toContain("clean");
 
@@ -47,8 +46,8 @@ test("a declared dependency that isn't selected stops sync and commands before a
   const generations = readdirSync(join(dir, ".office/generations")).length;
   // A valid package earlier in the selection doesn't load either.
   select("  - name: early\n  - name: needy\n");
-  writePackage(join(dir, "packages/early/office.ts"), 'import {appendFileSync} from "node:fs"; appendFileSync(process.env.PROBE + "-early", "imported\\n"); export default {name:"early",description:"early"}');
-  writePackage(join(dir, "packages/needy/office.ts"), `${marker} export default {name:"needy",description:"needy",setup(ctx){ctx.command({name:"needy run",summary:"run",run(){}})}}`, { dependencies: ["absent", "references"] });
+  writePackage(join(dir, "packages/early/office.ts"), definitionText('{}', 'import {appendFileSync} from "node:fs"; appendFileSync(process.env.PROBE + "-early", "imported\\n");'));
+  writePackage(join(dir, "packages/needy/office.ts"), definitionText(`{commands:{"needy run":{summary:"run",run(){}}}}`, `${marker}`), { dependencies: ["absent", "references"] });
   const problem = "package needy: depends on @office/absent, which isn't selected; add it to office.yaml";
 
   expect(cli(1, "sync", "--packages")).toContain(problem);
@@ -65,11 +64,27 @@ test("an office never synced loads no package: the required built-ins aren't the
   const { env } = fixture("never-synced-runner");
   const dir = join(root, "never-synced");
   write(join(dir, "office.yaml"), "name: never-synced\npackages:\n  - name: early\n");
-  writePackage(join(dir, "packages/early/office.ts"), `${marker} export default {name:"early",description:"early"}`);
+  writePackage(join(dir, "packages/early/office.ts"), definitionText(`{}`, `${marker}`));
   const result = Bun.spawnSync([exe, "--office", dir, "check"], { cwd: root, env });
   const output = result.stdout.toString() + result.stderr.toString();
 
   expect(result.exitCode, output).toBe(1);
   expect(output).toContain("package tooling: not synced yet; run office sync");
   expect(existsSync(env.PROBE)).toBe(false);
+});
+
+test("a package whose .settings.json can't be read fails check alone, and the next package is still checked", () => {
+  const { dir, cli, select } = fixture("unreadable-settings");
+
+  writePackage(join(dir, "packages/blocked/office.ts"), definitionText("{}"));
+  writePackage(join(dir, "packages/healthy/office.ts"), definitionText("{}"));
+  select("  - name: blocked\n  - name: healthy\n");
+  cli(0, "sync", "--packages");
+  rmSync(join(dir, "packages/blocked/.settings.json"));
+  mkdirSync(join(dir, "packages/blocked/.settings.json"));
+
+  const checked = cli(1, "check");
+
+  expect(checked).toMatch(/^FAIL\s+package blocked: .*packages\/blocked\/\.settings\.json can't be read: .*EISDIR/m);
+  expect(checked).toMatch(/^ok\s+package healthy\b/m);
 });

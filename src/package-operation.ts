@@ -8,7 +8,7 @@ import { parse } from "yaml";
 import * as v from "valibot";
 import { type LockedPackage, officeSchema, type PackageLock, parsePackageLock } from "./schema.ts";
 import { activeGeneration, beginGeneration, managedDirectory, pinActive, publishGeneration, type Candidate } from "./package-generation.ts";
-import { coupledFailures, writePackageLinks } from "./package-imports.ts";
+import { coupledFailures, writePackageLinks, writeSdk } from "./package-imports.ts";
 import { installedPackages } from "./layout.ts";
 import { embeddedPackage, materializePackage, problemLine, readRecord, type ResolvedPackage, resolvePackages, validateReplacement, verifiedCommit, writePackageSettings } from "./packages.ts";
 import { lockFile, lockSections, packageLockChanges, readLockSection } from "./versions.ts";
@@ -292,6 +292,7 @@ export async function publishPackages(office: Office, exclude: boolean, update?:
     if (update && rejected.length) return { published: false, lines, rejected: coupled(rejected) };
     const packages = candidatePackageLock(selection.packages, join(folder, "packages"), rejected, locked);
     writePackageLinks(folder, selection.packages, rejected);
+    writeSdk(folder);
     writeFileSync(join(folder, "unavailable.json"), JSON.stringify(rejected));
     writeFileSync(join(folder, "selection.json"), JSON.stringify(office.packages.map(({ name, settings, cron, source }) => ({ name, settings, cron, ...source }))));
     const request: Admission = { office, transaction, yaml, packages: Object.fromEntries(packages), embedded, validate, rejected, exclude, tracked: !!update, apply: update?.apply ?? true };
@@ -369,6 +370,14 @@ export async function evaluateAdmission(temporary: string) {
       // The packages the problems belong to; the caller's coupledFailures widens them to their dependents.
       if (input.tracked) rejectedOwners = [...new Set(installed.blocked.flatMap(problem => problem.packages))];
       throw new OfficeError("no package was loaded and no package set was published; fix the packages above and sync again");
+    }
+
+    // Every package's settings are checked before any setup runs, a candidate's or a collector's.
+    if (installed.invalidSettings.length) {
+      lines.push(...installed.invalidSettings.map(problem => `FAILED ${problemLine(problem)}`));
+
+      if (input.tracked) rejectedOwners = [...new Set(installed.invalidSettings.flatMap(problem => problem.packages))];
+      throw new OfficeError("no package was set up and no package set was published; fix the settings above and sync again");
     }
 
     for (const item of selection.packages) {

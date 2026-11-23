@@ -1,12 +1,12 @@
 {
   "name": "@office/browser",
+  "description": "Browser automation for agents. agent-browser drives a headless Chromium of its own, in either mode, or, opted into on an Ubuntu WSL host, Google Chrome from apt; in a host-mode office, Browse also drives the user's own Chrome, with their logins. Each is an MCP server in every session where it applies.",
   "private": true,
   "exports": {},
   "office": {
     "definition": "./office.ts",
     "dependencies": [
       "@office/mise-integration",
-      "@office/office",
       "@office/tooling"
     ]
   }
