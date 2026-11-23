@@ -207,7 +207,7 @@ export function onTerminal(): boolean {
  * Runs an office command with a reporter. An OfficeError stops it with the reason and exit code 1,
  * Ctrl+C with 130; anything else is reported and rethrown. What `last` registered runs at the end.
  */
-export async function reported(command: "setup" | "sync" | "up" | "upgrade-tools" | "refresh" | "check" | "skills update" | "packages update" | "apps deploy", context: string, body: (reporter: Reporter) => Promise<void>, { verbose = false } = {}): Promise<void> {
+export async function reported(command: "setup" | "sync" | "up" | "upgrade-tools" | "refresh" | "check" | "packages update" | "apps deploy", context: string, body: (reporter: Reporter) => Promise<void>, { verbose = false } = {}): Promise<void> {
   const name = `office ${command}`;
   const rerun = `Run ${name} again to continue`;
   let over = false;

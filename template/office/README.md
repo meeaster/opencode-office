@@ -18,11 +18,11 @@ Portable owner credentials are SOPS-encrypted in `secrets/executor-owner.enc.jso
 
 | Path | Holds |
 |---|---|
-| `office.yaml` | Under `tools`: the versions the containers run (and Socket Firewall's, and whether package downloads go through it), and how old a release must be before package managers, mise or the daily job take it. Also the desks, references, desk repositories, enabled skills, copied skills and cloned plugins |
+| `office.yaml` | Under `tools`: the versions the containers run (and Socket Firewall's, and whether package downloads go through it), and how old a release must be before package managers, mise or the daily job take it. Also the desks, references, desk repositories, cloned plugins and packages, such as the `skills` package's sources and enabled skills |
 | `office.lock` | The checksum of each version in `office.yaml`, written by `office pin`, and the commit of each package from a Git repository, written by `office sync`; don't edit it |
 | `.office/seeds/` | The `seeds` package's: `receipts.json`, a receipt for each file a package laid down in the office or found already there (a seed), and the bytes of each seed a receipt names, by its SHA-256. Written by `office sync` and `office seeds settle`; a stored seed is never deleted. Committed |
 | `AGENTS.md`, `.opencode/opencode.jsonc` | Your instructions and config for every session. No tool writes to `AGENTS.md` |
-| `skills/<id>/` | The skill library. Only skills `office.yaml` enables are linked into a `.opencode/skills/`; a real folder there is a skill of your own, committed and left alone |
+| `.agents/skills/` | Skills every session loads: your own folders, committed, and, with the `skills` package, its links to the skills it enables, which it records in `.office/skills/links.json` and keeps out of Git. A folder of your own skills such as `skills/` reaches it only as a `skills` package source |
 | `.opencode/plugins/` | OpenCode plugins every session loads: your own, committed, and `office sync`'s links to each package's plugin and each `plugins:` clone, which it keeps out of Git |
 | `.office/packages/` | Packages pulled into the office, rebuilt by `office sync` and kept out of Git: ones shipped inside the `office` executable, such as the core `office` package (the guidance for a session's folder, which `office instructions` prints, the `office` skill and the `office-executor` MCP server) and `knowledge` (lists the articles in `knowledge/` in every session), and ones copied from another repository. They are read-only: `office check` reports an edit and `office sync` restores the copy. To change one, copy it into `packages/` under a name of your own |
 | `.office/mise/` | Packages' mise setup (a host install, a system setup), one file per package, written by `office sync`; don't edit them. `.office/` is the tool's and, but for the folders packages commit such as `.office/seeds/`, stays out of Git (sync excludes it, and its links, in `.git/info/exclude`): what you edit is at the root |
@@ -44,8 +44,8 @@ Portable owner credentials are SOPS-encrypted in `secrets/executor-owner.enc.jso
 - OpenCode, Claude Code, Codex, Executor and mise run at the versions under `tools` in `office.yaml`. The daily `upgrade-tools` job bumps them once a release is `tools.minimum_release_age` old (or the runtime's own age) and commits as the office's git identity (else `office cron`); nothing restarts until you run `office up --upgrade`, which backs up and applies them (`office up` alone keeps the applied versions and says what is pending). After changing a version by hand, run `office pin`. An office never goes back to an older OpenCode or Executor.
 - `office pair` prints a one-time link that connects the OpenCode app or a browser to this office.
 
-- Change `office.yaml`, then run `office sync`. It clones, scaffolds missing desks, installs, updates, restores and removes packages and links library skills and package plugins; it never overwrites hand-written content.
+- Change `office.yaml`, then run `office sync`. It clones, scaffolds missing desks, installs, updates, restores and removes packages and applies them, such as the `skills` package's links and the package plugins; it never overwrites hand-written content.
 - A desk's jobs are code in its Executor app: a schedule or webhook starts a workflow, which can run an OpenCode session in the desk's folder (`agent.ask`).
-- Skills enabled at the root reach every desk. Enable a skill for one desk under `desks.<desk>.skills`.
+- Skills at the root (`.agents/skills/`) reach every desk and its repositories.
 - `office check` reports drift between `office.yaml` and the folders, and the running containers' state.
 - OpenCode runs in the office's container or, with `opencode: { mode: host, url: ... }` in `office.yaml`, on a server already running on the host. Executor always runs in a container. After switching, run `office up` and `office apps deploy`.

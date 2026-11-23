@@ -4,17 +4,22 @@ import { configFile, installedPanelNames, isRegistered, locate, panelDir, readPa
 import { findOffice, loadOffice, OfficeError, readOfficeFields, type Office } from "../../src/office.ts";
 import { requiredPackages, resolvePackages } from "../../src/packages.ts";
 import { officeSchema } from "../../src/schema.ts";
-import { cloneTarget, declarationBinding, pluginClones, pluginFolder } from "./delivery.ts";
+import { cloneTarget, declarationBinding, pluginClones } from "./delivery.ts";
 import { configSources, conventionSources, projectDirectories, type Source } from "./native.ts";
 import { readDeclarations } from "./declarations.ts";
-import { officeTarget } from "./ownership.ts";
+import { officeTarget, pluginFolder } from "./ownership.ts";
 import { readPackageJson } from "../../src/package-manifest.ts";
+
+/** What the last sync recorded of a selected package's panel: declared, withheld, or not confirmed for its current inputs. */
+type PanelState = "declared" | "withheld" | "unconfirmed";
 
 /**
  * Desktop registration is machine-wide and can outlive deselection or a withdrawn claim. Show only
- * this office's records, naming the package only while it still declares that panel.
+ * this office's records, naming the package only while the last sync recorded it declaring that
+ * panel for its current settings and source; a selected package without such a record, even with
+ * no record at all, gets a retained panel.
  */
-function desktopSources(office: Office, selected: Set<string>, withheld: Set<string>): string[] {
+function desktopSources(office: Office, selected: Set<string>, panels: ReadonlyMap<string, PanelState>): string[] {
   const location = locate(undefined, false);
 
   if (location.kind !== "app") return ["desktop: app machine not inspected"];
@@ -32,7 +37,12 @@ function desktopSources(office: Office, selected: Set<string>, withheld: Set<str
     const registration = registered === undefined ? "registration unknown" : registered ? "listed" : "not listed";
 
     const present = lstatSync(join(dir, "gui-experimental.cjs"), { throwIfNoEntry: false })?.isFile();
-    const label = !selected.has(name) ? "previously delivered panel" : withheld.has(name) ? "retained panel, not declared by its package" : name;
+    const state = panels.get(name) ?? "withheld";
+
+    const label = !selected.has(name)
+      ? "previously delivered panel"
+      : state === "declared" ? name : state === "unconfirmed" ? "retained panel, registration not confirmed since its last sync" : "retained panel, not declared by its package";
+
     found.push(`desktop: ${label} (${present ? "bundle present" : "bundle missing or not a regular file"}; ${registration} in app-machine ${basename(configFile(machine))})`);
   }
 
@@ -63,7 +73,7 @@ function inventory(office: Office, folder: string) {
   const declarations = readDeclarations(office);
   const { packages, problems } = resolvePackages(office);
   const kinds = new Map(packages.map(item => [item.entry.name, item.kind === "remote" ? "pinned Git" : item.kind]));
-  const withheld = new Set<string>();
+  const panels = new Map<string, PanelState>();
 
   const lines = [
     `OpenCode sources for ${scopePath(office, dirs[dirs.length - 1]) || "."} (office-relative; runtime not checked)`,
@@ -102,7 +112,7 @@ function inventory(office: Office, folder: string) {
     for (const [index, { path, identity }] of conventionSources(office.dir, dir).entries()) {
       const name = basename(path);
       const target = dirname(path) === managed && lstatSync(path).isSymbolicLink() ? readlinkSync(path) : undefined;
-      const owned = target !== undefined && officeTarget("plugins", "../../", name, target);
+      const owned = target !== undefined && officeTarget(name, target);
       const clone = owned && target === cloneTarget(name);
       const known = dirname(path) === managed && (selected.has(name) || office.plugins.some(item => item.name === name));
       const origin = join(scopePath(office, dir), ".opencode", basename(dirname(path)), known ? name : `<entry-${index + 1}>`);
@@ -120,14 +130,18 @@ function inventory(office: Office, folder: string) {
 
     if (declared) {
       const json = readPackageJson(dir, entry.name);
-      const origin = `${relative(office.dir, dir)}/${json.ok ? json.value.definition : "package.json"}#opencode`;
+      const origin = `${relative(office.dir, dir)}/${json.ok ? json.value.definition : "package.json"}#setup`;
 
-      if (declared.state === "unavailable") describe(office.dir, { origin, description: "OpenCode registration unavailable at last sync" });
-      else if (declared.binding !== declarationBinding(item)) describe(office.dir, { origin, description: "OpenCode declaration inputs changed; sync required" });
-      else {
+      if (declared.state === "unavailable") {
+        panels.set(entry.name, "unconfirmed");
+        describe(office.dir, { origin, description: "OpenCode registration unavailable at last sync" });
+      } else if (declared.binding !== declarationBinding(item)) {
+        panels.set(entry.name, "unconfirmed");
+        describe(office.dir, { origin, description: "OpenCode declaration inputs changed; sync required" });
+      } else {
         const { server, panel } = declared.paths;
 
-        if (!panel) withheld.add(entry.name);
+        panels.set(entry.name, panel ? "declared" : "withheld");
         describe(office.dir, { origin, description: `last synced registration: server ${server ? "declared" : "withheld"}, desktop ${panel ? "declared" : "withheld"}` });
         const link = join(managed, entry.name);
 
@@ -137,11 +151,7 @@ function inventory(office: Office, folder: string) {
       continue;
     }
 
-    if (!existsSync(dir)) {
-      describe(office.dir, { origin: relative(office.dir, dir), description: `selected ${kinds.get(entry.name)} package ${entry.name} (source missing; plugin not inspected)` });
-    } else if (existsSync(join(dir, "plugin")) && linkTarget(join(managed, entry.name)) !== relative(managed, join(dir, "plugin"))) {
-      describe(office.dir, { origin: relative(office.dir, join(dir, "plugin")), description: `selected ${kinds.get(entry.name)} package ${entry.name} (conventional asset present; no matching link or recorded registration)` });
-    }
+    if (!existsSync(dir)) describe(office.dir, { origin: relative(office.dir, dir), description: `selected ${kinds.get(entry.name)} package ${entry.name} (source missing; plugin not inspected)` });
   }
 
   for (const problem of problems) lines.push(`package selection unresolved: ${problem.packages.join(", ")} (see office check)`);
@@ -156,7 +166,7 @@ function inventory(office: Office, folder: string) {
     if (sources.length > 1) lines.push(`possible duplicate source (${identity.startsWith("npm:") ? "same package name or ID; versions not resolved" : "same filesystem target"}; activation not checked):`, ...sources.map(line => `  ${line}`));
   }
 
-  return [...lines, ...desktopSources(office, selected, withheld)];
+  return [...lines, ...desktopSources(office, selected, panels)];
 }
 
 export function inspect(folder: string, officeDir: string | undefined) {

@@ -191,11 +191,11 @@ test("the executable syncs mixed definitions and keeps applied state when a sele
   const pkg = join(dir, "packages/notes");
   const link = join(dir, ".opencode/plugins/notes");
   const pins = join(dir, "machine.packages.toml");
-  const module = definitionText('{ settings: { type: "object", additionalProperties: false, properties: { count: { type: "integer", default: count } } }, tools: { jq: "1.7.1" }, sync({ office }) { mkdirSync(join(office.dir, "notes"), { recursive: true }); appendFileSync(join(office.dir, "notes/example"), "ran\\n"); } }', 'import { count } from "./defaults.ts"; import { appendFileSync, mkdirSync } from "node:fs"; import { join } from "node:path";');
+  const module = definitionText('{ settings: { type: "object", additionalProperties: false, properties: { count: { type: "integer", default: count } } }, tools: { jq: "1.7.1" }, setup(c) { opencode.plugins.add(c, { directory: "plugin" }) }, sync({ office }) { mkdirSync(join(office.dir, "notes"), { recursive: true }); appendFileSync(join(office.dir, "notes/example"), "ran\\n"); } }', 'import { count } from "./defaults.ts"; import { opencode } from "@office/opencode"; import { appendFileSync, mkdirSync } from "node:fs"; import { join } from "node:path";');
 
   select("  - name: legacy\n  - name: notes\n");
   writePackage(join(dir, "packages/legacy/package.yaml"), "# Legacy\nsettings: { type: object, additionalProperties: false, properties: { label: { type: string, default: old } } }\n");
-  writePackage(join(pkg, "office.ts"), module);
+  writePackage(join(pkg, "office.ts"), module, { dependencies: ["opencode"] });
   write(join(pkg, "defaults.ts"), "export const count: number = 3;");
   write(join(pkg, "plugin/index.ts"), 'export default { id: "notes", setup() {} }');
   write(join(pkg, "compose.yaml"), "services:\n  notes:\n    image: example/notes\n");

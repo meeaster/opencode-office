@@ -132,7 +132,7 @@ export async function setup(initial: Office, options: SetupOptions, reporter: Re
     stage.done(claim(office).kind === "ours" ? `managed by office ${office.name}` : "not managed by this office");
   }
 
-  // Repositories and packages: the sources, skills and packages office.yaml declares.
+  // Repositories and packages: the sources and packages office.yaml declares, the skills package's Git sources among them.
   stage = reporter.stage("Repositories and packages", { key: "repos" });
   // A login alone proves nothing: read every source as sync will, before cloning starts.
   stage.detail("reading every source with this machine's git credentials");

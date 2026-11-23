@@ -6,7 +6,10 @@ import { commandNames } from "./command-table.ts";
 import { divertStdout, writeResult } from "./command-stdout.ts";
 import { type DeclaredCommand, gatherPackages, problemLines } from "./gather.ts";
 import { officeInfo } from "./lifecycle-inputs.ts";
-import { loadOffice, OfficeError } from "./office.ts";
+import { updateExcluded } from "./commands/sync.ts";
+import { loadOffice, OfficeError, replacePackageSetting } from "./office.ts";
+import { schemaSettings } from "./packages.ts";
+import { relative } from "node:path";
 import * as v from "valibot";
 
 /** A reader process: the office it is bound to (`bindReader` recorded the set's rejected packages). */
@@ -76,8 +79,17 @@ export async function dispatchCommand({ dir }: Reader, words: string[]): Promise
   const problems = [...problemLines(load.problems), ...names];
 
   if (problems.length) throw new OfficeError(`${match.name}: ${problems.join("; ")}`);
-  const [{ command, settings = {} }] = match.matches;
-  const inputs = { office: officeInfo(office), entries: load.entries, settings: structuredClone(settings), args: match.args };
+  const [{ owner, command, settings = {} }] = match.matches;
+  const item = load.inventory.installed.find(each => each.entry.name === owner);
+
+  // Only the owner's own settings entry, validated by its own schema before anything is written.
+  const replaceSetting = (path: readonly (string | number)[], value: string | number | boolean) => {
+    if (item === undefined) throw new OfficeError(`${match.name}: package ${owner} did not read, so its settings can't be changed`);
+
+    return replacePackageSetting(loadOffice(dir), owner, path, value, entry => schemaSettings({ entry }, item.manifest, `${relative(dir, item.dir)}/package.json`));
+  };
+
+  const inputs = { office: officeInfo(office), entries: load.entries, settings: structuredClone(settings), args: match.args, replaceSetting, updateExcluded: (change: { add?: readonly string[]; remove?: readonly string[] }) => updateExcluded(office, change) };
 
   if (command.result) {
     // An untyped definition's handler can return anything.

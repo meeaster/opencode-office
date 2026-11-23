@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Registry, RegistryEntry } from "../sdk/index.ts";
 import { repositories } from "../packages/references/repositories.ts";
+import { opencode } from "../packages/opencode/handles.ts";
+import { contributedAssets } from "../standard/opencode/assets.ts";
 import { setLinkProblem } from "./bound-paths.ts";
 import { commandHelp, dispatchCommand } from "./direct-commands.ts";
 import { gatherPackages, parseEntries, readEntries, type SetUp } from "./gather.ts";
@@ -213,14 +215,12 @@ test("a package that fails a check after its definition loaded keeps its command
     skilled: { body: '{commands:{"skilled show":{summary:"Show skilled",run(){}}}}' },
     ink: { body: '{setup(){},commands:{"ink show":{summary:"Show ink",run(){console.log("ink shown")}}}}' },
   });
-  // skills/ that isn't a folder can't be listed.
+  // No folder is read by its name: a skills/ that isn't a folder is no problem.
   write(join(dir, "packages/skilled/skills"), "");
 
   const help = await commandHelp({ dir });
 
-  expect(help.slice(0, 3)).toEqual(["  service show    Show service", "  skilled show    Show skilled", "  ink show    Show ink"]);
-  expect(help).toContain("  package service: service: host.services.svc: missing.sh must be a file inside the package");
-  expect(help).toContainEqual(expect.stringMatching(/^ {2}package skilled: packages\/skilled\/office\.ts: .*ENOTDIR/));
+  expect(help).toEqual(["  service show    Show service", "  skilled show    Show skilled", "  ink show    Show ink", "  package service: service: host.services.svc: missing.sh must be a file inside the package"]);
   await expect(dispatchCommand({ dir }, ["service", "show"])).rejects.toThrow("service show: package service: service: host.services.svc");
 });
 
@@ -348,7 +348,7 @@ test("in a bound reader, a package the set has no link for, or a wrong link, is 
 const registered = (part: Partial<Registered>): Registered => ({ registries: new Map(), additions: [], ...part });
 const provider = (handle: Registry<RegistryEntry>) => registered({ registries: new Map([[handle.id, handle]]) });
 const references = registered({ registries: new Map([[repositories.id, repositories]]) });
-const setUp = (name: string, part: Registered): SetUp => ({ name, folder: `/set/${name}`, registered: part });
+const setUp = (name: string, part: Registered): SetUp => ({ name, folder: `/set/${name}`, root: `/packages/${name}`, registered: part });
 const own = (references: { name: string; url: string }[]) => ({ dir: "/office", references });
 const add = (id: string, ...values: RegistryEntry[]) => registered({ additions: values.map(value => ({ id, value })) });
 const messages = (load: ReturnType<typeof parseEntries>) => load.problems.map(problem => [problem.packages, problem.message]);
@@ -373,13 +373,13 @@ test("reads list office.yaml's references first, then each package's, parsed onc
 
   expect(load.problems).toEqual([]);
   expect(readEntries(load.entries, repositories)).toEqual([
-    { value: { name: "own", url: "o" }, owner: "office.yaml", folder: "/office" },
-    { value: { name: "docs", url: "d" }, owner: "alpha", folder: "/set/alpha" },
+    { value: { name: "own", url: "o" }, owner: "office.yaml", folder: "/office", root: "/office" },
+    { value: { name: "docs", url: "d" }, owner: "alpha", folder: "/set/alpha", root: "/packages/alpha" },
   ]);
   const first = readEntries(load.entries, items);
   first[0].value.count = 99;
   // A reader's own handle has another parser; reads never run it.
-  expect(readEntries(load.entries, { id: "catalog.items", parse(): RegistryEntry { throw new Error("reader parser ran"); } })).toEqual([{ value: { name: "first", count: 2 }, owner: "alpha", folder: "/set/alpha" }]);
+  expect(readEntries(load.entries, { id: "catalog.items", parse(): RegistryEntry { throw new Error("reader parser ran"); } })).toEqual([{ value: { name: "first", count: 2 }, owner: "alpha", folder: "/set/alpha", root: "/packages/alpha" }]);
   expect(parsed).toBe(1);
 });
 
@@ -456,4 +456,19 @@ test("a key runs on a copy of the entry, and a result that isn't text is refused
     [["beta"], "catalog.trap: its key returned something other than text"],
   ]);
   expect(readEntries(load.entries, editing).map(entry => entry.value)).toEqual([{ name: "kept" }]);
+});
+
+test("a package registers at most one OpenCode server directory and one panel; two from one package fail naming it, and the values are checked", () => {
+  const owned = registered({ registries: new Map<string, Registry<RegistryEntry>>([[opencode.plugins.id, opencode.plugins], [opencode.panels.id, opencode.panels]]) });
+
+  const load = parseEntries(own([]), [
+    setUp("opencode", owned),
+    setUp("alpha", add(opencode.plugins.id, { directory: "plugin" })),
+    setUp("beta", registered({ additions: [{ id: opencode.plugins.id, value: { directory: "plugin" } }, { id: opencode.plugins.id, value: { directory: "other" } }, { id: opencode.panels.id, value: { file: "gui/panel.cjs" } }] })),
+  ]);
+
+  expect(messages(load)).toEqual([[["beta"], "opencode.plugins server directory added twice by package beta"]]);
+  expect(contributedAssets(entries => readEntries(load.entries, entries))).toEqual(new Map([["alpha", { server: "plugin" }], ["beta", { server: "other", panel: "gui/panel.cjs" }]]));
+  expect(messages(parseEntries(own([]), [setUp("opencode", owned), setUp("gamma", add(opencode.plugins.id, { directory: "../outside" }))]))).toEqual([[["gamma"], "an OpenCode server plugin: directory must be a relative path inside the package, such as plugin"]]);
+  expect(messages(parseEntries(own([]), [setUp("opencode", owned), setUp("gamma", add(opencode.panels.id, { file: "gui/panel.js" }))]))).toEqual([[["gamma"], "an OpenCode desktop panel: file must be a .cjs bundle"]]);
 });

@@ -1,3 +1,4 @@
+import { opencode } from "@office/opencode";
 import { Package } from "@office/sdk";
 import { seeds } from "@office/seeds";
 
@@ -13,6 +14,7 @@ export default Package.define({
     },
   },
   setup(ctx) {
+    opencode.plugins.add(ctx, { directory: "plugin" });
     seeds.add(ctx, { destination: "artifacts", source: "seed/artifacts" });
     seeds.add(ctx, { destination: ".github/workflows/publish-artifacts.yml", source: "seed/.github/workflows/publish-artifacts.yml" });
   },

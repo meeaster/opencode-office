@@ -15,7 +15,7 @@ import { writeAppliedReferences } from "./applied-references.ts";
 import { applyPackages, SyncStopped } from "./commands/sync.ts";
 import { claimAssetProblems, destinationProblems } from "../standard/mise-integration/projection.ts";
 import { openCheckoutLease } from "./checkout-lease.ts";
-import { collectAssets } from "../standard/opencode/assets.ts";
+import { validateAssets } from "../standard/opencode/assets.ts";
 import { renameNoReplace } from "./no-replace.ts";
 import { resultDescriptor } from "./command-stdout.ts";
 
@@ -37,10 +37,11 @@ type Admission = {
  * and applied, or published with a failed application (FAILED lines). `recorded` is whether the
  * applied references file was written after the switch; without it no reference checkout is touched.
  * `stopped` is a package's sync function throwing: a full sync runs none of its later steps.
- * `committed`, the folders packages declare committed, is set only when the set was applied with
- * every package loaded and no sync function threw; without it the exclude block is left as it is.
+ * `committed`, the folders packages declare committed, and `excluded`, the paths their sync
+ * functions exclude, are set only when the set was applied with every package loaded and no sync
+ * function threw; without them the exclude block is left as it is.
  */
-type Outcome = { published: boolean; recorded?: boolean; stopped?: boolean; committed?: string[]; lines: string[]; rejected?: string[]; generation?: string };
+type Outcome = { published: boolean; recorded?: boolean; stopped?: boolean; committed?: string[]; excluded?: string[]; lines: string[]; rejected?: string[]; generation?: string };
 
 function program() {
   return Bun.isStandaloneExecutable ? [process.execPath] : [process.execPath, "--no-install", join(import.meta.dir, "cli.ts")];
@@ -377,6 +378,7 @@ export async function evaluateAdmission(temporary: string) {
   let recorded = false;
   let stopped = false;
   let committed: string[] | undefined;
+  let excluded: string[] | undefined;
   let rejectedOwners: string[] | undefined;
   const lines: string[] = [];
 
@@ -411,9 +413,18 @@ export async function evaluateAdmission(temporary: string) {
       }
     }
 
-    // OpenCode registrations may depend on defaults that setup just supplied.
+    // A changed copy's OpenCode registrations must name files of its own before it is published,
+    // even while another package is unread.
     for (const item of gathered.packages) {
-      if (input.validate.includes(item.entry.name) && item.manifest.opencode) collectAssets(office.dir, item);
+      const paths = gathered.assets.get(item.entry.name);
+
+      if (!input.validate.includes(item.entry.name) || paths === undefined) continue;
+
+      try {
+        validateAssets(office.dir, item.dir, paths);
+      } catch (error) {
+        throw refuse([{ packages: [item.entry.name], message: `OpenCode registration: ${error instanceof Error ? error.message : String(error)}` }], "no package set was published");
+      }
     }
 
     const problems = [...gathered.problems, ...admissionProblems(office, gathered.packages, gathered.names)];
@@ -440,17 +451,14 @@ export async function evaluateAdmission(temporary: string) {
     if (input.apply) {
       for (const item of [...gathered.packages, ...gathered.inventory.installed]) {
         if (item.kind === "local") continue;
-        const stable = join(office.dir, ".office/packages", item.entry.name);
-
-        if (item.panel) item.panel = join(stable, relative(item.dir, item.panel));
-        item.dir = stable;
+        item.dir = join(office.dir, ".office/packages", item.entry.name);
       }
 
       // Lines a step returned before one threw are still reported.
       const applied: string[] = [];
 
       try {
-        await applyPackages(office, gathered, applied, input.exclude, join(folder, "withdrawals"));
+        excluded = await applyPackages(office, gathered, applied, input.exclude, join(folder, "withdrawals"));
       } finally {
         lines.push(...applied);
       }
@@ -468,5 +476,5 @@ export async function evaluateAdmission(temporary: string) {
     else lines.push(`FAILED ${published ? `generation ${transaction.name} is active; retry application with office sync --packages: ` : ""}${text}`);
   }
 
-  writeFileSync(join(temporary, "output"), JSON.stringify({ published, recorded, stopped, committed, lines, rejected: rejectedOwners, generation: published ? transaction.name : undefined } satisfies Outcome));
+  writeFileSync(join(temporary, "output"), JSON.stringify({ published, recorded, stopped, committed, excluded, lines, rejected: rejectedOwners, generation: published ? transaction.name : undefined } satisfies Outcome));
 }

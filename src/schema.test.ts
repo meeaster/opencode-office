@@ -57,9 +57,9 @@ test("tools takes a version or a mapping per runtime, and refuses unknown keys a
 });
 
 test("a top-level key office.yaml doesn't have, such as versions, is refused like any unknown key", () => {
-  expect(errors("versions:\n  opencode: 2.3.2\n")).toEqual(["versions: must be a mapping of name, state, opencode, executor, git, secrets, tools, references, desks, skills, plugins and packages"]);
+  expect(errors("versions:\n  opencode: 2.3.2\n")).toEqual(["versions: must be a mapping of name, state, opencode, executor, git, secrets, tools, references, desks, plugins and packages"]);
   // Cron's configuration is the cron package's settings: the keys before it are unknown like any other.
-  expect(errors("cron:\n  heartbeat: { schedule: '@hourly', script: heartbeat.sh }\n")).toEqual(["cron: must be a mapping of name, state, opencode, executor, git, secrets, tools, references, desks, skills, plugins and packages"]);
+  expect(errors("cron:\n  heartbeat: { schedule: '@hourly', script: heartbeat.sh }\n")).toEqual(["cron: must be a mapping of name, state, opencode, executor, git, secrets, tools, references, desks, plugins and packages"]);
   expect(errors("packages:\n  - name: office\n    cron: { upgrade-tools: { enabled: false } }\n")).toEqual(["packages[0].cron: must be a mapping of the fields this schema knows"]);
 });
 

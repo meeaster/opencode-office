@@ -3,7 +3,7 @@
 // each naming the field and what it expected.
 import * as v from "valibot";
 
-import type { CheckInputs, CommandInputs, DownInputs, JsonValue, Lifecycle, Problem, OpenCodeContext, UpInputs, SettingValue, SetupContext } from "../sdk/index.ts";
+import type { CheckInputs, CommandInputs, DownInputs, JsonValue, Problem, SyncInputs, UpInputs, SettingValue, SetupContext } from "../sdk/index.ts";
 
 export type { SettingValue } from "../sdk/index.ts";
 
@@ -44,14 +44,11 @@ export const repository = v.strictObject(
 
 const repositories = v.pipe(v.nullish(v.array(repository, "must be a list"), []), v.check(uniqueNames, "lists a name twice"));
 
-const names = v.nullish(v.array(name, "must be a list"), []);
-
 const desk = v.nullish(
   v.strictObject(
     {
       description: v.optional(text),
       repos: repositories,
-      skills: names,
       // Whether the desk has its own Executor app at <desk>/executor-apps/<desk>/.
       app: v.optional(v.boolean("must be true or false"), true),
     },
@@ -180,66 +177,14 @@ export const modelReference = v.pipe(
 );
 
 /**
- * What a copied skill group or a package from a repository follows when `office skills update` or
- * `office packages update` advances its pin: a branch name, or a pattern of stable SemVer tags with
- * `*`, such as `v2.*`, of which the highest version wins.
+ * What a package from a repository follows when `office packages update` advances its pin: a
+ * branch name, or a pattern of stable SemVer tags with `*`, such as `v2.*`, of which the highest
+ * version wins.
  */
 export const track = v.pipe(
   text,
   v.regex(/^[A-Za-z0-9._\/*+-]+$/, "must be a branch such as main, or a tag pattern such as v2.*"),
   v.check((value) => !value.split("/").includes("..") && !value.startsWith("/") && !value.endsWith("/"), "must be a branch such as main, or a tag pattern such as v2.*"),
-);
-
-/** A folder of a repository, relative to its root (or a group's base), without `..`. */
-const repositoryPath = v.pipe(
-  text,
-  v.check((value) => !value.startsWith("/") && !value.split("/").includes(".."), "must be a relative path inside the repository, without .."),
-);
-
-const copiedSkill = v.strictObject({ name, repo: text, ref: v.optional(text), path: text }, mapping);
-
-// A group of skills from one repository at one pinned ref: each skill is a name, copied from
-// <base>/<name>, or { name, path } with path relative to base (the repository's root by default).
-// Both forms parse to { name, path }.
-const skillGroup = v.strictObject(
-  {
-    repo: text,
-    ref: text,
-    track: v.optional(track),
-    base: v.optional(repositoryPath),
-    skills: v.pipe(
-      v.array(
-        v.union([v.pipe(name, v.transform((skill) => ({ name: skill, path: skill }))), v.strictObject({ name, path: repositoryPath }, mapping)], "must be a skill name or { name, path }"),
-        "must be a list",
-      ),
-      v.minLength(1, "must list at least one skill"),
-    ),
-  },
-  mapping,
-);
-
-/** An entry of skills.copied: one skill, as offices have always listed them, or a group from one repository. */
-const copiedEntry = v.lazy((input) => (v.is(v.object({ skills: v.unknown() }), input) ? skillGroup : copiedSkill));
-
-type CopiedEntry = v.InferOutput<typeof copiedSkill> | v.InferOutput<typeof skillGroup>;
-
-/** The library names the entries of skills.copied copy into, in order. */
-export function copiedNames(entries: CopiedEntry[]): string[] {
-  return entries.flatMap((entry) => ("skills" in entry ? entry.skills.map((skill) => skill.name) : [entry.name]));
-}
-
-const skills = v.nullish(
-  v.strictObject(
-    {
-      enabled: names,
-      copied: v.pipe(
-        v.nullish(v.array(copiedEntry, "must be a list"), []),
-        v.check((entries) => new Set(copiedNames(entries)).size === copiedNames(entries).length, "lists a skill name twice"),
-      ),
-    },
-    mapping,
-  ),
-  {},
 );
 
 export const scalarSetting = v.union([v.string(), v.pipe(v.number(), v.finite()), v.boolean()], "must be text, a number or true/false");
@@ -338,11 +283,10 @@ export const officeSchema = v.pipe(v.strictObject(
     tools,
     references: repositories,
     desks: v.nullish(v.record(v.pipe(name, v.check(key => key !== "executor-apps", "executor-apps is reserved for shared Executor app sources")), desk, "must map desk names to desks"), {}),
-    skills,
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
     packages: packageEntries,
   },
-  "must be a mapping of name, state, opencode, executor, git, secrets, tools, references, desks, skills, plugins and packages",
+  "must be a mapping of name, state, opencode, executor, git, secrets, tools, references, desks, plugins and packages",
 ), v.forward(v.check(({ secrets, opencode }) => secrets?.server === undefined || (opencode !== "container" && opencode.mode === "host" && opencode.managed), "requires opencode.managed: true in host mode"), ["secrets", "server"]));
 
 export type OfficeConfig = v.InferOutput<typeof officeSchema>;
@@ -650,10 +594,9 @@ export function packageManifestSchema(packageName: string) {
         // What its services, volumes and variables are named after, when that isn't its name.
         namespace: v.optional(name),
         setup: v.optional(v.custom<(ctx: SetupContext) => void | Promise<void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
-        opencode: v.optional(v.custom<(ctx: OpenCodeContext) => void>(value => v.is(v.function(), value), "must be a synchronous registration function in office.ts")),
         settings: v.optional(settingsSchema),
         commands: v.optional(packageCommands, {}),
-        sync: v.optional(v.custom<(inputs: Lifecycle) => readonly string[] | void | Promise<readonly string[] | void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
+        sync: v.optional(v.custom<(inputs: SyncInputs) => readonly string[] | void | Promise<readonly string[] | void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
         check: v.optional(v.custom<(inputs: CheckInputs) => readonly Problem[] | Promise<readonly Problem[]>>(value => v.is(v.function(), value), "must be a function in office.ts")),
         up: v.optional(v.custom<(inputs: UpInputs) => readonly string[] | void | Promise<readonly string[] | void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
         down: v.optional(v.custom<(inputs: DownInputs) => readonly string[] | void | Promise<readonly string[] | void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
@@ -669,7 +612,7 @@ export function packageManifestSchema(packageName: string) {
         // The label on Docker resources its services create themselves, which `office down` removes.
         spawns: v.optional(spawnsBlock),
       },
-      "must be a mapping of namespace, settings, commands, setup, sync, check, up, down, committed, secrets, tools, host, system, opencode, executor_app and spawns",
+      "must be a mapping of namespace, settings, commands, setup, sync, check, up, down, committed, secrets, tools, host, system, executor_app and spawns",
     ),
     v.transform((manifest) => ({ ...manifest, settings: manifest.settings ?? noSettings, namespace: manifest.namespace ?? packageName })),
     v.forward(

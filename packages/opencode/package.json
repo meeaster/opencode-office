@@ -1,0 +1,11 @@
+{
+  "name": "@office/opencode",
+  "description": "OpenCode delivery: packages register a native server plugin directory and a desktop panel bundle with opencode.plugins.add and opencode.panels.add, and office sync links the plugin into the office root's .opencode/plugins/ and installs the panel on the desktop app's machine.",
+  "private": true,
+  "exports": {
+    ".": "./handles.ts"
+  },
+  "office": {
+    "definition": "./office.ts"
+  }
+}

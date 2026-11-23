@@ -34,8 +34,7 @@ export async function init(target: string, name: string | undefined) {
   writeLock(dir, defaultPins);
 
   // Installs the built-in office, knowledge and browser packages from this executable, writes the
-  // browser package's mise tools, links their plugins, scaffolds the example desk and links the
-  // enabled skills.
+  // browser package's mise tools, links the plugins they register and scaffolds the example desk.
   const changes = await sync(loadOffice(dir));
   const failures = changes.filter(line => line.startsWith("FAILED"));
 

@@ -46,7 +46,7 @@ function pack(name: string, files: Record<string, string> = {}): string {
   return link;
 }
 
-const entry = (owner: string, folder: string, value: Seed): Entry<Seed> => ({ owner, folder, value });
+const entry = (owner: string, folder: string, value: Seed): Entry<Seed> => ({ owner, folder, root: folder, value });
 
 const receipts = () => Object.fromEntries(readReceipts(office));
 

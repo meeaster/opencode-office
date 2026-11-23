@@ -14,20 +14,33 @@ import { parse } from "yaml";
 import { git } from "./git.ts";
 import { ghLink, type InstalledTool, officeTool } from "./host-tools.ts";
 import { clones } from "./layout.ts";
-import { type Office, OfficeError, type Repository, skillGroups, updateConfig } from "./office.ts";
+import { type Office, OfficeError, type Repository, updateConfig } from "./office.ts";
 import { check } from "./schema.ts";
 import { compareVersions } from "./versions.ts";
 import { inherit, progress, say, stream, warn } from "./report/index.ts";
 
-/** A declared clone source: a reference, desk repository, plugin, copied skill or package. */
+/** A declared clone source: a reference, desk repository, plugin, package or Git skill source. */
 export type Source = { what: string; url: string; pushes: boolean };
+
+const skillSources = v.object({ sources: v.fallback(v.array(v.fallback(v.looseObject({ repo: v.optional(v.string()) }), {})), []) });
+
+/**
+ * The Git sources the skills package's settings name, as written in office.yaml: setup reads each
+ * with this host's credentials before the package's sync fetches it. Its own schema checks them.
+ */
+function skillRepositories(office: Office): Source[] {
+  const settings = office.packages.find(entry => entry.name === "skills")?.settings;
+  const read = v.safeParse(skillSources, settings ?? {});
+
+  return read.success ? read.output.sources.flatMap((source, index) => source.repo === undefined ? [] : [{ what: `skills source ${index + 1}`, url: source.repo, pushes: false }]) : [];
+}
 
 /** The office's sources, with `references` the ones to clone: the applied ones in setup, the gathered ones in check. */
 export function sources(office: Office, references: readonly Repository[]): Source[] {
   return [
     // Desk repositories are working clones that agents commit in and push from.
     ...clones(office, references).map((clone) => ({ what: `${clone.kind} ${clone.name}`, url: clone.url, pushes: clone.kind !== "reference" && clone.kind !== "plugin" })),
-    ...skillGroups(office).map((group) => ({ what: group.grouped ? `copied skills ${group.skills.map((skill) => skill.name).join(", ")}` : `copied skill ${group.skills[0].name}`, url: group.repo, pushes: false })),
+    ...skillRepositories(office),
     ...office.packages.flatMap((entry) => (entry.source === undefined ? [] : [{ what: `package ${entry.name}`, url: entry.source.repo, pushes: false }])),
   ];
 }

@@ -1,10 +1,11 @@
 import { lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import * as v from "valibot";
-import type { InstalledPackage } from "../../src/packages.ts";
+import type { Entries } from "../../sdk/index.ts";
+import { assetPath, opencode } from "../../packages/opencode/handles.ts";
 
 // Portable package-relative names, so a registered path never leads outside its package.
-export const asset = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9_-][\w.-]*(?:\/[a-zA-Z0-9_-][\w.-]*)*$/));
+export const asset = v.pipe(v.string(), v.regex(assetPath));
 const bundle = v.pipe(asset, v.endsWith(".cjs"));
 export const assetPaths = v.strictObject({ server: v.optional(asset), panel: v.optional(bundle) });
 
@@ -25,40 +26,16 @@ export function validateAssets(root: string, dir: string, paths: AssetPaths) {
   }
 }
 
-/** No host operations in the registration context. Never hand a partially collected list to apply. */
-export function collectAssets(root: string, item: InstalledPackage): AssetPaths {
-  const paths: AssetPaths = {};
-  const register = item.manifest.opencode;
+/**
+ * What each package registered with `opencode.plugins.add` and `opencode.panels.add`, by package,
+ * read from a complete gathering. The registries' keys already allow one of each per package.
+ */
+export function contributedAssets(entries: Entries): Map<string, AssetPaths> {
+  const assets = new Map<string, AssetPaths>();
 
-  if (register) {
-    let invalid = false;
+  for (const { owner, value } of entries(opencode.plugins)) assets.set(owner, { server: value.directory });
 
-    const returned = register({
-      settings: structuredClone(item.settings),
-      serverPlugin(path) {
-        if (paths.server !== undefined || !v.is(asset, path)) invalid = true;
-        else paths.server = path;
-      },
-      desktopPanel(path) {
-        if (paths.panel !== undefined || !v.is(bundle, path)) invalid = true;
-        else paths.panel = path;
-      },
-    });
+  for (const { owner, value } of entries(opencode.panels)) assets.set(owner, { ...assets.get(owner), panel: value.file });
 
-    if (returned !== undefined) {
-      void Promise.resolve(returned).catch(() => {});
-      throw new Error("opencode(ctx) must register synchronously and return nothing");
-    }
-
-    if (invalid) throw new Error("expected at most one package-relative server directory and one .cjs desktop bundle");
-
-    // Only authored claims are strict; convention discovery keeps its earlier behavior, symlinks included.
-    validateAssets(root, item.dir, paths);
-  } else {
-    if (item.plugin) paths.server = "plugin";
-
-    if (item.panel) paths.panel = relative(item.dir, item.panel);
-  }
-
-  return { ...paths };
+  return assets;
 }

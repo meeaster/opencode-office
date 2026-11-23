@@ -71,7 +71,7 @@ function fixture(): void {
   // packages it imports, linked as a package set links them.
   mkdirSync(join(root, ".office/node_modules/@office"), { recursive: true });
 
-  for (const name of ["tooling", "cron"]) {
+  for (const name of ["tooling", "cron", "opencode"]) {
     cpSync(join(import.meta.dir, "../../packages", name), join(dirname(pkg), name), { recursive: true, filter: source => !source.includes("/test") });
     symlinkSync(join(dirname(pkg), name), join(root, `.office/node_modules/@office/${name}`));
   }
@@ -273,7 +273,7 @@ test.skipIf(process.platform !== "linux")("with its job disabled, the scheduled 
   const run = cron.commands?.["cron run"]?.run;
 
   // What the job's timer runs: `office cron run <id>`, which reads the job's eligibility now.
-  expect(run?.({ office: officeInfo(office), entries: gathered.entries, settings, args: [agentUpdateJob] })).rejects.toThrow(`cron ${agentUpdateJob}: not enabled for this office`);
+  expect(run?.({ office: officeInfo(office), entries: gathered.entries, settings, args: [agentUpdateJob], replaceSetting: () => { throw new Error("not in this test"); }, updateExcluded: () => { throw new Error("not in this test"); } })).rejects.toThrow(`cron ${agentUpdateJob}: not enabled for this office`);
   expect(calls()).toEqual([]);
 
   expect(await result()).toMatchObject({ code: 0, out: expect.stringContaining("already current at PID 2200") });

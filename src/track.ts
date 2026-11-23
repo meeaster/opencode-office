@@ -1,7 +1,6 @@
 // What a tracked pin moves to: the commit a branch names, or the commit of the highest stable
 // SemVer tag matching a pattern such as `v2.*`. Read with `git ls-remote`, so any Git host works
-// and no release API is involved; `office skills update` and `office packages update` record the
-// full commit SHA it returns.
+// and no release API is involved; `office packages update` records the full commit SHA it returns.
 import { streamChecked } from "./report/index.ts";
 
 /** A tracked ref, resolved: the full commit SHA and how it was chosen, for messages. */

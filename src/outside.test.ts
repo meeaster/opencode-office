@@ -237,22 +237,30 @@ test("warns about an outside skill or plugin with the name of one the office pro
 
   const provided = {
     skills: new Map([
-      ["writing", "the office's library skill skills/writing"],
+      ["writing", "the office's skill .agents/skills/writing"],
       ["office", "package office's skill"],
     ]),
     plugins: new Map([["tracks", "package tracks's plugin"]]),
   };
 
-  expect(shadowing(items, provided, home)).toEqual([
+  expect(shadowing(items, provided, home, office)).toEqual([
     "plugin tracks at ~/.config/opencode/plugins/tracks.js has the name of package tracks's plugin; OpenCode loads plugins outside the office first, and of two with the same plugin ID it keeps the first and rejects the office's as a duplicate",
-    "skill office at ~/.claude/skills/office has the name of package office's skill; this outside one loads: OpenCode reads skill folders after plugins register their skills",
-    "skill writing at ~/.claude/skills/writing has the name of the office's library skill skills/writing; the office's loads: its .opencode/skills/ is read after global and compatibility skill folders",
+    "skill office at ~/.claude/skills/office has the name of package office's skill; which one loads depends on the server; office check reports it while OpenCode runs",
+    "skill writing at ~/.claude/skills/writing has the name of the office's skill .agents/skills/writing; which one loads depends on the server; office check reports it while OpenCode runs",
   ]);
 
-  const loaded = { skills: new Map([["writing", join(office, ".opencode/skills/writing/SKILL.md")], ["office", join(home, ".claude/skills/office/SKILL.md")]]), plugins: [] };
+  const loaded = { skills: new Map([["writing", join(office, ".agents/skills/writing/SKILL.md")], ["office", join(home, ".claude/skills/office/SKILL.md")]]), plugins: [] };
 
-  expect(shadowing(items, provided, home, loaded).slice(1)).toEqual([
+  expect(shadowing(items, provided, home, office, loaded).slice(1)).toEqual([
     "skill office at ~/.claude/skills/office has the name of package office's skill; the server loads this outside one instead of the office's",
-    "skill writing at ~/.claude/skills/writing has the name of the office's library skill skills/writing; the server loads the office's",
+    "skill writing at ~/.claude/skills/writing has the name of the office's skill .agents/skills/writing; the server loads the office's",
+  ]);
+
+  // A running server that loaded no folder of that name, or another outside one, credits nobody in the office.
+  const elsewhere = { skills: new Map([["writing", join(home, ".agents/skills/writing/SKILL.md")]]), plugins: [] };
+
+  expect(shadowing(items, provided, home, office, elsewhere).slice(1)).toEqual([
+    "skill office at ~/.claude/skills/office has the name of package office's skill; the server reports no skill folder of that name loaded",
+    "skill writing at ~/.claude/skills/writing has the name of the office's skill .agents/skills/writing; the server loads another one outside the office, at ~/.agents/skills/writing",
   ]);
 });

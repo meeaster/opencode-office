@@ -370,14 +370,18 @@ export function scanOutside(places: Places): OutsideItem[] {
   return found;
 }
 
-/** What the office itself provides, by name, with a label for each: library skills, package skills, package plugins. */
+/** What the office itself provides, by name, with a label for each: the skills in its root's project skill folders, and package plugins. */
 export type Provided = { skills: Map<string, string>; plugins: Map<string, string> };
 
 /** What the session's server reported loading, as paths on this machine where it can read them. */
 export type Loaded = { skills: Map<string, string>; plugins: { id: string; path: string; active: boolean }[] };
 
-/** One warning per outside skill or plugin that has the name of one the office provides, saying which one loads. */
-export function shadowing(items: OutsideItem[], provided: Provided, home: string, loaded?: Loaded): string[] {
+/**
+ * One warning per outside skill or plugin that has the name of one the office provides, saying
+ * which one loads as far as the server's answer shows: none without a running server, and the
+ * office's only when the path the server loaded is in the office.
+ */
+export function shadowing(items: OutsideItem[], provided: Provided, home: string, office: string, loaded?: Loaded): string[] {
   return items.flatMap((entry) => {
     const at = shortPath(home, entry.path);
 
@@ -388,14 +392,17 @@ export function shadowing(items: OutsideItem[], provided: Provided, home: string
 
       const winner = loaded?.skills.get(entry.name);
 
+      // Without the server's answer, which one loads is not known: plugins can also register and remove skills.
       const verdict =
-        winner === undefined
-          ? own.startsWith("package")
-            ? "this outside one loads: OpenCode reads skill folders after plugins register their skills"
-            : "the office's loads: its .opencode/skills/ is read after global and compatibility skill folders"
-          : isSkill(entry, winner)
-            ? "the server loads this outside one instead of the office's"
-            : "the server loads the office's";
+        loaded === undefined
+          ? "which one loads depends on the server; office check reports it while OpenCode runs"
+          : winner === undefined
+            ? "the server reports no skill folder of that name loaded"
+            : isSkill(entry, winner)
+              ? "the server loads this outside one instead of the office's"
+              : contains(office, winner)
+                ? "the server loads the office's"
+                : `the server loads another one outside the office, at ${shortPath(home, winner.endsWith(`${sep}SKILL.md`) ? dirname(winner) : winner)}`;
 
       return [`skill ${entry.name} at ${at} has the name of ${own}; ${verdict}`];
     }

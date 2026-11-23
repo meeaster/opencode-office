@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { unshareable } from "./github.ts";
+import { sources, unshareable } from "./github.ts";
 import { loadOffice, updateConfig } from "./office.ts";
 
 let dir: string;
@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 test("office.yaml edits change only the fields they set, and an invalid value is never written", () => {
-  const text = "# The office.\nname: demo # its name\n\nskills:\n  enabled: [office]\n  copied: []\n\n# Plugins.\nplugins: []\n";
+  const text = "# The office.\nname: demo # its name\n\nreferences: []\n\n# Plugins.\nplugins: []\n";
 
   writeFileSync(join(dir, "office.yaml"), text);
 
@@ -43,4 +43,12 @@ test("only a non-expiring login stored in gh's hosts.yml is shared with the cont
   expect(unshareable({ ...file, tokenSource: "keyring" })).toContain("keyring");
   expect(unshareable({ ...file, tokenSource: "GH_TOKEN" })).toContain("GH_TOKEN");
   expect(unshareable({ ...file, refreshable: true })).toContain("rotates");
+});
+
+test("setup reads the skills package's Git sources with the others; a folder source or no skills package adds none", () => {
+  writeFileSync(join(dir, "office.yaml"), "name: demo\npackages:\n  - name: skills\n    settings:\n      sources:\n        - folder: skills\n        - { repo: https://example.com/handbook.git, ref: abc, skills: [{ name: review, path: review }] }\n");
+
+  expect(sources(loadOffice(dir), [])).toEqual([{ what: "skills source 2", url: "https://example.com/handbook.git", pushes: false }]);
+  writeFileSync(join(dir, "office.yaml"), "name: demo\n");
+  expect(sources(loadOffice(dir), [])).toEqual([]);
 });

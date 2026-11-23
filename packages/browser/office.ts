@@ -1,3 +1,4 @@
+import { opencode } from "@office/opencode";
 import { Package } from "@office/sdk";
 import { installs, recipes } from "@office/mise-integration/claims";
 import { requirements } from "@office/tooling/requirements";
@@ -15,6 +16,7 @@ export default Package.define({
     },
   },
   setup(ctx) {
+    opencode.plugins.add(ctx, { directory: "plugin" });
     ctx.add(requirements, { name: "npm:agent-browser", minimumVersion: "0.43.0" });
 
     if (ctx.settings.browse) {

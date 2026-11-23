@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { describeIgnoredSkills, expandFolder, ignoredSkills, inFolders, packageSkills, readIgnoredFolders, skillsIn } from "../plugin/ignored-skills.ts";
+import { describeIgnoredSkills, expandFolder, ignoredSkills, inFolders, readIgnoredFolders, skillsIn } from "../plugin/ignored-skills.ts";
 
 let dir: string;
 let home: string;
@@ -93,27 +93,14 @@ test("a loaded skill is in a folder by its path as written or resolved, and neve
   expect(inFolders([], join(synced, "bucket-1/docx/SKILL.md"))).toBe(false);
 });
 
-test("a package's skills are the office's, whether the package was pulled in or written there", () => {
-  write(join(office, ".office/packages/office/skills/office/SKILL.md"));
-  write(join(office, ".office/packages/office/skills/not-a-skill/README.md"));
-  write(join(office, "packages/mine/skills/review/SKILL.md"));
-
-  expect([...packageSkills(office)]).toEqual([
-    ["office", "office"],
-    ["review", "mine"],
-  ]);
-});
-
-test("every skill in the ignored folders is hidden except an ID a package of the office has, which is named", () => {
+test("every skill in the ignored folders is hidden, whatever skill of the office or of a package has its ID", () => {
   const synced = join(home, ".claude/skills/synced");
 
   write(join(synced, "bucket-1/docx/SKILL.md"));
   write(join(synced, "bucket-1/office/SKILL.md"));
   write(join(home, ".claude/skills/mine/SKILL.md"));
+  // No folder of a package is read to guess which IDs to spare.
   write(join(office, ".office/packages/office/skills/office/SKILL.md"));
-  // A library skill of the same ID is no reason to keep the outside one: the office's loads after it.
-  write(join(synced, "bucket-1/library/SKILL.md"));
-  write(join(office, "skills/library/SKILL.md"));
 
   const found = ignoredSkills(office, ["~/.claude/skills/synced", "~/missing"], home);
 
@@ -121,20 +108,18 @@ test("every skill in the ignored folders is hidden except an ID a package of the
     folders: [synced, join(home, "missing")],
     hidden: [
       { id: "docx", path: join(synced, "bucket-1/docx") },
-      { id: "library", path: join(synced, "bucket-1/library") },
+      { id: "office", path: join(synced, "bucket-1/office") },
     ],
-    kept: [{ id: "office", path: join(synced, "bucket-1/office"), package: "office" }],
   });
 
   expect(describeIgnoredSkills(found, home)).toEqual([
-    { ok: true, text: "~/.claude/skills/synced: hides docx, library" },
-    { ok: true, text: "~/missing: doesn't exist, so nothing is hidden" },
-    { ok: false, text: "skill office at ~/.claude/skills/synced/bucket-1/office is not hidden: the office package has a skill of that ID, which this one replaces; rename one of them" },
+    "~/.claude/skills/synced: hides docx, office",
+    "~/missing: doesn't exist, so nothing is hidden",
   ]);
 });
 
 test("without the setting nothing is hidden", () => {
   write(join(home, ".claude/skills/synced/bucket-1/docx/SKILL.md"));
 
-  expect(ignoredSkills(office, [], home)).toEqual({ folders: [], hidden: [], kept: [] });
+  expect(ignoredSkills(office, [], home)).toEqual({ folders: [], hidden: [] });
 });

@@ -20,9 +20,6 @@ import * as v from "valibot";
 import { check } from "./schema.ts";
 import { pluginSource as nativePluginSource } from "../standard/opencode/native.ts";
 
-/** Where a package keeps its panel's built bundle; a package has a panel when this file exists. */
-export const panelBundle = "gui/dist/gui-experimental.cjs";
-
 /** The app machine's folders, overridable so tests and scratch runs never touch the real config. */
 export const configDirVariable = "OFFICE_APP_CONFIG_DIR";
 

@@ -1,3 +1,4 @@
+import { opencode } from "@office/opencode";
 import { Package } from "@office/sdk";
 import { seeds } from "@office/seeds";
 
@@ -20,6 +21,7 @@ export default Package.define({
     DOOP_DB_PASSWORD: { generate: "hex", bytes: 32 },
   },
   setup(ctx) {
+    opencode.plugins.add(ctx, { directory: "plugin" });
     seeds.add(ctx, { destination: ".opencode/doop/.gitignore", source: "seed/.opencode/doop/.gitignore" });
   },
 });

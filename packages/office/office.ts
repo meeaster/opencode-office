@@ -1,4 +1,5 @@
 import { cron } from "@office/cron";
+import { opencode } from "@office/opencode";
 import { Package } from "@office/sdk";
 import { requirements } from "@office/tooling/requirements";
 import { floors } from "./floors.ts";
@@ -23,6 +24,8 @@ export default Package.define({
     },
   },
   setup(ctx) {
+    opencode.plugins.add(ctx, { directory: "plugin" });
+
     for (const [name, minimumVersion] of Object.entries(floors)) ctx.add(requirements, { name, minimumVersion });
     cron.add(ctx, { name: "update-references", schedule: "0 6 * * *", script: "scripts/update-references.sh" });
     cron.add(ctx, { name: "upgrade-tools", schedule: "30 6 * * *", script: "scripts/upgrade-tools.sh" });

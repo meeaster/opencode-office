@@ -5,7 +5,7 @@ import { existsSync, readlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
-import { definitionText, writePackage } from "./test-package.ts";
+import { definitionText, pluginDefinition, writePackage } from "./test-package.ts";
 
 const { root, exe, write, read, commit, fixture } = definitionFixture({ second: false });
 
@@ -64,9 +64,15 @@ test("a sync function that throws stops the sync there: earlier lines print, lat
   const exclude = read(join(dir, ".git/info/exclude"));
 
   writePackage(join(dir, "packages/thrower/office.ts"), definitionText('{sync(){throw Error("sync boom")}}'));
-  // A package-only sync, then a full one, whose later steps (the skill link, the exclude block) must not run.
-  write(join(dir, "skills/alpha/SKILL.md"), "---\nname: alpha\ndescription: fixture\n---\n");
-  write(join(dir, "office.yaml"), read(join(dir, "office.yaml")).replace("  enabled: []", "  enabled: [alpha]"));
+  // A package-only sync, then a full one, whose later steps (the new plugin's link, the clones, the
+  // exclude block) must not run.
+  writePackage(join(dir, "packages/linked/office.ts"), pluginDefinition(), { dependencies: ["opencode"] });
+  write(join(dir, "packages/linked/plugin/index.js"), "export default {}\n");
+  const upstream = join(root, "throws-desk-repo");
+  git(["init", "-qb", "main", upstream]);
+  write(join(upstream, "README.md"), "work\n");
+  commit(upstream);
+  write(join(dir, "office.yaml"), read(join(dir, "office.yaml")).replace("  - name: after\n", "  - name: after\n  - name: linked\n").replace("    repos: []", `    repos: [{ name: work, url: ${upstream} }]`));
 
   for (const args of [["sync", "--packages"], ["sync"]]) {
     rmSync(path);
@@ -78,7 +84,8 @@ test("a sync function that throws stops the sync there: earlier lines print, lat
     expect(output).toContain("run office sync again");
     expect(probe(path)).toEqual(["first"]);
     expect(readlinkSync(join(dir, ".office/current"))).not.toBe(current);
-    expect(existsSync(join(dir, ".opencode/skills/alpha"))).toBe(false);
+    expect(existsSync(join(dir, ".opencode/plugins/linked"))).toBe(false);
+    expect(existsSync(join(dir, "example/repos/work"))).toBe(false);
     expect(read(join(dir, ".git/info/exclude"))).toBe(exclude);
   }
 
@@ -87,7 +94,8 @@ test("a sync function that throws stops the sync there: earlier lines print, lat
   rmSync(path);
   cli(0, "sync");
   expect(probe(path)).toEqual(["first", "thrower", "after"]);
-  expect(existsSync(join(dir, ".opencode/skills/alpha"))).toBe(true);
+  expect(readlinkSync(join(dir, ".opencode/plugins/linked"))).toBe("../../packages/linked/plugin");
+  expect(existsSync(join(dir, "example/repos/work/.git"))).toBe(true);
 }, 60_000);
 
 test("no sync function runs on a rejected candidate or with a package unfetched, and check runs no check function while a package is broken", () => {

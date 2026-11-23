@@ -23,7 +23,7 @@ function gathered(dir: string, settings: Record<string, SettingValue>) {
   writeFileSync(join(dir, "packages/report/digest.sh"), "true\n");
 
   const entries: Entries = <Value extends RegistryEntry>(registry: Registry<Value>) =>
-    registry.id === "cron.jobs" ? [{ value: registry.parse({ name: "digest", schedule: "0 7 * * MON", script: "digest.sh" }), owner: "report", folder: join(dir, "packages/report") }] : [];
+    registry.id === "cron.jobs" ? [{ value: registry.parse({ name: "digest", schedule: "0 7 * * MON", script: "digest.sh" }), owner: "report", folder: join(dir, "packages/report"), root: join(dir, "packages/report") }] : [];
 
   const packages = [{ entry: { name: "cron", settings, source: undefined }, settings }];
 

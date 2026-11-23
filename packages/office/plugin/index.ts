@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { compactSessionTool } from "./compact-session.ts";
-import { expandFolder, inFolders, packageSkills, readIgnoredFolders } from "./ignored-skills.ts";
+import { expandFolder, inFolders, readIgnoredFolders } from "./ignored-skills.ts";
 import { findOffice, officeInstructions } from "./instructions.ts";
 import { tryFileLock } from "../../../src/file-lock.ts";
 
@@ -97,9 +97,8 @@ async function register(ctx: Context) {
     attached.set(sessionID, text);
   });
 
-  // Which loaded skills the office's skill-folder settings hide: those whose file is in
-  // one of its folders, except an ID one of the office's packages has, which the outside skill
-  // replaced. Read on each use, so the next `office sync`'s setting and a package added since apply.
+  // Which loaded skills the office's skill-folder settings hide: those whose file is in one of its
+  // folders. Read on each use, so the next `office sync`'s setting applies.
   const hidden = (skills: readonly { id: string; path: string }[]): string[] => {
     if (office === undefined) return [];
 
@@ -107,9 +106,7 @@ async function register(ctx: Context) {
 
     if (folders.length === 0) return [];
 
-    const provided = packageSkills(office);
-
-    return skills.flatMap(skill => !provided.has(skill.id) && inFolders(folders, skill.path) ? [skill.id] : []);
+    return skills.flatMap(skill => inFolders(folders, skill.path) ? [skill.id] : []);
   };
 
   // OpenCode applies skill transforms in the order they were registered, on every load of the

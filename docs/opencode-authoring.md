@@ -1,6 +1,6 @@
 # Register a package's OpenCode assets
 
-A package definition (`office.ts`, or whatever file its `package.json` names) can declare a server plugin directory and a desktop bundle in code. Here is the Tracks consumer in a local office. Its `package.json` names the definition and describes the package; `@office/sdk` is always available, so it lists no dependency:
+A package reaches OpenCode only through what its `setup` registers with the core `opencode` package: at most one **server plugin directory**, which OpenCode loads directly, and at most one **desktop panel bundle**. No folder is found by its name: a package with a `plugin/` or `gui/dist/` folder and no registration gets no link and no panel. Here is the Tracks consumer in a local office. Its `package.json` names the definition and declares `@office/opencode`, whose handles it imports:
 
 ```json
 {
@@ -9,43 +9,41 @@ A package definition (`office.ts`, or whatever file its `package.json` names) ca
   "private": true,
   "exports": {},
   "office": {
-    "definition": "./office.ts"
+    "definition": "./office.ts",
+    "dependencies": ["@office/opencode"]
   }
 }
 ```
 
 ```ts
 // office.ts
-import { type OpenCodeContext, Package } from "@office/sdk";
+import { opencode } from "@office/opencode";
+import { Package } from "@office/sdk";
 
 export default Package.define({
-  opencode(ctx: OpenCodeContext) {
-    ctx.serverPlugin("plugin");
-    ctx.desktopPanel("gui/dist/gui-experimental.cjs");
+  setup(ctx) {
+    opencode.plugins.add(ctx, { directory: "plugin" });
+    opencode.panels.add(ctx, { file: "gui/dist/gui-experimental.cjs" });
   },
 });
 ```
 
-`opencode(ctx)` and `OpenCodeContext` are transitional: they become registries the agents package owns.
-
-The callback **itself** selects explicit registration for both parts. Omit it to use the existing conventions (`plugin/`, `gui/dist/gui-experimental.cjs`) in either TS or YAML. Providing it with zero, one or two claims is meaningful. For example:
+A registration can depend on settings like any other entry `setup` adds:
 
 ```ts
-opencode(ctx: OpenCodeContext) {
+setup(ctx) {
   if (ctx.settings.edition === "notes-only") return;
-  ctx.serverPlugin("extensions/server");
-  if (ctx.settings.edition === "desktop") ctx.desktopPanel("dist/review.cjs");
+  opencode.plugins.add(ctx, { directory: "extensions/server" });
+  if (ctx.settings.edition === "desktop") opencode.panels.add(ctx, { file: "dist/review.cjs" });
 }
 ```
 
-`edition` here is an ordinary setting of the example package; there is no Office `when` field. On the next `office sync --packages`, `notes-only` withdraws the package's server link, even when its conventional `plugin/` still exists. Not claiming a desktop panel stops copying and registering it; it **does not uninstall** a shared bundle or edit the machine's existing registration. Removing the callback entirely returns to convention discovery. A conventional file, an authored declaration, an Office link, and an active OpenCode plugin are different observations. Changing the registered server directory relinks `.opencode/plugins/<name>` and prints a restart notice: a running OpenCode server keeps loading the directory it first found.
+`edition` here is an ordinary setting of the example package. On the next `office sync --packages`, `notes-only` withdraws the package's server link. Not registering a desktop panel stops copying and registering it; it **does not uninstall** a shared bundle or edit the machine's existing registration. Changing the registered server directory relinks `.opencode/plugins/<name>` and prints a restart notice: a running OpenCode server keeps loading the directory it first found.
 
-**Contract.** Use relative paths from this package's directory, one directory for the server and one existing regular `.cjs` file for the GUI. Absolute, traversal and redirected paths are refused. A duplicate claim, throw, invalid type, missing asset or asynchronous return rejects the owner's whole collection. A failed collection keeps the package's existing link and cannot install a panel. Successful empty collection withdraws its link. The link `.opencode/plugins/<name>` -> `../../packages/<name>/<path>` (or `.office/packages/`) is Office's by that text alone, so any such link is managed with the package; unrelated native plugins, desk JSONC and links elsewhere remain the owner's. See [which entries are Office's](opencode-sources.md#who-owns-each-source).
+**What the plugin owns.** OpenCode loads the registered directory as a native plugin, through the root link `.opencode/plugins/<name>`, so every desk and nested repository gets it. The plugin's own code registers its skills, tools, MCP servers, hooks and RPC, as the `office`, `knowledge`, `design`, `browser`, `aws-emulator` and `artifact-share` plugins do: a skill bundled with a plugin is the plugin's, not a standalone skill, and the `skills` package's catalog doesn't list it. A package that wants a folder of its own offered as a standalone skill, which the office enables by ID, registers it with `skills.add` from `@office/skills` instead (see the README's "Standalone skills").
 
-**Why a separate callback?** `setup(ctx)` also runs on every package command and on `office --help`, which load every selected package. Neither package commands nor health, teardown or offline inspection should replay extension registrations. `opencode(ctx)` runs synchronously during package sync and when validating a staged built-in or pinned replacement. It may be called more than once: use only the supplied settings and registration methods; put filesystem mutations, installs and native hooks elsewhere. This is trusted package code, not a sandbox. Office validates the candidates, writes settings, manages a relative root link and installs the machine's panel. Only OpenCode loads the plugin code.
+**Contract.** Use relative paths from this package's directory: one existing directory for the server and one existing regular `.cjs` file for the panel. Absolute, traversal and redirected paths are refused. Each registry's parser refuses a malformed path, and a second server directory or panel from the same package fails the gathering naming the package, so no package set is published. A path that doesn't exist fails delivery, naming the package, and keeps its existing link and panel. The link `.opencode/plugins/<name>` -> `../../packages/<name>/<path>` (or `.office/packages/`) is Office's by that text alone, so any such link is managed with the package; unrelated native plugins, desk JSONC and links elsewhere remain the owner's. See [which entries are Office's](opencode-sources.md#who-owns-each-source).
 
-Inspect and health use recorded **data**: relative claims or an unavailable status, and a binding to the package selection/settings and, for a pulled package, its source identity. The record, `.office/resolved/opencode-assets.json`, contains no functions or settings values and confers no ownership of links. Changes to a local author's code need another sync. A desktop copy may still belong to a different office. `office gui dev <local-package>` watches the declared bundle; for authored packages it requires the selected owner's fresh collection to agree with the synced registration before writing. Restart it after changing the watched source.
+**Applied record.** Sync records what it applied in `.office/resolved/opencode-assets.json`: each package's relative paths, or an unavailable status, bound to its selection, settings and, for a pulled package, its source identity. It holds no functions or settings values and confers no ownership of links. `office opencode inspect` and `office gui dev <local-package>` read only this record, so neither runs package code; sync reads it to name a withdrawn package's panel. `office check` gathers every package, so it reports what they register now. `gui dev` watches the recorded bundle and refuses a package whose settings or source changed since the last sync; restart it after changing the registration. Each time it starts or the build writes, it checks the files themselves before copying: a bundle folder that leads outside the package through a link, or a bundle that isn't a regular file there, stops it, while a build removing its output is only waited out.
 
-**Rollout:** upgrade all Office writers before switching a consumer's definition. Older CLIs reject `opencode(ctx)`; they have no equivalent feature under another key. For a rollback, restore the previous definition before using the older writer. An older writer that predates authored registrations doesn't recognize a link to a nonconventional server directory as a package link, so it leaves it in place. Links are relative, so a moved or copied office keeps working and stays manageable.
-
-From the CLI checkout, `bun test ./src/opencode-scope-registrations.e2e.test.ts` exercises conditional collection, failure retention, pinned repair, a dev watcher, machine registration and owner replacements through a compiled executable. To include the old-writer control, set `OFFICE_TEST_PRE_ASSETS` to a compiled CLI from before authored registrations. The [native test](opencode-sources.md#reproduce-the-native-check) has its own opt-in launcher.
+From the CLI checkout, `bun test ./src/opencode-scope-registrations.e2e.test.ts` exercises conditional registration, failure retention, pinned repair, a dev watcher, machine registration and owner replacements through a compiled executable. The [native test](opencode-sources.md#reproduce-the-native-check) has its own opt-in launcher.

@@ -35,12 +35,19 @@ export type Registry<Value extends RegistryEntry> = {
   parse(input: RegistryEntry): Value;
 };
 
-/** An entry a command reads: the provider's parsed value, who added it, and the folder that package was loaded from. */
+/** An entry a command reads: the provider's parsed value, who added it, and where that package is. */
 export type Entry<Value> = {
   value: Value;
   /** The adding package's name, or `office.yaml` for the office's own entries. */
   owner: string;
+  /** The folder the adding package was loaded from in this run: read its files here. It can belong to one package generation. */
   folder: string;
+  /**
+   * The adding package's delivery folder, which outlives package generations: `packages/<name>/`
+   * for a package of the office's own, `.office/packages/<name>/` for one sync pulls in; the
+   * office's folder for office.yaml's entries. Build a link that must outlast this run from it.
+   */
+  root: string;
 };
 
 /** The office a command or lifecycle function runs in. */
@@ -90,6 +97,27 @@ export type Lifecycle<Settings = Readonly<Record<string, SettingValue>>> = {
   readonly settings: Settings;
 };
 
+/** What a package's `sync` and its commands get: a way to change their own exclusions at once. */
+export type ExclusionUpdate = {
+  /**
+   * Changes the office's Git exclude block now, not at the end of a whole sync: each office-relative
+   * path in `remove` stops being excluded and each in `add` is excluded, literally; every other line
+   * stays. For paths a command placed or gave up, or that a sync gave up before it throws, since a
+   * sync that throws rewrites no exclusions. Returns one line per change.
+   */
+  updateExcluded(change: { add?: readonly string[]; remove?: readonly string[] }): readonly string[];
+};
+
+/** What a package's `sync` gets: also `exclude`, to keep what it placed for this machine out of commits. */
+export type SyncInputs<Settings = Readonly<Record<string, SettingValue>>> = Lifecycle<Settings> & {
+  /**
+   * Office-relative paths this sync placed for this machine, such as links, which commits leave
+   * out: sync names each one, literally, in the office's Git exclude block. Each call adds to this
+   * sync's list; a path missing from it next sync stops being excluded.
+   */
+  exclude(paths: readonly string[]): void;
+} & ExclusionUpdate;
+
 /** What a package's `check` gets: also the host helpers, to read its timers. */
 export type CheckInputs<Settings = Readonly<Record<string, SettingValue>>> = Lifecycle<Settings> & { readonly host: Host };
 
@@ -112,7 +140,14 @@ export type Problem = { level: "warning" | "failed"; message: string };
  */
 export type CommandInputs<Settings = Readonly<Record<string, SettingValue>>> = Lifecycle<Settings> & {
   readonly args: readonly string[];
-};
+  /**
+   * Replaces one scalar that already exists in this package's own settings in office.yaml, such as
+   * `["sources", 0, "ref"]`, keeping every other character of the file. Throws, writing nothing,
+   * for a path outside its settings or to no scalar, or when office.yaml or the package's settings
+   * schema would reject the result. Returns the settings as they now read.
+   */
+  replaceSetting(path: readonly (string | number)[], value: string | number | boolean): Settings;
+} & ExclusionUpdate;
 
 /**
  * A command a package declares under its name: `office <name>` runs it. It has one handler:
@@ -136,13 +171,6 @@ export type SetupContext<Settings = Readonly<Record<string, SettingValue>>> = {
   registry<Value extends RegistryEntry>(registry: Registry<Value>): void;
   /** Adds an entry to a registry, this package's or another's. */
   add<Value extends RegistryEntry>(registry: Registry<Value>, value: NoInfer<Value>): void;
-};
-
-/** Transitional, until agents are a registry: what `opencode(ctx)` registers. */
-export type OpenCodeContext = {
-  readonly settings: Readonly<Record<string, SettingValue>>;
-  serverPlugin(directory: string): void;
-  desktopPanel(bundle: string): void;
 };
 
 // `ctx.settings` from the schema. The keywords below are left to the validator: a property using
@@ -226,7 +254,7 @@ export type Definition<Schema extends SettingsSchema = NoSettings> = {
    * Runs at each sync that switches and applies the package set with every selected package loaded,
    * after every `setup`, in the order packages load. Returns the lines to print. A throw stops the sync.
    */
-  sync?(inputs: Lifecycle<Settings<Schema>>): readonly string[] | void | Promise<readonly string[] | void>;
+  sync?(inputs: SyncInputs<Settings<Schema>>): readonly string[] | void | Promise<readonly string[] | void>;
   /** Runs at `office check` with every selected package loaded, and only reports: it must not write. */
   check?(inputs: CheckInputs<Settings<Schema>>): readonly Problem[] | Promise<readonly Problem[]>;
   /**
@@ -248,7 +276,6 @@ export type Definition<Schema extends SettingsSchema = NoSettings> = {
   tools?: { readonly [tool: string]: string };
   host?: HostBlock;
   system?: SystemBlock;
-  opencode?(ctx: OpenCodeContext): void;
   executor_app?: { setting?: string };
   spawns?: { label: string };
 };

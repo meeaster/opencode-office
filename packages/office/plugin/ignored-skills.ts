@@ -118,50 +118,18 @@ export function skillsIn(folder: string): FoundSkill[] {
   return found;
 }
 
-/**
- * Skill IDs the office's packages give sessions through their plugins, each with the package that
- * has it. A skill outside the office with one of these IDs replaces the package's in OpenCode,
- * which reads skill folders after plugins register theirs, so removing it would leave neither.
- */
-export function packageSkills(office: string): Map<string, string> {
-  const provided = new Map<string, string>();
-
-  for (const root of [join(office, ".office/packages"), join(office, "packages")]) {
-    for (const item of entries(root)) {
-      if (item.type !== "dir") continue;
-
-      for (const skill of entries(join(item.path, "skills"))) {
-        if (skill.type === "dir" && existsSync(join(skill.path, "SKILL.md")) && !provided.has(skill.name)) provided.set(skill.name, item.name);
-      }
-    }
-  }
-
-  return provided;
-}
-
 export type IgnoredSkills = {
   /** The setting's folders, expanded. */
   folders: string[];
   /** Skills in those folders that sessions don't get. */
   hidden: FoundSkill[];
-  /** Skills in those folders left in place, because a package of the office has the same ID. */
-  kept: (FoundSkill & { package: string })[];
 };
 
 /** What the setting hides for an office, by reading the folders as they are now. */
 export function ignoredSkills(office: string, settingFolders: string[], home: string): IgnoredSkills {
   const folders = settingFolders.map((folder) => expandFolder(folder, home, office));
-  const provided = packageSkills(office);
-  const result: IgnoredSkills = { folders, hidden: [], kept: [] };
 
-  for (const skill of folders.flatMap(skillsIn)) {
-    const owner = provided.get(skill.id);
-
-    if (owner === undefined) result.hidden.push(skill);
-    else result.kept.push({ ...skill, package: owner });
-  }
-
-  return result;
+  return { folders, hidden: folders.flatMap(skillsIn) };
 }
 
 /** A path under the home as ~/…, others as they are. */
@@ -169,23 +137,11 @@ function short(home: string, path: string): string {
   return contains(home, path) ? join("~", relative(home, path)) : path;
 }
 
-/** One line per ignored folder, then one per skill left in place, for `office check`. */
-export function describeIgnoredSkills(found: IgnoredSkills, home: string): { ok: boolean; text: string }[] {
-  const lines = found.folders.map((folder) => {
-    const here = (skill: FoundSkill) => contains(folder, skill.path);
-    const hidden = found.hidden.filter(here).map((skill) => skill.id);
+/** One line per ignored folder, for `office check`. */
+export function describeIgnoredSkills(found: IgnoredSkills, home: string): string[] {
+  return found.folders.map((folder) => {
+    const hidden = found.hidden.filter((skill) => contains(folder, skill.path)).map((skill) => skill.id);
 
-    return {
-      ok: true,
-      text: `${short(home, folder)}: ${existsSync(folder) ? (hidden.length > 0 ? `hides ${hidden.join(", ")}` : "holds no skills to hide") : "doesn't exist, so nothing is hidden"}`,
-    };
+    return `${short(home, folder)}: ${existsSync(folder) ? (hidden.length > 0 ? `hides ${hidden.join(", ")}` : "holds no skills to hide") : "doesn't exist, so nothing is hidden"}`;
   });
-
-  return [
-    ...lines,
-    ...found.kept.map((skill) => ({
-      ok: false,
-      text: `skill ${skill.id} at ${short(home, skill.path)} is not hidden: the ${skill.package} package has a skill of that ID, which this one replaces; rename one of them`,
-    })),
-  ];
 }

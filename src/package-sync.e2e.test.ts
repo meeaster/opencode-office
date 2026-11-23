@@ -6,12 +6,12 @@ import { existsSync, lstatSync, readlinkSync, renameSync, rmSync } from "node:fs
 import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
-import { definitionText, writePackage } from "./test-package.ts";
+import { definitionText, pluginDefinition, writePackage } from "./test-package.ts";
 
 const { root, write, read, commit, fixture } = definitionFixture({ second: false });
 
-const imports = 'import {repositories} from "@office/references/repositories"; import {requirements} from "@office/tooling/requirements"; import {tasks} from "@office/mise-integration/claims"; import {mkdirSync, writeFileSync} from "node:fs"; import {join} from "node:path";';
-const dependencies = ["references", "tooling", "mise-integration"];
+const imports = 'import {opencode} from "@office/opencode"; import {repositories} from "@office/references/repositories"; import {requirements} from "@office/tooling/requirements"; import {tasks} from "@office/mise-integration/claims"; import {mkdirSync, writeFileSync} from "node:fs"; import {join} from "node:path";';
+const dependencies = ["opencode", "references", "tooling", "mise-integration"];
 
 /**
  * A definition that requires `tool`, adds the task `task` and the reference `reference`, and whose
@@ -38,11 +38,11 @@ test("a setup that throws stops package sync and changes nothing it applies; fix
   const first = join(dir, "packages/first");
   const second = join(dir, "packages/second/office.ts");
   const third = join(dir, "packages/third");
-  writePackage(join(first, "office.ts"), claims({ tool: "jq@1.7.1", task: "Say hello", reference: "first-docs", file: "first.md", mark: "first\n" }), { dependencies });
+  writePackage(join(first, "office.ts"), claims({ tool: "jq@1.7.1", task: "Say hello", reference: "first-docs", extra: 'opencode.plugins.add(c, {directory: "plugin"});', file: "first.md", mark: "first\n" }), { dependencies });
   write(join(first, "hello.sh"), "echo hello\n");
   write(join(first, "plugin/index.ts"), "export default { id: \"first\", async setup() {} };\n");
   writePackage(second, definitionText("{setup(){}}"));
-  writePackage(join(third, "office.ts"), definitionText("{}"));
+  writePackage(join(third, "office.ts"), pluginDefinition(), { dependencies: ["opencode"] });
   write(join(third, "plugin/index.ts"), "export default { id: \"third\", async setup() {} };\n");
   write(yaml, host("  - name: first\n  - name: second\n  - name: third\n"));
   cli(0, "sync", "--packages");
@@ -89,20 +89,23 @@ test("a setup that throws stops package sync and changes nothing it applies; fix
   expect(existsSync(join(dir, ".office/mise/first.toml"))).toBe(false);
 }, 60_000);
 
-test("a Git package that can't be fetched doesn't stop the others, but no package's tools or machine files are reconciled", () => {
+test("a Git package that can't be fetched doesn't stop the others, but no package's tools or machine files are reconciled; the others' plugins still are", () => {
   const { dir, cli } = fixture("fetch-fails");
   const yaml = join(dir, "office.yaml");
   const repo = join(root, "unreachable-source");
   const local = join(dir, "packages/local");
   git(["init", "-qb", "main", repo]);
-  writePackage(join(repo, "remote/office.ts"), definitionText('{setup(c){c.registry({id:"remote.items",parse:i=>i}); c.add(tasks,{name:"hello",script:"hello.sh",description:"Remote hello"})}}', 'import {tasks} from "@office/mise-integration/claims";'), { name: "remote", dependencies: ["mise-integration"] });
+  writePackage(join(repo, "remote/office.ts"), definitionText('{setup(c){c.registry({id:"remote.items",parse:i=>i}); c.add(tasks,{name:"hello",script:"hello.sh",description:"Remote hello"}); opencode.plugins.add(c, {directory: "plugin"})}}', 'import {tasks} from "@office/mise-integration/claims"; import {opencode} from "@office/opencode";'), { name: "remote", dependencies: ["mise-integration", "opencode"] });
   write(join(repo, "remote/hello.sh"), "echo hello\n");
   write(join(repo, "remote/plugin/index.ts"), "export default { id: \"remote\", async setup() {} };\n");
   const pinned = commit(repo);
   writePackage(join(local, "office.ts"), claims({ tool: "jq@1.7.1", task: "Local hello", reference: "local-docs", file: "local.md", mark: "v1\n" }), { dependencies });
   write(join(local, "hello.sh"), "echo hello\n");
-  write(yaml, host(`  - {name: remote, repo: ${repo}, path: remote, ref: ${pinned}}\n  - name: local\n`));
+  writePackage(join(dir, "packages/leaving/office.ts"), pluginDefinition(), { dependencies: ["opencode"] });
+  write(join(dir, "packages/leaving/plugin/index.ts"), "export default { id: \"leaving\", async setup() {} };\n");
+  write(yaml, host(`  - {name: remote, repo: ${repo}, path: remote, ref: ${pinned}}\n  - name: local\n  - name: leaving\n`));
   cli(0, "sync", "--packages");
+  expect(readlinkSync(join(dir, ".opencode/plugins/leaving"))).toBe("../../packages/leaving/plugin");
   const current = readlinkSync(join(dir, ".office/current"));
   const tools = read(join(dir, "machine.packages.toml"));
   const fragments = ["remote", "local"].map(name => read(join(dir, `.office/mise/${name}.toml`)));
@@ -115,11 +118,18 @@ test("a Git package that can't be fetched doesn't stop the others, but no packag
   writePackage(join(local, "office.ts"), claims({ tool: "jq@1.7.1", task: "Local hello", reference: "local-docs", extra: `
     c.add(repositories,{name:"local-guide",url:"https://example.invalid/guide.git"});
     c.add(requirements,{name:"yq",minimumVersion:"4.44.1"});
-    c.add(tasks,{name:"more",script:"hello.sh",description:"Local more"});`, file: "local.md", mark: "v2\n" }), { dependencies });
+    c.add(tasks,{name:"more",script:"hello.sh",description:"Local more"});
+    opencode.plugins.add(c, {directory: "plugin"});`, file: "local.md", mark: "v2\n" }), { dependencies });
+  write(join(local, "plugin/index.ts"), "export default { id: \"local\", async setup() {} };\n");
+  // Leaving stops registering its plugin.
+  writePackage(join(dir, "packages/leaving/office.ts"), definitionText("{}"));
 
   const output = cli(1, "sync", "--packages");
   expect(output).toContain("FAILED .office/packages/remote");
   expect(output).toContain("not reconciling any package's tools or machine files: what package remote claims is unknown");
+  // OpenCode delivery of the packages that read goes on: a new link, a withdrawn one, remote's kept.
+  expect(readlinkSync(join(dir, ".opencode/plugins/local"))).toBe("../../packages/local/plugin");
+  expect(lstatSync(join(dir, ".opencode/plugins/leaving"), { throwIfNoEntry: false })).toBeUndefined();
   expect(readlinkSync(join(dir, ".office/current"))).not.toBe(current);
   expect(read(join(dir, ".office/resolved/references.json"))).toContain("local-guide");
   expect(read(join(dir, "machine.packages.toml"))).toBe(tools);
@@ -136,4 +146,32 @@ test("a Git package that can't be fetched doesn't stop the others, but no packag
   expect(cli(1, "sync", "--packages")).toContain("FAILED package local: no provider registered remote.items");
   expect(readlinkSync(join(dir, ".office/current"))).toBe(published);
   expect(existsSync(join(dir, ".office/mise/local.toml"))).toBe(true);
+}, 60_000);
+
+test("while a Git package can't be fetched, another's changed copy is still admitted only with OpenCode registrations naming its own files", () => {
+  const { dir, cli } = fixture("unread-admission");
+  const gone = join(root, "unread-admission-gone");
+  const moving = join(root, "unread-admission-moving");
+
+  for (const repo of [gone, moving]) git(["init", "-qb", "main", repo]);
+  writePackage(join(gone, "gone/office.ts"), definitionText("{}"), { name: "gone" });
+  writePackage(join(moving, "moving/office.ts"), pluginDefinition(), { name: "moving", dependencies: ["opencode"] });
+  write(join(moving, "moving/plugin/index.ts"), "export default { id: \"moving\", async setup() {} };\n");
+  const [kept, first] = [commit(gone), commit(moving)];
+  const select = (ref: string) => write(join(dir, "office.yaml"), host(`  - {name: gone, repo: ${gone}, path: gone, ref: ${kept}}\n  - {name: moving, repo: ${moving}, path: moving, ref: ${ref}}\n`));
+
+  select(first);
+  cli(0, "sync", "--packages");
+  const plugin = readlinkSync(join(dir, ".opencode/plugins/moving"));
+  rmSync(gone, { recursive: true });
+  rmSync(join(dir, ".office/packages/gone"), { recursive: true });
+  writePackage(join(moving, "moving/office.ts"), pluginDefinition("missing"), { name: "moving", dependencies: ["opencode"] });
+  select(commit(moving));
+  const current = readlinkSync(join(dir, ".office/current"));
+
+  const output = cli(1, "sync", "--packages");
+  expect(output).toContain("FAILED package moving: OpenCode registration: OpenCode server asset must be an existing directory inside the package");
+  expect(output).toContain("no package set was published");
+  expect(readlinkSync(join(dir, ".office/current"))).toBe(current);
+  expect(readlinkSync(join(dir, ".opencode/plugins/moving"))).toBe(plugin);
 }, 60_000);

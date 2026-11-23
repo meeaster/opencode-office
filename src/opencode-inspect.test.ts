@@ -41,7 +41,8 @@ test("inspect lists a desktop panel only by this office's own record, and a bund
   if (where.kind !== "app") throw new Error("the app machine variables should locate a local app machine");
   installPanel(where.machine, { name: "sample", dir: office }, { name: "common", bundle });
   const desktop = () => inspect(office, undefined).filter(line => line.startsWith("desktop: "));
-  expect(desktop()).toEqual(["desktop: common (bundle present; listed in app-machine opencode.json)"]);
+  // No sync recorded the package declaring it, so it is only retained.
+  expect(desktop()).toEqual(["desktop: retained panel, not declared by its package (bundle present; listed in app-machine opencode.json)"]);
 
   // A record that is a link, or another office's record, is not this office's panel.
   const record = join(root, "panels/common/office-panel.json");
@@ -57,7 +58,7 @@ test("inspect lists a desktop panel only by this office's own record, and a bund
   const installed = join(root, "panels/common/gui-experimental.cjs");
   rmSync(installed);
   mkdirSync(installed);
-  expect(desktop()).toEqual(["desktop: common (bundle missing or not a regular file; listed in app-machine opencode.json)"]);
+  expect(desktop()).toEqual(["desktop: retained panel, not declared by its package (bundle missing or not a regular file; listed in app-machine opencode.json)"]);
 });
 
 test("inspect names a package's OpenCode registration at the definition its package.json declares", () => {
@@ -67,5 +68,5 @@ test("inspect names a package's OpenCode registration at the definition its pack
   write(join(office, "packages/common/package.json"), packageJsonText("common", "src/definition.ts"));
   write(join(office, ".office/resolved/opencode-assets.json"), JSON.stringify({ common: { state: "unavailable" } }));
 
-  expect(inspect(office, undefined)).toContain("[office] OpenCode registration unavailable at last sync: packages/common/src/definition.ts#opencode");
+  expect(inspect(office, undefined)).toContain("[office] OpenCode registration unavailable at last sync: packages/common/src/definition.ts#setup");
 });

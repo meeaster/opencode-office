@@ -76,3 +76,14 @@ export function seedingDefinition(seeds: TestSeed[]) {
 export function markingDefinition(file: string, text: string, fields = "") {
   return definitionText(`{ ${fields}${fields ? ", " : ""}sync({ office }) { mkdirSync(dirname(join(office.dir, ${JSON.stringify(file)})), { recursive: true }); writeFileSync(join(office.dir, ${JSON.stringify(file)}), ${JSON.stringify(text)}); } }`, 'import { mkdirSync, writeFileSync } from "node:fs"; import { dirname, join } from "node:path";');
 }
+
+/**
+ * A definition that registers its `directory` as its OpenCode server plugin and, with `panel`, that
+ * bundle as its desktop panel; `fields` are more of its fields, each followed by a comma. Write it
+ * with `{ dependencies: ["opencode"] }`; from source, its office must have synced once before.
+ */
+export function pluginDefinition(directory = "plugin", { panel, fields = "" }: { panel?: string; fields?: string } = {}) {
+  const calls = [`opencode.plugins.add(ctx, ${JSON.stringify({ directory })});`, ...(panel === undefined ? [] : [`opencode.panels.add(ctx, ${JSON.stringify({ file: panel })});`])];
+
+  return definitionText(`{ ${fields} setup(ctx) { ${calls.join(" ")} } }`, 'import { opencode } from "@office/opencode";');
+}

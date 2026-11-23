@@ -174,7 +174,7 @@ const licenseNames = ["LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"];
  */
 export function copyFromRepository({ repo, ref, path }: { repo: string; ref?: string; path: string }, to: string): string {
   return withCheckout(repo, ref, (checkout) => {
-    copyFolder(checkout, path, to, undefined, `${repo}${ref === undefined ? "" : `@${ref}`}`);
+    copyFolder(checkout, path, to);
 
     return head(checkout);
   });
@@ -184,7 +184,7 @@ export function copyFromRepository({ repo, ref, path }: { repo: string; ref?: st
  * Runs `use` on a shallow checkout of `repo` at `ref` in a temporary folder, removed afterwards.
  * A failed fetch of what looks like an abbreviated SHA says so.
  */
-export function withCheckout<Result>(repo: string, ref: string | undefined, use: (checkout: string) => Result): Result {
+function withCheckout<Result>(repo: string, ref: string | undefined, use: (checkout: string) => Result): Result {
   const checkout = mkdtempSync(join(tmpdir(), "office-copy-"));
 
   try {
@@ -202,21 +202,9 @@ export function withCheckout<Result>(repo: string, ref: string | undefined, use:
   }
 }
 
-/** The commit a checkout is at. */
-export function checkoutCommit(checkout: string): string {
-  return head(checkout);
-}
-
-/**
- * Copies the folder `path` of a checkout into `to`, with the repository's licence when the folder
- * has none of its own. When required, `marker` must exist; `label` names the checkout in the error.
- */
-export function copyFolder(checkout: string, path: string, to: string, marker: string | undefined, label: string): void {
-  const source = join(checkout, path);
-
-  if (marker !== undefined && !existsSync(join(source, marker))) throw new Error(`${label} has no ${path}/${marker}`);
-
-  cpSync(source, to, { recursive: true });
+/** Copies the folder `path` of a checkout into `to`, with the repository's licence when the folder has none of its own. */
+function copyFolder(checkout: string, path: string, to: string): void {
+  cpSync(join(checkout, path), to, { recursive: true });
 
   const license = licenseNames.find((name) => existsSync(join(checkout, name)));
 

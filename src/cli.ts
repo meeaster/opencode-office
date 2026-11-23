@@ -20,7 +20,7 @@ import { guiDev } from "./commands/gui.ts";
 import { init, nextSteps } from "./commands/init.ts";
 import { pair } from "./commands/pair.ts";
 import { pin } from "./commands/pin.ts";
-import { updatePackages, updateSkills } from "./commands/pins.ts";
+import { updatePackages } from "./commands/pins.ts";
 import { finishSetup, setup } from "./commands/setup.ts";
 import { sessionInstructions } from "./commands/session-instructions.ts";
 import { runInContainer } from "./commands/shell.ts";
@@ -58,26 +58,26 @@ const usage = `usage: office <command> [--office <dir>]
   secrets get <package> <key>  write one declared, generated package secret to stdout
   secrets decrypt <file>       decrypt an office-relative SOPS JSON/YAML file to stdout as JSON
   sync [--packages | --references | --release-machine]
-                               clone and update, scaffold missing desks, copy and link library
-                               skills, install, restore and link packages, link a host-mode
-                               office's tools into mise's global conf.d, install panels on the
-                               desktop app's machine. --release-machine only removes every file
-                               the office wrote on this machine, and its consent.
+                               clone and update, scaffold missing desks, install, restore and
+                               apply packages (their sync functions, such as the skills package's
+                               links), link a host-mode office's tools into mise's global conf.d,
+                               link package plugins and install panels on the desktop app's
+                               machine. --release-machine only removes every file the office
+                               wrote on this machine, and its consent.
                                --packages applies packages at their declared pins without refreshing
                                 desk repos, references or separately declared plugin clones.
                                 Each package's package.json names its definition (office.definition)
-  skills update                move each skills.copied group with a track to the newest commit of
-                               its branch, or of its highest stable SemVer tag matching a pattern
-                               such as v2.*; recopy the whole group and record the commit as its ref.
-                               A group missing a skill, or with edits the copy would lose, stays put
-  packages update              likewise for packages from other repositories with a track, move
-                               the office.lock commit of each untracked tag or branch ref to where
-                               it points now, then apply them as sync does. Neither command syncs
-                               anything else, and office sync applies pins without moving them
+  packages update              move each package from another repository with a track to the
+                               newest commit of its branch, or of its highest stable SemVer tag
+                               matching a pattern such as v2.*, and record the commit as its ref;
+                               move the office.lock commit of each untracked tag or branch ref to
+                               where it points now, then apply them as sync does. It syncs nothing
+                               else, and office sync applies pins without moving them
   check                        report drift from office.yaml and the tool, the running
                                containers and opted-in managed OpenCode
-  refresh [--verbose]          update tracked package and skill pins and the office.lock commits
-                               of untracked package refs, run a full sync, start services with
+  refresh [--verbose]          update tracked package pins and the office.lock commits of
+                               untracked package refs, run office skills update when the skills
+                               package is selected, run a full sync, start services with
                                ordinary up, then check office health
   instructions [folder]        print the office guidance a session started in <folder> gets
   instructions --session <id>  print each stored instruction entry from a running OpenCode server
@@ -409,15 +409,11 @@ async function main(): Promise<void> {
       finishSync(stage, changes);
       reporter.finish([]);
     }, { verbose });
-  } else if ((command === "skills" || command === "packages") && rest[0] === "update" && rest.length === 1) {
+  } else if (command === "packages" && rest[0] === "update" && rest.length === 1) {
     const office = currentOffice(flags);
 
-    await reported(`${command} update`, officeContext(office), async (reporter) => {
-      const stage = reporter.stage(command === "skills" ? "Copied skill groups" : "Remote packages", { key: command });
-
-      if (command === "skills") await updateSkills(office, stage);
-      else await updatePackages(office, stage);
-
+    await reported("packages update", officeContext(office), async (reporter) => {
+      await updatePackages(office, reporter.stage("Remote packages", { key: "packages" }));
       reporter.finish([]);
     }, { verbose: flags.verbose === true });
   } else if (command === "refresh") {
@@ -427,7 +423,7 @@ async function main(): Promise<void> {
 
     await reported("refresh", officeContext(office), async reporter => {
       await updatePackages(office, reporter.stage("Remote packages", { key: "packages" }), { apply: false });
-      await updateSkills(currentOffice(flags), reporter.stage("Copied skill groups", { key: "skills" }));
+      await refreshSkills(currentOffice(flags), reporter.stage("Skills", { key: "skills" }));
       const stage = reporter.stage("Repositories and packages", { key: "sync" });
 
       finishSync(stage, await sync(currentOffice(flags), { stage, verbose }));
@@ -557,6 +553,30 @@ async function packageShutdown(office: Office): Promise<boolean> {
 
     return false;
   }
+}
+
+/**
+ * Refresh's skills step: with the skills package selected, its `skills update` runs as the package
+ * command it is, in a reader bound to the published package set, and a failure stops refresh.
+ * Without the package there is nothing to update.
+ */
+async function refreshSkills(office: Office, stage: Stage): Promise<void> {
+  if (!office.packages.some(entry => entry.name === "skills")) {
+    stage.done("the skills package isn't selected");
+
+    return;
+  }
+
+  stage.detail("office skills update");
+  const status = await runReader(office.dir, ["skills", "update"]);
+
+  if (status !== 0) {
+    stage.fail(status === undefined ? "no package set is published yet" : "office skills update failed");
+
+    throw new OfficeError(status === undefined ? "run office sync first: no package set is published, so office skills update can't run" : "office skills update failed, so refresh stopped; fix the failure above and run office refresh again");
+  }
+
+  stage.done("office skills update finished");
 }
 
 function finishSync(stage: Stage, changes: string[]) {

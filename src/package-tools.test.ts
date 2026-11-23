@@ -13,7 +13,7 @@ import { loadOffice } from "./office.ts";
 import { localEdits, pulledDir, readRecord } from "./packages.ts";
 import { parseManifest } from "./schema.ts";
 import { compareToolVersions, fragmentNotes, machineBelowFloors, machineFiles, orphanFragments, packageLines, packagesFileProblems, strayFragments } from "./package-tools.ts";
-import { definitionText, writePackage } from "./test-package.ts";
+import { definitionText, pluginDefinition, writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -497,7 +497,7 @@ test("a rejected candidate applies nothing: switching to container mode keeps th
   write(config, "name: test\npackages: []\n");
   await run();
 
-  pkg("editor", "");
+  writePackage(join(office, "packages/editor/office.ts"), pluginDefinition(), { dependencies: ["opencode"] });
   write(join(office, "packages/editor/plugin/index.ts"), "// fixture");
   writeConfig("{mode: host, url: 'http://127.0.0.1:49999'}", "editor");
   grantConsent(loadOffice(office));
@@ -525,6 +525,9 @@ test("a rejected candidate applies nothing: switching to container mode keeps th
   expect(partial).toContain("FAILED .office/packages/gone");
   expect(partial).toContain("not reconciling any package's tools or machine files");
   expect(readlinkSync(join(office, ".office/current"))).not.toBe(current);
+  // OpenCode delivery of the packages that read goes on: the deselected plugin is withdrawn.
+  expect(partial).toContain("unlinked .opencode/plugins/editor");
+  expect(existsSync(plugin)).toBe(false);
   expect(readFileSync(machineRecordPath())).toEqual(record);
   expect(readFileSync(link, "utf8")).toContain("postinstall =");
   // Accepted with every package loaded, the switch releases the machine and withdraws the deselected plugin.

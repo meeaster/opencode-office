@@ -55,9 +55,10 @@ function fakeHost(installed: TimerState[] = []) {
 
 /** The inputs of package demo's jobs in an office of `mode`, with `settings` for the cron package. */
 function inputs(mode: Mode, list: Job[], settings: GivenSettings = {}, args: string[] = []) {
-  const entries: Entries = <Value extends RegistryEntry>(registry: Registry<Value>) => list.flatMap(job => (registry.id === jobs.id ? [{ value: registry.parse(job), owner: "demo", folder: join(root, "packages/demo") }] : []));
+  const entries: Entries = <Value extends RegistryEntry>(registry: Registry<Value>) => list.flatMap(job => (registry.id === jobs.id ? [{ value: registry.parse(job), owner: "demo", folder: join(root, "packages/demo"), root: join(root, "packages/demo") }] : []));
+  const refuse = () => { throw new Error("not in these tests"); };
 
-  return { office: { dir: root, name: "test", mode, launcher: "/bin/false" }, entries, settings, args, ...fakeHost() };
+  return { office: { dir: root, name: "test", mode, launcher: "/bin/false" }, entries, settings, args, replaceSetting: refuse, exclude: refuse, updateExcluded: refuse, ...fakeHost() };
 }
 
 const digest: Job = { name: "digest", schedule: "15 6 * * *", script: "digest.sh" };

@@ -7,9 +7,10 @@
 import * as v from "valibot";
 import type { Entries, Registry, RegistryEntry, SettingValue } from "../sdk/index.ts";
 import { isRepository, repositories } from "../packages/references/repositories.ts";
+import { type AssetPaths, contributedAssets } from "../standard/opencode/assets.ts";
 import { machineCollection, project, type Projection, recipeSystem } from "../standard/mise-integration/projection.ts";
 import type { AppliedReference } from "./applied-references.ts";
-import { definitionRoot } from "./bound-paths.ts";
+import { definitionRoot, packageDeliveryDir } from "./bound-paths.ts";
 import { declaredCommands, nameProblems, type NameProblem, type RegisteredCommand } from "./command-table.ts";
 import { installedPackages, type InstalledPackages } from "./layout.ts";
 import type { Office } from "./office.ts";
@@ -26,11 +27,11 @@ export type DeclaredCommand = { owner: string; command: RegisteredCommand; setti
 /** A problem of the gathering: the packages it belongs to, and what it is. `named` messages already name their owners. */
 export type GatherProblem = PackageProblem & { named?: true };
 
-/** A parsed entry: its registry, the provider's parser output, who added it and the folder that package loaded from. */
-export type Entry = { id: string; value: RegistryEntry; owner: string; folder: string };
+/** A parsed entry: its registry, the provider's parser output, who added it, the folder that package loaded from and its delivery folder. */
+export type Entry = { id: string; value: RegistryEntry; owner: string; folder: string; root: string };
 
-/** A package whose setup ran: its name, the folder its definition loaded from, and what it registered. */
-export type SetUp = { name: string; folder: string; registered: Registered };
+/** A package whose setup ran: its name, the folder its definition loaded from, its delivery folder, and what it registered. */
+export type SetUp = { name: string; folder: string; root: string; registered: Registered };
 
 export type Gathered = {
   /** Every package office.yaml selects, the required built-ins included, loaded or not. */
@@ -57,6 +58,12 @@ export type Gathered = {
   committed: string[];
   /** Reads a registry; throws when the gathering is incomplete. */
   entries: Entries;
+  /**
+   * What each package registered with OpenCode, by package, read from every package whose
+   * registrations parsed without a problem, even while another package is unread: native delivery
+   * and its admission only, never handed to package code.
+   */
+  assets: ReadonlyMap<string, AssetPaths>;
 };
 
 /** One line for a gathering problem. */
@@ -91,7 +98,7 @@ export async function gatherPackages(office: Office, { skip = new Set<string>(),
   if (!inventory.blocked && !inventory.invalidSettings.length) {
     for (const item of inventory.installed) {
       try {
-        setUp.push({ name: item.entry.name, folder: definitionRoot(office.dir, item), registered: await registerPackage({ name: item.entry.name, manifest: item.manifest, settings: item.settings }) });
+        setUp.push({ name: item.entry.name, folder: definitionRoot(office.dir, item), root: packageDeliveryDir(office.dir, item), registered: await registerPackage({ name: item.entry.name, manifest: item.manifest, settings: item.settings }) });
       } catch (error) {
         problems.push({ packages: [item.entry.name], message: message(error) });
       }
@@ -120,6 +127,8 @@ export async function gatherPackages(office: Office, { skip = new Set<string>(),
   }
 
   const added = parsed.entries;
+  const failed = new Set(problems.flatMap(problem => problem.packages));
+  const native = added.filter(row => parsed.rows.has(row.owner) && !failed.has(row.owner));
   const complete = !inventory.blocked && !problems.length && !inventory.unread.size;
   const incomplete = () => problems.map(problemText).join("; ") || `not loaded: ${[...inventory.unread].join(", ")}`;
 
@@ -134,6 +143,7 @@ export async function gatherPackages(office: Office, { skip = new Set<string>(),
 
       return readEntries(added, registry);
     },
+    assets: contributedAssets(registry => readEntries(native, registry)),
   };
 }
 
@@ -157,7 +167,7 @@ export function committedFolders(definitions: ReadonlyMap<string, Pick<PackageMa
 /** A registry's entries, each a copy of its provider's parser output. */
 export function readEntries<T extends RegistryEntry>(entries: readonly Entry[], registry: Registry<T>) {
   // SAFETY: the caller's handle has the id its provider registered; the entry is that provider's parser output.
-  return entries.flatMap(({ id, value, owner, folder }) => id === registry.id ? [{ value: structuredClone(value) as T, owner, folder }] : []);
+  return entries.flatMap(({ id, value, owner, folder, root }) => id === registry.id ? [{ value: structuredClone(value) as T, owner, folder, root }] : []);
 }
 
 /**
@@ -171,9 +181,9 @@ export function parseEntries(office: Pick<Office, "dir" | "references">, setUp: 
   const rows = new Map<string, Entry[]>();
 
   for (const { registered } of setUp) for (const [id, handle] of registered.registries) providers.set(id, handle);
-  const entries: Entry[] = office.references.map(value => ({ id: repositories.id, value: structuredClone(value), owner: "office.yaml", folder: office.dir }));
+  const entries: Entry[] = office.references.map(value => ({ id: repositories.id, value: structuredClone(value), owner: "office.yaml", folder: office.dir, root: office.dir }));
 
-  for (const { name, folder, registered } of setUp) {
+  for (const { name, folder, root, registered } of setUp) {
     try {
       const own = registered.additions.map(({ id, value }) => {
         const provider = providers.get(id);
@@ -183,7 +193,7 @@ export function parseEntries(office: Pick<Office, "dir" | "references">, setUp: 
 
         if (!v.is(jsonObject, entry)) throw new Error(`${id}: its parser returned something other than a JSON object`);
 
-        return { id, value: structuredClone(entry), owner: name, folder };
+        return { id, value: structuredClone(entry), owner: name, folder, root };
       });
 
       entries.push(...own);

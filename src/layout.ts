@@ -1,15 +1,11 @@
-// What an office's folders should hold, derived from office.yaml and the tool: the clones, the
-// installed packages, and the library skill and package plugin links. `office sync` makes the
-// folders match; `office check` compares. Nothing of a package but its plugin is linked: the plugin
-// gives OpenCode whatever the package provides, its skills and MCP servers included.
-import { existsSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+// What an office's folders should hold, derived from office.yaml and the tool: the clones and the
+// installed packages. `office sync` makes the folders match; `office check` compares.
+import { join } from "node:path";
 
 import { type Office, type Repository } from "./office.ts";
 import { definitionGate, type InstalledPackage, type PackageProblem, readPackage, requiredPackages, resolvePackages } from "./packages.ts";
 import type { PackageManifest } from "./schema.ts";
 import { pluginClones } from "../standard/opencode/delivery.ts";
-import { entries, scope, type Scope } from "../standard/opencode/ownership.ts";
 
 export type Clone = { name: string; url: string; ref?: string; kind: string; dir: string };
 
@@ -22,17 +18,6 @@ export function clones(office: Office, references: readonly Repository[]): Clone
     ),
     ...pluginClones(office),
   ];
-}
-
-/** Skill IDs in the office's library, `skills/<id>/`. */
-export function library(office: Office): string[] {
-  const dir = join(office.dir, "skills");
-
-  if (!existsSync(dir)) return [];
-
-  return readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name);
 }
 
 /** Packages installed with valid settings, read from their definitions alone: no setup runs, so
@@ -89,46 +74,3 @@ export type InstalledPackages = {
   /** The definition of each package that loaded, read or not: its declared commands are claimed either way. */
   definitions: Map<string, PackageManifest>;
 };
-
-export type SkillSelection = {
-  desk: string | undefined;
-  folder: string;
-  scope: Scope;
-  /** Library skills enabled here, each linked into this `.opencode/skills/`. */
-  enabled: string[];
-  /** Office's links here (ownership.ts), with their targets. */
-  links: Map<string, string>;
-  /** The office's own skills here: real folders and links Office didn't write. Never changed. */
-  own: string[];
-  target: (skill: string) => string;
-};
-
-/**
- * The skill selection of the root (`desk` undefined) and of each desk: which library skills
- * should be linked into that `.opencode/skills/`, and what is there now.
- */
-export function skillSelections(office: Office): SkillSelection[] {
-  const levels = [{ desk: undefined, enabled: office.skills.enabled }, ...office.desks.map((desk) => ({ desk: desk.name, enabled: desk.skills }))];
-
-  return levels.map(({ desk, enabled }) => {
-    const where = scope(office, desk, "skills");
-    const links = new Map<string, string>();
-    const own: string[] = [];
-
-    for (const entry of entries(where)) {
-      if (entry.office && entry.target !== undefined) links.set(entry.name, entry.target);
-      else if (entry.folder || entry.target !== undefined) own.push(entry.name);
-    }
-
-    return {
-      desk,
-      folder: where.folder,
-      scope: where,
-      enabled,
-      links,
-      own,
-      /** The relative link target for a skill, so it resolves on the host and in the container. */
-      target: (skill) => relative(where.folder, join(office.dir, "skills", skill)),
-    };
-  });
-}

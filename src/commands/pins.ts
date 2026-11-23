@@ -1,14 +1,12 @@
-// `office skills update` and `office packages update`: move the pins of copied skill groups and of
-// packages from other repositories along their `track` (a branch, or the highest stable SemVer tag
-// matching a pattern), record each as a full commit SHA in office.yaml and apply it. Each command
-// touches only its own category: no clones, references, desks or the other category, and no sync.
-// A group or package whose track can't be resolved, or whose copy can't be applied, keeps its pin.
-// `office packages update` also moves the office.lock commit of each untracked package whose ref is
-// a tag or branch to where that ref points now, leaving office.yaml as it is.
-import { editConfig, type Office, OfficeError, skillGroups, withScalar } from "../office.ts";
+// `office packages update`: move the pins of packages from other repositories along their `track`
+// (a branch, or the highest stable SemVer tag matching a pattern), record each as a full commit SHA
+// in office.yaml and apply it. It touches only packages: no clones, references or desks, and no
+// sync. A package whose track can't be resolved, or whose copy can't be applied, keeps its pin.
+// It also moves the office.lock commit of each untracked package whose ref is a tag or branch to
+// where that ref points now, leaving office.yaml as it is.
+import { type Office, OfficeError, withScalar } from "../office.ts";
 import { fullCommit, requirePackageOwnership, resolvePackages } from "../packages.ts";
 import type { Stage } from "../report/index.ts";
-import { describeGroup, stageGroup } from "../skill-copies.ts";
 import { resolveRef, resolveTrack, type Resolved, short } from "../track.ts";
 import { publishPackages } from "../package-operation.ts";
 import { readLockSection } from "../versions.ts";
@@ -48,62 +46,6 @@ class UpdateProgress {
 
     this.stage.done(this.updated === 0 ? "nothing to update" : `${this.updated} updated`);
   }
-}
-
-/**
- * Resolves each tracked skill group once, stages all of its copies at the commit found, then
- * records that commit as the group's ref and swaps the copies in.
- */
-export async function updateSkills(loaded: Office, stage: Stage): Promise<void> {
-  let office = loaded;
-  const lines = new UpdateProgress(stage);
-  const groups = skillGroups(office).filter((group) => group.grouped);
-
-  for (const group of groups) {
-    const what = describeGroup(group);
-
-    if (group.track === undefined || group.ref === undefined) {
-      lines.push(`${what}: pinned at ${short(group.ref ?? "")} with no track, so left there`);
-
-      continue;
-    }
-
-    stage.detail(`checking ${group.skills.map((skill) => skill.name).join(", ")} (${group.track})`);
-
-    const found = await resolve(group.repo, group.track);
-
-    if (!found.ok) {
-      lines.push(`FAILED ${what}: ${found.reason}; pin left at ${short(group.ref)}`);
-
-      continue;
-    }
-
-    const staged = stageGroup(office, group, found.commit);
-
-    if (!staged.ok) {
-      lines.push(`FAILED ${what}: found ${short(found.commit)} (${found.via}), but ${staged.reason}; pin left at ${short(group.ref)}`);
-
-      continue;
-    }
-
-    try {
-      if (group.ref !== found.commit) office = editConfig(office, (text) => withScalar(text, ["skills", "copied", group.index, "ref"], found.commit));
-    } catch (error) {
-      staged.discard();
-      lines.push(`FAILED ${what}: ${error instanceof Error ? error.message : String(error)}; pin left at ${short(group.ref)}`);
-
-      continue;
-    }
-
-    const copies = staged.apply();
-    const pin = group.ref === found.commit ? `already at ${short(found.commit)} (${found.via})` : `pinned ${short(group.ref)} → ${found.commit} (${found.via})`;
-
-    if (group.ref !== found.commit || copies.length > 0) lines.updated++;
-    lines.push(`${what}: ${pin}`, ...copies);
-  }
-
-  if (groups.length === 0) lines.push("skills.copied has no skill groups to update");
-  lines.finish();
 }
 
 /**

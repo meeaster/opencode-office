@@ -1,5 +1,5 @@
-// Packages: capabilities an office opts into, each a folder with a definition, an OpenCode
-// plugin, skills the plugin registers, package-owned scripts and a desktop app panel (src/desktop.ts). There are three kinds, by where a package comes from:
+// Packages: capabilities an office opts into, each a folder with a definition and whatever it
+// registers, such as an OpenCode plugin, package-owned scripts and a desktop app panel (src/desktop.ts). There are three kinds, by where a package comes from:
 //
 // - built-in: shipped inside the `office` executable (the tool's packages/), listed by name alone,
 //   and replaced whenever it differs from the executable's copy. `office` is always installed.
@@ -18,8 +18,6 @@ import { basename, dirname, join, relative } from "node:path";
 import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
 import * as v from "valibot";
 
-import { panelBundle } from "./desktop.ts";
-import { collectAssets } from "../standard/opencode/assets.ts";
 import { copyFromRepository } from "./git.ts";
 import { type Office, OfficeError, type PackageEntry } from "./office.ts";
 import { readDefinition } from "./package-definition.ts";
@@ -57,7 +55,7 @@ export const sdkName = "sdk";
 const sdkReserved = `the name ${sdkName} is reserved for ${scope}${sdkName}; rename the package`;
 
 /** The built-in packages every office has, without an entry in office.yaml. */
-export const requiredPackages = ["tooling", "mise-integration", "office", "references", "seeds", "cron"];
+export const requiredPackages = ["tooling", "mise-integration", "opencode", "office", "references", "seeds", "cron"];
 
 const files = v.record(v.string(), v.string());
 
@@ -86,12 +84,6 @@ export type InstalledPackage = ResolvedPackage & {
   manifest: PackageManifest;
   /** The settings with defaults applied, as the plugin and scripts read them from `.settings.json`. */
   settings: Record<string, SettingValue>;
-  /** Skill IDs under `skills/`, each a folder with a SKILL.md, which the package's plugin registers. */
-  skills: string[];
-  /** Conventional server asset on read; withPluginPlan projects the effective registration. */
-  plugin: boolean;
-  /** Conventional desktop bundle on read; withPluginPlan projects the effective bundle. */
-  panel: string | undefined;
 };
 
 /** The folder of a built-in or remote package. */
@@ -683,19 +675,9 @@ export function readPackage(office: Office, resolved: ResolvedPackage): { ok: tr
 
     if (errors.length > 0) return { ok: false, errors, manifest };
 
-    const skillsDir = join(dir, "skills");
-
-    const skills = existsSync(skillsDir)
-      ? readdirSync(skillsDir, { withFileTypes: true })
-          .filter((item) => item.isDirectory() && existsSync(join(skillsDir, item.name, "SKILL.md")))
-          .map((item) => item.name)
-      : [];
-
-    const panel = join(dir, panelBundle);
-
-    return { ok: true, value: { ...resolved, manifest, settings: settings.value, skills, plugin: !manifest.opencode && existsSync(join(dir, "plugin")), panel: !manifest.opencode && existsSync(panel) ? panel : undefined } };
+    return { ok: true, value: { ...resolved, manifest, settings: settings.value } };
   } catch (error) {
-    // A file the package's folder can't give (a skills/ that isn't a folder, an unreadable script) fails this package alone.
+    // A file the package's folder can't give (an unreadable script) fails this package alone.
     return { ok: false, errors: [`${file}: ${error instanceof Error ? error.message : String(error)}`], manifest };
   }
 }
@@ -729,7 +711,7 @@ function candidateProblems(office: Pick<Office, "dir" | "packages">, candidate: 
 
 /**
  * Sync's admission checks a changed copy against the consuming entry before any live path points
- * at its files: its selection, settings, assets, system setup and compose file. Its setup runs
+ * at its files: its selection, settings, system setup and compose file. Its setup runs
  * with every other package's, in the admission's gathering.
  */
 export function validateReplacement(office: Office, resolved: ResolvedPackage) {
@@ -741,8 +723,6 @@ export function validateReplacement(office: Office, resolved: ResolvedPackage) {
   if (!read.ok) throw new Error(read.errors.join("; "));
 
   const item = read.value;
-
-  if (item.manifest.opencode) collectAssets(office.dir, item);
   const { host, system } = item.manifest;
 
   for (const file of [host?.install?.script, system?.bootstrap, system?.prepare, system?.verify]) {

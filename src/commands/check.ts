@@ -23,12 +23,12 @@ import { ghConfigDir, ghLogin, githubHosts, gitHelper, isGhHelper, loginProblem,
 import { hookNote, hookState } from "../hook.ts";
 import { planServer, serverReport } from "../host-server.ts";
 import { officeCommands, officePins, officeTool, officeToolNamed, required } from "../host-tools.ts";
-import { clones, library, skillSelections } from "../layout.ts";
-import { cloneTarget, pluginClones, pluginLinks, pluginScope, restartNotice, withPluginPlan } from "../../standard/opencode/delivery.ts";
+import { clones } from "../layout.ts";
+import { cloneTarget, pluginClones, pluginLinks, restartNotice, withPluginPlan } from "../../standard/opencode/delivery.ts";
 import { cloneFolder, entry as entryAt } from "../../standard/opencode/ownership.ts";
+import { contributedAssets } from "../../standard/opencode/assets.ts";
 import { packageLockProblems } from "../package-operation.ts";
-import { executorEnvFile, type Office, readEnvFile, type Repository, skillGroups } from "../office.ts";
-import { isCurrent, readSkillRecord, skillDir } from "../skill-copies.ts";
+import { executorEnvFile, type Office, readEnvFile, type Repository } from "../office.ts";
 import { appliedServices, appliedSpawns, packageComposeFile, parseCompose, serviceStatus, sharedNamespaces } from "../package-services.ts";
 import { listSpawned, planSweep, sweepIsEmpty } from "../package-spawns.ts";
 import { hostServiceStatus } from "../package-host-services.ts";
@@ -53,7 +53,8 @@ import type { Stage } from "../report/index.ts";
 type Report = (ok: boolean | "warn", name: string, detail: string) => void;
 
 /**
- * What one `office check` gathered, shared by every check: the packages with their plugin plan,
+ * What one `office check` gathered, shared by every check: the packages with their plugin plan
+ * (what they register now when the gathering is complete, else what the last sync applied),
  * `claims` only when the gathering is complete (what every package claims is known), and the
  * references to compare checkouts with: the gathering's, or with a package broken office.yaml's own.
  */
@@ -61,7 +62,7 @@ type Context = { gathered: Gathered; loaded: ReturnType<typeof withPluginPlan>; 
 
 function context(office: Office, gathered: Gathered): Context {
   return {
-    gathered, loaded: withPluginPlan(office, gathered.inventory),
+    gathered, loaded: withPluginPlan(office, gathered.inventory, gathered.complete ? contributedAssets(gathered.entries) : undefined),
     claims: gathered.complete ? gathered : undefined,
     references: gathered.complete ? gathered.references : office.references,
   };
@@ -69,7 +70,6 @@ function context(office: Office, gathered: Gathered): Context {
 
 async function drift(office: Office, { loaded, claims, references }: Context): Promise<string[]> {
   const problems: string[] = [];
-  const libraryIds = library(office);
   const declared = new Set(office.desks.map((desk) => desk.name));
 
   problems.push(...claudeFiles(office.dir));
@@ -120,32 +120,9 @@ async function drift(office: Office, { loaded, claims, references }: Context): P
   }
 
   for (const clone of pluginClones(office)) {
-    const link = entryAt(pluginScope(office), clone.name);
+    const link = entryAt(office, clone.name);
 
     if (existsSync(join(clone.dir, ".git")) && !(link?.office && link.target === cloneTarget(clone.name))) problems.push(`plugin ${clone.name} is cloned but .opencode/plugins/${clone.name} doesn't link to it${link ? " (an entry of the office's own is there)" : " (office sync links it)"}`);
-  }
-
-  for (const group of skillGroups(office)) {
-    for (const skill of group.skills) {
-      if (!libraryIds.includes(skill.name)) problems.push(`copied skill skills/${skill.name} is missing`);
-      else if (group.grouped && !isCurrent(readSkillRecord(skillDir(office, skill.name)), skill, group.ref)) problems.push(`copied skill skills/${skill.name} isn't the copy of ${skill.path} at ${group.ref} that office.yaml pins (office sync copies it, unless it was edited)`);
-    }
-  }
-
-  for (const selection of skillSelections(office)) {
-    const where = selection.desk ?? "the root";
-
-    for (const skill of selection.enabled) {
-      if (!libraryIds.includes(skill)) problems.push(`${where} enables ${skill}, which is not in skills/`);
-      else if (!selection.links.has(skill) && !selection.own.includes(skill)) problems.push(`${where}: ${skill} is enabled but not linked`);
-    }
-
-    for (const [entry, target] of selection.links) {
-      const path = relative(office.dir, join(selection.folder, entry));
-
-      if (!selection.enabled.includes(entry)) problems.push(`${path} is linked but nothing enables it`);
-      else if (target !== selection.target(entry)) problems.push(`${path} points to ${target}, not ${selection.target(entry)}`);
-    }
   }
 
   const { packages } = resolvePackages(office);
@@ -293,13 +270,6 @@ async function packageChecks(office: Office, report: Report, { gathered, loaded,
       notes.push(`${relative(office.dir, officePath)} doesn't say opencode: ${office.opencode.mode}; office sync writes it`);
     }
 
-    // Skills reach OpenCode only through the package's plugin.
-    // A failed or stale authored registration keeps its prior link, so loading is unknown, not absent.
-    if (item.skills.length > 0 && !item.plugin && !loaded.unread.has(entry.name)) {
-      ok = false;
-      notes.push(`skills ${item.skills.join(", ")} don't load: the package has no plugin to register them${kind === "remote" ? " (move ref to a version that has one)" : ""}`);
-    }
-
     const services = serviceStatus(office, item);
     const sharing = shared.get(entry.name);
 
@@ -406,7 +376,7 @@ export async function packageCheckFunctions(office: Office, report: Report, gath
  * last sync wins). Also one line for each panel this office installed whose package it no longer lists.
  */
 function panelChecks(office: Office, report: Report, { loaded: plan }: Context): void {
-  const panels = plan.installed.flatMap((item) => (item.panel === undefined ? [] : [{ name: item.entry.name, bundle: item.panel }]));
+  const panels = [...plan.panels].map(([name, bundle]) => ({ name, bundle }));
   const where = locate();
 
   if (where.kind === "container") {
@@ -502,22 +472,6 @@ async function settle<Result>(read: () => Promise<Result>, ready: (value: Result
   }
 
   throw lastError;
-}
-
-/**
- * Skill IDs a session in `desk` (undefined: the root) must load, and the office's others it must
- * not. Package plugins register their skills in every session.
- */
-function expectedSkills(office: Office, desk: string | undefined, { loaded }: Context) {
-  const selections = skillSelections(office);
-  const own = (selection: { enabled: string[]; own: string[] } | undefined) => (selection === undefined ? [] : [...selection.enabled, ...selection.own]);
-  const root = selections.find((selection) => selection.desk === undefined);
-  const mine = desk === undefined ? [] : own(selections.find((selection) => selection.desk === desk));
-  const packaged = loaded.installed.flatMap((item) => (item.plugin ? item.skills : []));
-  const expected = new Set([...own(root), ...mine, ...packaged]);
-  const everything = new Set([...library(office), ...selections.flatMap(own)]);
-
-  return { expected: [...expected], forbidden: [...everything].filter((skill) => !expected.has(skill)) };
 }
 
 /**
@@ -744,23 +698,14 @@ async function runtime(office: Office, report: Report, run: Context, stage?: Sta
 
       report(agents.data.length > 0, `${where}: agents`, agents.data.map((agent) => agent.id).join(", "));
 
-      const skills = (await getJson<Listing<{ id: string; path: string }>>(`${opencode}/api/skill`, headers)).data;
-      const loaded = new Set(skills.map((skill) => skill.id));
-      const { expected, forbidden } = expectedSkills(office, desk, run);
-      const missing = expected.filter((skill) => !loaded.has(skill));
-      const leaked = forbidden.filter((skill) => loaded.has(skill));
-
-      report(
-        missing.length === 0 && leaked.length === 0,
-        `${where}: skills`,
-        [`loads ${expected.join(", ") || "none of the office's"}`, ...(missing.length > 0 ? [`MISSING ${missing.join(", ")}`] : []), ...(leaked.length > 0 ? [`SHOULD NOT LOAD ${leaked.join(", ")}`] : [])].join("; "),
-      );
+      // Which skills load is the runtime's and its plugins' business; the root's list feeds the outside section.
+      const skills = desk === undefined ? (await getJson<Listing<{ id: string; path: string }>>(`${opencode}/api/skill`, headers)).data : [];
 
       // The root's plugins, which every desk loads: each package's, the office package's
       // included. A folder still loading lists none of them yet.
       // Declared clones count once they are linked; a running server only loads a link it saw appear.
       const linkedClones = office.plugins.filter((plugin) => {
-        const link = entryAt(pluginScope(office), plugin.name);
+        const link = entryAt(office, plugin.name);
 
         return link?.office === true && link.target === cloneTarget(plugin.name) && existsSync(join(office.dir, cloneFolder, plugin.name, ".git"));
       });
@@ -1073,6 +1018,23 @@ function gitChecks(office: Office, report: Report, running: boolean, references:
   }
 }
 
+/** The skills in the office root's project skill folders, by ID, each labelled with its path; links included. */
+function officeSkills(office: Office): Map<string, string> {
+  const found = new Map<string, string>();
+
+  for (const folder of [".agents/skills", ".opencode/skills"]) {
+    const dir = join(office.dir, folder);
+
+    if (!existsSync(dir)) continue;
+
+    for (const id of readdirSync(dir).sort()) {
+      if (!found.has(id) && existsSync(join(dir, id, "SKILL.md"))) found.set(id, `the office's skill ${folder}/${id}`);
+    }
+  }
+
+  return found;
+}
+
 /**
  * What sessions load from outside the office, for information: never a failure. Skills and plugins
  * come from the server's answer when there is one, the rest from reading the session's home. The
@@ -1112,15 +1074,11 @@ function outsideSection(office: Office, report: Report, root: RootAnswer | undef
   for (const line of lines) info(`     - ${line}`);
 
   const provided: Provided = {
-    skills: new Map([
-      ...skillSelections(office).flatMap((selection) => selection.own.map((id) => [id, `the office's skill ${relative(office.dir, join(selection.folder, id))}`] as const)),
-      ...library(office).map((id) => [id, `the office's library skill skills/${id}`] as const),
-      ...installed.installed.flatMap((item) => (item.plugin ? item.skills.map((id) => [id, `package ${item.entry.name}'s skill`] as const) : [])),
-    ]),
+    skills: officeSkills(office),
     plugins: new Map([...installed.plugins.keys()].map((name) => [name, `package ${name}'s plugin`])),
   };
 
-  for (const warning of shadowing(items, provided, places.home, loaded)) report("warn", "outside the office", warning);
+  for (const warning of shadowing(items, provided, places.home, office.dir, loaded)) report("warn", "outside the office", warning);
 
   // What the office package's skill-folder settings hide from sessions, and what it can't.
   const officePackage = installed.installed.find((item) => item.entry.name === "office");
@@ -1128,7 +1086,7 @@ function outsideSection(office: Office, report: Report, root: RootAnswer | undef
 
   if (ignored.length === 0) return;
 
-  for (const line of describeIgnoredSkills(ignoredSkills(office.dir, ignored, places.home), places.home)) report(line.ok ? true : "warn", "ignored skill folders", line.text);
+  for (const line of describeIgnoredSkills(ignoredSkills(office.dir, ignored, places.home), places.home)) report(true, "ignored skill folders", line);
 }
 
 /**

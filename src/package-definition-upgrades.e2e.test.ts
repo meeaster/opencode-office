@@ -17,10 +17,10 @@ test("tracked updates validate the consuming settings and staged assets before p
   const link = join(dir, ".opencode/plugins/shared");
   git(["init", "-q", "-b", "main", repo]);
   // Its seeds are a folder: a file added there would be laid down by any revision that publishes.
-  const seeded = 'setup(c){seeds.add(c,{destination:"seeded",source:"seed"})},';
-  const withSeeds = (body: string) => definitionText(body, 'import {seeds} from "@office/seeds";');
+  const seeded = 'setup(c){seeds.add(c,{destination:"seeded",source:"seed"});opencode.plugins.add(c,{directory:"plugin"})},';
+  const withSeeds = (body: string) => definitionText(body, 'import {seeds} from "@office/seeds"; import {opencode} from "@office/opencode";');
   const definition = withSeeds(`{${seeded}commands:{edition:{summary:"Current edition",run(){console.log("original edition")}}},settings:{type:"object",additionalProperties:false,required:["title"],properties:{title:{type:"string"}}}}`);
-  const uses = { dependencies: ["seeds"] };
+  const uses = { dependencies: ["seeds", "opencode"] };
   writePackage(join(source, "office.ts"), definition, uses);
   write(join(source, "compose.yaml"), "services:\n  shared:\n    image: example/shared\n    env_file: ./base.env\n");
   write(join(source, "base.env"), "FEATURE=original\n");
@@ -43,15 +43,17 @@ test("tracked updates validate the consuming settings and staged assets before p
     [definitionText('{settings:{type:"object",additionalProperties:false,properties:{active:{type:"boolean",default:true}}}}'), "settings.title"],
     [definitionText('{settings:{type:"object",additionalProperties:false,properties:{title:{type:"boolean",default:true}}}}'), "settings.title: must be boolean"],
     [definitionText('{settings:{type:"object",additionalProperties:false,properties:{title:{type:"string",default:"ok"},new_key:{type:"string",default:"can\'t"}}}}'), "setting new_key holds a quote"],
-    [definitionText('{settings:{type:"object",additionalProperties:false,properties:{title:{type:"string",default:"fallback"}}},opencode(c){if(c.settings.title==="Mine")c.serverPlugin("missing")}}'), "existing directory"],
+    [withSeeds('{settings:{type:"object",additionalProperties:false,properties:{title:{type:"string",default:"fallback"}}},setup(c){if(c.settings.title==="Mine")opencode.plugins.add(c,{directory:"missing"})}}'), "existing directory"],
+    // The callback that registered OpenCode assets before is an unknown key.
+    [definition.replace("settings:", 'opencode(){},settings:'), "office.ts: opencode: must be a mapping of"],
     // A removed setup call is a call to something that isn't there.
     [definitionText('{settings:{type:"object",additionalProperties:false,properties:{title:{type:"string"}}},setup(c){c.booleanSetting("active",{default:true,description:"Active"})}}'), "booleanSetting"],
     // The ways jobs were declared before cron was a package are unknown keys.
     [definition.replace("settings:", 'cron:{job:{script:"job.sh",schedule:"@daily"}},settings:'), "office.ts: cron: must be a mapping of"],
     [definition.replace("settings:", 'registerCron(){},settings:'), "office.ts: registerCron: must be a mapping of"],
     // A job the cron registry's parser refuses (handles match by id, so no import is needed).
-    [definition.replace(seeded, `setup(c){seeds.add(c,{destination:"seeded",source:"seed"});c.add({id:"cron.jobs",parse:v=>v},{name:"job",schedule:"every tuesday",script:"job.sh"})},`), "cron job job: schedule must be"],
-    [definition.replace(seeded, `setup(c){seeds.add(c,{destination:"seeded",source:"seed"});throw Error("interrupted replacement")},`), "interrupted replacement"],
+    [definition.replace(seeded, `setup(c){seeds.add(c,{destination:"seeded",source:"seed"});opencode.plugins.add(c,{directory:"plugin"});c.add({id:"cron.jobs",parse:v=>v},{name:"job",schedule:"every tuesday",script:"job.sh"})},`), "cron job job: schedule must be"],
+    [definition.replace(seeded, `setup(c){seeds.add(c,{destination:"seeded",source:"seed"});opencode.plugins.add(c,{directory:"plugin"});throw Error("interrupted replacement")},`), "interrupted replacement"],
   ]) {
     writePackage(join(source, "office.ts"), candidate, uses);
     commit(repo);

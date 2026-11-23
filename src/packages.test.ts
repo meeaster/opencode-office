@@ -11,7 +11,7 @@ import { fetchPackage, installPackage, readPackage, resolvePackages } from "./pa
 import { recordRequiredBuiltins } from "./test-builtin-record.ts";
 import { readLockSection } from "./versions.ts";
 import { readReceipts } from "../packages/seeds/store.ts";
-import { definitionText, markingDefinition, settingsSchema, writePackage } from "./test-package.ts";
+import { definitionText, markingDefinition, pluginDefinition, settingsSchema, writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -185,10 +185,13 @@ test("a package plugin is linked while declared, gives way to a plugins: entry o
   const link = join(office, ".opencode/plugins/demo");
   const declared = "name: t\npackages:\n  - name: demo\n";
 
-  writePackage(join(office, "packages/demo/package.yaml"), "{}\n");
+  writePackage(join(office, "packages/demo/office.ts"), pluginDefinition(), { dependencies: ["opencode"] });
   write(join(office, "packages/demo/plugin/index.ts"), "export default { id: \"demo\", async setup() {} };\n");
-  write(join(office, "office.yaml"), declared);
   git(["init", "--quiet", office]);
+  // From source, a local package resolves its @office imports through the published set.
+  write(join(office, "office.yaml"), "name: t\n");
+  await sync(loadOffice(office));
+  write(join(office, "office.yaml"), declared);
 
   expect(await sync(loadOffice(office))).toContain("linked .opencode/plugins/demo");
   expect(readlinkSync(link)).toBe("../../packages/demo/plugin");
@@ -361,6 +364,7 @@ test("an entry without repo is built-in when shipped and local otherwise; the re
   expect(packages.map((item) => [item.entry.name, item.kind, item.dir.slice(office.length + 1)])).toEqual([
     ["tooling", "built-in", ".office/packages/tooling"],
     ["mise-integration", "built-in", ".office/packages/mise-integration"],
+    ["opencode", "built-in", ".office/packages/opencode"],
     ["office", "built-in", ".office/packages/office"],
     ["references", "built-in", ".office/packages/references"],
     ["seeds", "built-in", ".office/packages/seeds"],

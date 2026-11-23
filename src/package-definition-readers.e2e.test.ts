@@ -15,7 +15,7 @@ for (const kind of ["local", "tracked"]) {
     const installed = kind === "local" ? pkg : join(dir, ".office/packages/arrival");
     const link = join(dir, ".opencode/plugins/arrival");
     // Its sync appends a line each time it runs.
-    writePackage(join(pkg, "office.ts"), definitionText(`{sync({office}){appendFileSync(join(office.dir, "arrival.md"), "ran\\n")}}`, `${marker} import {join} from "node:path";`));
+    writePackage(join(pkg, "office.ts"), definitionText(`{setup(c){opencode.plugins.add(c, {directory: "plugin"})}, sync({office}){appendFileSync(join(office.dir, "arrival.md"), "ran\\n")}}`, `${marker} import {join} from "node:path"; import {opencode} from "@office/opencode";`), { dependencies: ["opencode"] });
     write(join(pkg, "plugin/index.ts"), "// original plugin");
     let identity = "packages/arrival";
 

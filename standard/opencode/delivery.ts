@@ -8,11 +8,9 @@ import { RenameError, renameNoReplace } from "../../src/no-replace.ts";
 import { OfficeError, type Office } from "../../src/office.ts";
 import type { InstalledPackages } from "../../src/layout.ts";
 import { builtinSource, gitSelection, readRecord, sourceFile, type ResolvedPackage } from "../../src/packages.ts";
-import { collectAssets, validateAssets, type AssetPaths } from "./assets.ts";
+import { validateAssets, type AssetPaths } from "./assets.ts";
 import { type Declaration, readDeclarations, writeDeclarations } from "./declarations.ts";
-import { cloneFolder, entries, entry as entryAt, scope } from "./ownership.ts";
-
-export const pluginFolder = ".opencode/plugins";
+import { cloneFolder, entries, entry as entryAt, pluginFolder } from "./ownership.ts";
 
 /** Sync owns entries in these directories, never the targets of a redirected parent. */
 export function requirePluginDestination(office: Office) {
@@ -33,10 +31,6 @@ export function cloneTarget(name: string) {
   return `../../${cloneFolder}/${name}`;
 }
 
-export function pluginScope(office: Office) {
-  return scope(office, undefined, "plugins");
-}
-
 export function declarationBinding(item: ResolvedPackage) {
   if (item.kind !== "local" && !lstatSync(join(item.dir, sourceFile), { throwIfNoEntry: false })?.isFile()) return undefined;
   const record = item.kind === "local" ? undefined : readRecord(item.dir);
@@ -55,14 +49,20 @@ export function declarationBinding(item: ResolvedPackage) {
   return new Bun.CryptoHasher("sha256").update(JSON.stringify([source, item.entry.settings])).digest("hex");
 }
 
-export function withPluginPlan(office: Office, installed: InstalledPackages, mode: "observe" | "collect" = "observe") {
+/**
+ * Each package's OpenCode plugin and panel. `collected` is what this run's gathering registered,
+ * by package (sync and check); without it, the applied record of the last sync is observed, as
+ * readers that run no package code do. A package registering neither has none: no folder is
+ * looked for by name. `plugins` maps each package to the plugin directory to link, `panels` to its
+ * desktop bundle.
+ */
+export function withPluginPlan(office: Office, installed: InstalledPackages, collected?: ReadonlyMap<string, AssetPaths>) {
   const plugins = new Map<string, string>();
+  const panels = new Map<string, string>();
   const problems = [...installed.problems];
   const unread = new Set(installed.unread);
-  const saved = mode === "observe" ? readDeclarations(office) : undefined;
+  const saved = collected ? undefined : readDeclarations(office);
   const declarations = new Map<string, Declaration>();
-  const projected = [];
-  const destination = pluginScope(office);
 
   for (const name of unread) {
     // Unknown source: withhold both outputs, never restore a previous declaration as new authority.
@@ -74,37 +74,35 @@ export function withPluginPlan(office: Office, installed: InstalledPackages, mod
     let paths: AssetPaths;
 
     try {
-      if (!item.manifest.opencode) paths = collectAssets(office.dir, item);
+      const old = saved?.get(entry.name);
+      const fresh = collected?.get(entry.name);
+
+      if (!fresh && !old) paths = {};
       else {
         declarations.set(entry.name, { state: "unavailable" });
         const binding = declarationBinding(item);
 
         if (!binding) throw new Error("package source has changed; sync its selected revision");
 
-        if (mode === "collect") paths = collectAssets(office.dir, item);
-        else {
-          const old = saved?.get(entry.name);
+        if (fresh) paths = fresh;
+        else if (old?.state !== "declared" || old.binding !== binding) throw new Error("no current successful OpenCode registration; run office sync --packages");
+        else paths = old.paths;
 
-          if (old?.state !== "declared" || old.binding !== binding) throw new Error("no current successful OpenCode registration; run office sync --packages");
-          validateAssets(office.dir, dir, old.paths);
-          paths = old.paths;
-        }
-
+        validateAssets(office.dir, dir, paths);
         declarations.set(entry.name, { state: "declared", binding, paths });
       }
     } catch (error) {
       unread.add(entry.name);
       problems.push({ packages: [entry.name], message: `OpenCode registration: ${error instanceof Error ? error.message : "failed"}` });
-      projected.push({ ...item, plugin: false, panel: undefined });
       continue;
     }
 
-    projected.push({ ...item, plugin: !!paths.server, panel: paths.panel && join(dir, paths.panel) });
+    if (paths.panel) panels.set(entry.name, join(dir, paths.panel));
 
     if (!paths.server) continue;
     const plugin = join(item.kind === "local" ? dir : join(office.dir, ".office/packages", entry.name), paths.server);
     const at = `${pluginFolder}/${entry.name}`;
-    const existing = entryAt(destination, entry.name);
+    const existing = entryAt(office, entry.name);
     const taken = existing !== undefined && !existing.office;
 
     const problem = office.plugins.some(cloned => cloned.name === entry.name)
@@ -117,7 +115,7 @@ export function withPluginPlan(office: Office, installed: InstalledPackages, mod
     else problems.push({ packages: [entry.name], message: `${problem}, so it isn't linked; rename one of them` });
   }
 
-  return { ...installed, installed: projected, unread, plugins, declarations, problems };
+  return { ...installed, unread, plugins, panels, declarations, problems };
 }
 
 /**
@@ -125,15 +123,15 @@ export function withPluginPlan(office: Office, installed: InstalledPackages, mod
  * Office's links there now. `withPluginPlan` already left out names the owner holds.
  */
 export function pluginLinks(office: Office, plugins: Map<string, string>) {
-  const where = pluginScope(office);
-  const wanted = new Map([...plugins].map(([name, dir]) => [name, relative(where.folder, dir)]));
+  const folder = join(office.dir, pluginFolder);
+  const wanted = new Map([...plugins].map(([name, dir]) => [name, relative(folder, dir)]));
   const links = new Map<string, string>();
 
-  for (const item of entries(where)) {
+  for (const item of entries(office)) {
     if (item.office && item.target !== undefined) links.set(item.name, item.target);
   }
 
-  return { folder: where.folder, wanted, links };
+  return { folder, wanted, links };
 }
 
 /** Office's staging folder, on the office's filesystem and never scanned by OpenCode. */

@@ -50,9 +50,9 @@ function bytes(f: DefinitionFixture): Record<string, string> {
 
 /**
  * `office check`, started without blocking this process, which serves the stand-in Executor and
- * OpenCode; its cron lines. The fixture's check exits 1 for four failures unrelated to cron, always
- * the same: the stand-in container reports no office version, Executor accepts no key, and the two
- * skill folders aren't loaded by the stand-in OpenCode; the test requires exactly those. Check is
+ * OpenCode; its cron lines. The fixture's check exits 1 for two failures unrelated to cron, always
+ * the same: the stand-in container reports no office version and Executor accepts no key; the test
+ * requires exactly those. Check is
  * read-only: the unit files and the container's revision are the same after it, and every call it
  * made is a read.
  */
@@ -70,7 +70,7 @@ async function cronCheck(f: DefinitionFixture): Promise<string[]> {
   expect(bytes(f)).toEqual(before);
   expect(calls.filter(line => !readCall.test(line))).toEqual([]);
   expect(calls.some(line => line.endsWith("exec -T opencode printenv OFFICE_CRON_REVISION"))).toBe(true);
-  expect(lines.filter(line => /^FAIL (?!cron:|package cron:)/.test(line)).map(line => line.slice(0, line.indexOf(":")))).toEqual(["FAIL office versions", "FAIL Executor key", "FAIL root", "FAIL example"]);
+  expect(lines.filter(line => /^FAIL (?!cron:|package cron:)/.test(line)).map(line => line.slice(0, line.indexOf(":")))).toEqual(["FAIL office versions", "FAIL Executor key"]);
 
   return lines.filter(line => /^\S+ +cron: /.test(line));
 }
