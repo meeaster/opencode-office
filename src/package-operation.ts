@@ -2,19 +2,19 @@ import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rea
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { bindPaths } from "./bound-paths.ts";
-import { boundRevision, collectReferences } from "./collect-references.ts";
-import { currentOffice, loadOffice, type Office, OfficeError, type PackageEntry } from "./office.ts";
+import { loadOffice, type Office, OfficeError, type PackageEntry } from "./office.ts";
 import { parse } from "yaml";
 import * as v from "valibot";
 import { type LockedPackage, officeSchema, type PackageLock, parsePackageLock } from "./schema.ts";
 import { activeGeneration, beginGeneration, managedDirectory, pinActive, publishGeneration, type Candidate } from "./package-generation.ts";
 import { coupledFailures, writePackageLinks, writeSdk } from "./package-imports.ts";
-import { installedPackages } from "./layout.ts";
-import { embeddedPackage, materializePackage, problemLine, readRecord, type ResolvedPackage, resolvePackages, validateReplacement, verifiedCommit, writePackageSettings } from "./packages.ts";
+import { type GatheredPackage, type GatherProblem, gatherPackages, problemLines } from "./gather.ts";
+import { materializePackage, readRecord, type ResolvedPackage, resolvePackages, validateReplacement, verifiedCommit, writePackageSettings } from "./packages.ts";
 import { lockFile, lockSections, packageLockChanges, readLockSection } from "./versions.ts";
-import { beginReferencePublication } from "./reference-publication.ts";
-import { readSnapshot, type ReferenceSnapshot } from "./reference-snapshot.ts";
+import { writeAppliedReferences } from "./applied-references.ts";
 import { applyPackages } from "./commands/sync.ts";
+import { collectJobs } from "../standard/cron/jobs.ts";
+import { claimAssetProblems, destinationProblems } from "../standard/mise-integration/projection.ts";
 import { openCheckoutLease } from "./checkout-lease.ts";
 import { collectAssets } from "../standard/opencode/assets.ts";
 import { renameNoReplace } from "./no-replace.ts";
@@ -25,7 +25,6 @@ type Admission = {
   yaml: string;
   /** The candidate `packages:` section of office.lock, published with office.yaml (a Map, as an object here). */
   packages: Record<string, LockedPackage>;
-  embedded: [string, string][];
   validate: string[];
   rejected: string[];
   exclude: boolean;
@@ -33,7 +32,12 @@ type Admission = {
   tracked: boolean;
 };
 
-type Outcome = { published: boolean; lines: string[]; rejected?: string[]; generation?: string };
+/**
+ * Three outcomes: rejected before publishing (`published` false, the pointer where it was), published
+ * and applied, or published with a failed application (FAILED lines). `recorded` is whether the
+ * applied references file was written after the switch; without it no reference checkout is touched.
+ */
+type Outcome = { published: boolean; recorded?: boolean; lines: string[]; rejected?: string[]; generation?: string };
 
 function program() {
   return Bun.isStandaloneExecutable ? [process.execPath] : [process.execPath, "--no-install", join(import.meta.dir, "cli.ts")];
@@ -97,15 +101,13 @@ export function bindReader(dir: string, name: string) {
 
 /**
  * The commit to install a Git package at: its office.lock entry's while that entry has the
- * selected repo, path and ref (and, for a full-SHA ref, names that commit), else `published`, the
- * commit the previous reference generation bound it to.
+ * selected repo, path and ref (and, for a full-SHA ref, names that commit). Without one, a matching
+ * installed copy is kept from its source record, else the ref is resolved (`fetchPackage`).
  */
-export function boundCommit(lock: PackageLock, entry: PackageEntry, published: string | undefined): string | undefined {
+export function boundCommit(lock: PackageLock, entry: PackageEntry): string | undefined {
   const locked = entry.source && lock.get(entry.name);
 
   if (locked && locked.repo === entry.source?.repo && locked.path === entry.source.path && locked.ref === entry.source.ref && verifiedCommit(locked.ref, locked.commit)) return locked.commit;
-
-  return published;
 }
 
 /**
@@ -138,7 +140,8 @@ export function candidatePackageLock(selected: ResolvedPackage[], staged: string
 /**
  * Each Git package whose office.lock entry is missing, doesn't match office.yaml's repo, path and
  * ref, or names another commit than its installed copy records, and each entry for a package no
- * longer selected; office sync fixes each.
+ * longer selected; office sync fixes each. An ownership conflict leaves out only the packages it
+ * names, which check reports on its own; no definition is read.
  */
 export function packageLockProblems(office: Office): string[] {
   let lock: PackageLock;
@@ -149,8 +152,9 @@ export function packageLockProblems(office: Office): string[] {
     return [error instanceof Error ? error.message : String(error)];
   }
 
-  const remote = resolvePackages(office).packages.filter(({ kind, entry }) => kind === "remote" && entry.source !== undefined);
-  const selected = new Set(remote.map(({ entry }) => entry.name));
+  const remote = resolvePackages(office, undefined, true).packages.filter(({ kind, entry }) => kind === "remote" && entry.source !== undefined);
+  // A Git entry a conflict leaves out is still selected: its lock entry isn't stale.
+  const selected = new Set(office.packages.flatMap(({ name, source }) => source ? [name] : []));
   const stale = [...lock.keys()].sort().filter((name) => !selected.has(name)).map((name) => `${lockFile} locks package ${name}, which office.yaml no longer selects from a Git repository (office sync removes the entry)`);
 
   return [...stale, ...remote.flatMap(({ entry, dir }) => {
@@ -176,15 +180,31 @@ export function packageLockProblems(office: Office): string[] {
   })];
 }
 
-async function prepareSources(office: Office, selection: ReturnType<typeof resolvePackages>, folder: string, previous: string, snapshot: ReferenceSnapshot | undefined, lock: PackageLock, commits: ReadonlyMap<string, string>, lines: string[]) {
+const applicationLock = ".office/resolved/checkout-leases/.package-application.lock";
+
+/** Opens and takes the lease that preparing and applying packages hold; failing either names the package application lock. */
+function applicationLease(dir: string) {
+  let lease: ReturnType<typeof openCheckoutLease> | undefined;
+
+  try {
+    lease = openCheckoutLease(dir, ".package-application");
+    lease.acquire(`another office sync or package update holds ${applicationLock}; retry once it finishes`);
+
+    return lease;
+  } catch (error) {
+    lease?.[Symbol.dispose]();
+
+    throw new OfficeError(`cannot take the package application lock: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function prepareSources(office: Office, selection: ReturnType<typeof resolvePackages>, folder: string, previous: string, lock: PackageLock, commits: ReadonlyMap<string, string>, lines: string[]) {
   const packages = join(folder, "packages");
   mkdirSync(packages);
-  const embedded: [string, string][] = [];
   const validate: string[] = [];
   const rejected: string[] = [];
 
-  using deliveries = openCheckoutLease(office.dir, ".package-application");
-  deliveries.acquire();
+  using deliveries = applicationLease(office.dir);
 
   for (const item of selection.packages) {
     if (item.kind === "local") continue;
@@ -193,8 +213,8 @@ async function prepareSources(office: Office, selection: ReturnType<typeof resol
 
     if (lstatSync(old, { throwIfNoEntry: false })?.isSymbolicLink()) throw new OfficeError(`cannot materialize redirected package ${old}`);
 
-    const published = boundRevision(snapshot, item.entry);
-    const bound = commits.get(item.entry.name) ?? boundCommit(lock, item.entry, published);
+    const locked = boundCommit(lock, item.entry);
+    const bound = commits.get(item.entry.name) ?? locked;
     let copiedPrevious = false;
 
     try {
@@ -205,7 +225,6 @@ async function prepareSources(office: Office, selection: ReturnType<typeof resol
 
       const materialized = await materializePackage(office, item, packages, bound);
 
-      if (materialized.source) embedded.push([item.entry.name, materialized.source]);
       lines.push(...materialized.changes.map(line => line.replaceAll(relative(office.dir, packages), ".office/packages")));
 
       if (materialized.changes.some(line => line.startsWith("FAILED"))) {
@@ -213,9 +232,9 @@ async function prepareSources(office: Office, selection: ReturnType<typeof resol
       } else if (materialized.changes.length) {
         validate.push(item.entry.name);
 
-        if (published && published === bound && !existsSync(old)) {
-          // Exact repair of a lost published Git source, independently of whether new
-          // registrations are admitted. Never restore a floating tag or replace an entry.
+        if (locked && locked === bound && !existsSync(old)) {
+          // Exact repair of a lost copy at its locked commit, independently of whether new
+          // registrations are admitted. Never at an update's override or a floating tag.
           const record = readRecord(dir);
 
           if (record && "repo" in record && record.commit === bound) {
@@ -227,8 +246,6 @@ async function prepareSources(office: Office, selection: ReturnType<typeof resol
       }
     } catch (error) {
       rejected.push(item.entry.name);
-
-      if (item.kind === "built-in") embedded.push([item.entry.name, (await embeddedPackage(item.entry.name)).source]);
       lines.push(`FAILED package ${item.entry.name}: ${String(error)}`);
 
       if (!copiedPrevious) rmSync(dir, { force: true, recursive: true });
@@ -254,7 +271,7 @@ async function prepareSources(office: Office, selection: ReturnType<typeof resol
     }
   }
 
-  return { embedded, validate, rejected };
+  return { validate, rejected };
 }
 
 /**
@@ -280,14 +297,11 @@ export async function publishPackages(office: Office, exclude: boolean, update?:
     const desired = loadOffice(office.dir, v.parse(officeSchema, parse(yaml, { stringKeys: true })));
 
     if (!Bun.deepEquals(desired, office)) throw new OfficeError("office.yaml changed while resolving packages; retry");
-    const snapshot = readSnapshot(office.dir);
-
-    if (!snapshot.ok) throw new OfficeError(`${snapshot.errors.join("; ")}; restore a readable generation, or verify installed Git pins before moving it aside and running office sync --packages`);
     const reserved = lockSections(transaction.lock).packages;
 
     if (!reserved.ok) throw reserved.error;
     const locked = reserved.value;
-    const { embedded, validate, rejected } = await prepareSources(office, selection, folder, previous, snapshot.value, locked, update?.commits ?? new Map(), lines);
+    const { validate, rejected } = await prepareSources(office, selection, folder, previous, locked, update?.commits ?? new Map(), lines);
 
     if (update && rejected.length) return { published: false, lines, rejected: coupled(rejected) };
     const packages = candidatePackageLock(selection.packages, join(folder, "packages"), rejected, locked);
@@ -295,7 +309,7 @@ export async function publishPackages(office: Office, exclude: boolean, update?:
     writeSdk(folder);
     writeFileSync(join(folder, "unavailable.json"), JSON.stringify(rejected));
     writeFileSync(join(folder, "selection.json"), JSON.stringify(office.packages.map(({ name, settings, cron, source }) => ({ name, settings, cron, ...source }))));
-    const request: Admission = { office, transaction, yaml, packages: Object.fromEntries(packages), embedded, validate, rejected, exclude, tracked: !!update, apply: update?.apply ?? true };
+    const request: Admission = { office, transaction, yaml, packages: Object.fromEntries(packages), validate, rejected, exclude, tracked: !!update, apply: update?.apply ?? true };
     writeFileSync(join(temporary, "input"), JSON.stringify(request));
     const code = await run(["--package-admission", temporary], reservation.fd);
 
@@ -317,6 +331,31 @@ export async function publishPackages(office: Office, exclude: boolean, update?:
   }
 }
 
+/** The problems admission finds beyond the gathering's: executable cron registrations, the files claims name, destinations across packages and every command name. */
+function admissionProblems(office: Office, packages: GatheredPackage[], names: { owners: string[]; message: string }[]): GatherProblem[] {
+  const problems: GatherProblem[] = [];
+
+  for (const item of packages) {
+    const owner = [item.entry.name];
+
+    if (item.manifest.registerCron) {
+      const cron = collectJobs({ ...office, cron: {} }, { installed: [item], problems: [] });
+
+      if (!cron.ok) problems.push(...cron.errors.map(message => ({ packages: owner, message })));
+    }
+
+    problems.push(...claimAssetProblems(item).map(message => ({ packages: owner, message })));
+  }
+
+  const owners = new Set<string>();
+  const destinations = destinationProblems(office, packages, (...names) => { for (const name of names) owners.add(name); });
+
+  if (destinations.length) problems.push(...destinations.map(message => ({ packages: [...owners], named: true as const, message })));
+  problems.push(...names.map(problem => ({ packages: problem.owners, named: true as const, message: problem.message })));
+
+  return problems;
+}
+
 export async function evaluateAdmission(temporary: string) {
   const input: Admission = JSON.parse(readFileSync(join(temporary, "input"), "utf8"));
   const { transaction, office, yaml } = input;
@@ -325,85 +364,69 @@ export async function evaluateAdmission(temporary: string) {
   if (!packages.ok) throw new OfficeError(`invalid candidate ${lockFile}: ${packages.errors.join("; ")}`);
   const folder = managedDirectory(office.dir, transaction.name);
   let published = false;
+  let recorded = false;
   let rejectedOwners: string[] | undefined;
   const lines: string[] = [];
 
   try {
-    const owner = currentOffice({ office: office.dir });
-    using application = openCheckoutLease(office.dir, ".package-application");
-
-    const publication = beginReferencePublication(owner, snapshot => {
-      // OpenCode registrations may depend on defaults that setup just supplied.
-      for (const item of installed.installed) {
-        if (input.validate.includes(item.entry.name) && item.manifest.opencode) collectAssets(office.dir, item);
-      }
-
-      const brokenReplacement = snapshot.contributors.find(group => group.stale && input.validate.includes(group.name) && existsSync(join(office.dir, ".office/packages", group.name)));
-
-      if (brokenReplacement || (input.tracked && lines.some(line => line.startsWith("FAILED")))) {
-        if (input.tracked) rejectedOwners = snapshot.contributors.flatMap(group => group.stale ? [group.name] : []);
-        throw new OfficeError(`candidate failed collection${brokenReplacement ? `: ${brokenReplacement.name}` : ""}`);
-      }
-
-      application.acquire();
-
-      for (const item of installed.installed) {
-        if (item.kind !== "local") lines.push(...writePackageSettings(office, item).map(line => line.replace(relative(office.dir, folder) + "/packages", ".office/packages")));
-      }
-
-      writeFileSync(join(folder, "references.json"), JSON.stringify(snapshot, null, 2) + "\n");
-      publishGeneration(transaction, yaml, packages.value);
-      published = true;
-    });
-
-    if (!publication.ok) throw new OfficeError(publication.errors.join("; "));
     bindReader(office.dir, transaction.name);
     const selection = resolvePackages(office);
-    const rejected = new Set(input.rejected);
-    // Every copy, package.json, declared dependency and link is checked before the first import;
-    // this sync's own rejections are already FAILED lines.
-    const installed = installedPackages(office, rejected, false);
+    // This sync's fetch failures are already FAILED lines: they stay selected and unread.
+    const gathered = await gatherPackages(office, { skip: new Set(input.rejected), machine: true });
 
-    if (installed.blocked) {
-      lines.push(...installed.blocked.map(problem => `FAILED ${problemLine(problem)}`));
+    const refuse = (problems: GatherProblem[], reason: string) => {
+      lines.push(...problemLines(problems).map(line => `FAILED ${line}`));
 
       // The packages the problems belong to; the caller's coupledFailures widens them to their dependents.
-      if (input.tracked) rejectedOwners = [...new Set(installed.blocked.flatMap(problem => problem.packages))];
-      throw new OfficeError("no package was loaded and no package set was published; fix the packages above and sync again");
-    }
+      if (input.tracked) rejectedOwners = [...new Set(problems.flatMap(problem => problem.packages))];
 
-    // Every package's settings are checked before any setup runs, a candidate's or a collector's.
-    if (installed.invalidSettings.length) {
-      lines.push(...installed.invalidSettings.map(problem => `FAILED ${problemLine(problem)}`));
+      return new OfficeError(reason);
+    };
 
-      if (input.tracked) rejectedOwners = [...new Set(installed.invalidSettings.flatMap(problem => problem.packages))];
-      throw new OfficeError("no package was set up and no package set was published; fix the settings above and sync again");
-    }
+    // Every copy, package.json, declared dependency and link is checked before the first import.
+    if (gathered.blocked) throw refuse(gathered.blocked, "no package was loaded and no package set was published; fix the packages above and sync again");
+
+    // Every package's settings are checked before any setup runs.
+    if (gathered.inventory.invalidSettings.length) throw refuse(gathered.inventory.invalidSettings, "no package was set up and no package set was published; fix the settings above and sync again");
 
     for (const item of selection.packages) {
       if (!input.validate.includes(item.entry.name)) continue;
 
       try {
-        await validateReplacement(office, item, false);
+        validateReplacement(office, item);
       } catch (error) {
-        if (input.tracked) rejectedOwners = [item.entry.name];
-        throw error;
+        throw refuse([{ packages: [item.entry.name], message: error instanceof Error ? error.message : String(error) }], "no package set was published");
       }
     }
 
-    lines.push(...installed.problems.map(p => `FAILED package ${p.packages.join(", ")}: ${p.message}`));
-    const conflicts = new Set<string>();
+    // OpenCode registrations may depend on defaults that setup just supplied.
+    for (const item of gathered.packages) {
+      if (input.validate.includes(item.entry.name) && item.manifest.opencode) collectAssets(office.dir, item);
+    }
 
-    const accepted = await collectReferences(office, selection.packages, installed, lines, publication.value, rejected, new Map(input.embedded), (...owners) => {
-      for (const owner of owners) conflicts.add(owner);
-    });
+    const problems = [...gathered.problems, ...admissionProblems(office, gathered.packages, gathered.names)];
 
-    // Only retry attributable admission failures. Never turn a lost writer ticket,
-    // failed pointer switch, or failed application into a different publication.
-    if (!accepted && input.tracked) rejectedOwners = [...conflicts];
+    if (problems.length) throw refuse(problems, "no package set was published; fix or deselect the packages above and sync again");
 
-    if (accepted && input.apply) {
-      for (const item of installed.installed) {
+    // Held through the switch, the applied references and the application, apply: false included.
+    using application = applicationLease(office.dir);
+
+    for (const item of gathered.packages) {
+      if (item.kind !== "local") lines.push(...writePackageSettings(office, item).map(line => line.replace(relative(office.dir, folder) + "/packages", ".office/packages")));
+    }
+
+    publishGeneration(transaction, yaml, packages.value);
+    published = true;
+
+    try {
+      writeAppliedReferences(office.dir, gathered.references);
+      recorded = true;
+    } catch (error) {
+      lines.push(`FAILED the references were not recorded (${error instanceof Error ? error.message : String(error)}), so no reference checkout is cloned or updated; run office sync again`);
+    }
+
+    if (input.apply) {
+      for (const item of [...gathered.packages, ...gathered.inventory.installed]) {
         if (item.kind === "local") continue;
         const stable = join(office.dir, ".office/packages", item.entry.name);
 
@@ -411,15 +434,15 @@ export async function evaluateAdmission(temporary: string) {
         item.dir = stable;
       }
 
-      const application: string[] = [];
-      await applyPackages(office, installed, publication.value.previous, application, input.exclude, join(folder, "withdrawals"));
-      lines.push(...application);
+      const applied: string[] = [];
+      await applyPackages(office, gathered, applied, input.exclude, join(folder, "withdrawals"));
+      lines.push(...applied);
 
-      if (application.some(line => line.startsWith("FAILED"))) lines.push(`generation ${transaction.name} is active; retry the incomplete application with office sync --packages`);
+      if (applied.some(line => line.startsWith("FAILED"))) lines.push(`generation ${transaction.name} is active; retry the incomplete application with office sync --packages`);
     }
   } catch (error) {
     lines.push(`FAILED ${published ? `generation ${transaction.name} is active; retry application with office sync --packages: ` : ""}${error instanceof Error ? error.message : String(error)}`);
   }
 
-  writeFileSync(join(temporary, "output"), JSON.stringify({ published, lines, rejected: rejectedOwners, generation: published ? transaction.name : undefined } satisfies Outcome));
+  writeFileSync(join(temporary, "output"), JSON.stringify({ published, recorded, lines, rejected: rejectedOwners, generation: published ? transaction.name : undefined } satisfies Outcome));
 }

@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 
 import { sync } from "./commands/sync.ts";
 import { envFilePath } from "./host-env.ts";
-import { installedPackages } from "./layout.ts";
+import { gatherPackages } from "./gather.ts";
 import { grantConsent } from "./machine.ts";
 import { loadOffice } from "./office.ts";
 import { machinePlatform, systemApplies, systemPlatformVariable } from "./package-system.ts";
@@ -98,7 +98,7 @@ test("native directories allow children; absent and conditional files own paths 
     c.add(recipes,{name:"demo",setting:"system",description:"Example",platforms:["ubuntu-24.04-amd64-wsl"],bootstrap:"system/bootstrap.toml",ready:[${JSON.stringify(ready())}],env:{}})
   }}`, `import {recipes} from "@office/mise-integration/claims";`), { dependencies: ["mise-integration"] });
   expect((await run()).join("\n")).not.toContain("FAILED");
-  expect(notes().notes).toContain("Example is set up on this machine");
+  expect((await notes()).notes).toContain("Example is set up on this machine");
   const original = fragment();
   const target = join(dir, "home/.config/demo/old");
   write(file, `${readFileSync(file, "utf8")}[bootstrap.directories.${JSON.stringify(target)}]\nmode="0755"\n`);
@@ -114,9 +114,9 @@ test("native directories allow children; absent and conditional files own paths 
 /** demo's fragment, or "" when it has none. */
 const fragment = () => (existsSync(join(office, ".office/mise/demo.toml")) ? readFileSync(join(office, ".office/mise/demo.toml"), "utf8") : "");
 
-function notes() {
+async function notes() {
   const loaded = loadOffice(office);
-  const item = installedPackages(loaded).installed.find((candidate) => candidate.entry.name === "demo");
+  const item = (await gatherPackages(loaded, { machine: true })).packages.find((candidate) => candidate.entry.name === "demo");
 
   if (item === undefined) throw new Error("demo isn't installed");
 
@@ -150,7 +150,7 @@ test("an office that opts in on a supported host gets the setup in the fragment 
   expect(fragment()).toEndWith(`\n\n${systemPart}`);
   expect(fragment()).toContain('[tasks."demo:install"]');
   expect(readFileSync(envFilePath(), "utf8")).toContain("export DEMO_BROWSER='/usr/bin/demo-browser'\n");
-  expect(notes()).toEqual({
+  expect(await notes()).toEqual({
     ok: false,
     notes: [
       "tools jq in machine.packages.toml",
@@ -162,7 +162,7 @@ test("an office that opts in on a supported host gets the setup in the fragment 
 
   write(ready(), "");
 
-  expect(notes().notes).toContain("Demo Browser from the distribution is set up on this machine");
+  expect((await notes()).notes).toContain("Demo Browser from the distribution is set up on this machine");
   // A second sync changes nothing: the setup is written once, and applying it is the user's.
   expect((await sync(loadOffice(office))).filter((line) => line.includes("system setup"))).toEqual([]);
 });
@@ -184,7 +184,7 @@ test("the system block is independent of the host block's setting, and off by de
   expect(changes).toContain("removed package demo's system setup, Demo Browser from the distribution, from .office/mise/demo.toml: its system setting is off; what it installed stays on the machine");
   expect(fragment()).not.toContain("bootstrap");
   expect(fragment()).toContain('[tasks."demo:install"]');
-  expect(notes().notes.some((note) => note.includes("Demo Browser"))).toBe(false);
+  expect((await notes()).notes.some((note) => note.includes("Demo Browser"))).toBe(false);
 });
 
 test("it applies only on the platforms the block names, in host mode, and a platform without -wsl is no WSL machine", async () => {
@@ -204,7 +204,7 @@ test("it applies only on the platforms the block names, in host mode, and a plat
     process.env[systemPlatformVariable] = platform;
 
     // Opting in where it can't apply is noted, without failing check.
-    expect(notes()).toEqual({ ok: true, notes: ["tools jq in machine.packages.toml", `Demo Browser from the distribution isn't set up: ${why}`] });
+    expect(await notes()).toEqual({ ok: true, notes: ["tools jq in machine.packages.toml", `Demo Browser from the distribution isn't set up: ${why}`] });
   }
 
   // A block's platform without -wsl covers the machine under WSL too.
@@ -321,10 +321,11 @@ test("a system setup applies only when office.yaml sets its setting to true, and
   const opted = read("demo");
 
   if (!opted.result.ok) throw new Error(opted.result.errors.join("\n"));
-  expect(systemApplies(opted.loaded, opted.result.value)).toBe(true);
+  const own = { ...opted.result.value, system: opted.result.value.manifest.system };
+  expect(systemApplies(opted.loaded, own)).toBe(true);
   // Whatever the resolved settings say, only office.yaml's own true opts in.
-  opted.result.value.entry.settings = { system: "true" };
-  expect(systemApplies(opted.loaded, opted.result.value)).toBe(false);
+  own.entry.settings = { system: "true" };
+  expect(systemApplies(opted.loaded, own)).toBe(false);
 
   // A contributed recipe: the gate is known once its setup's rows are projected.
   writePackage(join(office, "packages/giver/package.yaml"), "settings: {type: object, additionalProperties: false, properties: {system: {type: boolean, default: false}}, allOf: [{properties: {system: {default: true}}}]}\n");

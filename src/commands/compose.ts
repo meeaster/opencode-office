@@ -23,6 +23,7 @@ import { hostTool } from "../host-tools.ts";
 import { notify } from "../notify.ts";
 import { CommandFailed, progress, say, streamChecked, warn } from "../report/index.ts";
 import { displayLines } from "../report/reporter.ts";
+import type { InstalledPackages } from "../layout.ts";
 import { type Office, OfficeError, readEnvFile } from "../office.ts";
 import { hostLayout, hostWrappers } from "../host-env.ts";
 import { markServerStopped, planServer, serverIncumbent, startServer } from "../host-server.ts";
@@ -469,10 +470,13 @@ function choosePins(office: Office, upgrade: boolean) {
   return { pins, moved: changes(office, applied.pins, pins) };
 }
 
-/** Starts the office's services; returns a one-line summary of what runs. */
-export async function up(office: Office, { upgrade = false, refresh = false } = {}): Promise<string> {
+/**
+ * Starts the office's services; returns a one-line summary of what runs. `inventory` is the
+ * packages a finishing reader already read; standalone, `up` reads their definitions itself.
+ */
+export async function up(office: Office, { upgrade = false, refresh = false, inventory }: { upgrade?: boolean; refresh?: boolean; inventory?: InstalledPackages } = {}): Promise<string> {
   const managed = office.opencode.managed !== undefined;
-  const jobs = requireJobs(office);
+  const jobs = requireJobs(office, inventory);
   const timers = office.opencode.mode === "host" ? cronTimers(office, jobs) : [];
 
   if (managed) requireServerConsent(office);
@@ -496,7 +500,7 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
 
   guardDowngrade(office, pins);
 
-  const services = await preparePackageServices(office, upgrade);
+  const services = await preparePackageServices(office, upgrade, inventory);
 
   if (upgrade) {
     const what = [...moved.map((move) => `${move.tool} ${move.from} → ${move.to}`), ...services.upgraded.map((item) => `package ${item.name}'s ${packageComposeFile}`)];
@@ -547,7 +551,7 @@ export async function up(office: Office, { upgrade = false, refresh = false } = 
     writeExecutorFiles(office);
   }
 
-  reconcileHostServices(office, upgrade ? "upgrade" : "up");
+  reconcileHostServices(office, upgrade ? "upgrade" : "up", inventory);
   writeApplied(office, pins, office.opencode.mode === "container" ? refreshed : applied?.refreshed);
 
   // A new Executor serves a new apps framework; every app must match it.

@@ -1,7 +1,7 @@
 // What a package gets from @office/sdk in the compiled office: the executable's own SDK.
 import { expect, test } from "bun:test";
 import { existsSync, lstatSync, readFileSync, readlinkSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { definitionFixture } from "./package-definition.fixture.ts";
 import { definitionText, settingsSchema, writePackage } from "./test-package.ts";
 
@@ -120,32 +120,4 @@ test("a package called sdk fails sync, and the set's @office/sdk stays the SDK",
   expect(readlinkSync(current)).toBe(before.generation);
   expect(lstatSync(sdk).isDirectory()).toBe(true);
   expect(readFileSync(join(sdk, "index.ts"), "utf8")).toBe(before.index);
-});
-
-// The plugin's guidance reads the references registry's handle, made with Registry.define: the
-// bundle carries its own SDK, so a process that registers nothing loads it.
-test("the office plugin's bundle loads in a fresh process and gives the guidance", () => {
-  const { dir, env, cli } = fixture("sdk-plugin");
-  const config = join(dir, "office.yaml");
-  const bundle = join(dir, ".opencode/plugins/office/index.js");
-  const harness = join(dir, "..", "sdk-plugin-harness.mjs");
-
-  write(config, readFileSync(config, "utf8").replace("references: []", "references:\n  - { name: docs, url: https://example.com/docs.git, description: Fixture docs }"));
-  cli(0, "sync", "--packages");
-  expect(readFileSync(bundle, "utf8")).not.toContain("@office/sdk");
-  write(harness, `const plugin = (await import(${JSON.stringify(bundle)})).default;
-const hooks = []; const registration = { dispose: async () => {} };
-const close = await plugin.setup({
-  location: { directory: ${JSON.stringify(dir)} },
-  session: { async hook(_, handler) { hooks.push(handler); return registration; }, instructions: { entry: { async put(entry) { console.log(entry.value); } } }, compact: async () => ({}) },
-  skill: { transform: async () => registration, list: async () => ({ data: [] }), reload: async () => {} },
-  mcp: { transform: async () => registration }, tool: { transform: async () => registration },
-});
-for (const hook of hooks) await hook({ sessionID: "fixture" });
-close?.();
-process.exit(0);
-`);
-  const run = Bun.spawnSync([process.execPath, harness], { cwd: dirname(harness), env });
-  expect(run.exitCode, run.stderr.toString()).toBe(0);
-  expect(run.stdout.toString()).toContain("`references/docs/`: Fixture docs");
 });

@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { argument, quoted, requireLocalUnit, unitDir } from "./systemd.ts";
 import { machineDir, miseShims } from "./host-env.ts";
 import { userSystemd } from "./host-server.ts";
-import { installedPackages } from "./layout.ts";
+import { installedPackages, type InstalledPackages } from "./layout.ts";
 import { machineRecordPath } from "./machine.ts";
 import { type Office, OfficeError } from "./office.ts";
 import { hostApplies } from "./package-tools.ts";
@@ -75,8 +75,9 @@ function installed(office: Office) {
   return owned;
 }
 
-export function reconcileHostServices(office: Office, action: "up" | "upgrade" | "down") {
-  const packages = action === "down" ? undefined : installedPackages(office);
+/** `inventory` is the caller's packages, read here when it has none; `down` reads none. */
+export function reconcileHostServices(office: Office, action: "up" | "upgrade" | "down", inventory?: InstalledPackages) {
+  const packages = action === "down" ? undefined : inventory ?? installedPackages(office);
 
   if (packages?.problems.length) throw new OfficeError(packages.problems.map(problem => problem.message).join("\n"));
   const wanted = packages === undefined ? new Map<string, string>() : units(office, packages);
@@ -113,9 +114,9 @@ export function reconcileHostServices(office: Office, action: "up" | "upgrade" |
   }
 }
 
-export function hostServiceStatus(office: Office, report: (ok: boolean, name: string, detail: string) => void) {
+export function hostServiceStatus(office: Office, report: (ok: boolean, name: string, detail: string) => void, inventory: InstalledPackages = installedPackages(office)) {
   const owned = installed(office);
-  const wanted = units(office, installedPackages(office));
+  const wanted = units(office, inventory);
 
   for (const [name, body] of wanted) {
     const previous = owned.get(name);

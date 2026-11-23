@@ -6,17 +6,15 @@ import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { type Office, type Repository } from "./office.ts";
-import { builtinSource, definitionGate, gitSelection, readRecord, type InstalledPackage, type PackageProblem, readPackage, requiredPackages, resolvePackages } from "./packages.ts";
-import { readSnapshot } from "./reference-snapshot.ts";
+import { definitionGate, type InstalledPackage, type PackageProblem, readPackage, requiredPackages, resolvePackages } from "./packages.ts";
 import type { PackageManifest } from "./schema.ts";
-import { machineCollection, project } from "../standard/mise-integration/projection.ts";
 import { pluginClones } from "../standard/opencode/delivery.ts";
 import { entries, scope, type Scope } from "../standard/opencode/ownership.ts";
 
-export type Clone = { name: string; url: string; ref?: string; kind: string; dir: string; stale?: boolean };
+export type Clone = { name: string; url: string; ref?: string; kind: string; dir: string };
 
 /** Every clone office.yaml declares, with the folder it belongs in. */
-export function clones(office: Office, references: readonly (Repository & { stale?: boolean })[]): Clone[] {
+export function clones(office: Office, references: readonly Repository[]): Clone[] {
   return [
     ...references.map((reference) => ({ ...reference, kind: "reference", dir: join(office.dir, "references", reference.name) })),
     ...office.desks.flatMap((desk) =>
@@ -37,48 +35,36 @@ export function library(office: Office): string[] {
     .map((entry) => entry.name);
 }
 
-/** Packages installed with valid settings. Filesystem conflicts in plugin delivery are not
- * package-load failures and must not disable independent consumers such as cron. The whole
- * selection passes `definitionGate` first (the `rejected` packages, this sync's own failures, are
- * skipped); with any problem, no definition is imported and `blocked` holds the problems. */
-export function installedPackages(office: Office, rejected: ReadonlySet<string> = new Set(), publishedMachine = true): InstalledPackages {
+/** Packages installed with valid settings, read from their definitions alone: no setup runs, so
+ * nothing they register is known here (src/gather.ts gathers that). The whole selection passes
+ * `definitionGate` first (the `skip` packages, the ones sync failed to fetch, are left out); with
+ * any problem, no definition is imported and `blocked` holds the problems. `live` (the gathering)
+ * resolves the rest of the selection past an ownership problem, and that problem blocks it too:
+ * another package could import the conflicting one's copy. */
+export function installedPackages(office: Office, skip: ReadonlySet<string> = new Set(), live = false): InstalledPackages {
   const installed: InstalledPackage[] = [];
-  const resolved = resolvePackages(office);
+  const resolved = resolvePackages(office, undefined, live);
   const problems = [...resolved.problems];
   const selected = new Set([...requiredPackages, ...office.packages.map((entry) => entry.name)]);
   const unread = new Set(selected);
-  const blocked = definitionGate(office, resolved.packages, rejected);
-
+  const gate = definitionGate(office, resolved.packages, skip);
   // resolvePackages already names a package called sdk.
-  if (blocked.length) return { selected, installed, problems: [...problems, ...blocked.filter(problem => !problems.some(known => known.message === problem.message))], unread, blocked, invalidSettings: [], definitions: new Map() };
+  const unknown = gate.filter(problem => !problems.some(known => known.message === problem.message));
+  const blocked = live ? [...problems, ...unknown] : gate;
 
-  const snapshot = publishedMachine ? readSnapshot(office.dir) : undefined;
+  if (blocked.length) return { selected, installed, problems: [...problems, ...unknown], unread, blocked, invalidSettings: [], definitions: new Map() };
+
   const invalidSettings: PackageProblem[] = [];
   const definitions = new Map<string, PackageManifest>();
 
   for (const item of resolved.packages) {
-    if (rejected.has(item.entry.name)) continue;
+    if (skip.has(item.entry.name)) continue;
     const read = readPackage(office, item);
     const manifest = read.ok ? read.value.manifest : read.manifest;
 
     if (manifest) definitions.set(item.entry.name, manifest);
 
     if (read.ok) {
-      try {
-        if (snapshot && !snapshot.ok) throw new Error(snapshot.errors.join("; "));
-        const group = snapshot?.value?.contributors.find(owner => owner.name === item.entry.name);
-
-        if (group?.entries.some(row => machineCollection(row.id))) {
-          const record = item.kind === "local" ? undefined : readRecord(item.dir);
-          const source = item.kind === "local" ? "local" : item.entry.source ? gitSelection(item.entry.source) : record && builtinSource(record.files);
-
-          if (source !== group.source || (record && "repo" in record && record.commit !== group.commit)) throw new Error(`machine claims of ${item.entry.name} belong to a different source; sync to collect them`);
-          project(read.value, group.entries);
-        }
-      } catch (error) {
-        read.value.machineProblem = String(error);
-      }
-
       installed.push(read.value);
       unread.delete(item.entry.name);
     } else {

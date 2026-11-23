@@ -16,7 +16,10 @@ import { join, relative } from "node:path";
 import { packageDeliveryDir } from "../../src/bound-paths.ts";
 import type { Office, PackageEntry } from "../../src/office.ts";
 import type { InstalledPackage } from "../../src/packages.ts";
-import type { Parsed, SettingValue } from "../../src/schema.ts";
+import type { Parsed, SettingValue, SystemBlock } from "../../src/schema.ts";
+
+/** A package with its effective system block: its own, or a recipe it contributed in this run (src/gather.ts). */
+export type WithSystem = InstalledPackage & { readonly system: SystemBlock | undefined };
 
 /** Overrides the machine's platform, for tests and scratch offices; empty for a machine no block supports. */
 export const systemPlatformVariable = "OFFICE_SYSTEM_PLATFORM";
@@ -84,8 +87,8 @@ export function gateDefaultProblem(entry: Pick<PackageEntry, "name" | "settings"
   return `packages.${entry.name}.settings.${setting}: resolves to true though office.yaml doesn't set it; the setting of a system setup must default to off, so an office opts in`;
 }
 
-export function systemState(office: Office, item: InstalledPackage): SystemState | undefined {
-  const system = item.manifest.system;
+export function systemState(office: Office, item: WithSystem): SystemState | undefined {
+  const system = item.system;
 
   if (system === undefined) return undefined;
 
@@ -105,7 +108,7 @@ export function systemState(office: Office, item: InstalledPackage): SystemState
   return { applies: true };
 }
 
-export function systemApplies(office: Office, item: InstalledPackage): boolean {
+export function systemApplies(office: Office, item: WithSystem): boolean {
   return systemState(office, item)?.applies === true;
 }
 
@@ -147,8 +150,8 @@ function bootstrapText(item: InstalledPackage, file: string): Parsed<string> {
  * runs its prepare script, found from the fragment's own path as the host install's hook is, then
  * its bootstrap file's tables.
  */
-export function systemSection(office: Office, item: InstalledPackage): Parsed<string | undefined> {
-  const system = item.manifest.system;
+export function systemSection(office: Office, item: WithSystem): Parsed<string | undefined> {
+  const system = item.system;
 
   if (system === undefined || !systemApplies(office, item)) return { ok: true, value: undefined };
 
@@ -185,8 +188,8 @@ export function systemSection(office: Office, item: InstalledPackage): Parsed<st
 }
 
 /** The variables the block adds to the office's environment file while it applies. */
-export function systemVariables(office: Office, item: InstalledPackage): [string, string][] {
-  const system = item.manifest.system;
+export function systemVariables(office: Office, item: WithSystem): [string, string][] {
+  const system = item.system;
 
   return system === undefined || !systemApplies(office, item) ? [] : Object.entries(system.env);
 }
@@ -194,8 +197,8 @@ export function systemVariables(office: Office, item: InstalledPackage): [string
 /** What `office check` says of a package's system block, and whether it is set up where it applies. */
 export type SystemReport = { ok: boolean; notes: string[] };
 
-export function systemNotes(office: Office, item: InstalledPackage): SystemReport {
-  const system = item.manifest.system;
+export function systemNotes(office: Office, item: WithSystem): SystemReport {
+  const system = item.system;
   const state = systemState(office, item);
 
   if (system === undefined || state === undefined) return { ok: true, notes: [] };

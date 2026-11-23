@@ -21,6 +21,7 @@ import { hostToolsRoot } from "./host-tools.ts";
 import type { Office } from "./office.ts";
 import { systemVariables } from "./package-system.ts";
 import { hostApplies } from "./package-tools.ts";
+import type { GatheredPackage } from "./gather.ts";
 import type { InstalledPackage } from "./packages.ts";
 import { managedAgentEnvironment } from "./schema.ts";
 import { type Environment, releaseAgeVariables, type SfwLayout, sfwLayout, shellQuote } from "./sfw.ts";
@@ -115,7 +116,7 @@ function folder(item: InstalledPackage, entry: string): string {
 }
 
 /** A package's host block's folders and variables where it applies, then its system block's variables where that applies. */
-function packageEnvironment(office: Office, item: InstalledPackage): PackageEnvironment {
+function packageEnvironment(office: Office, item: GatheredPackage): PackageEnvironment {
   const host = item.manifest.host;
   const system = systemVariables(office, item);
 
@@ -132,7 +133,7 @@ export type HostEnvironment = { environment: Environment; problems: string[]; co
  * then the folders packages declare; the release ages, then the variables packages declare. A
  * variable two packages set is left out, named in `problems`.
  */
-export function hostEnvironment(office: Office, installed: InstalledPackage[], retained: PackageEnvironment[] = []): HostEnvironment {
+export function hostEnvironment(office: Office, installed: GatheredPackage[], retained: PackageEnvironment[] = []): HostEnvironment {
   const current = new Map(installed.map(item => [item.entry.name, packageEnvironment(office, item)]));
   const prior = new Map(retained.map(item => [item.name, item]));
   const declared = [...new Set(["office", ...office.packages.map(item => item.name)])].flatMap(name => current.get(name) ?? prior.get(name) ?? []);

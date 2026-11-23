@@ -1,4 +1,5 @@
 import type { Office } from "../../src/office.ts";
+import type { GatheredPackage } from "../../src/gather.ts";
 import type { InstalledPackage } from "../../src/packages.ts";
 
 /** The package whose tools are the ones the office CLI itself runs: SOPS, age, gh and pre-commit (src/host-tools.ts). */
@@ -17,10 +18,10 @@ export function hostApplies(office: Office, item: InstalledPackage): boolean {
 }
 
 /** The tools a package declares in this office, at the versions it was tested with. */
-export function wantedTools(office: Office, item: InstalledPackage): Record<string, string> {
+export function wantedTools(office: Office, item: GatheredPackage): Record<string, string> {
   const tools = hostApplies(office, item) ? { ...item.manifest.tools, ...item.manifest.host?.tools } : { ...item.manifest.tools };
 
-  for (const { name, minimumVersion, hostOnly } of item.machine?.tools ?? []) {
+  for (const { name, minimumVersion, hostOnly } of item.claims.tools) {
     if (hostOnly && office.opencode.mode !== "host") continue;
 
     if (!Object.hasOwn(tools, name) || (compareToolVersions(minimumVersion, tools[name]) ?? 0) > 0) tools[name] = minimumVersion;
@@ -83,7 +84,7 @@ type Declared = { floor: string; packages: { name: string; version: string }[] }
  * package and in each package's order. Its floor is the highest version a package declares; among
  * versions office can't order, the first package's stands.
  */
-export function declaredTools(office: Office, installed: InstalledPackage[]): Map<string, Declared> {
+export function declaredTools(office: Office, installed: GatheredPackage[]): Map<string, Declared> {
   const ordered = installed.toSorted((a, b) => a.entry.name === b.entry.name ? 0 : a.entry.name === cliToolsPackage ? -1 : b.entry.name === cliToolsPackage ? 1 : a.entry.name.localeCompare(b.entry.name));
   const tools = new Map<string, Declared>();
 

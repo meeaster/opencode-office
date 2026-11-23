@@ -32,6 +32,7 @@ import { cronCommand } from "../standard/cron/command.ts";
 import { namedJob } from "../standard/cron/discovery.ts";
 import { releaseMachine, serviceEnvironment } from "./machine.ts";
 import { currentOffice, findOffice, type Office, OfficeError } from "./office.ts";
+import { type Gathered, gatherPackages } from "./gather.ts";
 import { ensureDiscovery, hasPublishedSet } from "./package-generation.ts";
 import { bindReader, evaluateAdmission, restoreCallerEnv, runReader } from "./package-operation.ts";
 import { packageSecret } from "./package-services.ts";
@@ -229,9 +230,11 @@ async function main(): Promise<void> {
       const verbose = args[2] === "verbose";
 
       return reported("refresh", officeContext(office), async reporter => {
+        // One gathering for every step of the finishing reader; office up itself needs none.
+        const gathered = await gatherPackages(office, { machine: true });
         const services = reporter.stage("Services", { key: "services" });
-        services.done(await up(office));
-        await checkStage(office, reporter, verbose);
+        services.done(await up(office, { inventory: gathered.inventory }));
+        await checkStage(office, reporter, verbose, gathered);
         reporter.finish([]);
       }, { verbose });
     }
@@ -510,9 +513,9 @@ function finishSync(stage: Stage, changes: string[]) {
   stage.done(summary);
 }
 
-async function checkStage(office: Office, reporter: Reporter, verbose: boolean) {
+async function checkStage(office: Office, reporter: Reporter, verbose: boolean, gathered?: Gathered) {
   const stage = reporter.stage("Health check", { key: "check" });
-  const ok = await check(office, reporter.interactive ? stage : undefined, verbose);
+  const ok = await check(office, reporter.interactive ? stage : undefined, verbose, gathered);
 
   if (!reporter.interactive) {
     if (ok) stage.done("office check passed");

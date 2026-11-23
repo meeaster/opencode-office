@@ -11,7 +11,8 @@ import * as v from "valibot";
 
 import { claudeFiles } from "../claude.ts";
 import { appliedReferenceProblem, referenceOriginProblem } from "../git.ts";
-import { resolvedReferences } from "../reference-snapshot.ts";
+import { appliedReferences } from "../applied-references.ts";
+import { type Gathered, gatherPackages } from "../gather.ts";
 import { cronRevision } from "../../standard/cron/container.ts";
 import { cronTimers, refreshTimer, staleTimerUnits, timerStates } from "../../standard/cron/host.ts";
 import { collectJobs } from "../../standard/cron/jobs.ts";
@@ -21,11 +22,11 @@ import { ghConfigDir, ghLogin, githubHosts, gitHelper, isGhHelper, loginProblem,
 import { hookNote, hookState } from "../hook.ts";
 import { planServer, serverReport } from "../host-server.ts";
 import { officeCommands, officePins, officeTool, officeToolNamed, required } from "../host-tools.ts";
-import { clones, installedPackages, library, skillSelections } from "../layout.ts";
+import { clones, library, skillSelections } from "../layout.ts";
 import { cloneTarget, pluginClones, pluginLinks, pluginScope, restartNotice, withPluginPlan } from "../../standard/opencode/delivery.ts";
 import { cloneFolder, entry as entryAt } from "../../standard/opencode/ownership.ts";
 import { packageLockProblems } from "../package-operation.ts";
-import { executorEnvFile, type Office, readEnvFile, skillGroups } from "../office.ts";
+import { executorEnvFile, type Office, readEnvFile, type Repository, skillGroups } from "../office.ts";
 import { isCurrent, readSkillRecord, skillDir } from "../skill-copies.ts";
 import { appliedServices, appliedSpawns, packageComposeFile, parseCompose, serviceStatus, sharedNamespaces } from "../package-services.ts";
 import { listSpawned, planSweep, sweepIsEmpty } from "../package-spawns.ts";
@@ -36,7 +37,7 @@ import { wrappedCommands } from "../sfw.ts";
 import { toolPins } from "../mise-toml.ts";
 import { destinationProblems } from "../../standard/mise-integration/projection.ts";
 import { fragmentNotes, machineBelowFloors, machineFile, orphanFragments, packagesFile, packagesFileProblems, strayFragments } from "../package-tools.ts";
-import { describeRecord, fileHashes, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, requiredPackages, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
+import { describeRecord, fileHashes, type InstalledPackage, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, requiredPackages, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
 import { describeIgnoredSkills, ignoredSkills, readIgnoredFolders } from "../../packages/office/plugin/ignored-skills.ts";
 import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces, shadowing, withLoaded } from "../outside.ts";
 import { pinnedTools } from "../schema.ts";
@@ -52,7 +53,22 @@ import type { Stage } from "../report/index.ts";
 /** Prints one check; "warn" is shown but doesn't fail `office check`. */
 type Report = (ok: boolean | "warn", name: string, detail: string) => void;
 
-async function drift(office: Office): Promise<string[]> {
+/**
+ * What one `office check` gathered, shared by every check: the packages with their plugin plan,
+ * `claims` only when the gathering is complete (what every package claims is known), and the
+ * references to compare checkouts with: the gathering's, or with a package broken office.yaml's own.
+ */
+type Context = { gathered: Gathered; loaded: ReturnType<typeof withPluginPlan>; claims?: Gathered; references: readonly Repository[] };
+
+function context(office: Office, gathered: Gathered): Context {
+  return {
+    gathered, loaded: withPluginPlan(office, gathered.inventory),
+    claims: gathered.complete ? gathered : undefined,
+    references: gathered.complete ? gathered.references : office.references,
+  };
+}
+
+async function drift(office: Office, { loaded, claims, references }: Context): Promise<string[]> {
   const problems: string[] = [];
   const libraryIds = library(office);
   const declared = new Set(office.desks.map((desk) => desk.name));
@@ -79,10 +95,12 @@ async function drift(office: Office): Promise<string[]> {
     }
   }
 
-  const references = resolvedReferences(office.dir, office);
-  problems.push(...(references.ok ? references.value.notes : references.errors));
+  // The applied file is the plugin's and refresh's input, not check's: an invalid one is its own problem.
+  const applied = appliedReferences(office.dir, office);
 
-  for (const clone of clones(office, references.ok ? references.value.entries : [])) {
+  if (!applied.ok) problems.push(...applied.errors.map(error => `${error}; office sync writes it again`));
+
+  for (const clone of clones(office, references)) {
     if (!existsSync(join(clone.dir, ".git"))) problems.push(`${clone.kind} ${relative(office.dir, clone.dir)} is not cloned`);
     else if (clone.kind === "reference") {
       const problem = referenceOriginProblem(clone.dir, clone.url) ?? appliedReferenceProblem(clone.dir, clone.url, clone.ref);
@@ -91,7 +109,6 @@ async function drift(office: Office): Promise<string[]> {
     }
   }
 
-  const loaded = withPluginPlan(office, installedPackages(office));
   const plugins = pluginLinks(office, loaded.plugins);
 
   for (const [name, target] of plugins.links) {
@@ -146,7 +163,7 @@ async function drift(office: Office): Promise<string[]> {
 
   const listed = [...loaded.selected];
 
-  problems.push(...orphanFragments(office, listed), ...strayFragments(office), ...packagesFileProblems(office, loaded.installed, listed));
+  problems.push(...orphanFragments(office, listed), ...strayFragments(office), ...(claims ? packagesFileProblems(office, claims.packages, listed) : []));
 
   problems.push(...packageLockProblems(office), ...seedReceiptProblems(office.dir, new Set([...requiredPackages, ...office.packages.map((entry) => entry.name)])));
 
@@ -230,9 +247,9 @@ async function pulledCopy(dir: string, kind: "built-in" | "remote", name: string
  * One line per package: its kind and where it came from, whether a pulled-in copy was edited,
  * whether its settings are valid and written, its mise tools, and the plugin it links.
  */
-async function packageChecks(office: Office, report: Report): Promise<void> {
-  const loaded = withPluginPlan(office, installedPackages(office));
-  const { installed, plugins, problems } = loaded;
+async function packageChecks(office: Office, report: Report, { gathered, loaded, claims }: Context): Promise<void> {
+  const { installed, plugins } = loaded;
+  const problems = [...gathered.problems, ...loaded.problems.filter(problem => !gathered.problems.some(known => known.message === problem.message))];
   const shared = sharedNamespaces(installed);
   const links = pluginLinks(office, plugins);
   const { packages } = resolvePackages(office);
@@ -328,11 +345,15 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
 
     // A version the office changed is its own pin, not drift: only a missing tool, or one below
     // what the package needs, is.
-    const tools = fragmentNotes(office, item);
+    const claimed = claims?.packages.find((candidate) => candidate.entry.name === entry.name);
 
-    notes.push(...tools.notes);
+    if (claimed) {
+      const tools = fragmentNotes(office, claimed);
 
-    if (!tools.ok) ok = false;
+      notes.push(...tools.notes);
+
+      if (!tools.ok) ok = false;
+    }
 
     if (plugins.has(entry.name)) {
       const pluginLinked = links.links.get(entry.name) === links.wanted.get(entry.name);
@@ -353,10 +374,16 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
     }
   }
 
-  // machine.toml is the office's to hold a tool back, so a pin below a package's version only warns.
-  for (const error of destinationProblems(office, installed)) report(false, "machine destinations", error);
+  if (!claims) {
+    report("warn", "package claims", `not checked while a package doesn't load: the shared ${packagesFile}, the fragments in .office/mise/, machine destinations and the checkouts of packages' references; fix the packages above, then office check`);
 
-  for (const line of machineBelowFloors(office, installed)) report("warn", machineFile, line);
+    return;
+  }
+
+  // machine.toml is the office's to hold a tool back, so a pin below a package's version only warns.
+  for (const error of destinationProblems(office, claims.packages)) report(false, "machine destinations", error);
+
+  for (const line of machineBelowFloors(office, claims.packages)) report("warn", machineFile, line);
 }
 
 /**
@@ -364,8 +391,7 @@ async function packageChecks(office: Office, report: Report): Promise<void> {
  * the office's copy, naming the office that installed another (the install is per machine, so the
  * last sync wins). Also one line for each panel this office installed whose package it no longer lists.
  */
-function panelChecks(office: Office, report: Report): void {
-  const plan = withPluginPlan(office, installedPackages(office));
+function panelChecks(office: Office, report: Report, { loaded: plan }: Context): void {
   const panels = plan.installed.flatMap((item) => (item.panel === undefined ? [] : [{ name: item.entry.name, bundle: item.panel }]));
   const where = locate();
 
@@ -468,20 +494,20 @@ async function settle<Result>(read: () => Promise<Result>, ready: (value: Result
  * Skill IDs a session in `desk` (undefined: the root) must load, and the office's others it must
  * not. Package plugins register their skills in every session.
  */
-function expectedSkills(office: Office, desk: string | undefined) {
+function expectedSkills(office: Office, desk: string | undefined, { loaded }: Context) {
   const selections = skillSelections(office);
   const own = (selection: { enabled: string[]; own: string[] } | undefined) => (selection === undefined ? [] : [...selection.enabled, ...selection.own]);
   const root = selections.find((selection) => selection.desk === undefined);
   const mine = desk === undefined ? [] : own(selections.find((selection) => selection.desk === desk));
-  const packaged = withPluginPlan(office, installedPackages(office)).installed.flatMap((item) => (item.plugin ? item.skills : []));
+  const packaged = loaded.installed.flatMap((item) => (item.plugin ? item.skills : []));
   const expected = new Set([...own(root), ...mine, ...packaged]);
   const everything = new Set([...library(office), ...selections.flatMap(own)]);
 
   return { expected: [...expected], forbidden: [...everything].filter((skill) => !expected.has(skill)) };
 }
 
-function cron(office: Office, report: Report, running: string[]): void {
-  const jobs = collectJobs(office, installedPackages(office));
+function cron(office: Office, report: Report, running: string[], { gathered }: Context): void {
+  const jobs = collectJobs(office, gathered.inventory);
 
   if (!jobs.ok) {
     for (const error of jobs.errors) report(false, "cron", error);
@@ -643,20 +669,20 @@ function spawnChecks(office: Office, report: Report): void {
 }
 
 /** The runtime checks; returns the root session's skills and plugins when the server listed them. */
-async function runtime(office: Office, report: Report, stage?: Stage): Promise<RootAnswer | undefined> {
+async function runtime(office: Office, report: Report, run: Context, stage?: Stage): Promise<RootAnswer | undefined> {
   stage?.detail("containers and Executor");
   const running = servicesRunning(office);
   let root: RootAnswer | undefined;
 
   if (!running.includes("opencode") && !running.includes("executor")) {
     report(true, "containers", `not running (start them with office up)`);
-    gitChecks(office, report, false);
+    gitChecks(office, report, false, run.references);
 
     return undefined;
   }
 
   report(office.opencode.mode === "container" || !running.includes("opencode"), "containers", `running: ${running.join(", ")}${office.opencode.mode === "host" ? ` (OpenCode on the host at ${office.opencode.url})` : ""}`);
-  gitChecks(office, report, office.opencode.mode === "container" && running.includes("opencode"));
+  gitChecks(office, report, office.opencode.mode === "container" && running.includes("opencode"), run.references);
 
   if (office.opencode.mode === "container" && running.includes("opencode")) officeVersions(office, report);
 
@@ -691,7 +717,7 @@ async function runtime(office: Office, report: Report, stage?: Stage): Promise<R
 
       const skills = (await getJson<Listing<{ id: string; path: string }>>(`${opencode}/api/skill`, headers)).data;
       const loaded = new Set(skills.map((skill) => skill.id));
-      const { expected, forbidden } = expectedSkills(office, desk);
+      const { expected, forbidden } = expectedSkills(office, desk, run);
       const missing = expected.filter((skill) => !loaded.has(skill));
       const leaked = forbidden.filter((skill) => loaded.has(skill));
 
@@ -710,7 +736,7 @@ async function runtime(office: Office, report: Report, stage?: Stage): Promise<R
         return link?.office === true && link.target === cloneTarget(plugin.name) && existsSync(join(office.dir, cloneFolder, plugin.name, ".git"));
       });
 
-      const plugins = [...withPluginPlan(office, installedPackages(office)).plugins.keys(), ...linkedClones.map((plugin) => plugin.name)];
+      const plugins = [...run.loaded.plugins.keys(), ...linkedClones.map((plugin) => plugin.name)];
       const folder = `${base}/.opencode/plugins/`;
 
       // Each plugin OpenCode loaded from the root's .opencode/plugins/, by folder name.
@@ -754,11 +780,11 @@ async function runtime(office: Office, report: Report, stage?: Stage): Promise<R
 
   await opencodeVersion(office, report, auth, opencode);
 
-  if (hasToken && health === 200) await appFrameworks(office, report);
+  if (hasToken && health === 200) await appFrameworks(office, report, run.gathered.inventory.installed);
 
   stage?.detail("services and timers");
-  hostServiceStatus(office, report);
-  cron(office, report, running);
+  hostServiceStatus(office, report, run.gathered.inventory);
+  cron(office, report, running, run);
 
   return root;
 }
@@ -927,15 +953,15 @@ async function opencodeVersion(office: Office, report: Report, auth: Record<stri
 }
 
 /** Every app in the office, in its folder and as deployed, must name the apps framework Executor serves. */
-async function appFrameworks(office: Office, report: Report): Promise<void> {
+async function appFrameworks(office: Office, report: Report, installed: InstalledPackage[]): Promise<void> {
   try {
-    const { version: served, apps, catalog } = await deployedFrameworks(office);
+    const { version: served, apps, catalog } = await deployedFrameworks(office, installed);
 
     for (const item of catalog) {
       report(!!item.existing, `catalog app ${item.id}`, item.existing ? `installed from ${item.pkg} (${item.existing.id})` : "missing; run office apps deploy");
     }
 
-    const folders = appFolders(office).filter(folder => !folder.adopted);
+    const folders = appFolders(office, installed).filter(folder => !folder.adopted);
     // A package's app is read-only; deploy sends it with the served version.
     const local = folders.filter((folder) => folder.fromPackage === undefined && JSON.parse(readFileSync(join(folder.dir, "package.json"), "utf8")).dependencies?.apps !== served);
     const deployed = apps.filter((app) => app.apps !== served);
@@ -957,7 +983,7 @@ async function appFrameworks(office: Office, report: Report): Promise<void> {
  * The office's commit identity, and when office.yaml shares the host's gh login, whether it is
  * ready: on the host, and in a running opencode container. An office without it isn't failed.
  */
-function gitChecks(office: Office, report: Report, running: boolean): void {
+function gitChecks(office: Office, report: Report, running: boolean, references: readonly Repository[]): void {
   report(
     true,
     "git identity",
@@ -985,7 +1011,7 @@ function gitChecks(office: Office, report: Report, running: boolean): void {
   }
 
   const container = office.opencode.mode === "container";
-  const hosts = githubHosts(office);
+  const hosts = githubHosts(office, references);
 
   for (const host of hosts) {
     const login = ghLogin(gh, host);
@@ -1023,7 +1049,7 @@ function gitChecks(office: Office, report: Report, running: boolean): void {
  * come from the server's answer when there is one, the rest from reading the session's home. The
  * one warning is an outside skill or plugin with the name of one the office provides.
  */
-function outsideSection(office: Office, report: Report, root: RootAnswer | undefined, info: (line: string) => void): void {
+function outsideSection(office: Office, report: Report, root: RootAnswer | undefined, info: (line: string) => void, { loaded: installed }: Context): void {
   const places = sessionPlaces(office);
   const onHost = (path: string) => places.fromSession(path);
 
@@ -1056,8 +1082,6 @@ function outsideSection(office: Office, report: Report, root: RootAnswer | undef
 
   for (const line of lines) info(`     - ${line}`);
 
-  const installed = withPluginPlan(office, installedPackages(office));
-
   const provided: Provided = {
     skills: new Map([
       ...skillSelections(office).flatMap((selection) => selection.own.map((id) => [id, `the office's skill ${relative(office.dir, join(selection.folder, id))}`] as const)),
@@ -1078,8 +1102,11 @@ function outsideSection(office: Office, report: Report, root: RootAnswer | undef
   for (const line of describeIgnoredSkills(ignoredSkills(office.dir, ignored, places.home), places.home)) report(line.ok ? true : "warn", "ignored skill folders", line.text);
 }
 
-/** Without a terminal stage, keep each original plain-text line for scripts and setup. */
-export async function check(office: Office, stage?: Stage, verbose = false): Promise<boolean> {
+/**
+ * Without a terminal stage, keep each original plain-text line for scripts and setup. Gathers the
+ * packages once, unless the caller (the reader that finishes setup or refresh) passes its gathering.
+ */
+export async function check(office: Office, stage?: Stage, verbose = false, gathered?: Gathered): Promise<boolean> {
   let passed = 0;
   let warnings = 0;
   let failed = 0;
@@ -1098,7 +1125,8 @@ export async function check(office: Office, stage?: Stage, verbose = false): Pro
   };
 
   stage?.detail("office folders and packages");
-  const problems = await drift(office);
+  const run = context(office, gathered ?? await gatherPackages(office, { machine: true }));
+  const problems = await drift(office, run);
 
   report(problems.length === 0, "office.yaml and folders", problems.length === 0 ? "in sync" : `${problems.length} problems`);
 
@@ -1107,7 +1135,7 @@ export async function check(office: Office, stage?: Stage, verbose = false): Pro
     else console.log(`     - ${problem}`);
   }
 
-  await packageChecks(office, report);
+  await packageChecks(office, report, run);
   seedChecks(office, report);
   withdrawnClones(office, report);
   spawnChecks(office, report);
@@ -1119,7 +1147,7 @@ export async function check(office: Office, stage?: Stage, verbose = false): Pro
 
   firewallChecks(office, report);
 
-  for (const line of machineReport(office)) report(line.ok, line.name, line.detail);
+  for (const line of machineReport(office, run.claims)) report(line.ok, line.name, line.detail);
 
   if (office.opencode.managed !== undefined) {
     try {
@@ -1136,20 +1164,20 @@ export async function check(office: Office, stage?: Stage, verbose = false): Pro
 
   if (office.opencode.mode === "host") shellCheck(report);
 
-  panelChecks(office, report);
+  panelChecks(office, report, run);
 
-  const apps = appFolders(office);
+  const apps = appFolders(office, run.gathered.inventory.installed);
 
   report(apps.length > 0, "Executor apps", apps.map((app) => relative(office.dir, app.dir)).join(", ") || "none");
 
   versionChecks(office, report);
-  const root = await runtime(office, report, stage);
+  const root = await runtime(office, report, run, stage);
 
   stage?.detail("outside skills and plugins");
   outsideSection(office, report, root, line => {
     if (!stage) console.log(line);
     else if (verbose) stage.note(line);
-  });
+  }, run);
 
   const summary = `${passed} passed, ${warnings} warnings, ${failed} failed`;
 

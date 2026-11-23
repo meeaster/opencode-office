@@ -9,7 +9,8 @@ import { installHook } from "../hook.ts";
 import { envFilePath, sourceLine } from "../host-env.ts";
 import { planServer, queueStaleRestart, restartStaleServer, staleServer } from "../host-server.ts";
 import { hostTool, onboardHostTools, requireOfficeTool } from "../host-tools.ts";
-import { installedPackages } from "../layout.ts";
+import { appliedReferences } from "../applied-references.ts";
+import { gatherPackages, problemText } from "../gather.ts";
 import { claim, consentCommand, consentQuestion, grantConsent, ownedElsewhere } from "../machine.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile, updateConfig } from "../office.ts";
 import { last, type NextStep, type Reporter, say, terminalAsk } from "../report/index.ts";
@@ -113,7 +114,7 @@ export async function setup(initial: Office, options: SetupOptions, reporter: Re
   // Anonymous reads of the sources, before any login: the GitHub step below asks for one only when needed.
   stage.detail("checking which sources read without a login");
 
-  const github = await planGithub(office);
+  const github = await planGithub(office, applied(office));
 
   office = await commitIdentity(office, ask);
   stage.detail("checking the GitHub login");
@@ -137,7 +138,7 @@ export async function setup(initial: Office, options: SetupOptions, reporter: Re
   // A login alone proves nothing: read every source as sync will, before cloning starts.
   stage.detail("reading every source with this machine's git credentials");
 
-  const unreachable = await unreachableSources(office);
+  const unreachable = await unreachableSources(office, applied(office));
 
   if (unreachable.length > 0) {
     throw new OfficeError(`these sources don't read on this host, so nothing was cloned:\n${unreachable.map((line) => `  - ${line}`).join("\n")}\nFix them or office.yaml, then rerun office setup`);
@@ -164,15 +165,28 @@ export async function setup(initial: Office, options: SetupOptions, reporter: Re
   if (status !== 0) throw new OfficeError("setup did not complete with the published package generation");
 }
 
+/** The references the last sync applied, or office.yaml's own before the first: what setup plans GitHub access and reads for. */
+function applied(office: Office) {
+  const references = appliedReferences(office.dir, office);
+
+  if (!references.ok) throw new OfficeError(references.errors.join("\n"));
+
+  return references.value;
+}
+
+/** The reader that finishes setup gathers once for its system setup, system checks and office check. */
 export async function finishSetup(office: Office, shell: boolean, ownerEmail: string | undefined, reporter: Reporter) {
   const ask = terminalAsk();
+  const gathered = await gatherPackages(office, { machine: true });
+
+  if (!gathered.complete) throw new OfficeError(`packages didn't load: ${gathered.problems.map(problemText).join("; ") || [...gathered.unread].join(", ")}; fix them, run office sync, then rerun office setup`);
   const hasToken = readEnvFile(executorEnvFile(office)).EXECUTOR_TOKEN;
   const ownerFile = office.secrets?.executor_owner;
 
   // System packages: before office up installs tools, some of which build against them.
   let stage = reporter.stage("System packages", { key: "system" });
 
-  const outcome = await systemStep(office, installedPackages(office).installed, { mise: office.opencode.mode === "host" ? hostTool("mise") : "mise", ask });
+  const outcome = await systemStep(office, gathered.packages, { mise: office.opencode.mode === "host" ? hostTool("mise") : "mise", ask });
 
   stage.done(outcome === "applied" ? "applied" : outcome === "deferred" ? "not applied" : undefined);
 
@@ -187,22 +201,22 @@ export async function finishSetup(office: Office, shell: boolean, ownerEmail: st
     email = await reporter.ask({ kind: "text", message: "Executor owner email (it signs you in to the dashboard)", placeholder: "you@example.com", validate: (value) => (value.includes("@") ? undefined : "An email address, like you@example.com") });
   }
 
-  if (requireJobs(office).length > 0) stage.note("Cron: applicable jobs are installed at startup. Review them with office cron list.");
+  if (requireJobs(office, gathered.inventory).length > 0) stage.note("Cron: applicable jobs are installed at startup. Review them with office cron list.");
 
   await startExecutor(office);
   await bootstrapExecutor(office, email);
-  stage.done(await up(office));
+  stage.done(await up(office, { inventory: gathered.inventory }));
 
   // Apps: the Executor apps the office deploys.
   stage = reporter.stage("Apps", { key: "apps" });
 
-  stage.done(await deploy(office));
+  stage.done(await deploy(office, gathered.inventory.installed));
 
   // Checks: package system checks, the OpenCode restart offer, then office check.
   stage = reporter.stage("Checks", { key: "checks" });
   stage.detail("running the packages' system checks");
 
-  const verified = verifySystems(office, installedPackages(office).installed);
+  const verified = verifySystems(office, gathered.packages);
 
   for (const line of verified.lines) stage.note(`System check: ${line}`);
 
@@ -219,7 +233,7 @@ export async function finishSetup(office: Office, shell: boolean, ownerEmail: st
   }
 
   // office check prints its own report; it gets the terminal as it is.
-  const checked = await stage.inherit("office check", () => check(office));
+  const checked = await stage.inherit("office check", () => check(office, undefined, false, gathered));
 
   if (!verified.ok) {
     stage.fail("a package's system check failed");

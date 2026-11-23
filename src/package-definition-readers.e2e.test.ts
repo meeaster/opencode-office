@@ -54,8 +54,7 @@ test("reads return the provider's parsed values, a copy each; sync admits no bat
   const { dir, cli, select } = fixture("collections");
   const path = (name: string) => join(dir, "packages", name, "office.ts");
   const contract = join(dir, "packages/catalog/items.ts");
-  const saved = join(dir, ".office/resolved/references.json");
-  const rows = () => JSON.stringify(JSON.parse(read(saved)).contributors.find((group: { name: string }) => group.name === "alpha"));
+  const current = join(dir, ".office/current");
   const author = definitionText('{setup(c){c.add(items,{name:"first",count:1})}}', 'import {items} from "@office/catalog/items";');
   const shares = { exports: { "./items": "./items.ts" } };
   const uses = { dependencies: ["catalog"] };
@@ -71,24 +70,25 @@ test("reads return the provider's parsed values, a copy each; sync admits no bat
   cli(0, "sync", "--packages");
   // Normalized once by the provider, not by the reader's handle; changing one read leaves the next alone.
   expect(cli(0, "items")).toContain('"count":2');
-  const synced = rows();
-  expect(synced).toContain('"count":2');
+  const synced = readlinkSync(current);
 
   writePackage(path("alpha"), 'throw Error("failed author")');
-  cli(1, "sync", "--packages");
-  expect(rows()).toBe(synced.replace('"stale":false', '"stale":true'));
+  expect(cli(1, "sync", "--packages")).toContain("FAILED package alpha: packages/alpha/office.ts: failed author");
+  expect(readlinkSync(current)).toBe(synced);
   expect(cli(1, "items")).toContain("package alpha: packages/alpha/office.ts: failed author");
+  // A provider whose parser now refuses an author's entry stops sync, naming the author.
+  writePackage(path("alpha"), author, uses);
   write(contract, 'export const items={id:"catalog.items",parse(i){if(typeof i.count!=="string")throw Error("expected text");return i}}');
-  expect(cli(1, "sync", "--packages")).toContain("provider contract changed");
-  expect(rows()).toContain('"entries":[]');
+  expect(cli(1, "sync", "--packages")).toContain("FAILED package alpha: expected text");
+  expect(readlinkSync(current)).toBe(synced);
   writePackage(path("alpha"), author.replace("count:1", 'count:"valid"'), uses);
   writePackage(path("catalog"), provider.replace("c.registry(items);", 'c.registry(items);c.add(items,{name:"bad",count:1});'), shares);
-  expect(cli(1, "sync", "--packages")).toContain("provider of catalog.items failed");
-  expect(rows()).toContain('"entries":[]');
+  expect(cli(1, "sync", "--packages")).toContain("FAILED package catalog: expected text");
+  expect(readlinkSync(current)).toBe(synced);
   expect(cli(1, "items")).toContain("package catalog: expected text");
 });
 
-test("a reader uses the provider as it is now; sync keeps a changed provider's last-good rows out", () => {
+test("a reader uses the provider as it is now; a writer that fails stops sync and leaves the applied references", () => {
   const { dir, cli, select } = fixture("reader-contract");
   const packages = join(dir, "packages");
   const contract = join(packages, "catalog/items.ts");
@@ -109,12 +109,12 @@ test("a reader uses the provider as it is now; sync keeps a changed provider's l
   // An unsynced provider edit parses this run's additions: no old row meets the new reader.
   write(contract, 'export const items={id:"catalog.items",parse:i=>({...i,value:"v"+i.value})};export const display=i=>i.value.toUpperCase()');
   expect(cli(0, "display")).toContain("V12");
+  // A registry without a key accepts equal entries.
   writePackage(writer, author(add + add), uses);
-  expect(cli(1, "sync", "--packages")).toContain("claimed by both");
-  expect(read(snapshot)).toBe(previous);
-  expect(cli(1, "display")).toContain("catalog.items x claimed by both package alpha and package alpha");
+  expect(cli(0, "display")).toContain("V12,V12");
   writePackage(writer, 'throw Error("writer unavailable")');
-  expect(cli(1, "sync", "--packages")).toContain("omitting last-good catalog.items/x");
+  expect(cli(1, "sync", "--packages")).toContain("writer unavailable");
+  expect(read(snapshot)).toBe(previous);
   expect(cli(1, "display")).toContain("writer unavailable");
   writePackage(writer, author(add), uses);
   cli(0, "sync", "--packages");

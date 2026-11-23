@@ -36,7 +36,7 @@ import * as v from "valibot";
 import { fetchBytes } from "./download.ts";
 import { envFilePath, hostEnvironment, hostLayout, hostWrappers, realMise } from "./host-env.ts";
 import { type ServerPlan, serverUnit, serverUnitPath, userSystemd } from "./host-server.ts";
-import { installedPackages, type InstalledPackages } from "./layout.ts";
+import type { GatheredPackage } from "./gather.ts";
 import { type Office, OfficeError, readConfig } from "./office.ts";
 import { fragmentOwner, machineFile, machineFiles, packagesFile } from "./package-tools.ts";
 import { platformAsset } from "./releases.ts";
@@ -294,10 +294,13 @@ function sfwDigest(pin: Lock["sfw"]): string | undefined {
 /** What the office wants on the machine, and the problems that kept something out. */
 type WantedFiles = { wanted: Wanted[]; problems: string[] };
 
-function wantedFiles(office: Office, record: MachineRecord, packages = installedPackages(office)): WantedFiles {
+/** The packages a run gathered, with the selected ones it couldn't read (src/gather.ts). */
+export type MachinePackages = { unread: ReadonlySet<string>; packages: GatheredPackage[] };
+
+function wantedFiles(office: Office, record: MachineRecord, packages: MachinePackages): WantedFiles {
   const previous = record.files.find(file => file.path === envFilePath());
   const retained = previous?.kind === "file" ? previous.contributions?.filter(item => packages.unread.has(item.name)) : [];
-  const { environment, problems, contributions } = hostEnvironment(office, packages.installed, retained);
+  const { environment, problems, contributions } = hostEnvironment(office, packages.packages, retained);
   const envText = envScript(`the environment of office ${office.name}, which agents and your terminal share`, envFilePath(), environment);
   const links = wantedLinks(office).filter(({ file }) => file.package === null || !packages.unread.has(file.package) || record.files.some(prior => prior.path === file.path && same(prior, file) && fileState(prior) === "present"));
   const wanted: Wanted[] = [...links, { file: { kind: "file", path: envFilePath(), package: null, sha256: sha256(envText), contributions }, what: "the office's environment file", made: "; source it from your shell's startup file (office setup prints the line)", text: envText }];
@@ -631,7 +634,7 @@ export function removeUnwantedServer(office: Office): void {
  * of an office that moved; in container mode it removes everything the office wrote and the record.
  * Returns one line per change; a refusal starts with FAILED.
  */
-export function syncMachine(office: Office, packages?: InstalledPackages): string[] {
+export function syncMachine(office: Office, packages?: MachinePackages): string[] {
   const current = claim(office);
 
   if (office.opencode.mode !== "host") return current.kind === "ours" ? release(current.record, "as the office now runs OpenCode in its container") : [];
@@ -644,6 +647,7 @@ export function syncMachine(office: Office, packages?: InstalledPackages): strin
     return [`not linking machine.toml, machine.packages.toml and .office/mise/ into ${globalConfD()} or writing ${envFilePath()} yet, so the office's tools apply nowhere${firewall}: office writes outside its folder only once you agree; run ${consentCommand}`];
   }
 
+  if (packages === undefined) throw new Error("linking a host office's machine files needs its gathered packages");
   const { record, movedFrom } = current;
   const { wanted, problems } = wantedFiles(office, record, packages);
   const lines = [...(movedFrom === undefined ? [] : [`office ${office.name} moved from ${movedFrom}; ${machineRecordPath()} now names ${office.dir}`]), ...problems.map((problem) => `FAILED ${problem}`)];
@@ -690,8 +694,12 @@ export function syncMachine(office: Office, packages?: InstalledPackages): strin
 /** One line of `office check` about the machine. */
 export type MachineLine = { ok: boolean | "warn"; name: string; detail: string };
 
-/** What `office check` says of the machine: who manages it, and each file the office wrote or wants there. */
-export function machineReport(office: Office): MachineLine[] {
+/**
+ * What `office check` says of the machine: who manages it, and each file the office wrote or wants
+ * there. Without `packages` (the gathering was incomplete), what packages want isn't compared; each
+ * recorded file is still checked against the record.
+ */
+export function machineReport(office: Office, packages?: MachinePackages): MachineLine[] {
   const current = claim(office);
   const lines: MachineLine[] = [];
 
@@ -713,14 +721,28 @@ export function machineReport(office: Office): MachineLine[] {
   }
 
   const { record, movedFrom } = current;
-  const { wanted, problems } = wantedFiles(office, record);
 
   lines.push(
     movedFrom === undefined
       ? { ok: true, name: "machine", detail: `managed by this office since ${record.consented}, recorded in ${machineRecordPath()}` }
       : { ok: false, name: "machine", detail: `the record names ${movedFrom}, where this office was; office sync moves it here and relinks its tools` },
-    ...problems.map((problem) => ({ ok: false, name: "machine", detail: problem })),
   );
+
+  // Without every package's claims, each recorded file is checked against the record alone (sfw
+  // against office.lock): nothing says which files the office wants now.
+  if (packages === undefined) {
+    for (const file of record.files) {
+      if (managedFile(file) && office.opencode.managed !== undefined && file.path === serverUnitPath(office)) continue;
+
+      lines.push(isSfw(file) && office.socketFirewall ? sfwLine(office, file) : recordedLine(file));
+    }
+
+    return lines;
+  }
+
+  const { wanted, problems } = wantedFiles(office, record, packages);
+
+  lines.push(...problems.map((problem) => ({ ok: false, name: "machine", detail: problem })));
 
   for (const file of record.files) {
     if (managedFile(file) && office.opencode.managed !== undefined && file.path === serverUnitPath(office)) continue;
@@ -758,6 +780,21 @@ function fileLine(file: MachineFile, want: Wanted | undefined): MachineLine {
   };
 
   return { ok: state === "present" && want !== undefined && !stale, name: `machine ${file.path}`, detail: details[state] };
+}
+
+/** One recorded file's line against the record alone: as office wrote it, changed, missing or dangling. */
+function recordedLine(file: MachineFile): MachineLine {
+  const state = fileState(file);
+  const target = file.kind === "link" ? ` to ${file.target}` : "";
+
+  const details: Record<FileState, string> = {
+    present: `${file.kind === "link" ? `links${target}` : "written"}, as office wrote it`,
+    changed: `changed since office wrote it${target}; office leaves it: delete it, then office sync`,
+    missing: "missing since office wrote it; office sync settles it once every package loads",
+    dangling: `dangling: ${file.kind === "link" ? file.target : file.path} is gone, so mise skips it silently; office sync settles it once every package loads`,
+  };
+
+  return { ok: state === "present", name: `machine ${file.path}`, detail: details[state] };
 }
 
 /** sfw's line: the version installed against the one office up applied and the one office.yaml pins. */

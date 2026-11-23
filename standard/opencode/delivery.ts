@@ -191,21 +191,6 @@ function unlinkPlugin(folder: string, name: string, target: string) {
   unlinkSync(path);
 }
 
-/** Explicit package deselection needs no new publication or asset declarations. */
-export function withdrawDeselectedPlugins(office: Office, selected: Set<string>) {
-  requirePluginDestination(office);
-  const { folder, links } = pluginLinks(office, new Map());
-  const changes: string[] = [];
-
-  for (const [name, target] of links) {
-    if (selected.has(name) || target === cloneTarget(name)) continue;
-    unlinkPlugin(folder, name, target);
-    changes.push(`unlinked ${pluginFolder}/${name}`);
-  }
-
-  return changes;
-}
-
 /**
  * Makes the root's `.opencode/plugins/` hold a link for each package plugin, and no other Office
  * link except those of declared clones, which the clone step manages. An Office link whose package

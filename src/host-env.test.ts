@@ -8,12 +8,13 @@ import { dirname, join } from "node:path";
 import { sync } from "./commands/sync.ts";
 import { envFilePath, hostWrappers, machineDirVariable, sourcedBy, sourceLine } from "./host-env.ts";
 import { globalConfD, grantConsent, installSfw, machineRecordVariable, machineReport, miseConfigVariable, readMachine, releaseMachine } from "./machine.ts";
+import { gatherPackages } from "./gather.ts";
 import { loadOffice } from "./office.ts";
 import { parseManifest } from "./schema.ts";
 import { wrappedCommands } from "./sfw.ts";
 import { configureStartup } from "./shell-startup.ts";
 import { defaultPins, hostPlatform } from "./versions.ts";
-import { writePackage } from "./test-package.ts";
+import { definitionText, writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -44,6 +45,14 @@ afterEach(() => {
     else process.env[name] = value;
   }
 });
+
+
+/** What \`office check\` says of the machine, from the office's packages as one gathering loads them. */
+async function report(at: string) {
+  const config = loadOffice(at);
+
+  return machineReport(config, await gatherPackages(config, { machine: true }));
+}
 
 function write(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -107,7 +116,7 @@ test.skipIf(hostPlatform() === undefined)("with the firewall on, sync writes the
 
   expect(refused.exitCode).toBe(127);
   expect(refused.stderr.toString()).toStartWith(`office: Socket Firewall is not installed at ${sfwPath()}`);
-  expect(machineReport(loadOffice(office)).find((line) => line.name === `machine ${sfwPath()}`)).toEqual({ ok: false, name: `machine ${sfwPath()}`, detail: `not installed; office up installs sfw ${defaultPins.sfw.version}, and until then the wrappers refuse to run downloads` });
+  expect((await report(office)).find((line) => line.name === `machine ${sfwPath()}`)).toEqual({ ok: false, name: `machine ${sfwPath()}`, detail: `not installed; office up installs sfw ${defaultPins.sfw.version}, and until then the wrappers refuse to run downloads` });
 });
 
 /** A fake sfw, and a pin whose digest on every platform is its SHA-256. */
@@ -141,6 +150,31 @@ test("office up installs sfw checked against the lock, records it, and leaves it
   expect(readMachine()?.files.find((file) => file.path === sfwPath())).toEqual({ kind: "file", path: sfwPath(), package: null, sha256: pin.digest.replace("sha256:", "") });
   expect(await installSfw(loadOffice(office), pin, download)).toEqual([]);
   expect(await sync(loadOffice(office))).toEqual([]);
+});
+
+test.skipIf(hostPlatform() === undefined)("while a package doesn't load, check still checks each recorded file against the record, and sfw against office.lock", async () => {
+  makeOffice();
+  grantConsent(loadOffice(office));
+  await sync(loadOffice(office));
+  const { bytes, pin } = fakeSfw(defaultPins.sfw.version);
+  await installSfw(loadOffice(office), pin, async () => bytes);
+  rmSync(join(office, "packages/demo"), { recursive: true });
+  writePackage(join(office, "packages/demo/office.ts"), definitionText('{setup(){throw Error("broken setup")}}'));
+  const script = join(data(), "sfw/package-manager.sh");
+  rmSync(envFilePath());
+  write(script, "# edited\n");
+  rmSync(sfwPath());
+  const config = loadOffice(office);
+  const gathered = await gatherPackages(config, { machine: true });
+  expect(gathered.complete).toBe(false);
+  // As office check passes it: no claims while the gathering is incomplete.
+  const lines = machineReport(config, gathered.complete ? gathered : undefined);
+  const line = (path: string) => lines.find((entry) => entry.name === `machine ${path}`);
+
+  expect(line(envFilePath())).toEqual({ ok: false, name: `machine ${envFilePath()}`, detail: "missing since office wrote it; office sync settles it once every package loads" });
+  expect(line(script)?.detail).toBe("changed since office wrote it; office leaves it: delete it, then office sync");
+  expect(line(sfwPath())?.detail).toBe(`missing, so the wrappers refuse to run downloads; office up installs sfw ${defaultPins.sfw.version}`);
+  expect(line(join(hostWrappers(), "npm"))).toEqual({ ok: true, name: `machine ${join(hostWrappers(), "npm")}`, detail: `links to ${join(data(), "sfw/package-manager.sh")}, as office wrote it` });
 });
 
 test("the environment file carries the office's minimum release age, and sync rewrites it when the age changes", async () => {
@@ -220,7 +254,7 @@ test("a package's host block adds folders and variables to the environment file;
   expect(readFileSync(envFilePath(), "utf8")).not.toContain("DEMO_MODE");
 });
 
-test("one failed read and one deselection keep and withdraw their respective machine inputs together", async () => {
+test("a package that fails to read stops sync: a deselected package's machine inputs stay with everyone else's", async () => {
   const host = (name: string) => `host:\n  path: [${name}-bin]\n  env: { ${name.toUpperCase()}_MODE: ok }\n  install: {description: Install, creates: ~/.local/bin/${name}, script: install.ts}\n`;
   makeOffice({ firewall: false, host: host("demo") });
   const config = join(office, "office.yaml");
@@ -238,15 +272,18 @@ test("one failed read and one deselection keep and withdraw their respective mac
   expect(readFileSync(envFilePath(), "utf8")).toContain("OTHER_MODE");
   write(config, initial);
   writePackage(join(office, "packages/demo/package.yaml"), "[bad");
+  const env = readFileSync(envFilePath(), "utf8");
   expect((await run()).join("\n")).toContain("FAILED package demo");
   expect(readFileSync(link("demo"), "utf8")).toBe(before);
-  expect(existsSync(join(office, ".office/mise/other.toml"))).toBe(false);
+  expect(readFileSync(link("other"), "utf8")).toContain("other:install");
+  expect(existsSync(join(office, ".office/mise/other.toml"))).toBe(true);
+  expect(readFileSync(envFilePath(), "utf8")).toBe(env);
+  // Fixed, the next sync withdraws the deselected package's inputs.
+  writePackage(join(office, "packages/demo/package.yaml"), host("demo"));
+  expect((await run()).join("\n")).not.toContain("FAILED");
   expect(lstatSync(link("other"), { throwIfNoEntry: false })).toBeUndefined();
-  const env = readFileSync(envFilePath(), "utf8");
-  expect(env).toContain("export DEMO_MODE='ok'");
-  expect(env).toContain("demo-bin");
-  expect(env).not.toContain("OTHER_MODE");
-  expect(env).not.toContain("other-bin");
+  expect(readFileSync(envFilePath(), "utf8")).not.toContain("OTHER_MODE");
+  expect(readFileSync(envFilePath(), "utf8")).toContain("export DEMO_MODE='ok'");
 });
 
 test("a host block's folders and variables are plain: no shell code, PATH separators or variables office sets", () => {

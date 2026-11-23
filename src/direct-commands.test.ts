@@ -5,7 +5,9 @@ import { dirname, join } from "node:path";
 import type { Registry, RegistryEntry } from "../sdk/index.ts";
 import { repositories } from "../packages/references/repositories.ts";
 import { setLinkProblem } from "./bound-paths.ts";
-import { combine, commandHelp, dispatchCommand, type SetUp } from "./direct-commands.ts";
+import { commandHelp, dispatchCommand } from "./direct-commands.ts";
+import { gatherPackages, parseEntries, readEntries, type SetUp } from "./gather.ts";
+import { loadOffice } from "./office.ts";
 import type { Registered } from "./package-setup.ts";
 import { fileHashes, type ResolvedPackage, selectionProblems } from "./packages.ts";
 import { packageJsonHint } from "./package-manifest.ts";
@@ -196,6 +198,32 @@ test("a selected package named sdk loads nothing, and is named once", async () =
   expect(existsSync(imported)).toBe(false);
 });
 
+test("a selected built-in whose ownership is in conflict loads nothing: no other package can import its copy", async () => {
+  const imported = join(dir, "imported");
+
+  office({ ink: { body: '{commands:{"ink show":{summary:"Show ink",run(){}}}}', prelude: `import {writeFileSync} from "node:fs"; writeFileSync(${JSON.stringify(imported)}, "x");` } });
+  mkdirSync(join(dir, "packages/references"));
+  const conflict = "package references: built-in package references conflicts with local packages/references; rename one before syncing";
+
+  const help = await commandHelp({ dir });
+
+  expect(existsSync(imported)).toBe(false);
+  expect(help).toEqual([`  ${conflict}`]);
+  await expect(dispatchCommand({ dir }, ["ink", "show"])).rejects.toThrow(`no package loaded: ${conflict}`);
+  expect(existsSync(imported)).toBe(false);
+});
+
+test("a command reads a contributed system recipe without its bootstrap file; only a gathering for the machine reads that file", async () => {
+  writePackage(join(dir, ".office/packages/mise-integration/office.ts"), definitionText('{setup(c){c.registry({id: "mise-integration.recipes", parse: i => i})}}'));
+  const recipe = { name: "giver", setting: "system", description: "Giver", platforms: ["ubuntu-24.04-amd64-wsl"], bootstrap: "system/bootstrap.toml", ready: ["/opt/giver"], env: {} };
+  const settings = '{type:"object",additionalProperties:false,properties:{system:{type:"boolean",default:false}}}';
+
+  office({ giver: { body: `{settings:${settings},setup(c){c.add({id: "mise-integration.recipes"}, ${JSON.stringify(recipe)})},commands:{"giver show":{summary:"Show",run({read}){for (const e of read({id: "mise-integration.recipes"})) console.log(e.value.name, e.value.bootstrap)}}}}` } });
+
+  expect(await printed(["giver", "show"])).toEqual(["giver system/bootstrap.toml"]);
+  expect((await gatherPackages(loadOffice(dir), { machine: true })).problems).toEqual([{ packages: ["giver"], message: "system/bootstrap.toml must be a file inside package giver" }]);
+});
+
 test("a command claimed twice is reported with the packages that failed", async () => {
   office({
     notes: { body: '{setup(){throw Error("setup failed")},commands:{"shared show":{summary:"Show",run(){}}}}' },
@@ -216,12 +244,26 @@ test("every setup finishes before an entry is parsed, whatever the order; handle
   expect(await printed(["provider", "show"])).toEqual([JSON.stringify([{ name: "entry", seen: 2 }, "consumer"])]);
 });
 
-test("adding to a registry no selected package registered fails, naming the adder and the id", async () => {
+test("adding to a registry no selected package registered fails, naming the adder and the id; a handle is matched by its id alone", async () => {
   office({
-    adder: { body: '{setup(c){c.add({id: "nobody.items", parse: i => i}, {name: "x"})},commands:{"adder show":{summary:"Show",run(){}}}}' },
+    adder: { body: '{setup(c){c.add({id: "nobody.items"}, {name: "x"})},commands:{"adder show":{summary:"Show",run(){}}}}' },
   });
 
   await expect(dispatchCommand({ dir }, ["adder", "show"])).rejects.toThrow("package adder: no provider registered nobody.items");
+
+  // An incomplete gathering's read throws, rather than answering with what did register.
+  const gathered = await gatherPackages(loadOffice(dir));
+
+  expect(gathered.complete).toBe(false);
+  expect(() => gathered.read({ id: "nobody.items", parse: (input: RegistryEntry) => input })).toThrow("cannot read nobody.items: the packages' registrations are incomplete: package adder: no provider registered nobody.items");
+});
+
+test("a value that isn't a JSON object, such as one holding a function, fails the run naming the adder and the registry", async () => {
+  office({
+    adder: { body: '{setup(c){c.registry(items); c.add(items, {name: "x", run() {}})},commands:{"adder show":{summary:"Show",run(){}}}}', prelude: 'const items = {id: "adder.items", parse: i => i};' },
+  });
+
+  await expect(dispatchCommand({ dir }, ["adder", "show"])).rejects.toThrow("package adder: adder.items: an entry must be a JSON object");
 });
 
 test("the selection is checked without importing: rejected, uncopied and edited copies, package.json and declared dependencies, @office/sdk among them", () => {
@@ -269,7 +311,9 @@ const registered = (part: Partial<Registered>): Registered => ({ registries: new
 const provider = (handle: Registry<RegistryEntry>) => registered({ registries: new Map([[handle.id, handle]]) });
 const references = registered({ registries: new Map([[repositories.id, repositories]]) });
 const setUp = (name: string, part: Registered): SetUp => ({ name, folder: `/set/${name}`, registered: part });
-const own = (references: RegistryEntry[]) => ({ dir: "/office", references });
+const own = (references: { name: string; url: string }[]) => ({ dir: "/office", references });
+const add = (id: string, ...values: RegistryEntry[]) => registered({ additions: values.map(value => ({ id, value })) });
+const messages = (load: ReturnType<typeof parseEntries>) => load.problems.map(problem => [problem.packages, problem.message]);
 
 test("reads list office.yaml's references first, then each package's, parsed once and copied per read", () => {
   let parsed = 0;
@@ -283,46 +327,95 @@ test("reads list office.yaml's references first, then each package's, parsed onc
     },
   };
 
-  const load = combine(own([{ name: "own", url: "o" }]), [
+  const load = parseEntries(own([{ name: "own", url: "o" }]), [
     setUp("references", references),
     setUp("catalog", provider(items)),
     setUp("alpha", registered({ additions: [{ id: "catalog.items", value: { name: "first", count: 1 } }, { id: repositories.id, value: { name: "docs", url: "d" } }] })),
   ]);
 
-  expect(load.failures).toEqual([]);
-  expect(load.read(repositories)).toEqual([
+  expect(load.problems).toEqual([]);
+  expect(readEntries(load.entries, repositories)).toEqual([
     { value: { name: "own", url: "o" }, owner: "office.yaml", folder: "/office" },
     { value: { name: "docs", url: "d" }, owner: "alpha", folder: "/set/alpha" },
   ]);
-  const first = load.read(items);
+  const first = readEntries(load.entries, items);
   first[0].value.count = 99;
   // A reader's own handle has another parser; reads never run it.
-  expect(load.read({ id: "catalog.items", parse(): RegistryEntry { throw new Error("reader parser ran"); } })).toEqual([{ value: { name: "first", count: 2 }, owner: "alpha", folder: "/set/alpha" }]);
+  expect(readEntries(load.entries, { id: "catalog.items", parse(): RegistryEntry { throw new Error("reader parser ran"); } })).toEqual([{ value: { name: "first", count: 2 }, owner: "alpha", folder: "/set/alpha" }]);
   expect(parsed).toBe(1);
 });
 
-test("an addition one's parser refuses fails that package", () => {
+test("an addition one's parser refuses fails that package; a reference without a name is refused by its parser", () => {
   const strict = { id: "catalog.items", parse(): RegistryEntry { throw new Error("expected count"); } };
 
-  const load = combine(own([]), [
-    setUp("catalog", provider(strict)),
-    setUp("beta", registered({ additions: [{ id: "catalog.items", value: { name: "y" } }] })),
-  ]);
-
-  expect(load.failures).toEqual(["package beta: expected count"]);
+  expect(messages(parseEntries(own([]), [setUp("catalog", provider(strict)), setUp("beta", add("catalog.items", { name: "y" }))]))).toEqual([[["beta"], "expected count"]]);
+  expect(messages(parseEntries(own([]), [setUp("references", references), setUp("beta", add(repositories.id, { url: "https://example.com/x.git" }))]))).toEqual([[["beta"], "a reference needs a name"]]);
 });
 
-test("a name claimed twice conflicts, unless its registry keeps names per package", () => {
-  const scoped = { id: "catalog.notes", identity: "package" as const, parse: (input: RegistryEntry) => input };
-  const add = (id: string, name: string) => registered({ additions: [{ id, value: { name, url: "u" } }] });
+test("a registry's key: two owners clash, office.yaml counts as one, a package scope keeps keys per package, and no key accepts equal entries", () => {
+  const notes = { id: "catalog.notes", key: (entry: RegistryEntry) => String(entry.name), keyScope: "package" as const, parse: (input: RegistryEntry) => input };
+  const plain = { id: "catalog.plain", parse: (input: RegistryEntry) => input };
+  const shared = { id: "catalog.shared", key: (entry: RegistryEntry) => String(entry.name), parse: (input: RegistryEntry) => input };
 
-  const load = combine(own([{ name: "docs", url: "u" }]), [
+  const load = parseEntries(own([{ name: "floci", url: "u" }]), [
     setUp("references", references),
-    setUp("catalog", provider(scoped)),
-    setUp("alpha", add(repositories.id, "docs")),
-    setUp("beta", add("catalog.notes", "same")),
-    setUp("gamma", add("catalog.notes", "same")),
+    setUp("catalog", registered({ registries: new Map<string, Registry<RegistryEntry>>([[notes.id, notes], [plain.id, plain], [shared.id, shared]]) })),
+    setUp("alpha", registered({ additions: [{ id: repositories.id, value: { name: "floci", url: "u" } }, { id: notes.id, value: { name: "bun" } }, { id: shared.id, value: { name: "docs" } }, { id: plain.id, value: { destination: "~/a", source: "s" } }] })),
+    setUp("beta", registered({ additions: [{ id: notes.id, value: { name: "bun" } }, { id: notes.id, value: { name: "bun" } }, { id: shared.id, value: { name: "docs" } }, { id: plain.id, value: { destination: "~/a", source: "s" } }] })),
   ]);
 
-  expect(load.conflicts).toEqual(["reference docs claimed by both office.yaml and package alpha; select one claimant"]);
+  expect(messages(load)).toEqual([
+    [["alpha"], "references.repository floci claimed by both office.yaml and package alpha"],
+    [["beta"], "catalog.notes bun added twice by package beta"],
+    [["alpha", "beta"], "catalog.shared docs claimed by both package alpha and package beta"],
+  ]);
+  // An entry without a name, in a registry without a key: both equal entries are read.
+  expect(readEntries(load.entries, plain).map(entry => [entry.value, entry.owner])).toEqual([[{ destination: "~/a", source: "s" }, "alpha"], [{ destination: "~/a", source: "s" }, "beta"]]);
+});
+
+test("a key that isn't text, a key that throws, a parser that returns something other than JSON, and a key two packages add each fail the run, naming the registry", async () => {
+  // Plain JavaScript, as a package can write it: no type stops these.
+  office({
+    catalog: { body: '{setup(c){c.registry(numbered);c.registry(throwing);c.registry(functional);c.registry(shared)},commands:{"catalog show":{summary:"Show",run(){}}}}', prelude: 'export const numbered = {id: "catalog.numbered", key: e => e.count, parse: i => i}; export const throwing = {id: "catalog.throwing", key() { throw Error("no key"); }, parse: i => i}; export const functional = {id: "catalog.functional", parse: i => ({...i, run() {}})}; export const shared = {id: "catalog.shared", key: e => e.name, parse: i => i};' },
+    alpha: { body: '{setup(c){c.add({id: "catalog.numbered"}, {count: 1}); c.add({id: "catalog.shared"}, {name: "docs"})}}' },
+    beta: { body: '{setup(c){c.add({id: "catalog.throwing"}, {name: "x"}); c.add({id: "catalog.shared"}, {name: "docs"})}}' },
+    gamma: { body: '{setup(c){c.add({id: "catalog.functional"}, {name: "x"})}}' },
+  });
+
+  const failure = await dispatchCommand({ dir }, ["catalog", "show"]).then(() => "", (error: Error) => error.message);
+  expect(failure).toContain("package gamma: catalog.functional: its parser returned something other than a JSON object");
+  expect(failure).toContain("package alpha: catalog.numbered: its key returned something other than text");
+  expect(failure).toContain("package beta: catalog.throwing: its key failed: no key");
+  expect(failure).toContain("catalog.shared docs claimed by both package alpha and package beta");
+});
+
+test("a key runs on a copy of the entry, and a result that isn't text is refused without being read", () => {
+  // A BigInt can't be serialized, and a proxy throws when anything inspects it. Object() types
+  // them as anything, as plain JavaScript would.
+  const hostile = new Proxy({}, { get() { throw new Error("result inspected"); } });
+  const big = { id: "catalog.big", key: (): string => Object(1n).valueOf(), parse: (input: RegistryEntry) => input };
+  const trap = { id: "catalog.trap", key: (): string => Object(hostile), parse: (input: RegistryEntry) => input };
+
+  const editing = {
+    id: "catalog.editing",
+    key(entry: RegistryEntry) {
+      entry.name = "changed";
+
+      return "fixed";
+    },
+    parse: (input: RegistryEntry) => input,
+  };
+
+  const load = parseEntries(own([]), [
+    setUp("catalog", registered({ registries: new Map<string, Registry<RegistryEntry>>([[big.id, big], [trap.id, trap], [editing.id, editing]]) })),
+    setUp("alpha", add(big.id, { name: "a" })),
+    setUp("beta", add(trap.id, { name: "b" })),
+    setUp("gamma", add(editing.id, { name: "kept" })),
+  ]);
+
+  expect(messages(load)).toEqual([
+    [["alpha"], "catalog.big: its key returned something other than text"],
+    [["beta"], "catalog.trap: its key returned something other than text"],
+  ]);
+  expect(readEntries(load.entries, editing).map(entry => entry.value)).toEqual([{ name: "kept" }]);
 });

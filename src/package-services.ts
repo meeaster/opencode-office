@@ -5,7 +5,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import * as compose from "../standard/compose/services.ts";
-import { installedPackages } from "./layout.ts";
+import { installedPackages, type InstalledPackages } from "./layout.ts";
 import { type Office, OfficeError, readEnvFile } from "./office.ts";
 import type { InstalledPackage } from "./packages.ts";
 import { say } from "./report/index.ts";
@@ -65,8 +65,9 @@ export function serviceStatus(office: Office, item: InstalledPackage) {
   return compose.serviceStatus(office, source(item));
 }
 
-export async function preparePackageServices(office: Office, upgrade: boolean) {
-  const { installed, selected } = installedPackages(office);
+/** `inventory` is the caller's packages, read here when it has none. */
+export async function preparePackageServices(office: Office, upgrade: boolean, inventory: InstalledPackages = installedPackages(office)) {
+  const { installed, selected } = inventory;
   const plan = compose.prepareServices(office, installed.map(source), selected, upgrade);
   const envFile = (name: string) => secretsPath(office, name);
 

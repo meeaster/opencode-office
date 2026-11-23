@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, readlinkSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "./git.ts";
-import { sources } from "./github.ts";
+import { appliedReferences } from "./applied-references.ts";
 import { loadOffice } from "./office.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
 import { definitionText, writePackage } from "./test-package.ts";
@@ -16,19 +16,23 @@ test("a built-in's bytes and a Git contributor's resolved commit survive separat
   const delivered = ["office.ts", ".settings.json", ".source.json", "compose.yaml"].map(path => join(dir, ".office/packages/aws-emulator", path));
   const before = delivered.map(read);
 
-  // Exercise setup's real planner with Git restricted to file transport. The only HTTPS
-  // source is contributed, so it must be reported as requiring access, never push access.
+  // Exercise setup's real planner, on the references sync recorded, with Git restricted to file
+  // transport. The only HTTPS source is contributed, so it must be reported as requiring access, never push access.
   const planning = Bun.spawnSync([process.execPath, "--no-install", "-e", `
     import {planGithub} from ${JSON.stringify(join(import.meta.dir, "github.ts"))};
+    import {appliedReferences} from ${JSON.stringify(join(import.meta.dir, "applied-references.ts"))};
     import {loadOffice} from ${JSON.stringify(join(import.meta.dir, "office.ts"))};
-    console.log(JSON.stringify(await planGithub(loadOffice(process.cwd()))));
+    const office = loadOffice(process.cwd());
+    const applied = appliedReferences(office.dir, office);
+    if (!applied.ok) throw new Error(applied.errors.join("; "));
+    console.log(JSON.stringify(await planGithub(office, applied.value)));
   `], { cwd: dir, env });
 
   expect(planning.exitCode, planning.stderr.toString()).toBe(0);
   expect(JSON.parse(planning.stdout.toString())).toEqual({
     hosts: ["github.com"], private: [{ what: "reference floci", url: "https://github.com/floci-io/floci.git", pushes: false }], pushes: [], needed: true,
   });
-  expect(newer(1, "sync", "--packages")).toMatch(/built-in:[a-f0-9]{64}.*changed built-in collector/);
+  expect(newer(1, "sync", "--packages")).toContain("FAILED package aws-emulator: changed built-in collector");
   // A broken replacement leaves the installed native definition and its delivered settings in place.
   expect(delivered.map(read)).toEqual(before);
   // The set's built-in copies came from the other executable; each matches its own record, so it loads.
@@ -43,9 +47,14 @@ test("a built-in's bytes and a Git contributor's resolved commit survive separat
   const pin = (ref: string) => select(`  - {name: docs, repo: ${repo}, path: pkg, ref: ${ref}}\n`);
   pin("v1");
   cli(0, "sync", "--packages");
-  writePackage(join(repo, "pkg/office.ts"), `${marker} ${collector("unapproved:B")}`, { name: "docs" });
+  writePackage(join(repo, "pkg/office.ts"), `${marker} ${collector("unapproved:B", "main", 'throw Error("refused B");')}`, { name: "docs" });
   git(["tag", "-f", "v1", commit(repo)], repo);
   rmSync(installed, { recursive: true });
+  // An update to where the tag points now is refused, and never repairs the lost copy at its commit.
+  expect(cli(1, "packages", "update")).toContain("refused B");
+  expect(existsSync(installed)).toBe(false);
+  rmSync(probe);
+  // Sync repairs it at the locked commit, without importing the tag's.
   cli(0, "sync", "--packages");
   expect(JSON.parse(read(join(installed, ".source.json")))).toMatchObject({ commit: first, ref: "v1" });
   expect(cli(0, "references", "list")).toContain("approved:A");
@@ -55,7 +64,8 @@ test("a built-in's bytes and a Git contributor's resolved commit survive separat
   rmSync(installed, { recursive: true });
   renameSync(repo, repo + "-offline");
   expect(cli(1, "sync", "--packages")).toContain(`${repo}:pkg @ ${first} (revision ${first})`);
-  expect(published(dir)).toContain("approved:A @ main\tpackage docs (stale)");
+  // The set publishes without the package it couldn't fetch, whose references are then unknown.
+  expect(published(dir)).not.toContain("approved:A");
   expect(cli(1, "references", "list")).toContain("package docs: rejected by the last sync; run office sync");
   expect(existsSync(installed)).toBe(false);
 }, 60_000);
@@ -143,7 +153,7 @@ test("an overlapping or interrupted collector cannot republish an explicitly wit
   }
 }, 60_000);
 
-test.skipIf(process.getuid?.() === 0)("an inaccessible saved file fails its readers closed; genuine absence reads office.yaml", () => {
+test.skipIf(process.getuid?.() === 0)("an inaccessible applied file fails its readers closed; genuine absence reads office.yaml; commands never read it", () => {
   const { dir, cli } = fixture("read-errors");
   const folder = join(dir, ".office/resolved");
   const repo = join(root, "legacy-origin");
@@ -154,15 +164,16 @@ test.skipIf(process.getuid?.() === 0)("an inaccessible saved file fails its read
   chmodSync(folder, 0);
 
   try {
-    expect(cli(1, "references", "list")).toContain("EACCES");
+    expect(cli(0, "references", "list")).toContain(`legacy\t${repo}\toffice.yaml`);
     expect(cli(1, "sync", "--references")).toContain("EACCES");
     expect(existsSync(join(dir, "references/legacy"))).toBe(false);
-    expect(() => sources(loadOffice(dir))).toThrow("EACCES");
+    const applied = appliedReferences(dir, loadOffice(dir));
+    expect(applied.ok ? "" : applied.errors.join("\n")).toContain("EACCES");
   } finally {
     chmodSync(folder, 0o700);
   }
 
-  // Package commands never read the saved file: replacing it with text that isn't JSON changes nothing.
+  // Package commands never read the applied file: replacing it with text that isn't JSON changes nothing.
   const listing = cli(0, "references", "list");
   expect(listing).toContain(`legacy\t${repo}\toffice.yaml`);
   write(join(folder, "references.json"), "{");

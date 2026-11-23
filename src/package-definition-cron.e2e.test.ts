@@ -5,66 +5,26 @@ import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
 import { definitionText, writePackage } from "./test-package.ts";
 
-const { root, bin, marker, write, read, commit, fixture, collector, pausedRefresh } = definitionFixture();
+const { root, marker, write, read, commit, fixture, collector } = definitionFixture();
 
-test("stale refresh needs the actual and last-applied origin/ref; cron runs only its named owner", async () => {
+test("the reference refresh job applies what the last sync recorded and loads no package; check compares checkouts with the packages as they are now", () => {
   const f = fixture("cron-refs");
   const { dir, home, cli, probe, select } = f;
   const a = join(root, "repo-a");
-  const b = join(root, "repo-b");
-
-  for (const repo of [a, b]) {
-    git(["init", "-qb", "main", repo]);
-    write(join(repo, "document"), repo);
-    commit(repo);
-  }
+  git(["init", "-qb", "main", a]);
+  write(join(a, "document"), "A");
+  commit(a);
 
   const module = join(dir, "packages/docs/office.ts");
   const checkout = join(dir, "references/docs");
   const job = "package.office.update-references";
   const stamp = join(home, `.local/state/office/cron/cron-refs/${job}.stamp`);
-  const observed = () => [git(["rev-parse", "HEAD"], checkout), read(join(checkout, "document")), read(join(checkout, ".git/FETCH_HEAD"))];
   select("  - name: docs\n");
   writePackage(module, collector(a));
   cli(0, "sync");
   cli(0, "check");
-  write(join(checkout, "document"), "dirty A");
-  const before = observed();
 
-  writePackage(module, collector(b));
-  cli(0, "sync", "--packages");
-  writePackage(module, `${marker} throw Error("broken definition");`);
-  cli(1, "sync", "--packages");
-  rmSync(probe);
-  git(["remote", "set-url", "origin", b], checkout);
-  expect(cli(1, "sync", "--references")).toContain(`desired ${b} @ main, last applied ${a} @ main`);
-  expect(observed()).toEqual(before);
-  expect(cli(1, "cron", "run", job)).toContain("exited 1");
-  expect(observed()).toEqual(before);
-  expect(existsSync(stamp)).toBe(false);
-  expect(existsSync(probe)).toBe(false);
-
-  git(["remote", "set-url", "origin", a], checkout);
-  git(["switch", "-qc", "release"], a);
-  write(join(a, "document"), "pending release");
-  commit(a);
-  git(["switch", "-q", "main"], a);
-  writePackage(module, collector(a, "release"));
-  cli(0, "sync", "--packages");
-  expect(cli(1, "check", "--verbose")).toContain(`desired ${a} @ release, last applied ${a} @ main`);
-  expect(observed()).toEqual(before);
-
-  // A legacy ref alone cannot grant stale authority. A healthy refresh establishes the pair.
-  writePackage(module, collector(a));
-  cli(0, "sync", "--packages");
-  git(["config", "--unset", "office.appliedReference"], checkout);
-  git(["config", "office.referenceRef", "main"], checkout);
-  writePackage(module, collector(a, "main", 'throw Error("failed");'));
-  cli(1, "sync", "--packages");
-  expect(cli(1, "sync", "--references")).toContain("no unambiguous applied origin and ref");
-  expect(observed()).toEqual(before);
-  writePackage(module, collector(a));
-  cli(0, "sync");
+  // A broken definition stops sync; the job refreshes from the recorded references without importing it.
   writePackage(module, `${marker} throw Error("must not import from cron");`);
   cli(1, "sync", "--packages");
   rmSync(probe);
@@ -73,19 +33,21 @@ test("stale refresh needs the actual and last-applied origin/ref; cron runs only
   expect(cli(0, "cron", "run", job)).toContain("exited 0");
   expect(git(["rev-parse", "HEAD"], checkout)).toBe(advanced);
   expect(read(join(checkout, "document"))).toBe("advanced A");
+  expect(existsSync(probe)).toBe(false);
   const success = read(stamp);
-  write(join(a, "document"), "fetched but no longer authorized");
+
+  // A ref changed since the checkout was applied is reported by check, not applied by it.
+  git(["switch", "-qc", "release"], a);
+  write(join(a, "document"), "pending release");
   commit(a);
-  write(join(checkout, "document"), "keep through stale apply refusal");
-  const lastGood = observed();
-  const paused = await pausedRefresh(f);
-  git(["config", "--unset", "office.appliedReference"], checkout);
-  expect(await paused.resume(1)).toContain("no unambiguous applied");
-  expect(observed()).toEqual(lastGood);
+  git(["switch", "-q", "main"], a);
+  writePackage(module, collector(a, "release"));
+  expect(cli(1, "check", "--verbose")).toContain(`desired ${a} @ release, last applied ${a} @ main`);
+  expect(git(["rev-parse", "HEAD"], checkout)).toBe(advanced);
+
   select("  - name: docs\n  - name: office\n    cron: {update-references: {enabled: false}}\n");
   expect(cli(1, "cron", "run", job)).toContain("not enabled");
   expect(read(stamp)).toBe(success);
-  expect(existsSync(probe)).toBe(false);
 }, 60_000);
 
 test("cron routes mixed job declarations without claiming a local package named cron", () => {
@@ -198,7 +160,7 @@ packages:
   writePackage(module, definition());
   configure("container", "one");
   cli(0, "sync", "--packages");
-  expect(read(probe)).toBe("cron:one\nsetup:one\n");
+  expect(read(probe)).toBe("setup:one\ncron:one\n");
   expect(existsSync(join(dir, "runs"))).toBe(false);
   expect(existsSync(join(home, "units"))).toBe(false);
   expect(cli(0, "cron", "supercronic")).toBe(`0 ${hour} * * * office cron run ${run}\n0 0 * * 0 office cron run package.other.weekly\n`);

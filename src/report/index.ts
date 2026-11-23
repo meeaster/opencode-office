@@ -121,9 +121,10 @@ function stageOutput(line: string): void {
  * (the running stage's output by default, nothing without one) and returning the whole output.
  * Ctrl+C or the end of the command stops it.
  */
-export function stream(command: string, args: string[], { cwd, env, timeout, line = stageOutput }: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number; line?: (text: string) => void } = {}): Promise<Streamed> {
+export function stream(command: string, args: string[], { cwd, env, timeout, line = stageOutput, fd }: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number; line?: (text: string) => void; fd?: number } = {}): Promise<Streamed> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    // `fd`, a held lease, becomes the child's fd 3, so the lease lasts as long as the child does.
+    const child = spawn(command, args, { cwd, env, stdio: fd === undefined ? ["ignore", "pipe", "pipe"] : ["ignore", "pipe", "pipe", fd] });
     const collected = { stdout: "", stderr: "" };
     const pending = { stdout: "", stderr: "" };
     const timer = timeout === undefined ? undefined : setTimeout(() => child.kill("SIGTERM"), timeout);
@@ -156,8 +157,9 @@ export function stream(command: string, args: string[], { cwd, env, timeout, lin
       }
     };
 
-    child.stdout.on("data", take("stdout"));
-    child.stderr.on("data", take("stderr"));
+    // Both are pipes; the type with an inherited descriptor doesn't say so.
+    child.stdout?.on("data", take("stdout"));
+    child.stderr?.on("data", take("stderr"));
 
     const settle = (status: number, error?: string) => {
       if (timer !== undefined) clearTimeout(timer);

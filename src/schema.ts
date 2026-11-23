@@ -536,6 +536,8 @@ export const systemBlock = v.strictObject(
   mapping,
 );
 
+export type SystemBlock = v.InferOutput<typeof systemBlock>;
+
 /** The one variable a `spawns` label may hold, which office replaces with the office's name. */
 export const spawnsOfficeName = "${OFFICE_NAME}";
 

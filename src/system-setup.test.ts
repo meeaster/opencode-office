@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 
 import { sync } from "./commands/sync.ts";
 import { envFilePath } from "./host-env.ts";
-import { installedPackages } from "./layout.ts";
+import { gatherPackages } from "./gather.ts";
 import { grantConsent } from "./machine.ts";
 import { loadOffice } from "./office.ts";
 import { systemPlatformVariable } from "./package-system.ts";
@@ -75,7 +75,7 @@ async function prepare(consent = true) {
 
   const loaded = loadOffice(office);
 
-  return { loaded, installed: installedPackages(loaded).installed };
+  return { loaded, installed: (await gatherPackages(loaded, { machine: true })).packages };
 }
 
 const plan = (actions: Record<string, string>) =>

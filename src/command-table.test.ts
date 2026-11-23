@@ -62,7 +62,7 @@ test("a package can't take a first word of the CLI's own commands, nor opencode 
   expect(messages(owned("ink", "references list"), owned("press", "opencode tidy"))).toEqual([]);
 });
 
-test("sync reports a reserved name, or one claimed twice, by command-only packages and by ones that failed, and publishes nothing", async () => {
+test("sync reports a reserved name, or one claimed twice, by command-only packages and by ones that failed, and a registry key two packages add, and publishes nothing", async () => {
   const office = mkdtempSync(join(tmpdir(), "office-names-"));
 
   const write = (path: string, text: string) => {
@@ -71,7 +71,10 @@ test("sync reports a reserved name, or one claimed twice, by command-only packag
   };
 
   try {
-    write("office.yaml", "name: t\npackages:\n  - name: notes\n  - name: pages\n  - name: quill\n  - name: service\n");
+    write("office.yaml", "name: t\npackages:\n  - name: notes\n  - name: pages\n  - name: quill\n  - name: service\n  - name: alpha\n  - name: beta\n");
+    // Any registry with a key, not only the built-ins': both packages add docs.
+    writePackage(join(office, "packages/alpha/office.ts"), definitionText('{setup(c){c.registry(shared); c.add(shared, {name: "docs"})}}', 'const shared = {id: "alpha.shared", key: e => e.name, parse: i => i};'));
+    writePackage(join(office, "packages/beta/office.ts"), definitionText('{setup(c){c.add({id: "alpha.shared"}, {name: "docs"})}}'));
     // Neither has a setup: their commands are still checked.
     writePackage(join(office, "packages/notes/office.ts"), definitionText('{commands:{"sync extra":{summary:"Extra",run(){}},"shared show":{summary:"Show",run(){}}}}'));
     writePackage(join(office, "packages/pages/office.ts"), definitionText('{commands:{"shared show":{summary:"Show",run(){}}}}'));
@@ -81,10 +84,11 @@ test("sync reports a reserved name, or one claimed twice, by command-only packag
     git(["init", "--quiet", office]);
     const changes = await sync(loadOffice(office), { scope: "packages" });
 
-    expect(changes).toContain("FAILED package notes: command sync extra is reserved; no reference generation published");
-    expect(changes).toContain("FAILED command shared show claimed by both package notes and package pages; no reference generation published");
-    expect(changes).toContain("FAILED package quill: command apps extra is reserved; no reference generation published");
-    expect(changes).toContain("FAILED package service: command seeds extra is reserved; no reference generation published");
+    expect(changes).toContain("FAILED package notes: command sync extra is reserved");
+    expect(changes).toContain("FAILED command shared show claimed by both package notes and package pages");
+    expect(changes).toContain("FAILED package quill: command apps extra is reserved");
+    expect(changes).toContain("FAILED package service: command seeds extra is reserved");
+    expect(changes).toContain("FAILED alpha.shared docs claimed by both package alpha and package beta");
   } finally {
     rmSync(office, { recursive: true, force: true });
   }

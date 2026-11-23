@@ -150,20 +150,16 @@ export function definitionFixture({ second = true } = {}) {
   }
 
   /**
-   * What sync last published in .office/current/references.json, one reference per line as
-   * `office references list` prints it. That command loads packages live, so tests of sync's
-   * publication read the saved file.
+   * The references sync last recorded in .office/resolved/references.json, one per line as
+   * `office references list` prints them. That command gathers packages live, so tests of what
+   * sync applied read the file.
    */
   function published(dir: string) {
-    type Row = { name: string; url: string; ref?: string };
+    type Row = { name: string; url: string; ref?: string; owner: string };
 
-    const saved: { owner: Row[]; contributors: { name: string; stale: boolean; entries: { id: string; value: Row }[] }[] } = JSON.parse(read(join(dir, ".office/resolved/references.json")));
-    const line = (row: Row, owner: string) => `${row.name}\t${row.url}${row.ref ? ` @ ${row.ref}` : ""}\t${owner}`;
+    const applied: { references: Row[] } = JSON.parse(read(join(dir, ".office/resolved/references.json")));
 
-    return [
-      ...saved.owner.map(row => line(row, "office.yaml")),
-      ...saved.contributors.flatMap(group => group.entries.filter(entry => entry.id === "references.repository").map(entry => line(entry.value, `package ${group.name}${group.stale ? " (stale)" : ""}`))),
-    ].map(row => `${row}\n`).join("");
+    return applied.references.map(row => `${row.name}\t${row.url}${row.ref ? ` @ ${row.ref}` : ""}\t${row.owner === "office.yaml" ? row.owner : `package ${row.owner}`}\n`).join("");
   }
 
   /** A handle with the references registry's id: handles match by id. */
@@ -175,11 +171,12 @@ export function definitionFixture({ second = true } = {}) {
     return definitionText(`{async setup({add}) {add(repositories,${value});${after}}}`, references);
   }
 
-  /** Pause this invocation after real Git finished each network fetch, before Office can apply. */
+  /** Pause this invocation after real Git finished each network fetch, before Office can apply. `GIT_LOG` logs every Git command of a process with its folder. */
   async function pausedRefresh(f: ReturnType<typeof fixture>, count = 1) {
     const gate = mkdtempSync(join(root, "fetch-gate-"));
     write(join(f.home, "bin/git"), `#!/bin/sh
   set -eu
+  if [ -n "\${GIT_LOG:-}" ]; then echo "$PWD $*" >> "$GIT_LOG"; fi
   if [ "$1" != fetch ] || [ -z "\${FETCH_GATE:-}" ]; then exec "${bin}/git" "$@"; fi
   "${bin}/git" "$@"
   : > "$FETCH_GATE/\${PWD##*/}"
@@ -210,6 +207,12 @@ export function definitionFixture({ second = true } = {}) {
         return text;
       },
       interrupt() { process.kill("SIGINT"); },
+      /** Kills Office alone, leaving its paused Git fetch running; `release` lets that fetch finish. */
+      async kill() {
+        process.kill("SIGKILL");
+        await process.exited;
+      },
+      release() { write(join(gate, "go"), ""); },
     };
   }
 

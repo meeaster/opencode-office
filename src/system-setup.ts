@@ -37,7 +37,7 @@ import { type Office, OfficeError } from "./office.ts";
 import { systemApplies } from "./package-system.ts";
 import { destinationProblems } from "../standard/mise-integration/projection.ts";
 import { machineFiles } from "./package-tools.ts";
-import type { InstalledPackage } from "./packages.ts";
+import type { GatheredPackage } from "./gather.ts";
 import { check } from "./schema.ts";
 import { inherit, progress, say, warn } from "./report/index.ts";
 
@@ -104,7 +104,7 @@ export type SystemStatus =
   | { kind: "failed"; problems: string[] };
 
 /** The packages whose system block applies here. */
-function applying(office: Office, installed: InstalledPackage[]): InstalledPackage[] {
+function applying(office: Office, installed: GatheredPackage[]): GatheredPackage[] {
   return installed.filter((item) => systemApplies(office, item));
 }
 
@@ -120,7 +120,7 @@ function notOurs(office: Office): string | undefined {
 }
 
 /** What the office's system setup would change here, asked without sudo, network or changes. */
-export function systemStatus(office: Office, installed: InstalledPackage[], mise: string, run: Run = runCommand): SystemStatus {
+export function systemStatus(office: Office, installed: GatheredPackage[], mise: string, run: Run = runCommand): SystemStatus {
   const reason = notOurs(office);
 
   if (reason !== undefined) return { kind: "skipped", reason };
@@ -132,7 +132,7 @@ export function systemStatus(office: Office, installed: InstalledPackage[], mise
   const missing: string[] = [];
 
   for (const item of applying(office, installed)) {
-    const system = item.manifest.system;
+    const system = item.system;
 
     if (system?.prepare !== undefined) {
       const result = run(["bash", join(item.dir, system.prepare), "--check"], {});
@@ -191,7 +191,7 @@ const list = (lines: string[]) => lines.map((line) => `  - ${line}`).join("\n");
  * pending and the user agrees in a terminal, applies it through mise in the office's scope, then
  * checks that nothing is left. Throws when a check fails or the apply leaves something undone.
  */
-export async function systemStep(office: Office, installed: InstalledPackage[], { mise, ask, run = runCommand }: { mise: string; ask: Ask | undefined; run?: Run }): Promise<SystemOutcome> {
+export async function systemStep(office: Office, installed: GatheredPackage[], { mise, ask, run = runCommand }: { mise: string; ask: Ask | undefined; run?: Run }): Promise<SystemOutcome> {
   progress("asking mise what would change (no sudo, no network)");
 
   const status = systemStatus(office, installed, mise, run);
@@ -249,7 +249,7 @@ export async function systemStep(office: Office, installed: InstalledPackage[], 
 export type Verification = { ok: boolean; lines: string[] };
 
 /** Runs each applying block's verify script in a fresh shell that has sourced only the office's environment file. */
-export function verifySystems(office: Office, installed: InstalledPackage[], run: Run = runCommand): Verification {
+export function verifySystems(office: Office, installed: GatheredPackage[], run: Run = runCommand): Verification {
   if (notOurs(office) !== undefined) return { ok: true, lines: [] };
 
   const lines: string[] = [];
@@ -258,7 +258,7 @@ export function verifySystems(office: Office, installed: InstalledPackage[], run
   const keep = ["USER", "LOGNAME", "LANG"].flatMap((name) => (process.env[name] === undefined ? [] : [`${name}=${process.env[name]}`]));
 
   for (const item of applying(office, installed)) {
-    const system = item.manifest.system;
+    const system = item.system;
 
     if (system?.verify === undefined) continue;
 

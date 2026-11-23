@@ -2,8 +2,10 @@
 // call it; each decides what to do with the result.
 import * as v from "valibot";
 import type { Registry, RegistryEntry, SettingValue } from "../sdk/index.ts";
-import { namedEntry } from "./reference-snapshot.ts";
-import type { PackageManifest } from "./schema.ts";
+import { type PackageManifest, settingValue } from "./schema.ts";
+
+/** A registry entry: a JSON object, which sync and commands can copy and compare. */
+export const jsonObject = v.pipe(settingValue, v.check(value => value !== null && typeof value === "object" && !Array.isArray(value)));
 
 export type Registered = {
   /** The registries this package provides, by ID. */
@@ -31,8 +33,7 @@ export async function registerPackage({ name, manifest, settings }: SetupInput):
       registries.set(handle.id, handle);
     },
     add(handle, value) {
-      // Entries are named records until registries take other shapes.
-      if (!v.is(namedEntry, value)) throw new Error("expected a named registry entry");
+      if (!v.is(jsonObject, value)) throw new Error(`${handle.id}: an entry must be a JSON object`);
       additions.push({ id: handle.id, value: structuredClone(value) });
     },
   });

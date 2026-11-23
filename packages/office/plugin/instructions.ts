@@ -9,13 +9,13 @@ import { dirname, join, relative, sep } from "node:path";
 import * as v from "valibot";
 
 import { check, type OfficeConfig, officeSchema, type Parsed, resolveTools } from "../../../src/schema.ts";
-import { type ClaimedReference, resolvedReferences } from "../../../src/reference-snapshot.ts";
+import { type AppliedReference, appliedReferences } from "../../../src/applied-references.ts";
 import sessionScope from "../claude/session-scope.txt" with { type: "text" };
 
 // What the text uses from office.yaml, read through the schema the CLI uses.
 type DeskInfo = { name: string } & OfficeConfig["desks"][string];
 
-type OfficeInfo = { name: string; desks: DeskInfo[]; references: ClaimedReference[]; referenceNotes: string[]; catalogApps: string[]; socketFirewall: boolean; minimumReleaseAge: string };
+type OfficeInfo = { name: string; desks: DeskInfo[]; references: AppliedReference[]; referenceNotes: string[]; catalogApps: string[]; socketFirewall: boolean; minimumReleaseAge: string };
 
 function readOffice(office: string): Parsed<OfficeInfo> {
   // The plugin and the compiled `office` both run on Bun, which parses YAML itself.
@@ -25,15 +25,15 @@ function readOffice(office: string): Parsed<OfficeInfo> {
 
   const config = result.value;
   const tools = resolveTools(config);
-  const references = resolvedReferences(office, config);
+  const references = appliedReferences(office, config);
 
   return {
     ok: true,
     value: {
       name: config.name,
       desks: Object.entries(config.desks).map(([name, desk]) => ({ name, ...desk })),
-      references: references.ok ? references.value.entries : [],
-      referenceNotes: references.ok ? references.value.notes : references.errors,
+      references: references.ok ? references.value : [],
+      referenceNotes: references.ok ? [] : references.errors,
       catalogApps: config.executor?.catalog_apps ?? [],
       socketFirewall: tools.socketFirewall,
       minimumReleaseAge: tools.minimumReleaseAge,
@@ -109,7 +109,7 @@ function sharedSections(office: OfficeInfo, apps: string[]): string[] {
     ...(office.references.length === 0 ? ["None listed."] : office.references.map(reference => {
       const line = entry(`references/${reference.name}/`, reference.description);
 
-      return reference.owner === "office.yaml" ? line : `${line} (${reference.owner}${reference.stale ? ", stale" : ""})`;
+      return reference.owner === "office.yaml" ? line : `${line} (package ${reference.owner})`;
     })),
     "",
     "## Shared Executor apps",

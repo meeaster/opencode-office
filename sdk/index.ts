@@ -19,8 +19,8 @@ export type SettingsSchema = { readonly type: "object"; readonly [keyword: strin
 /** The settings of a package that declares none. */
 type NoSettings = { readonly type: "object"; readonly additionalProperties: false };
 
-/** A registry entry as a package adds it: a JSON record with a name. */
-export type RegistryEntry = { name: string; [field: string]: SettingValue };
+/** A registry entry as a package adds it: any JSON object. */
+export type RegistryEntry = { [field: string]: SettingValue };
 
 /**
  * A registry handle: its id, which starts with the owning package's name and a dot, and the parser
@@ -28,8 +28,10 @@ export type RegistryEntry = { name: string; [field: string]: SettingValue };
  */
 export type Registry<Value extends RegistryEntry> = {
   readonly id: string;
-  /** Entry names are unique per adding package rather than across the registry. */
-  readonly identity?: "package";
+  /** What makes a parsed entry unique: two entries with one key fail the run. Without it, equal entries are accepted. */
+  key?(entry: Value): string;
+  /** Where keys must be unique: across the registry (the default), or within each adding package's own entries. */
+  readonly keyScope?: "office" | "package";
   parse(input: RegistryEntry): Value;
 };
 

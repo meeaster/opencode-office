@@ -29,10 +29,6 @@ export function packageDeliveryDir(dir: string, item: ResolvedPackage) {
   return item.kind === "local" ? item.dir : join(dir, pulledFolder, item.entry.name);
 }
 
-export function snapshotPath(dir: string) {
-  return bound?.dir === dir ? join(bound.folder, "references.json") : join(dir, ".office/resolved/references.json");
-}
-
 /** The set's link folder: `node_modules/@office/<name>` for each package that loads. */
 export function packageLinks(folder: string) {
   return join(folder, "node_modules/@office");

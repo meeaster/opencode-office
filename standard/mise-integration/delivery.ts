@@ -30,7 +30,7 @@ import { packageDeliveryDir } from "../../src/bound-paths.ts";
 import { toolPins } from "../../src/mise-toml.ts";
 import type { Office } from "../../src/office.ts";
 import { fragmentOfficeRoot, systemApplyCommand, systemMarker, systemNotes, systemSection, systemState } from "../../src/package-system.ts";
-import type { InstalledPackage } from "../../src/packages.ts";
+import type { GatheredPackage } from "../../src/gather.ts";
 import type { Parsed } from "../../src/schema.ts";
 
 /** Where sync writes packages' fragments: in the tool's `.office/`, where mise loads nothing by itself. */
@@ -138,7 +138,7 @@ type PackagesPlan = { text: string | undefined; changes: PackageChange[] };
  * office.yaml lists but that didn't read (`declared`, not installed) stays as it is, since what that
  * package declares isn't known.
  */
-export function planPackageTools(office: Office, installed: InstalledPackage[], declared: string[]): PackagesPlan {
+export function planPackageTools(office: Office, installed: GatheredPackage[], declared: string[]): PackagesPlan {
   const current = readPackagesFile(office);
   const existing = current === undefined ? new Map<string, PackageLine>() : packageLines(current);
   const tools = declaredTools(office, installed);
@@ -192,7 +192,7 @@ export function planPackageTools(office: Office, installed: InstalledPackage[], 
 }
 
 /** Writes machine.packages.toml as `planPackageTools` makes it. Returns one line per change. */
-function syncPackageTools(office: Office, installed: InstalledPackage[], declared: string[]): string[] {
+function syncPackageTools(office: Office, installed: GatheredPackage[], declared: string[]): string[] {
   const current = readPackagesFile(office);
   const plan = planPackageTools(office, installed, declared);
 
@@ -221,8 +221,8 @@ const officeRoot = fragmentOfficeRoot;
  * Who keeps a host install current once it exists: an executable updates itself (Browse); a
  * regular file stays as installed until its task runs again.
  */
-function installOf(item: InstalledPackage) {
-  const typed = item.machine?.install;
+function installOf(item: GatheredPackage) {
+  const typed = item.claims.install;
 
   if (typed) return { ...typed, creates: typed.ready };
   const host = item.manifest.host?.install;
@@ -230,11 +230,11 @@ function installOf(item: InstalledPackage) {
   return host && { ...host, name: "install" };
 }
 
-function installTask(item: InstalledPackage) {
+function installTask(item: GatheredPackage) {
   return `${item.entry.name}:${installOf(item)?.name ?? "install"}`;
 }
 
-function afterInstall(item: InstalledPackage): string {
+function afterInstall(item: GatheredPackage): string {
   return installOf(item)?.executable === false ? `mise run ${installTask(item)} repairs or updates it` : "it updates itself";
 }
 
@@ -257,10 +257,10 @@ function installed(path: string, executable: boolean): boolean {
  * unconditionally. Both are inline commands that find the script from the fragment's own path, so
  * they work from any folder; mise puts the office's tools on their PATH, `bun` among them.
  */
-export function hostSection(office: Office, item: InstalledPackage): string | undefined {
+export function hostSection(office: Office, item: GatheredPackage): string | undefined {
   const install = installOf(item);
 
-  if (install === undefined || office.opencode.mode !== "host" || (!item.machine?.install && !hostApplies(office, item))) return undefined;
+  if (install === undefined || office.opencode.mode !== "host" || (!item.claims.install && !hostApplies(office, item))) return undefined;
 
   const script = relative(office.dir, join(packageDeliveryDir(office.dir, item), install.script));
   const creates = install.creates.replace(/^~\//, "$HOME/");
@@ -280,12 +280,12 @@ export function hostSection(office: Office, item: InstalledPackage): string | un
 }
 
 /** A package's mise setup: the host install, then the system setup, each where it applies; undefined for neither. */
-function fragmentSection(office: Office, item: InstalledPackage): Parsed<string | undefined> {
+function fragmentSection(office: Office, item: GatheredPackage): Parsed<string | undefined> {
   const system = systemSection(office, item);
 
   if (!system.ok) return system;
 
-  const tasks = (item.machine?.tasks ?? []).map(task => {
+  const tasks = item.claims.tasks.map(task => {
     const path = relative(office.dir, join(packageDeliveryDir(office.dir, item), task.script));
     const runner = path.endsWith(".ts") ? "bun" : "bash";
 
@@ -302,20 +302,8 @@ function fragmentText(name: string, section: string, modeMarker: string[] = []):
   return `${[...header(name), ...modeMarker, "", ...section.replace(/\n$/, "").split("\n")].join("\n")}\n`;
 }
 
-/** Whether applying a selected setup would introduce a new or changed machine fragment. */
-export function changesSetup(office: Office, item: InstalledPackage) {
-  const section = fragmentSection(office, item);
-
-  if (!section.ok) return true;
-
-  if (section.value === undefined) return false;
-  const path = fragmentPath(office, item.entry.name);
-
-  return !existsSync(path) || readFileSync(path, "utf8") !== fragmentText(item.entry.name, section.value, containerMarker(office));
-}
-
 /** The line of the host install's task in a fragment, which tells sync's messages it is there. */
-function hostMarker(item: InstalledPackage): string {
+function hostMarker(item: GatheredPackage): string {
   return `[tasks.${JSON.stringify(installTask(item))}]`;
 }
 
@@ -347,14 +335,14 @@ function removeEmptyFolders(office: Office): void {
 }
 
 /** Why a package's host install isn't in its fragment, for messages. */
-function hostAbsence(office: Office, item: InstalledPackage): string {
+function hostAbsence(office: Office, item: GatheredPackage): string {
   if (office.opencode.mode !== "host") return "the office runs OpenCode in its container (opencode: container)";
 
   return item.manifest.host?.setting ? `its ${item.manifest.host.setting} setting is off` : "its setup no longer selects the install";
 }
 
 /** What changed in a package's setup, from `before` (the fragment's old text) to now, one line each. */
-function sectionChanges(office: Office, item: InstalledPackage, before: string, where: string): string[] {
+function sectionChanges(office: Office, item: GatheredPackage, before: string, where: string): string[] {
   const name = item.entry.name;
   const lines: string[] = [];
   const host = hostSection(office, item);
@@ -363,7 +351,7 @@ function sectionChanges(office: Office, item: InstalledPackage, before: string, 
   if (host === undefined && before.includes(hostMarker(item))) lines.push(`removed package ${name}'s install of ${install} from ${where}: ${hostAbsence(office, item)}`);
   else if (host !== undefined && !before.includes(host.trim())) lines.push(`wrote package ${name}'s install of ${install} to ${where}: mise install installs it once, through the link (or mise run ${name}:install)`);
 
-  const system = item.manifest.system;
+  const system = item.system;
   const state = systemState(office, item);
   const part = systemSection(office, item);
   const wanted = part.ok ? part.value : undefined;
@@ -381,7 +369,7 @@ function sectionChanges(office: Office, item: InstalledPackage, before: string, 
  * fragment of a package with none or that office.yaml no longer lists. `declared` names every
  * package office.yaml lists, so a package that fails to read keeps its fragment.
  */
-function syncFragments(office: Office, installed: InstalledPackage[], declared: string[]): string[] {
+function syncFragments(office: Office, installed: GatheredPackage[], declared: string[]): string[] {
   const changes: string[] = [];
 
   for (const item of installed) {
@@ -443,7 +431,7 @@ function syncFragments(office: Office, installed: InstalledPackage[], declared: 
  * `declared` names every package office.yaml lists. Returns one line per change; a refusal starts
  * with FAILED.
  */
-export function syncTools(office: Office, installed: InstalledPackage[], declared: string[]): string[] {
+export function syncTools(office: Office, installed: GatheredPackage[], declared: string[]): string[] {
   return [...syncPackageTools(office, installed, declared), ...syncFragments(office, installed, declared)];
 }
 
@@ -451,11 +439,11 @@ export function syncTools(office: Office, installed: InstalledPackage[], declare
 type FragmentReport = { ok: boolean; notes: string[] };
 
 /** The host install's notes: why it is off here, or whether what it creates exists. */
-function hostNotes(office: Office, item: InstalledPackage): FragmentReport {
+function hostNotes(office: Office, item: GatheredPackage): FragmentReport {
   const host = item.manifest.host;
   const install = installOf(item);
 
-  if (!item.machine?.install && (host === undefined || !switchedOn(item))) return { ok: true, notes: [] };
+  if (!item.claims.install && (host === undefined || !switchedOn(item))) return { ok: true, notes: [] };
 
   const what = install?.description ?? "its host-mode tools";
 
@@ -475,7 +463,7 @@ function hostNotes(office: Office, item: InstalledPackage): FragmentReport {
 }
 
 /** What `office check` says of a package's lines in machine.packages.toml. */
-function toolNotes(office: Office, item: InstalledPackage): FragmentReport {
+function toolNotes(office: Office, item: GatheredPackage): FragmentReport {
   const wanted = wantedTools(office, item);
   const tools = Object.keys(wanted);
 
@@ -508,7 +496,7 @@ function toolNotes(office: Office, item: InstalledPackage): FragmentReport {
 }
 
 /** What `office check` says of a package's fragment: whether it holds the setup sync writes. */
-function setupNotes(office: Office, item: InstalledPackage, section: string | undefined): FragmentReport {
+function setupNotes(office: Office, item: GatheredPackage, section: string | undefined): FragmentReport {
   const path = fragmentPath(office, item.entry.name);
   const where = relative(office.dir, path);
 
@@ -526,9 +514,7 @@ function setupNotes(office: Office, item: InstalledPackage, section: string | un
 }
 
 /** What `office check` says of a package's tools, its fragment and its host install. */
-export function fragmentNotes(office: Office, item: InstalledPackage): FragmentReport {
-  if (item.machineProblem) return { ok: false, notes: [item.machineProblem] };
-
+export function fragmentNotes(office: Office, item: GatheredPackage): FragmentReport {
   const composed = fragmentSection(office, item);
   const parts = [toolNotes(office, item), setupNotes(office, item, composed.ok ? composed.value : undefined), hostNotes(office, item), systemNotes(office, item)];
 
@@ -539,7 +525,7 @@ export function fragmentNotes(office: Office, item: InstalledPackage): FragmentR
  * What `office check` says of machine.packages.toml as a whole: tools no package declares, and
  * comments sync would rewrite. A missing or low tool is its package's line.
  */
-export function packagesFileProblems(office: Office, installed: InstalledPackage[], declared: string[]): string[] {
+export function packagesFileProblems(office: Office, installed: GatheredPackage[], declared: string[]): string[] {
   const current = readPackagesFile(office);
   const plan = planPackageTools(office, installed, declared);
   const removed = plan.changes.filter((change) => change.kind === "removed").map((change) => change.tool);
@@ -556,7 +542,7 @@ export function packagesFileProblems(office: Office, installed: InstalledPackage
  * Tools machine.toml pins below what a package needs, for a warning in `office check`: machine.toml
  * wins, so the office runs a version older than the package was tested with.
  */
-export function machineBelowFloors(office: Office, installed: InstalledPackage[]): string[] {
+export function machineBelowFloors(office: Office, installed: GatheredPackage[]): string[] {
   const path = join(office.dir, machineFile);
 
   if (!existsSync(path)) return [];

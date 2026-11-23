@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { openCheckoutLease } from "./checkout-lease.ts";
+import { sync } from "./commands/sync.ts";
 import { loadOffice, type PackageEntry } from "./office.ts";
 import { boundCommit, candidatePackageLock, packageLockProblems } from "./package-operation.ts";
 import { editLock } from "./versions.ts";
@@ -26,26 +28,21 @@ const entry: PackageEntry = { name: "notes", settings: {}, cron: {}, source };
 const entryLock = { repo: source.repo, path: source.path, ref: source.ref, commit: locked };
 const lock = new Map([["notes", entryLock]]);
 
-test("the locked commit binds a Git package while its repo, path and ref match; otherwise the published binding does", () => {
-  expect(boundCommit(lock, entry, undefined)).toBe(locked);
-  expect(boundCommit(lock, entry, published)).toBe(locked);
+test("the locked commit binds a Git package while its repo, path and ref match; otherwise none does, and sync keeps a matching copy or resolves the ref", () => {
+  expect(boundCommit(lock, entry)).toBe(locked);
 
   for (const moved of [{ ref: "v2" }, { path: "other" }, { repo: "https://example.com/acme/fork.git" }]) {
-    const selected = { ...entry, source: { ...source, ...moved } };
-
-    expect(boundCommit(lock, selected, undefined)).toBeUndefined();
-    expect(boundCommit(lock, selected, published)).toBe(published);
+    expect(boundCommit(lock, { ...entry, source: { ...source, ...moved } })).toBeUndefined();
   }
 
-  expect(boundCommit(new Map(), entry, undefined)).toBeUndefined();
-  expect(boundCommit(new Map(), entry, published)).toBe(published);
-  expect(boundCommit(lock, { ...entry, source: undefined }, undefined)).toBeUndefined();
+  expect(boundCommit(new Map(), entry)).toBeUndefined();
+  expect(boundCommit(lock, { ...entry, source: undefined })).toBeUndefined();
 
   // An entry edited by hand so its full-SHA ref names another commit is ignored, so sync resolves the ref again.
   const pinned = { ...entry, source: { ...source, ref: published } };
 
-  expect(boundCommit(new Map([["notes", { ...entryLock, ref: published }]]), pinned, undefined)).toBeUndefined();
-  expect(boundCommit(new Map([["notes", { ...entryLock, ref: published, commit: published }]]), pinned, undefined)).toBe(published);
+  expect(boundCommit(new Map([["notes", { ...entryLock, ref: published }]]), pinned)).toBeUndefined();
+  expect(boundCommit(new Map([["notes", { ...entryLock, ref: published, commit: published }]]), pinned)).toBe(published);
 });
 
 type StagedRecord = { repo: string; path: string; ref: string; commit: string };
@@ -123,4 +120,34 @@ test("check reports a Git package's missing or mismatched office.lock entry, a c
   // An entry for a package office.yaml no longer selects, such as one removed by hand.
   setPackages({ notes: { repo, path: "notes", ref: "v2", commit: installed }, constructor: { repo, path: "gone", ref: "v1", commit: locked } });
   expect(packageLockProblems(office)).toEqual(["office.lock locks package constructor, which office.yaml no longer selects from a Git repository (office sync removes the entry)"]);
+
+  // Ownership conflicts, a local folder and a Git entry with built-in names, don't hide unrelated drift
+  // or make the conflicting Git entry's lock entry look deselected.
+  mkdirSync(join(dir, "packages/references"), { recursive: true });
+  writeFileSync(join(dir, "office.yaml"), `name: t\npackages:\n  - { name: notes, repo: ${repo}, path: notes, ref: v2 }\n  - { name: browser, repo: ${repo}, path: browser, ref: v1 }\n`);
+  setPackages({ notes: { repo, path: "notes", ref: "v2", commit: locked }, browser: { repo, path: "browser", ref: "v1", commit: locked } });
+  expect(packageLockProblems(loadOffice(dir))).toEqual([`package notes is installed at ${installed.slice(0, 12)}, but office.lock locks ${locked.slice(0, 12)} (office sync installs the locked commit)`]);
+});
+
+test("a package application lock that can't be opened or is held fails the sync by name, publishing nothing", async () => {
+  const office = join(dir, "office");
+  mkdirSync(office);
+  writeFileSync(join(office, "office.yaml"), "name: t\n");
+  const file = join(office, ".office/resolved/checkout-leases/.package-application.lock");
+
+  // Held by another sync: here, this process's own descriptor.
+  const held = openCheckoutLease(office, ".package-application");
+
+  try {
+    held.acquire();
+    expect(await sync(loadOffice(office), { scope: "packages" })).toEqual([expect.stringMatching(/^FAILED cannot take the package application lock: another office sync or package update holds \.office\/resolved\/checkout-leases\/\.package-application\.lock; retry once it finishes/)]);
+  } finally {
+    held[Symbol.dispose]();
+  }
+
+  // A link where the lock file goes is never followed.
+  rmSync(file);
+  symlinkSync(join(dir, "elsewhere"), file);
+  expect(await sync(loadOffice(office), { scope: "packages" })).toEqual([expect.stringMatching(/^FAILED cannot take the package application lock: ELOOP/)]);
+  expect(existsSync(join(office, ".office/current/selection.json"))).toBe(false);
 });

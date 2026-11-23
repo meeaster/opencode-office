@@ -25,7 +25,6 @@ const journal = v.strictObject({
 // The discovery links: each path under .office/ and what it leads to in the active generation.
 const bridges = [
   ["packages", "packages"],
-  ["resolved/references.json", "references.json"],
 ] as const;
 
 function digest(text: string) {

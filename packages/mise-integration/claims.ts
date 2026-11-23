@@ -14,10 +14,20 @@ function homePath(path: string) {
   return path.startsWith("~/") && packagePath(path.slice(2)) && !path.split("/").includes(".");
 }
 
+/** The entry's name, which every machine claim needs. */
+function named(name: RegistryEntry[string], what: string): string {
+  if (typeof name !== "string") throw new Error(`a ${what} needs a name`);
+
+  return name;
+}
+
 export const tasks = Registry.define<Task>({
-  identity: "package",
   id: "mise-integration.tasks",
-  parse({ name, script, description }: RegistryEntry): Task {
+  key: entry => entry.name,
+  keyScope: "package",
+  parse({ name: given, script, description }: RegistryEntry): Task {
+    const name = named(given, "task");
+
     if (!/^[a-z][a-z0-9-]*$/.test(name) || typeof script !== "string" || !packagePath(script) || !/\.(sh|ts)$/.test(script) || typeof description !== "string" || !description.trim() || /[\r\n]/.test(description)) throw new Error(`invalid task ${name}`);
 
     return { name, script, description };
@@ -25,8 +35,9 @@ export const tasks = Registry.define<Task>({
 });
 
 export const installs = Registry.define<Install>({
-  identity: "package",
   id: "mise-integration.installs",
+  key: entry => entry.name,
+  keyScope: "package",
   parse(input: RegistryEntry): Install {
     const task = tasks.parse(input);
     const { destination, ready, executable } = input;
@@ -46,9 +57,12 @@ function variables(value: RegistryEntry[string]): value is Record<string, string
 }
 
 export const recipes = Registry.define<Recipe>({
-  identity: "package",
   id: "mise-integration.recipes",
-  parse({ name, setting, description, platforms, prepare, verify, bootstrap, ready, env }: RegistryEntry): Recipe {
+  key: entry => entry.name,
+  keyScope: "package",
+  parse({ name: given, setting, description, platforms, prepare, verify, bootstrap, ready, env }: RegistryEntry): Recipe {
+    const name = named(given, "system recipe");
+
     if (typeof setting !== "string" || typeof description !== "string" || !strings(platforms) || (prepare !== undefined && typeof prepare !== "string") || (verify !== undefined && typeof verify !== "string") || typeof bootstrap !== "string" || !strings(ready) || !variables(env)) throw new Error(`invalid system recipe ${name}`);
 
     const recipe: Recipe = { name, setting, description, platforms, bootstrap, ready, env };

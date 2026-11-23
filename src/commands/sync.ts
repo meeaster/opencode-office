@@ -13,17 +13,17 @@ import { dirname, join, relative, resolve } from "node:path";
 
 import { prepareReferenceRefresh } from "../../packages/references/tasks/refresh.ts";
 import { claudeFiles } from "../claude.ts";
-import { unresolvedMachineOwner } from "../collect-references.ts";
-import { planReferenceApply } from "../reference-publication.ts";
+import { appliedReferences } from "../applied-references.ts";
 import { publishPackages } from "../package-operation.ts";
 import { editorLinks, linkForEditors } from "../package-imports.ts";
-import type { ReferenceSnapshot } from "../reference-snapshot.ts";
+import { openCheckoutLease } from "../checkout-lease.ts";
+import type { Gathered } from "../gather.ts";
 import { installPanel, locate, panelBundle, panelId, removalNote } from "../desktop.ts";
 import { collectJobs } from "../../standard/cron/jobs.ts";
 import { syncMachine } from "../machine.ts";
 import { cloneOrFetchStreamed, clonePluginStreamed, existingPluginDestination, git, isClone, PluginCheckoutProblem, referenceGit, referenceOriginProblem, refreshCloneStreamed, verifiedHead } from "../git.ts";
-import { type Clone, clones, type InstalledPackages, skillSelections } from "../layout.ts";
-import { cloneTarget, linkPlugins, placeLink, pluginFolder, pluginScope, requirePluginDestination, stagingFolder, withdrawDeselectedPlugins, withPluginPlan } from "../../standard/opencode/delivery.ts";
+import { type Clone, clones, skillSelections } from "../layout.ts";
+import { cloneTarget, linkPlugins, placeLink, pluginFolder, pluginScope, requirePluginDestination, stagingFolder, withPluginPlan } from "../../standard/opencode/delivery.ts";
 import { validateAssets } from "../../standard/opencode/assets.ts";
 import { type Declaration, readDeclarations } from "../../standard/opencode/declarations.ts";
 import { cloneFolder, entry as entryAt, officeEntries, requireFolder } from "../../standard/opencode/ownership.ts";
@@ -31,7 +31,7 @@ import { atomicWrite } from "../secrets.ts";
 import { syncTools } from "../package-tools.ts";
 import { type Desk, type Office, skillGroups } from "../office.ts";
 import { silentStage, type Stage } from "../report/index.ts";
-import { type InstalledPackage, installPackage, removePackage, requirePackageOwnership, resolvePackages } from "../packages.ts";
+import { type InstalledPackage, installPackage, removePackage, requirePackageOwnership } from "../packages.ts";
 import { keepSeedAttributes, seedStore, settleReceipts } from "../seeds.ts";
 import { describeGroup, stageGroup } from "../skill-copies.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
@@ -291,7 +291,7 @@ async function syncPlugin(office: Office, clone: Clone, present: boolean, linked
  * order, with a FAILED line for each that failed.
  */
 async function syncClones(office: Office, scope: "references" | "others" | "all", stage: Stage, verbose: boolean): Promise<string[]> {
-  const references = scope === "others" ? undefined : planReferenceApply(office);
+  const references = scope === "others" ? undefined : appliedReferences(office.dir, office);
 
   if (references && !references.ok) {
     const errors = references.errors.map(error => `FAILED ${error}`);
@@ -301,8 +301,7 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
     return errors;
   }
 
-  for (const note of references?.value.notes ?? []) stage.warn(note);
-  const work = clones(office, references?.value.entries ?? []).filter((clone) => scope !== "references" || clone.kind === "reference");
+  const work = clones(office, references?.value ?? []).filter((clone) => scope !== "references" || clone.kind === "reference");
   const lines: string[][] = work.map(() => []);
 
   // A clone's result shows as its part; other changes it makes show as notes.
@@ -341,14 +340,6 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
 
       const present = isClone(clone.dir);
 
-      let refresh: ReturnType<typeof prepareReferenceRefresh> | undefined;
-
-      if (clone.kind === "reference") {
-        if (!references) throw new Error("reference apply requires a current claim");
-        const git = referenceGit(clone, apply => references.value.guard(clone.name, apply));
-        refresh = prepareReferenceRefresh(present, clone.stale === true, git);
-      }
-
       (present ? updates : missing).push(async () => {
         const part = stage.part(where, present ? "updating" : "cloning");
         const options = { line: part.output, verbose };
@@ -357,8 +348,12 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
           let result;
           let notes: string[] = [];
 
-          if (refresh) result = await refresh(options);
-          else if (clone.kind === "plugin") ({ result, notes } = await syncPlugin(office, clone, present, claim.linked));
+          if (clone.kind === "reference") {
+            // One lease for the whole checkout, fetch included: a second refresh runs no Git on it.
+            using lease = openCheckoutLease(office.dir, clone.name);
+            lease.acquire();
+            result = await prepareReferenceRefresh(present, referenceGit(clone, lease.fd))(options);
+          } else if (clone.kind === "plugin") ({ result, notes } = await syncPlugin(office, clone, present, claim.linked));
           else result = await cloneOrFetchStreamed(clone.url, clone.ref, clone.dir, options);
           part.done(result);
 
@@ -452,9 +447,10 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
 
   changes.push(...copySkills(office));
 
-  // info/exclude is written once, after skills are linked too.
-  const published = await syncPackages(office, changes, stage, false);
-  reported.push(...await syncClones(office, published ? "all" : "others", stage, verbose));
+  // info/exclude is written once, after skills are linked too. References are cloned only once
+  // this sync recorded the ones it resolved.
+  const recorded = await syncPackages(office, changes, stage, false);
+  reported.push(...await syncClones(office, recorded ? "all" : "others", stage, verbose));
   changes.push(...claudeFiles(office.dir, true));
   changes.push(...linkSkills(office));
   changes.push(...excludePlumbing(office));
@@ -466,26 +462,27 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
  * Installs, updates, restores and removes the office's packages at the refs office.yaml pins, then
  * applies them: settings and seed files, their mise tools (linked machine-wide where the
  * office manages the machine), plugin links and desktop panels. `office sync` and `office packages
- * update` both apply packages this way. Each change goes to `changes`.
+ * update` both apply packages this way. A rejected candidate applies nothing. Each change goes to
+ * `changes`. Returns whether the switch recorded the references it resolved.
  */
 export async function syncPackages(office: Office, changes: { push: (...lines: string[]) => void }, stage: Stage = silentStage, exclude = true): Promise<boolean> {
-  if (office.opencode.mode === "container") changes.push(...syncMachine(office));
   requirePluginDestination(office);
   const result = await publishPackages(office, exclude);
 
   if (result.generation) stage.detail(`active package generation: ${result.generation}`);
   changes.push(...result.lines);
 
-  if (!result.published) {
-    const selection = resolvePackages(office);
-
-    if (!selection.problems.length) changes.push(...withdrawDeselectedPlugins(office, new Set(selection.packages.map(pkg => pkg.entry.name))));
-  }
-
-  return result.published;
+  return result.recorded === true;
 }
 
-export async function applyPackages(office: Office, installed: InstalledPackages, previous: ReferenceSnapshot | undefined, changes: string[], exclude: boolean, withdrawals: string) {
+/**
+ * Applies a published package set from its gathering. While a selected package is unread (this
+ * sync couldn't fetch it), what it claims is unknown, so no package's tools or machine files are
+ * reconciled.
+ */
+export async function applyPackages(office: Office, gathered: Gathered, changes: string[], exclude: boolean, withdrawals: string) {
+  const installed = gathered.inventory;
+
   // .office/packages/ holds only what sync pulled in, so a folder no package wants goes. Its panel
   // stays on the app's machine, where other offices may use it.
   const removedPanels: string[] = [];
@@ -522,14 +519,10 @@ export async function applyPackages(office: Office, installed: InstalledPackages
   for (const item of installed.installed) changes.push(...installPackage(office, item));
   changes.push(...keepSeedAttributes(office.dir));
 
-  const unknown = unresolvedMachineOwner(office, installed, previous);
-
-  if (unknown) changes.push(`FAILED package ${unknown}: machine claims unresolved; keeping last-good tools, fragments and links`);
-  else {
-    changes.push(...syncTools(office, installed.installed, [...installed.selected]));
-
-    if (office.opencode.mode === "host") changes.push(...syncMachine(office, installed));
-  }
+  // The machine is reconciled in either mode (container mode releases the host's files) only
+  // once every selected package loaded.
+  if (gathered.unread.size) changes.push(`not reconciling any package's tools or machine files: what package ${[...gathered.unread].join(", ")} claims is unknown until a sync loads it`);
+  else changes.push(...syncTools(office, gathered.packages, [...gathered.selected]), ...syncMachine(office, gathered));
 
   const plan = withPluginPlan(office, { ...installed, problems: [] }, "collect");
   changes.push(...plan.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));

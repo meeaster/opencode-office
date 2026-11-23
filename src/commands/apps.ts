@@ -37,8 +37,8 @@ const packageModulePath = "package.ts";
  * The Executor apps the office's installed packages ship, each under the package's namespace, for
  * the packages whose `executor_app.setting` is on (or that have none).
  */
-function packageAppFolders(office: Office): AppFolder[] {
-  return installedPackages(office).installed.flatMap((item) => {
+function packageAppFolders(installed: InstalledPackage[]): AppFolder[] {
+  return installed.flatMap((item) => {
     const declared = item.manifest.executor_app;
     const dir = join(item.dir, packageAppFolder);
 
@@ -50,9 +50,12 @@ function packageAppFolders(office: Office): AppFolder[] {
   });
 }
 
-/** The Executor app sources shared by the office, local to each desk, and shipped by packages. */
-export function appFolders(office: Office): AppFolder[] {
-  const folders = [...officeAppFolders(office), ...packageAppFolders(office)];
+/**
+ * The Executor app sources shared by the office, local to each desk, and shipped by packages:
+ * `installed`, or the packages' definitions read here.
+ */
+export function appFolders(office: Office, installed: InstalledPackage[] = installedPackages(office).installed): AppFolder[] {
+  const folders = [...officeAppFolders(office), ...packageAppFolders(installed)];
   const seen = new Map<string, string>();
 
   for (const folder of folders) {
@@ -391,14 +394,14 @@ function matchFramework(office: Office, folders: AppFolder[], version: string): 
   }
 }
 
-/** The `apps` version each deployed app's source names, by slug, for `office check`. */
-export async function deployedFrameworks(office: Office) {
+/** The `apps` version each deployed app's source names, by slug, for `office check`, which passes its packages. */
+export async function deployedFrameworks(office: Office, installed?: InstalledPackage[]) {
   const call = client(connection(office));
   const { organization } = await call<{ organization: string }>("GET", "/api/context");
   const { version } = await call<{ version: string }>("GET", `/api/organizations/${organization}/framework/release`);
   const base = `/api/organizations/${organization}`;
   const apps = await installedApps(call, base);
-  const folders = appFolders(office);
+  const folders = appFolders(office, installed);
   const catalog = await catalogPlan(call, base, office.catalogApps, apps, folders);
   const slugs = new Set(folders.filter(folder => !folder.adopted).map((folder) => folder.slug));
   const deployed: { slug: string; apps: string | undefined }[] = [];
@@ -421,14 +424,15 @@ export async function adopt(office: Office, id: string) {
 /**
  * Deploys every app in the office. Each app's `apps` dependency is first set to the framework
  * version Executor serves (after an Executor upgrade it moves) and every app is type-checked
- * against it, so nothing is deployed if any app would break.
+ * against it, so nothing is deployed if any app would break. Setup passes the packages it already
+ * read; `office apps deploy` reads their definitions only.
  */
-export async function deploy(office: Office): Promise<string> {
+export async function deploy(office: Office, installed?: InstalledPackage[]): Promise<string> {
   progress("connecting to Executor");
   const call = client(connection(office));
   const { organization } = await call<{ organization: string }>("GET", "/api/context");
   const { version } = await call<{ version: string }>("GET", `/api/organizations/${organization}/framework/release`);
-  const folders = appFolders(office);
+  const folders = appFolders(office, installed);
 
   const base = `/api/organizations/${organization}`;
   const existing = await installedApps(call, base);

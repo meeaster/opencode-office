@@ -45,8 +45,9 @@ test("browser: tool profiles, Browse off and system Chrome on; its recipe's sett
   const { additions } = await registerPackage({ name: "browser", manifest: item.manifest, settings: item.settings });
 
   // The contributed recipe passes the default-off rule as sync projects it.
-  project(item, additions);
-  expect(item.manifest.system?.setting).toBe("system_chrome");
+  expect(project(item, additions).system?.setting).toBe("system_chrome");
+  // Projection reads claims without changing the definition.
+  expect(item.manifest.system).toBeUndefined();
 });
 
 test("office: more ignored skill folders, and the Claude app's synced skills loaded", () => {

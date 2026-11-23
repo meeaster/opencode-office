@@ -39,8 +39,9 @@ export function namedJob(office: Office, id: string): CronJob {
   return job;
 }
 
-export function requireJobs(office: Office): CronJob[] {
-  const result = collectJobs(office, installedPackages(office));
+/** `inventory` is the caller's packages, read here when it has none. */
+export function requireJobs(office: Office, inventory: InstalledPackages = installedPackages(office)): CronJob[] {
+  const result = collectJobs(office, inventory);
 
   if (!result.ok) throw new OfficeError(result.errors.join("\n"));
 

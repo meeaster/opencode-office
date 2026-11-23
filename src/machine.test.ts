@@ -7,6 +7,7 @@ import { sync } from "./commands/sync.ts";
 import { machineDirVariable } from "./host-env.ts";
 import { serverUnit, serverUnitPath } from "./host-server.ts";
 import { claim, grantConsent, machineRecordVariable, machineReport, matchesServerUnit, miseConfigVariable, readMachine, releaseMachine, syncMachine, writeServerUnit } from "./machine.ts";
+import { gatherPackages } from "./gather.ts";
 import { loadOffice, OfficeError, readConfig } from "./office.ts";
 import { writePackage } from "./test-package.ts";
 
@@ -36,6 +37,14 @@ afterEach(() => {
   }
 });
 
+
+/** What \`office check\` says of the machine, from the office's packages as one gathering loads them. */
+async function report(at: string) {
+  const config = loadOffice(at);
+
+  return machineReport(config, await gatherPackages(config, { machine: true }));
+}
+
 function write(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content);
@@ -56,7 +65,7 @@ function makeOffice(at: string, { name = "t", opencode = host, packages = "packa
 
 const links = () => (existsSync(confD) ? readdirSync(confD).sort() : []);
 
-test("the managed server unit needs consent and a recorded env.sh, and is not overwritten when edited", () => {
+test("the managed server unit needs consent and a recorded env.sh, and is not overwritten when edited", async () => {
   makeOffice(office, { name: "test-server-record", opencode: `${host}  managed: true\n` });
 
   const config = loadOffice(office);
@@ -69,7 +78,7 @@ test("the managed server unit needs consent and a recorded env.sh, and is not ov
   expect(() => writeServerUnit(config, plan)).toThrow("requires consent");
   grantConsent(config);
   expect(() => writeServerUnit(config, plan)).toThrow("recorded environment file");
-  syncMachine(config);
+  syncMachine(config, await gatherPackages(config, { machine: true }));
   write(plan.path, "# somebody else's unit\n");
   expect(() => writeServerUnit(config, plan)).toThrow("not in the machine record");
   unlinkSync(plan.path);
@@ -77,7 +86,7 @@ test("the managed server unit needs consent and a recorded env.sh, and is not ov
   expect(writeServerUnit(config, plan)).toBe(true);
   expect(writeServerUnit(config, plan)).toBe(false);
   expect(matchesServerUnit(config, plan)).toBe(true);
-  expect(syncMachine(config)).toEqual([]);
+  expect(syncMachine(config, await gatherPackages(config, { machine: true }))).toEqual([]);
   expect(matchesServerUnit(config, plan)).toBe(true);
 
   write(plan.path, "# edited\n");
@@ -97,7 +106,7 @@ test("without consent, sync writes nothing outside the office and says what to r
   expect(existsSync(join(dir, "data"))).toBe(false);
   expect(existsSync(confD)).toBe(false);
   expect(readMachine()).toBeUndefined();
-  expect(machineReport(loadOffice(office))).toEqual([{ ok: false, name: "machine", detail: expect.stringContaining(`no consent for this office to manage this machine, so machine.toml and the packages' tools in machine.packages.toml apply nowhere and ${join(dir, "data/env.sh")} isn't written; run office setup`) }]);
+  expect(await report(office)).toEqual([{ ok: false, name: "machine", detail: expect.stringContaining(`no consent for this office to manage this machine, so machine.toml and the packages' tools in machine.packages.toml apply nowhere and ${join(dir, "data/env.sh")} isn't written; run office setup`) }]);
 });
 
 test("with consent, sync links machine.packages.toml first, each fragment, machine.toml last, records them, and a second sync changes nothing", async () => {
@@ -125,7 +134,7 @@ test("with consent, sync links machine.packages.toml first, each fragment, machi
     ],
   });
   expect(await sync(loadOffice(office))).toEqual([]);
-  expect(machineReport(loadOffice(office)).map((line) => line.ok)).toEqual([true, true, true, true, true]);
+  expect((await report(office)).map((line) => line.ok)).toEqual([true, true, true, true, true]);
 });
 
 test("removing a package removes its link; leaving host mode removes them all and the record", async () => {
@@ -147,7 +156,7 @@ test("removing a package removes its link; leaving host mode removes them all an
   expect(changes).toEqual(expect.arrayContaining([expect.stringMatching(/^office t no longer manages this machine/)]));
   expect(links()).toEqual([]);
   expect(readMachine()).toBeUndefined();
-  expect(machineReport(loadOffice(office))).toEqual([]);
+  expect(await report(office)).toEqual([]);
 });
 
 test("office sync --release-machine removes everything and the consent, keeping a file changed by hand", async () => {
@@ -182,7 +191,7 @@ test("a second host-mode office is refused, naming the one that manages the mach
 
   expect(() => grantConsent(loadOffice(other))).toThrow(OfficeError);
   expect(await sync(loadOffice(other))).toEqual(expect.arrayContaining([expect.stringContaining(`FAILED to link this office's tools on the machine: this machine is managed by office t in ${office}`)]));
-  expect(machineReport(loadOffice(other))).toEqual([{ ok: false, name: "machine", detail: expect.stringContaining("managed by office t") }]);
+  expect(await report(other)).toEqual([{ ok: false, name: "machine", detail: expect.stringContaining("managed by office t") }]);
   expect(links()).toEqual(["office-t-0-packages.toml", "office-t-1-demo.toml", "office-t-2-machine.toml"]);
 
   // A copy of the same office beside it is another office too.
@@ -202,7 +211,7 @@ test("an office that moved takes its record along and relinks its tools", async 
 
   renameSync(office, moved);
 
-  expect(machineReport(loadOffice(moved)).map((line) => [line.ok, line.detail.split(";")[0]])).toEqual([
+  expect((await report(moved)).map((line) => [line.ok, line.detail.split(";")[0]])).toEqual([
     [false, `the record names ${office}, where this office was`],
     [false, `dangling: ${join(office, "machine.packages.toml")} is gone, so mise skips it silently`],
     [false, `dangling: ${join(office, ".office/mise/demo.toml")} is gone, so mise skips it silently`],
@@ -216,7 +225,7 @@ test("an office that moved takes its record along and relinks its tools", async 
   expect(changes).toContain(`relinked ${confD}/office-t-1-demo.toml to .office/mise/demo.toml (package demo)`);
   expect(readlinkSync(join(confD, "office-t-2-machine.toml"))).toBe(join(moved, "machine.toml"));
   expect(readMachine()?.office).toEqual({ name: "t", dir: moved });
-  expect(machineReport(loadOffice(moved)).every((line) => line.ok === true)).toBe(true);
+  expect((await report(moved)).every((line) => line.ok === true)).toBe(true);
 });
 
 test("sync never replaces a path the record doesn't list, and check reports dangling and hand-edited links", async () => {
@@ -227,7 +236,7 @@ test("sync never replaces a path the record doesn't list, and check reports dang
 
   expect(await sync(loadOffice(office))).toContain(`FAILED to link .office/mise/demo.toml (package demo): ${confD}/office-t-1-demo.toml exists and ${join(dir, "record/machine.json")} doesn't list it, so office leaves it; move it away and run office sync`);
   expect(readFileSync(join(confD, "office-t-1-demo.toml"), "utf8")).toBe("# someone else's\n");
-  expect(machineReport(loadOffice(office)).find((line) => line.name.endsWith("office-t-1-demo.toml"))?.detail).toStartWith("exists but isn't in the record");
+  expect((await report(office)).find((line) => line.name.endsWith("office-t-1-demo.toml"))?.detail).toStartWith("exists but isn't in the record");
 
   rmSync(join(confD, "office-t-1-demo.toml"));
   await sync(loadOffice(office));
@@ -237,10 +246,10 @@ test("sync never replaces a path the record doesn't list, and check reports dang
   symlinkSync(join(dir, "elsewhere.toml"), join(confD, "office-t-1-demo.toml"));
   rmSync(join(office, "machine.toml"));
 
-  const report = machineReport(loadOffice(office));
+  const lines = await report(office);
 
-  expect(report.find((line) => line.name.endsWith("office-t-1-demo.toml"))).toEqual({ ok: false, name: `machine ${confD}/office-t-1-demo.toml`, detail: `changed since office wrote it to ${join(office, ".office/mise/demo.toml")}; office leaves it: delete it, then office sync` });
-  expect(report.find((line) => line.name.endsWith("office-t-2-machine.toml"))?.detail).toStartWith(`dangling: ${join(office, "machine.toml")} is gone, so mise skips it silently; office sync removes it`);
+  expect(lines.find((line) => line.name.endsWith("office-t-1-demo.toml"))).toEqual({ ok: false, name: `machine ${confD}/office-t-1-demo.toml`, detail: `changed since office wrote it to ${join(office, ".office/mise/demo.toml")}; office leaves it: delete it, then office sync` });
+  expect(lines.find((line) => line.name.endsWith("office-t-2-machine.toml"))?.detail).toStartWith(`dangling: ${join(office, "machine.toml")} is gone, so mise skips it silently; office sync removes it`);
 
   const changes = await sync(loadOffice(office));
 
@@ -249,11 +258,11 @@ test("sync never replaces a path the record doesn't list, and check reports dang
   expect(lstatSync(join(confD, "office-t-1-demo.toml")).isSymbolicLink() && readlinkSync(join(confD, "office-t-1-demo.toml"))).toBe(join(dir, "elsewhere.toml"));
 });
 
-test("syncMachine does nothing for a container-mode office that doesn't manage the machine", () => {
+test("syncMachine does nothing for a container-mode office that doesn't manage the machine", async () => {
   makeOffice(office, { opencode: "opencode: container\n" });
 
   expect(syncMachine(loadOffice(office))).toEqual([]);
-  expect(machineReport(loadOffice(office))).toEqual([]);
+  expect(await report(office)).toEqual([]);
 });
 
 test("machine, config and mise are reserved package names", () => {

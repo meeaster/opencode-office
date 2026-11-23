@@ -137,45 +137,6 @@ test("two packages' schemas with the same $id each validate, with their own $ref
   expect(read(dir, "two").result).toMatchObject({ ok: false, errors: ["packages.two.settings.size: must be string"] });
 });
 
-test("a replacement's worker runs no setup while a peer's settings are invalid", async () => {
-  const repo = join(dir, "repo");
-  const office = join(dir, "office");
-  const marker = join(dir, "alpha-setup");
-
-  const commit = (text: string) => {
-    writePackage(join(repo, "alpha/office.ts"), definitionText(`{setup(){appendFileSync(${JSON.stringify(marker)},"${text}\\n")}}`, 'import {appendFileSync} from "node:fs";'));
-    git(["add", "-A"], repo);
-    git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "-m", text], repo);
-
-    return git(["rev-parse", "HEAD"], repo);
-  };
-
-  git(["init", "--quiet", repo]);
-  const first = commit("one");
-  const second = commit("two");
-  const config = (ref: string, port: string) => write(join(office, "office.yaml"), `name: t\npackages:\n  - {name: alpha, repo: ${repo}, path: alpha, ref: ${ref}}\n  - {name: bravo, settings: {port: ${port}}}\n`);
-  const fetch = (ref: string) => fetchPackage(loadOffice(office), loadOffice(office).packages[0], { repo, path: "alpha", ref, track: undefined });
-
-  writePackage(join(office, "packages/bravo/package.yaml"), "settings: {type: object, additionalProperties: false, properties: {port: {type: integer}}}\n");
-  recordRequiredBuiltins(office);
-  config(first, "4600");
-  expect(await fetch(first)).toEqual([`installed .office/packages/alpha from ${repo} at ${first}`]);
-
-  // Replacing the copy goes through the worker, whose admission reads every peer before any setup.
-  config(second, '"4600"');
-  const [rejected] = await fetch(second);
-
-  expect(rejected).toStartWith("FAILED .office/packages/alpha");
-  expect(rejected).toContain("packages.bravo.settings.port: must be integer; sync the selected peers before updating");
-  expect(existsSync(marker)).toBe(false);
-  expect(readFileSync(join(office, ".office/packages/alpha/office.ts"), "utf8")).toContain('"one\\n"');
-
-  // With the peer valid, the same worker sets the candidate up.
-  config(second, "4600");
-  expect(await fetch(second)).toEqual([`updated .office/packages/alpha from ${repo} alpha at ${first.slice(0, 12)} (ref ${first}) to ${second} (${second})`]);
-  expect(readFileSync(marker, "utf8")).toBe("two\n");
-});
-
 test("an install ignores the source office's records, an update by full commit SHA replaces the package, an edited copy is restored, and seed copies are left alone", async () => {
   const repo = join(dir, "repo");
   const office = join(dir, "office");
@@ -198,7 +159,7 @@ test("an install ignores the source office's records, an update by full commit S
   const first = commit("one");
 
   write(join(repo, "pkgs/demo/scripts/run.sh"), "echo two\n");
-  // The replacement is validated in its worker, which loads a module definition with its own SDK.
+  // Copying evaluates nothing: the replacement's module definition loads when admission gathers.
   rmSync(join(repo, "pkgs/demo/package.yaml"));
   writePackage(join(repo, "pkgs/demo/office.ts"), definitionText(`{settings:${settingsSchema({ title: "Shared" }, { url: "string" })}}`));
 
@@ -236,43 +197,6 @@ test("an install ignores the source office's records, an update by full commit S
 
   expect(installPackage(updated.loaded, updated.result.value)).toEqual([]);
   expect(readFileSync(join(office, "out/AGENTS.md"), "utf8")).toBe("the office's own\n");
-});
-
-test("a replacement is checked in the selection it joins before its definition is imported", async () => {
-  const repo = join(dir, "repo");
-  const office = join(dir, "office");
-  const imported = join(dir, "imported");
-
-  const commit = () => {
-    git(["add", "-A"], repo);
-    git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "-m", "fixture"], repo);
-
-    return git(["rev-parse", "HEAD"], repo);
-  };
-
-  writePackage(join(repo, "pkgs/demo/package.yaml"), "{}\n");
-  git(["init", "--quiet", repo]);
-  const first = commit();
-
-  rmSync(join(repo, "pkgs/demo/package.yaml"));
-  // Importing it would leave a marker; it depends on a package the office doesn't select.
-  writePackage(join(repo, "pkgs/demo/office.ts"), definitionText("{}", `import {writeFileSync} from "node:fs"; writeFileSync(${JSON.stringify(imported)}, "x");`), { dependencies: ["absent"] });
-  const second = commit();
-  const entry = (ref: string) => `name: t\npackages:\n  - name: demo\n    repo: ${repo}\n    path: pkgs/demo\n    ref: ${ref}\n`;
-
-  write(join(office, "office.yaml"), entry(first));
-  const loaded = loadOffice(office);
-  const source = { repo, path: "pkgs/demo", ref: first, track: undefined };
-
-  expect(await fetchPackage(loaded, loaded.packages[0], source)).toEqual([`installed .office/packages/demo from ${repo} at ${first}`]);
-  write(join(office, "office.yaml"), entry(second));
-  const [failed] = await fetchPackage(loadOffice(office), loaded.packages[0], { ...source, ref: second });
-
-  expect(failed).toStartWith("FAILED .office/packages/demo");
-  expect(failed).toContain("package demo: depends on @office/absent, which isn't selected; add it to office.yaml");
-  expect(existsSync(imported)).toBe(false);
-  // The installed copy is untouched.
-  expect(existsSync(join(office, ".office/packages/demo/package.yaml"))).toBe(true);
 });
 
 test("a package plugin is linked while declared, gives way to a plugins: entry of its name without git running through the link, and is unlinked when the entry goes", async () => {

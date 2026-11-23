@@ -243,11 +243,12 @@ export function cloneOrFetch(url: string, ref: string | undefined, dir: string):
 // when its output isn't a terminal; otherwise git stays quiet and prints only what went wrong.
 type GitOptions = { line?: (text: string) => void; verbose?: boolean };
 
-async function gitStreamed(args: string[], cwd: string | undefined, { line = () => {}, verbose = false }: GitOptions): Promise<void> {
+/** `checkoutFd`, a checkout's held lease, is inherited by Git, as `gitOutput` does. */
+async function gitStreamed(args: string[], cwd: string | undefined, { line = () => {}, verbose = false }: GitOptions, checkoutFd?: number): Promise<void> {
   const [command, ...rest] = args;
   const flags = verbose && (command === "fetch" || command === "clone") ? ["--progress"] : command === "fetch" || command === "clone" ? ["--quiet"] : [];
 
-  await streamChecked("git", [command, ...flags, ...rest], { cwd, line, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+  await streamChecked("git", [command, ...flags, ...rest], { cwd, line, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, fd: checkoutFd });
 }
 
 async function fetchNewShallow(url: string, ref: string | undefined, dir: string, options: GitOptions) {
@@ -458,11 +459,12 @@ export async function refreshCloneStreamed(ref: string | undefined, dir: string,
   return head(dir) === before ? "current" : "updated";
 }
 
-/** Fetch independently; only the ticket holder may publish a clone or force its worktree. */
-export function referenceGit(
-  { dir, url, ref = "HEAD" }: { dir: string; url: string; ref?: string },
-  guard: <T extends string | void>(apply: (fd: number) => T) => T,
-): ReferenceGit {
+/**
+ * A reference checkout's Git operations. The caller holds the checkout's lease for the whole
+ * operation, fetch included; `fd` is that lease, which each Git command changing the existing
+ * checkout inherits, its fetch and the removal of the fetched ref included.
+ */
+export function referenceGit({ dir, url, ref = "HEAD" }: { dir: string; url: string; ref?: string }, fd: number): ReferenceGit {
   function targetProblem(present: boolean) {
     const problem = referenceOriginProblem(dir, url);
 
@@ -480,11 +482,9 @@ export function referenceGit(
       await fetchNewShallow(url, ref, staging, options);
       git(["checkout", "--quiet", "--detach", "FETCH_HEAD"], staging);
       recordReference(staging, url, ref, head(staging));
-      guard(() => {
-        verify();
-        renameSync(staging, dir);
-        moved = true;
-      });
+      verify();
+      renameSync(staging, dir);
+      moved = true;
 
       return "cloned";
     } finally {
@@ -496,28 +496,22 @@ export function referenceGit(
     const pending = `refs/office-fetch/${randomUUID()}`;
 
     try {
-      await gitStreamed(["fetch", "--depth", "1", "--no-write-fetch-head", "--no-tags", "--refmap=", "--", "origin", `${ref}:${pending}`], dir, options);
+      await gitStreamed(["fetch", "--depth", "1", "--no-write-fetch-head", "--no-tags", "--refmap=", "--", "origin", `${ref}:${pending}`], dir, options, fd);
+      verify();
+      const commit = git(["rev-parse", "--verify", `${pending}^{commit}`], dir);
+      const before = unbornClone(dir) ? undefined : head(dir);
+      // A failed/interrupted local checkout cannot leave a previous success as authority.
+      gitOutput(["config", "--local", "--replace-all", appliedReference, "null"], dir, fd);
+      gitOutput(["checkout", "--quiet", "--force", "--detach", commit], dir, fd);
+      recordReference(dir, url, ref, commit, fd);
 
-      return guard(fd => {
-        verify();
-        const commit = git(["rev-parse", "--verify", `${pending}^{commit}`], dir);
-        const before = unbornClone(dir) ? undefined : head(dir);
-        // A failed/interrupted local checkout cannot leave a previous success as authority.
-        gitOutput(["config", "--local", "--replace-all", appliedReference, "null"], dir, fd);
-        gitOutput(["checkout", "--quiet", "--force", "--detach", commit], dir, fd);
-        recordReference(dir, url, ref, commit, fd);
-
-        return before === commit ? "current" : "updated";
-      });
+      return before === commit ? "current" : "updated";
     } finally {
-      if (existsSync(join(dir, ".git"))) git(["update-ref", "-d", pending], dir);
+      if (existsSync(join(dir, ".git"))) gitOutput(["update-ref", "-d", pending], dir, fd);
     }
   };
 
-  return {
-    targetProblem, appliedProblem: () => appliedReferenceProblem(dir, url, ref),
-    checkBeforeFetch: verify => guard(() => verify()), stageClone, fetchExisting,
-  };
+  return { targetProblem, stageClone, fetchExisting };
 }
 
 /** `cloneOrFetch`, without blocking. */

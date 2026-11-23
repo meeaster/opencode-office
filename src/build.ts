@@ -39,7 +39,7 @@ export async function compile(outfile: string, version = manifest.version): Prom
     }
 
     const result = await Bun.build({
-      entrypoints: [join(root, "src/cli.ts"), join(root, "src/validate-replacement.ts")],
+      entrypoints: [join(root, "src/cli.ts")],
       compile: { outfile, ...runtime, assets: [...assets.map((path) => join(root, path)), staged] },
       define: { OFFICE_COMMIT: JSON.stringify(checkoutCommit()), OFFICE_VERSION: JSON.stringify(version) },
     });

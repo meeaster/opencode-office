@@ -49,37 +49,6 @@ test("consenting host sync and bound check agree on Browser's stable mise fragme
   expect(browserLine(cli(1, "check"))).toMatch(/^ok\s+package browser:.*mise setup in \.office\/mise\/browser\.toml/);
 });
 
-test("sync doesn't publish while the references bridge is replaced, and sets it back only once the owner's file is moved aside", () => {
-  const { dir, cli, select } = fixture("legacy-writer");
-  const bridge = join(dir, ".office/resolved/references.json");
-  const current = join(dir, ".office/current");
-  const before = readlinkSync(current);
-  const packages = join(dir, ".office/packages");
-  const pkg = join(dir, "packages/notes/office.ts");
-  const command = 'commands:{"notes bye":{summary:"bye",run(){console.log("updated")}}}';
-  select("  - name: notes\n");
-  // Simulate the old executable's atomic replacement during collection, after reservation.
-  writePackage(pkg, definitionText(`{setup(ctx){
-    writeFileSync(${JSON.stringify(`${bridge}.tmp`)}, "owner bytes"); renameSync(${JSON.stringify(`${bridge}.tmp`)}, ${JSON.stringify(bridge)})}, ${command}}`, `import {renameSync,writeFileSync} from "node:fs";`));
-  expect(cli(1, "sync", "--packages")).toContain(bridge);
-  expect(readlinkSync(current)).toBe(before);
-  rmSync(packages);
-  expect(cli(1, "notes", "bye")).toContain("move the conflicting entry aside");
-  expect(existsSync(packages)).toBe(false);
-  expect(read(bridge)).toBe("owner bytes");
-  renameSync(bridge, `${bridge}.saved`);
-  symlinkSync(`${bridge}.saved`, bridge);
-  expect(cli(1, "sync", "--packages")).toContain(bridge);
-  expect(readlinkSync(current)).toBe(before);
-  rmSync(bridge);
-  writePackage(pkg, definitionText(`{${command}}`));
-  cli(0, "sync", "--packages");
-  expect(readlinkSync(bridge)).toBe("../current/references.json");
-  expect(readlinkSync(packages)).toBe("current/packages");
-  expect(cli(0, "notes", "bye")).toContain("updated");
-  expect(read(`${bridge}.saved`)).toBe("owner bytes");
-});
-
 test("recovery checks every discovery destination before rolling the pending journal forward", () => {
   const { dir, cli } = fixture("bridge-journal");
   const current = join(dir, ".office/current");
@@ -96,23 +65,19 @@ test("recovery checks every discovery destination before rolling the pending jou
   if (!locked.ok) throw locked.error;
   const section = sha256(packageSectionKey(locked.value));
   write(journal, JSON.stringify({ previous, candidate, before: digest, after: digest, lock: { before: section, after: section, packages: Object.fromEntries(locked.value) } }));
-  const bridge = join(dir, ".office/resolved/references.json");
-  rmSync(bridge);
-  write(join(bridge, "mine"), "keep");
   const packages = join(dir, ".office/packages");
   rmSync(packages);
-  expect(cli(1, "sync", "--packages")).toContain(bridge);
+  write(join(packages, "mine"), "keep");
+  expect(cli(1, "sync", "--packages")).toContain(packages);
   expect(readlinkSync(current)).toBe(`generations/${previous}`);
-  expect(existsSync(packages)).toBe(false);
   expect(existsSync(journal)).toBe(true);
-  renameSync(bridge, `${bridge}.saved`);
+  renameSync(packages, `${packages}.saved`);
   cli(0, "references", "list");
-  expect(readlinkSync(bridge)).toBe("../current/references.json");
   expect(readlinkSync(packages)).toBe("current/packages");
   cli(0, "sync", "--packages");
   expect(read(join(current, "previous"))).toBe(candidate);
   expect(existsSync(journal)).toBe(false);
-  expect(read(join(`${bridge}.saved`, "mine"))).toBe("keep");
+  expect(read(join(`${packages}.saved`, "mine"))).toBe("keep");
 });
 
 test("checking out a tracked package tree, a real folder where a discovery link belongs, blocks writers; switching back restores discovery and plugins", () => {

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
@@ -7,10 +7,10 @@ import { definitionText, writePackage } from "./test-package.ts";
 
 const { root, bin, exe, variant, marker, write, read, commit, prompt, fixture, collector, pausedRefresh, published } = definitionFixture();
 
-test("a compiled office collects independent references and scopes the last published generation to every reader", async () => {
+test("a compiled office records the references it resolved, in the gathering's order, and refreshes from that record", async () => {
   const { dir, home, probe, cli } = fixture("references");
   const yaml = join(dir, "office.yaml");
-  const snapshot = join(dir, ".office/resolved/references.json");
+  const applied = join(dir, ".office/resolved/references.json");
   const local = join(dir, "packages/manual/office.ts");
   const checkout = join(dir, "references/manual");
   const floci = "https://github.com/floci-io/floci.git";
@@ -35,6 +35,7 @@ packages: [${packages.join(", ")}]
   const broken = () => definition(`${add("partial")} await Promise.resolve(); throw Error("collector interrupted");`);
   const list = () => published(dir);
   const head = (repo: string) => git(["rev-parse", "HEAD"], repo);
+  const names = (text: string) => text.trimEnd().split("\n").map(line => line.split("\t")[0]);
 
   const verifyPrompt = async (folder: string) => {
     const instructions = cli(0, "instructions", folder).trimEnd();
@@ -43,34 +44,46 @@ packages: [${packages.join(", ")}]
     return instructions;
   };
 
-  rmSync(realpathSync(snapshot));
+  rmSync(applied);
   configure([manual, aws]);
   broken();
   // A selected package not synced yet stops the command before any package loads, the broken one included.
   const unsynced = cli(1, "references", "list");
   expect(unsynced).toContain("package aws-emulator: not synced yet; run office sync");
   expect(unsynced).not.toContain("collector interrupted");
-  expect(cli(1, "sync", "--packages")).toContain("collector interrupted");
-  expect(list()).toContain(`${floci} @ main\tpackage aws-emulator`);
-  expect(list()).not.toContain("partial");
+  // A setup that throws publishes nothing and records nothing.
+  expect(cli(1, "sync", "--packages")).toContain("FAILED package manual: collector interrupted");
+  expect(existsSync(applied)).toBe(false);
   expect(existsSync(join(dir, "references/floci"))).toBe(false);
 
   definition(add("manual"));
+  // A switch that can't record its references (a folder where the file goes) exits 1 and clones none.
+  mkdirSync(join(applied, "occupied"), { recursive: true });
+  const pointer = readlinkSync(join(dir, ".office/current"));
+  expect(cli(1, "sync")).toMatch(/FAILED the references were not recorded \(.*\), so no reference checkout is cloned or updated; run office sync again/);
+  expect(readlinkSync(join(dir, ".office/current"))).not.toBe(pointer);
+  expect(existsSync(checkout)).toBe(false);
+  expect(existsSync(join(dir, "references/floci"))).toBe(false);
+  rmSync(applied, { recursive: true });
   cli(0, "sync");
-  const expected = list();
-  expect(expected.split("\n").slice(0, 4).map(line => line.split("\t")[0])).toEqual(["z-owner", "a-owner", "floci", "manual"]);
-  expect(read(snapshot)).not.toContain(dir);
+  expect(lstatSync(applied).isFile()).toBe(true);
+  expect(existsSync(join(dir, ".office/current/references.json"))).toBe(false);
+  // office.yaml's own first, then the packages' in the order they were set up: manual before floci, not alphabetically.
+  expect(names(list())).toEqual(["z-owner", "a-owner", "manual", "floci"]);
+  expect(cli(0, "references", "list")).toBe(list());
+  expect(JSON.parse(read(applied)).references.find((row: { name: string }) => row.name === "floci")).toEqual({ name: "floci", url: floci, ref: "main", description: expect.any(String), owner: "aws-emulator" });
+  expect(read(applied)).not.toContain(dir);
   expect(head(checkout)).toBe(first);
   expect(head(join(dir, "references/floci"))).toBe(first);
-  const generation = read(snapshot);
   configure([aws, manual]);
   cli(0, "sync", "--packages");
-  expect(list()).toBe(expected);
-  expect(read(snapshot)).toBe(generation);
-  // Deliver just the generation and YAML at another root, without the collector modules.
+  expect(names(list())).toEqual(["z-owner", "a-owner", "floci", "manual"]);
+  expect(cli(0, "references", "list")).toBe(list());
+  const recorded = read(applied);
+  // Deliver just the applied file and YAML at another root, without the packages.
   const moved = fixture("relocated");
   write(join(moved.dir, "office.yaml"), read(yaml));
-  write(join(moved.dir, ".office/resolved/references.json"), generation);
+  write(join(moved.dir, ".office/resolved/references.json"), recorded);
   cpSync(upstream, join(moved.dir, "origin"), { recursive: true });
   write(join(moved.home, ".gitconfig"), `[url "${moved.dir}/origin"]\n\tinsteadOf = ${floci}\n`);
   moved.cli(0, "sync", "--references");
@@ -83,54 +96,45 @@ packages: [${packages.join(", ")}]
   write(yaml, read(yaml) + `plugins: [{name: fixture, repo: ${upstream}}]\n`);
   write(join(checkout, "document"), "keep through rejection");
   expect(cli(1, "sync")).toContain("floci claimed by both office.yaml and package aws-emulator");
+  // Steps outside packages still run; the applied file and the reference checkouts stay.
   expect(head(workRepo)).toBe(first);
   expect(head(join(dir, ".opencode/plugins/fixture"))).toBe(first);
-  expect(read(snapshot)).toBe(generation);
+  expect(read(applied)).toBe(recorded);
   expect(read(join(checkout, "document"))).toBe("keep through rejection");
   configure(["{name: aws-emulator, settings: {source_reference: false}}", manual], "floci");
   cli(0, "sync", "--packages");
   expect(list()).toContain("floci\t../../origin\toffice.yaml");
   configure([aws, manual]);
+  cli(0, "sync", "--packages");
+  const restored = read(applied);
 
   write(join(upstream, "document"), "second");
   const second = commit(upstream);
   broken();
+  // A rejected sync clones and updates no reference; a refresh applies what the last sync recorded.
   expect(cli(1, "sync")).toContain("collector interrupted");
-  expect(head(checkout)).toBe(second);
-  expect(list()).toContain("manual\t../../origin\tpackage manual (stale)");
-  expect(list()).not.toContain("partial");
+  expect(head(checkout)).toBe(first);
+  expect(read(applied)).toBe(restored);
   writePackage(local, `${marker} throw Error("never import on read");`);
   // Help loads packages too, and names the one that failed.
   expect(cli(0, "--help")).toMatch(/references list[\s\S]*package manual: .*never import on read/);
   rmSync(probe);
-  expect(cli(0, "sync", "--references")).toContain("last-good");
+  cli(0, "sync", "--references");
+  expect(head(checkout)).toBe(second);
   const nested = join(dir, "work/repos/nested");
   mkdirSync(nested, { recursive: true });
 
   for (const folder of [dir, nested]) {
     const text = await verifyPrompt(folder);
     expect(text).toContain("references/floci/");
-    expect(text).toContain("references/manual/");
-    expect(text).toContain("(package manual, stale)");
-    expect(text).toContain("package manual: reference collection failed");
+    expect(text).toContain("references/manual/` (package manual)");
     expect(text.includes("sibling/repos/other-desk/")).toBe(folder === dir);
   }
 
   expect(existsSync(probe)).toBe(false);
-  renameSync(checkout, `${checkout}.saved`);
-  expect(cli(1, "sync", "--references")).toContain("stale contribution cannot authorize a new clone");
-  expect(existsSync(checkout)).toBe(false);
-  renameSync(`${checkout}.saved`, checkout);
   git(["remote", "set-url", "origin", "../../foreign"], checkout);
   expect(cli(1, "sync", "--references")).toContain(`expected origin ${wanted}, found ../../foreign`);
   git(["remote", "set-url", "origin", wanted], checkout);
-
-  definition(`add({id:"references.repository",parse:e=>e},{name:"manual",url:"${wanted}",ref:"${first}"});`);
-  cli(0, "sync", "--packages");
-  broken();
-  cli(1, "sync", "--packages");
-  expect(cli(1, "sync", "--references")).toContain(`desired ${wanted} @ ${first}, last applied ${wanted} @ HEAD`);
-  expect(head(checkout)).toBe(second);
 
   // A new desired origin is not permission to replace, fetch or clean the old checkout.
   const changed = "../../other-origin";
@@ -144,10 +148,6 @@ packages: [${packages.join(", ")}]
     expect(read(join(checkout, "document"))).toBe("preserved");
   }
 
-  broken();
-  cli(1, "sync", "--packages");
-  expect(cli(1, "sync", "--references")).toContain(`expected origin ${changed}, found ${wanted}`);
-  expect(read(join(checkout, "document"))).toBe("preserved");
   definition("");
   configure([manual]);
   cli(0, "sync", "--packages");
@@ -157,15 +157,19 @@ packages: [${packages.join(", ")}]
   expect(read(join(checkout, "document"))).toBe("preserved");
   expect(head(join(dir, "references/floci"))).toBe(second);
 
-  write(snapshot, read(snapshot).replace('"version": 4', '"version": 9'));
-  expect(cli(1, "sync", "--references")).toContain("unsupported references snapshot version");
-  expect(await verifyPrompt(nested)).toContain("unsupported references snapshot version");
-  expect(cli(1, "sync", "--packages")).toContain("restore a readable generation");
-  rmSync(realpathSync(snapshot));
+  // An applied file that isn't valid is named, never read as empty, and touches no checkout.
+  write(applied, "{");
+  const refused = cli(1, "sync", "--references");
+  expect(refused).toContain(".office/resolved/references.json");
+  const guidance = await verifyPrompt(nested);
+  expect(guidance).toContain(".office/resolved/references.json");
+  expect(guidance).not.toContain("references/z-owner/");
+  expect(read(join(checkout, "document"))).toBe("preserved");
   cli(0, "sync", "--packages");
+  expect(names(list())).toEqual(["z-owner", "a-owner"]);
 }, 60_000);
 
-test("a different pin of a Git contributor cannot inherit the old pin's claims", () => {
+test("a broken new pin of a Git package publishes nothing; the recorded references stay the last sync's", () => {
   const { dir, cli, select } = fixture("source-change");
   const repo = join(root, "source-change-repo");
   const module = join(repo, "pkg/office.ts");
@@ -180,11 +184,11 @@ test("a different pin of a Git contributor cannot inherit the old pin's claims",
   publish(setup);
   cli(0, "sync", "--packages");
   expect(cli(0, "references", "list")).toContain("remote-docs");
+  const current = readlinkSync(join(dir, ".office/current"));
   publish(`${setup} throw Error("bad new pin");`);
   expect(cli(1, "sync", "--packages")).toContain("bad new pin");
-  // Readers of the saved file (here the office guidance) drop the old pin's rows.
-  expect(cli(0, "instructions", dir)).toContain("package docs: reference collection failed");
-  expect(cli(0, "instructions", dir)).not.toContain("remote-docs");
+  expect(readlinkSync(join(dir, ".office/current"))).toBe(current);
+  expect(cli(0, "instructions", dir)).toContain("references/remote-docs/` (package docs)");
   // The installed copy is still the old pin's: the command doesn't load it under the new pin.
   expect(cli(1, "references", "list")).toContain("package docs: ");
   expect(existsSync(join(dir, "node_modules"))).toBe(false);
@@ -194,8 +198,8 @@ test("a different pin of a Git contributor cannot inherit the old pin's claims",
   expect(cli(0, "instructions", dir)).not.toContain("../outside");
 }, 60_000);
 
-test("only a current refresh may apply its fetched commit; withdrawal protects later edits", async () => {
-  const f = fixture("refresh-races");
+test("check compares a checkout with the last applied origin, ref and commit", () => {
+  const f = fixture("refresh-records");
   const repo = join(root, "apply-upstream");
   git(["init", "-qb", "main", repo]);
   write(join(repo, "document"), "main");
@@ -207,21 +211,18 @@ test("only a current refresh may apply its fetched commit; withdrawal protects l
   const yaml = join(f.dir, "office.yaml");
   const initial = read(yaml);
 
-  const select = (ref?: string) => {
-    write(yaml, initial.replace("references: []", ref ? `references: [{name: docs, url: ${repo}, ref: ${ref}}]` : "references: []"));
+  const select = (ref: string) => {
+    write(yaml, initial.replace("references: []", `references: [{name: docs, url: ${repo}, ref: ${ref}}]`));
     f.cli(0, "sync", "--packages");
   };
 
   const dir = join(f.dir, "references/docs");
-  const head = () => git(["rev-parse", "HEAD"], dir);
   const record = () => JSON.parse(git(["config", "--get", "office.appliedReference"], dir));
   select("main");
   f.cli(0, "sync", "--references");
-  const older = await pausedRefresh(f);
   select("release");
   f.cli(0, "sync", "--references");
-  expect(await older.resume(1)).toContain("superseded");
-  expect(head()).toBe(release);
+  expect(git(["rev-parse", "HEAD"], dir)).toBe(release);
   expect(read(join(dir, "document"))).toBe("release");
   expect(record()).toEqual({ origin: repo, ref: "release", commit: release });
   git(["checkout", "--detach", main], dir);
@@ -229,26 +230,11 @@ test("only a current refresh may apply its fetched commit; withdrawal protects l
   select("main");
   expect(f.cli(1, "check")).toContain(`last applied ${repo} @ release`);
   f.cli(0, "sync", "--references");
-
-  const previousMain = await pausedRefresh(f);
-  write(join(repo, "document"), "advanced main");
-  const advanced = commit(repo);
-  f.cli(0, "sync", "--references");
-  expect(await previousMain.resume(1)).toContain("superseded");
-  expect(head()).toBe(advanced);
-  expect(record().commit).toBe(advanced);
-
-  const withdrawn = await pausedRefresh(f);
-  select();
-  write(join(dir, "document"), "mine after withdrawal");
-  expect(await withdrawn.resume(1)).toContain("superseded");
-  expect(read(join(dir, "document"))).toBe("mine after withdrawal");
-  expect(head()).toBe(advanced);
-  expect(record()).toEqual({ origin: repo, ref: "main", commit: advanced });
+  expect(record()).toEqual({ origin: repo, ref: "main", commit: main });
 }, 60_000);
 
 for (const signal of ["SIGTERM", "SIGKILL"] as const) {
-  test(`publication waits for real Git's authority after parent-only ${signal}`, async () => {
+  test(`a checkout's lease stays with real Git after parent-only ${signal}`, async () => {
     const f = fixture(`orphan-${signal.toLowerCase()}`);
     const upstream = join(f.home, "source");
     const other = join(f.home, "other-source");
@@ -313,12 +299,7 @@ exec /bin/cat
       await waitForFile(entered);
       await waitForFile(pid);
       expect(git(["config", "office.appliedReference"], docs)).toBe("null");
-      // The second process finishes an independent checkout while the first is in
-      // a real smudge filter; admission isn't blocked on a global SQLite writer.
-      write(join(other, "z"), "independent update");
-      const independent = commit(other);
       expect(f.cli(1, "sync", "--references")).toContain("reference docs: checkout lease unavailable");
-      expect(git(["rev-parse", "HEAD"], join(f.dir, "references/other"))).toBe(independent);
 
       parent.kill(signal);
       await parent.exited;
@@ -331,8 +312,8 @@ exec /bin/cat
         expect(read(`${proc}/fdinfo/3`)).toMatch(/^lock:\s+\d+: FLOCK\s+ADVISORY\s+WRITE\b/m);
       }
 
-      write(yaml, original);
-      expect(f.cli(1, "sync", "--packages")).toContain("retry after the active Git checkout finishes");
+      // With the parent gone, the Git child still holds the checkout's lease.
+      expect(f.cli(1, "sync", "--references")).toContain("reference docs: checkout lease unavailable");
       expect(read(generation)).toBe(before);
     } finally {
       write(go, "");
@@ -345,6 +326,7 @@ exec /bin/cat
     expect(read(exited).trim()).toBe("0");
     expect(git(["rev-parse", "HEAD"], docs)).toBe(expected);
     expect(git(["config", "office.appliedReference"], docs)).toBe("null");
+    write(yaml, original);
     f.cli(0, "sync", "--packages");
     write(join(docs, "z"), "mine after successful withdrawal");
     f.cli(0, "sync", "--references");
@@ -355,38 +337,72 @@ exec /bin/cat
   }, 60_000);
 }
 
-test("overlapping fresh clones publish only their own staging directories", async () => {
+test("two refreshes never work on one checkout at once: the second runs no Git on it and fails naming it", async () => {
   const f = fixture("clone-overlap");
   const repo = join(root, "queued-upstream");
   git(["init", "-qb", "main", repo]);
   write(join(repo, "document"), "upstream");
   const sha = commit(repo);
+  const log = join(f.home, "git.log");
 
   const select = (names: string[]) => {
     write(join(f.dir, "office.yaml"), JSON.stringify({ name: "overlap", references: names.map(name => ({ name, url: repo })) }));
     f.cli(0, "sync", "--packages");
   };
 
+  /** A second refresh, logging each Git command it runs with the folder it runs in. */
+  const second = () => {
+    const result = Bun.spawnSync([exe, "--office", f.dir, "sync", "--references"], { cwd: root, env: { ...f.env, GIT_LOG: log } });
+
+    return { status: result.exitCode, output: result.stdout.toString() + result.stderr.toString() };
+  };
+
+  // Paused inside the fetch of an existing checkout.
+  select(["docs"]);
+  f.cli(0, "sync", "--references");
+  write(join(repo, "document"), "advanced");
+  const advanced = commit(repo);
+  const first = await pausedRefresh(f);
+  const overlap = second();
+  expect(overlap.status).toBe(1);
+  expect(overlap.output).toContain("reference docs: checkout lease unavailable");
+  expect(existsSync(log) ? read(log) : "").not.toContain(join(f.dir, "references/docs"));
+  await first.resume(0);
+  expect(git(["rev-parse", "HEAD"], join(f.dir, "references/docs"))).toBe(advanced);
+  // Unopposed, the same refresh does run Git there: the log sees it.
+  expect(second().status).toBe(0);
+  expect(read(log)).toContain(join(f.dir, "references/docs"));
+
+  // With Office killed inside the fetch, the fetch it started still holds the checkout's lease.
+  write(join(repo, "document"), "orphaned");
+  commit(repo);
+  const orphan = await pausedRefresh(f);
+  await orphan.kill();
+  expect(second().output).toContain("reference docs: checkout lease unavailable");
+  orphan.release();
+
+  for (let i = 0; i < 100 && second().status !== 0; i++) await Bun.sleep(20);
+  expect(git(["rev-parse", "HEAD"], join(f.dir, "references/docs"))).toBe(git(["rev-parse", "HEAD"], repo));
+  git(["reset", "-q", "--hard", advanced], repo);
+
+  // Paused inside the fetch of a fresh clone: the second never creates the checkout.
+  select(["fresh"]);
+  const fresh = join(f.dir, "references/fresh");
+  const loser = await pausedRefresh(f);
+  expect(second().output).toContain("reference fresh: checkout lease unavailable");
+  expect(existsSync(fresh)).toBe(false);
+  await loser.resume(0);
+  expect(git(["rev-parse", "HEAD"], fresh)).toBe(advanced);
+
+  // A clone queued behind another finds the checkout a later refresh made, and leaves it.
   select(["a", "b", "c", "d", "queued"]);
   const old = await pausedRefresh(f, 4);
   select(["queued"]);
   const queued = join(f.dir, "references/queued");
   f.cli(0, "sync", "--references");
   write(join(queued, "document"), "winner");
-  expect(await old.resume(1)).toContain("superseded");
-  expect(git(["rev-parse", "HEAD"], queued)).toBe(sha);
+  expect(await old.resume(1)).toContain("reference checkout already exists");
   expect(read(join(queued, "document"))).toBe("winner");
-  expect(readdirSync(join(f.dir, "references"))).toEqual(["queued"]);
-
-  select(["fresh"]);
-  const fresh = join(f.dir, "references/fresh");
-  const loser = await pausedRefresh(f);
-  expect(existsSync(fresh)).toBe(false);
-  f.cli(0, "sync", "--references");
-  write(join(fresh, "document"), "keep the winner's checkout");
-  await loser.resume(1);
-  expect(git(["rev-parse", "HEAD"], fresh)).toBe(sha);
-  expect(read(join(fresh, "document"))).toBe("keep the winner's checkout");
 
   select(["interrupted"]);
   const interrupted = await pausedRefresh(f);
@@ -394,7 +410,8 @@ test("overlapping fresh clones publish only their own staging directories", asyn
   await interrupted.resume(130);
   expect(existsSync(join(f.dir, "references/interrupted"))).toBe(false);
   f.cli(0, "sync", "--references");
-  expect(read(join(f.dir, "references/interrupted/document"))).toBe("upstream");
+  expect(read(join(f.dir, "references/interrupted/document"))).toBe("advanced");
+  expect(sha).not.toBe(advanced);
 }, 60_000);
 
 test.skipIf(process.getuid?.() === 0)("a failed materialization matches only the wanted embedded bytes", () => {
@@ -414,10 +431,13 @@ test.skipIf(process.getuid?.() === 0)("a failed materialization matches only the
   block("aws-emulator");
 
   try {
-    expect(f.cli(1, "sync", "--packages")).toContain("EACCES");
-    expect(published(f.dir)).toContain("main\tpackage aws-emulator (stale)");
+    const failed = f.cli(1, "sync", "--packages");
+    expect(failed).toContain("EACCES");
+    // The set publishes without it; what it claims is unknown, so no package's tools are reconciled.
+    expect(failed).toContain("not reconciling any package's tools or machine files: what package aws-emulator claims is unknown");
+    expect(published(f.dir)).not.toContain("floci");
     expect(f.cli(1, "references", "list")).toContain("package aws-emulator: rejected by the last sync; run office sync");
-    expect(f.cli(1, "sync", "--references")).toContain("stale contribution cannot authorize a new clone");
+    f.cli(0, "sync", "--references");
     expect(existsSync(join(f.dir, "references/floci"))).toBe(false);
     mkdirSync(join(folder, "aws-emulator"), { recursive: true });
     block("aws-emulator");

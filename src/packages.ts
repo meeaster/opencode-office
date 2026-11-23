@@ -15,19 +15,16 @@
 import { boundUnavailable, definitionRoot, linkProblem, packageRoot, pulledFolder } from "./bound-paths.ts";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
-import { Worker } from "node:worker_threads";
 
 import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
 import * as v from "valibot";
 
-import type { MachineClaims } from "../standard/mise-integration/projection.ts";
 import { panelBundle } from "./desktop.ts";
 import { collectAssets } from "../standard/opencode/assets.ts";
 import { copyFromRepository } from "./git.ts";
 import { type Office, OfficeError, type PackageEntry } from "./office.ts";
 import { readDefinition } from "./package-definition.ts";
 import { readPackageJson, scope } from "./package-manifest.ts";
-import { readSnapshot } from "./reference-snapshot.ts";
 import { collectJobs } from "../standard/cron/jobs.ts";
 import { composeProblems, packageComposeFile } from "./package-services.ts";
 import { settingsEnv } from "../standard/compose/services.ts";
@@ -89,9 +86,6 @@ export type ResolvedPackages = { packages: ResolvedPackage[]; problems: PackageP
 
 export type InstalledPackage = ResolvedPackage & {
   manifest: PackageManifest;
-  machine?: MachineClaims;
-  /** A broken machine projection must not erase independent cron, plugin or Compose owners. */
-  machineProblem?: string;
   /** The settings with defaults applied, as the plugin and scripts read them from `.settings.json`. */
   settings: Record<string, SettingValue>;
   /** Skill IDs under `skills/`, each a folder with a SKILL.md, which the package's plugin registers. */
@@ -149,13 +143,9 @@ function ownershipProblems(office: Pick<Office, "dir" | "packages">, builtins: s
 
       if (installed && "repo" in installed) problems.push({ packages: [name], message: `built-in package ${name} conflicts with installed ${installed.repo}@${installed.ref}:${installed.path}; move the existing copy before syncing` });
 
-      // A live load never reads the saved file: such a copy then fails its own source check.
+      // A live load leaves such a copy to fail its own source check.
       if (!live && requiredPackages.includes(name) && name !== "office" && !installed && existsSync(pulledDir(office, name))) {
-        const snapshot = readSnapshot(office.dir);
-
-        if (!snapshot.ok || !snapshot.value?.contributors.some(group => group.name === name && group.source.startsWith("built-in:"))) {
-          problems.push({ packages: [name], message: `cannot establish ownership of ${pulledFolder}/${name}; restore its source record or move the existing copy before syncing` });
-        }
+        problems.push({ packages: [name], message: `cannot establish ownership of ${pulledFolder}/${name}; restore its source record or move the existing copy before syncing` });
       }
     }
   }
@@ -173,8 +163,8 @@ export function requirePackageOwnership(office: Office): void {
  * The packages the office has: the required built-ins, then each entry of office.yaml, with its
  * kind. An entry without `repo` is built-in when the tool ships a package of its name, so those
  * names are reserved. A required built-in's entry configures it without installing it twice.
- * Ownership problems leave no packages, unless `live` (package commands and help): then only the
- * packages they name are left out, and the saved references file is not read.
+ * Ownership problems leave no packages, unless `live` (the gathering): then only the packages
+ * they name are left out.
  */
 export function resolvePackages(office: Pick<Office, "dir" | "packages">, only?: string, live = false): ResolvedPackages {
   const builtins = builtinPackages();
@@ -327,22 +317,6 @@ function thisCopy(): string {
   return describeRecord(builtinRecordFor({}));
 }
 
-/**
- * Makes a built-in package's folder hold this executable's copy: installs a missing one, replaces
- * one that differs (written by another `office`, copied from a repository, or edited), and records
- * an unchanged copy that lacks a built-in record. Returns one line per change.
- */
-export async function installBuiltin(office: Office, entry: PackageEntry) {
-  const dir = pulledDir(office, entry.name);
-  const { wanted, hashes, source } = await embeddedPackage(entry.name);
-
-  try {
-    return { source, changes: await installBuiltinFiles(office, entry, dir, wanted, hashes) };
-  } catch (error) {
-    return { source, changes: [`FAILED ${relative(office.dir, dir)} (${source}): ${error instanceof Error ? error.message : String(error)}`] };
-  }
-}
-
 export function builtinSource(hashes: PackageRecord["files"]): string {
   return `built-in:${filesDigest(hashes)}`;
 }
@@ -351,55 +325,19 @@ export function filesDigest(hashes: PackageRecord["files"]): string {
   return sha256(JSON.stringify(Object.keys(hashes).sort().map(path => [path, hashes[path]])));
 }
 
-/** Managed packages keep their recorded file identity. Local providers can also import
- * through symlinks: bind each alias to its resolved target in the hashed package tree. */
-export function providerFiles(item: ResolvedPackage): string {
-  if (item.kind !== "local") return filesDigest(fileHashes(item.dir));
-  const hashes: PackageRecord["files"] = Object.create(null);
-  const root = realpathSync(item.dir);
-
-  // Bun's recursive readdir descends through directory links. Visit real directories
-  // only: the target's contents are hashed at their own paths, never via the alias.
-  function visit(dir: string) {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name);
-      const file = relative(root, path);
-
-      if (entry.isDirectory()) visit(path);
-      else if (entry.isFile() && !records.includes(file)) hashes[file] = sha256(readFileSync(path));
-      else if (entry.isSymbolicLink()) {
-        const target = relative(root, realpathSync(path));
-
-        if (target === ".." || target.startsWith("../") || records.includes(target)) {
-          throw new OfficeError(`package ${item.entry.name}: ${file} must link to provider content inside the package`);
-        }
-
-        hashes[file] = `link:${target}`;
-      }
-    }
-  }
-
-  visit(root);
-
-  return filesDigest(hashes);
-}
-
-export { gitSelection } from "./reference-snapshot.ts";
-
-// The package bytes determine defaults and setup declarations; overrides are the remaining
-// selected input. Independent readers can establish this identity without executing setup.
-export function collectionContract(source: { source: string; commit?: string }, files: string, entry: PackageEntry): string {
-  return sha256(JSON.stringify([source.source, source.commit, files, entry.settings ?? {}]));
+/** What a Git selection is: its repository, path and ref. */
+export function gitSelection(source: NonNullable<PackageEntry["source"]>) {
+  return `git:${sha256(JSON.stringify([source.repo, source.path, source.ref]))}`;
 }
 
 export async function embeddedPackage(name: string) {
   const wanted = await builtinFiles(name);
   const hashes = Object.fromEntries([...wanted].map(([file, content]) => [file, sha256(content)]));
 
-  return { wanted, hashes, source: builtinSource(hashes) };
+  return { wanted, hashes };
 }
 
-async function installBuiltinFiles(office: Office, entry: PackageEntry, dir: string, wanted: Map<string, string>, hashes: PackageRecord["files"], evaluate = true) {
+async function installBuiltinFiles(office: Office, entry: PackageEntry, dir: string, wanted: Map<string, string>, hashes: PackageRecord["files"]) {
   const where = relative(office.dir, dir);
   const record = readRecord(dir);
 
@@ -420,8 +358,6 @@ async function installBuiltinFiles(office: Office, entry: PackageEntry, dir: str
     }
 
     writeJson(join(staging, sourceFile), builtinRecordFor(hashes));
-
-    if (evaluate) await validateStaged(office, { entry, dir: staging, kind: "built-in" }, existsSync(dir));
   });
 
   if (record === undefined) return [`installed ${where}, the built-in ${entry.name} package`];
@@ -455,19 +391,11 @@ export async function fetchPackage(office: Office, entry: PackageEntry, source: 
 
   const known = current && verifiedCommit(source.ref, record.commit) && (!boundCommit || record.commit === boundCommit);
   const revision = boundCommit ?? (known ? record.commit : source.ref);
-  const movingPin = entry.source?.ref !== source.ref;
-
-  async function validate(candidate: string) {
-    const resolved = { entry: { ...entry, source }, dir: candidate, kind: "remote" } satisfies ResolvedPackage;
-
-    await validateStaged(office, resolved, existsSync(dir), movingPin);
-  }
 
   try {
     if (boundCommit && !verifiedCommit(source.ref, boundCommit)) throw new Error(`invalid reference generation binding ${boundCommit} for ${source.ref}`);
 
     if (known && edits.length === 0) {
-      if (movingPin) await validate(dir);
       commitPin?.();
 
       return [];
@@ -487,8 +415,6 @@ export async function fetchPackage(office: Office, entry: PackageEntry, source: 
       for (const file of records) rmSync(join(staging, file), { force: true });
 
       writeJson(join(staging, sourceFile), { repo: source.repo, path: source.path, ref: source.ref, commit: copied, files: fileHashes(staging), copied: new Date().toISOString() });
-
-      if (!destination) await validate(staging);
 
       return copied;
     }, commitPin);
@@ -511,9 +437,9 @@ export async function materializePackage(office: Office, item: ResolvedPackage, 
   const dir = join(folder, item.entry.name);
 
   if (item.kind === "built-in") {
-    const { wanted, hashes, source } = await embeddedPackage(item.entry.name);
+    const { wanted, hashes } = await embeddedPackage(item.entry.name);
 
-    return { source, changes: await installBuiltinFiles(office, item.entry, dir, wanted, hashes, false) };
+    return { changes: await installBuiltinFiles(office, item.entry, dir, wanted, hashes) };
   }
 
   if (!item.entry.source) throw new Error(`missing source for ${item.entry.name}`);
@@ -808,8 +734,12 @@ function candidateProblems(office: Pick<Office, "dir" | "packages">, candidate: 
   return selectionProblems(effective, [...reached.values()]);
 }
 
-/** Validate a candidate against the consuming entry before any live path points at its files. */
-export async function validateReplacement(office: Office, resolved: ResolvedPackage, resolveSetup: boolean, expectedBuiltins?: ReadonlyMap<string, string>) {
+/**
+ * Sync's admission checks a changed copy against the consuming entry before any live path points
+ * at its files: its selection, settings, assets, cron, system setup and compose file. Its setup runs
+ * with every other package's, in the admission's gathering.
+ */
+export function validateReplacement(office: Office, resolved: ResolvedPackage) {
   const problems = candidateProblems(office, resolved);
 
   if (problems.length) throw new Error(problems.map(problemLine).join("; "));
@@ -818,12 +748,6 @@ export async function validateReplacement(office: Office, resolved: ResolvedPack
   if (!read.ok) throw new Error(read.errors.join("; "));
 
   const item = read.value;
-
-  // Its setup runs with its peers', which admission reads first: a peer with invalid settings stops it.
-  if (resolveSetup && (item.manifest.setup || item.manifest.system || item.manifest.host?.install)) {
-    const { admitReplacement } = await import("./collect-references.ts");
-    await admitReplacement(office, item, expectedBuiltins);
-  }
 
   if (item.manifest.opencode) collectAssets(office.dir, item);
   const { host, system } = item.manifest;
@@ -838,7 +762,8 @@ export async function validateReplacement(office: Office, resolved: ResolvedPack
   const jobs = collectJobs({ ...office, cron: {} }, { installed: [item], problems: [] });
 
   if (!jobs.ok) throw new Error(jobs.errors.join("; "));
-  const section = systemSection(office, item);
+  // Its own system block: a recipe it contributes is checked when admission gathers it.
+  const section = systemSection(office, { ...item, system: item.manifest.system });
 
   if (!section.ok) throw new Error(section.errors.join("; "));
 
@@ -852,31 +777,6 @@ export async function validateReplacement(office: Office, resolved: ResolvedPack
   }
 
   return item;
-}
-
-async function validateStaged(office: Office, resolved: ResolvedPackage, replacing: boolean, movingPin = false) {
-  if (!movingPin && !replacing) {
-    await validateReplacement(office, resolved, false);
-
-    return;
-  }
-
-  // A candidate can import siblings that the same sync is about to replace. Never warm
-  // the collector's module cache with the staged graph.
-  const expectedBuiltins = new Map<string, string>();
-
-  if (movingPin) {
-    for (const peer of resolvePackages(office).packages) {
-      if (peer.kind === "built-in") expectedBuiltins.set(peer.entry.name, (await embeddedPackage(peer.entry.name)).source);
-    }
-  }
-
-  const worker = new Worker(join(import.meta.dir, Bun.isStandaloneExecutable ? "validate-replacement.js" : "validate-replacement.ts"), { workerData: { office, resolved, expectedBuiltins } });
-  await new Promise<void>((resolve, reject) => {
-    worker.once("error", reject);
-    worker.once("message", resolve);
-    worker.once("exit", code => reject(new Error(`candidate validator exited (${code}) before completing`)));
-  }).finally(() => worker.terminate());
 }
 
 /** `.office.json`'s content: what the office declares to its packages. */

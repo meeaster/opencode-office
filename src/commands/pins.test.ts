@@ -385,11 +385,15 @@ test("a pending peer setting and duplicate requirements reject the staged tree; 
   write(yaml, selected.replace("track: main, path: bravo", "track: hold, path: bravo"));
   const before = stamp();
 
-  for (const [code, problem] of [
-    [installer("alpha", "~/.local/bin/browse"), "claimed by both package browser and package alpha"],
-    [installer("alpha", "~/.local/alpha", `for(const v of ["1.1","1.2"])c.add(requirements,{name:"widget",minimumVersion:v})`), "tooling.requirements widget claimed by both"],
-  ]) {
-    commit(repo, { "alpha/office.ts": code, "alpha/run.ts": "// rejected" });
+  const candidates: [code: string, problem: string, script: string | null][] = [
+    [installer("alpha", "~/.local/bin/browse"), "claimed by both package browser and package alpha", "// rejected"],
+    [installer("alpha", "~/.local/alpha", `for(const v of ["1.1","1.2"])c.add(requirements,{name:"widget",minimumVersion:v})`), "tooling.requirements widget added twice by package alpha", "// rejected"],
+    // The install's script is gone from the candidate.
+    [alpha, "run.ts must be a file inside package alpha", null],
+  ];
+
+  for (const [code, problem, script] of candidates) {
+    commit(repo, { "alpha/office.ts": code, "alpha/run.ts": script });
     const rejected = await update("packages");
     expect(rejected.ok).toBe(false);
     expect(rejected.out).toContain(problem);
@@ -464,4 +468,59 @@ test("packages update holds back only the package whose newer commit fails the c
   expect(record(".office/packages/beta").commit).toBe(next);
   expect(read(yaml)).toContain(`{name: alpha, repo: ${repo}, ref: ${first}`);
   expect(read(yaml)).toContain(`{name: beta, repo: ${repo}, ref: ${next}`);
+});
+
+test("packages update retries without a provider whose newer commit fails setup and the package that adds to it; the healthy one advances, and the old copy still runs", async () => {
+  const repo = join(dir, "coupled");
+  const yaml = join(dir, "office", "office.yaml");
+  const names = ["provider", "consumer", "healthy"];
+  const provider = (extra: string) => definitionText(`{setup(c){c.registry(items);${extra}},commands:{"provider show":{summary:"show",run({read}){console.log("entries:" + read(items).map(e => e.value.name).join(","))}}}}`, 'import {items} from "./items.ts";');
+  const consumer = (name: string) => definitionText(`{setup(c){c.add(items,{name:"${name}"})}}`, 'import {items} from "@office/provider/items";');
+
+  const first = commit(repo, {
+    "provider/package.json": packageJsonText("provider", "office.ts", { exports: { "./items": "./items.ts" } }),
+    "provider/items.ts": 'export const items = {id: "provider.items", parse: i => i};',
+    "provider/office.ts": provider(""),
+    "consumer/package.json": packageJsonText("consumer", "office.ts", { dependencies: ["provider"] }),
+    "consumer/office.ts": consumer("one"),
+    "healthy/package.json": packageJsonText("healthy", "package.yaml"),
+    "healthy/package.yaml": "# One.\n{}\n",
+  });
+
+  write(yaml, `name: test\npackages:\n${names.map(name => `  - {name: ${name}, repo: ${repo}, ref: ${first}, track: main, path: ${name}}`).join("\n")}\n`);
+  await synced("packages");
+  expect(office("provider", "show").out).toBe("entries:one\n");
+  const next = commit(repo, { "provider/office.ts": provider('throw Error("broken provider")'), "consumer/office.ts": consumer("two"), "healthy/package.yaml": "# Two.\n{}\n" });
+
+  const updated = await update("packages");
+  expect(updated.ok).toBe(false);
+  expect(updated.out).toContain("broken provider");
+
+  for (const name of ["provider", "consumer"]) {
+    expect(record(`.office/packages/${name}`).commit).toBe(first);
+    expect(read(yaml)).toContain(`{name: ${name}, repo: ${repo}, ref: ${first}`);
+    expect(readPackageLock(join(dir, "office"))[name].commit).toBe(first);
+  }
+
+  expect(record(".office/packages/healthy").commit).toBe(next);
+  expect(read(yaml)).toContain(`{name: healthy, repo: ${repo}, ref: ${next}`);
+  expect(readPackageLock(join(dir, "office")).healthy.commit).toBe(next);
+  // The refused replacement leaves the installed copy, whose command still runs.
+  expect(office("provider", "show").out).toBe("entries:one\n");
+});
+
+test("an update that doesn't apply still records the references its switch resolved", async () => {
+  const repo = join(dir, "recorded");
+  const yaml = join(dir, "office", "office.yaml");
+  const docs = (name: string) => definitionText(`{setup(c){c.add(repositories,{name:"${name}",url:"https://example.invalid/${name}.git"})}}`, 'import {repositories} from "@office/references/repositories";');
+  const first = commit(repo, { "docs/package.json": packageJsonText("docs", "office.ts", { dependencies: ["references"] }), "docs/office.ts": docs("old-docs") });
+  write(yaml, `name: test\npackages:\n  - {name: docs, repo: ${repo}, ref: ${first}, track: main, path: docs}\n`);
+  await synced("packages");
+  const applied = join(dir, "office", ".office/resolved/references.json");
+  expect(read(applied)).toContain("old-docs");
+  commit(repo, { "docs/office.ts": docs("new-docs") });
+
+  await updatePackages(loadOffice(join(dir, "office")), silentStage, { apply: false });
+  expect(read(applied)).toContain("new-docs");
+  expect(read(applied)).not.toContain("old-docs");
 });

@@ -29,7 +29,7 @@ test("host services only load the recorded environment of the same office", () =
     expect(statSync(record).mode & 0o777).toBe(0o600);
     expect(() => serviceEnvironment(office)).toThrow("unrecorded");
     rmSync(file);
-    syncMachine(office);
+    syncMachine(office, { unread: new Set(), packages: [] });
     expect(serviceEnvironment(office)).toContain("export MISE_MINIMUM_RELEASE_AGE=");
     expect(serviceEnvironment({ ...office, dir: join(root, "other") })).toBe("");
 

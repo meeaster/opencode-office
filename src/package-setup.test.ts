@@ -19,9 +19,11 @@ test("one package's setup returns its registries and its unparsed additions", as
   expect(registered.additions).toEqual([{ id: "catalog.items", value: { name: "first" } }, { id: "references.repository", value: { name: "docs", url: "u" } }]);
 });
 
-test("a setup that throws, registers another package's registry or adds an unnamed entry fails the call", async () => {
+test("a setup that throws, registers another package's registry or adds something other than a JSON object fails the call", async () => {
   await expect(registerPackage({ ...input, manifest: manifest(() => { throw new Error("setup failed"); }) })).rejects.toThrow("setup failed");
   await expect(registerPackage({ ...input, manifest: manifest(ctx => ctx.registry({ id: "other.items", parse: entry => entry })) })).rejects.toThrow("invalid or duplicate registry other.items");
   // An untyped JavaScript definition can pass anything (JSON.parse's result is untyped); the entry is checked at runtime.
-  await expect(registerPackage({ ...input, manifest: manifest(ctx => ctx.add(items, JSON.parse('{"title":"x"}'))) })).rejects.toThrow("expected a named registry entry");
+  await expect(registerPackage({ ...input, manifest: manifest(ctx => ctx.add(items, JSON.parse('["x"]'))) })).rejects.toThrow("catalog.items: an entry must be a JSON object");
+  // Any JSON object is an entry: a name is the registry's parser's to require.
+  expect((await registerPackage({ ...input, manifest: manifest(ctx => ctx.add(items, JSON.parse('{"title":"x"}'))) })).additions).toEqual([{ id: "catalog.items", value: { title: "x" } }]);
 });
