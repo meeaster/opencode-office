@@ -2,6 +2,7 @@
 
 ## Design decisions
 
+- Prefer deep modules with narrow interfaces: when several callers need the same internal rule, give one module ownership and expose only what callers need to decide or do.
 - Before design or architecture work, read [VISION.md](VISION.md): what the project is for and where it is going.
 - **Stage: exploration.** The project is still working out its architecture, features and API. Scope each design and slice to the main path: prove the architecture and deliver something that works and is useful. Give failures one plain rule, stop and name what broke. Park hardening (recovery from partial failure, rare edge cases, concurrent runs, version skew, migration) as a named later item, and say in the proposal what was parked. This sets scope and order, not quality: what is built is still well designed and tested.
 - The CLI holds no migration or compatibility code: an office, machine or container in a state an earlier release wrote gets the ordinary error (unknown key, conflict, missing file) or is left as it is. A migration that is needed is a script run outside the CLI.

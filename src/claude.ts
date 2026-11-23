@@ -1,3 +1,4 @@
+import { failure, type Change } from "./change.ts";
 import { chmodSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -9,8 +10,10 @@ const files = [
 ];
 
 /** The shell files are tool-owned; the root mise.toml that exposes them is not. */
-export function claudeFiles(root: string, sync = false): string[] {
-  const changes: string[] = [];
+export function claudeFiles(root: string): string[];
+export function claudeFiles(root: string, sync: boolean): Change[];
+export function claudeFiles(root: string, sync = false): Change[] {
+  const changes: Change[] = [];
 
   for (const { path, mode } of files) {
     const name = `.office/claude/${path}`;
@@ -18,7 +21,9 @@ export function claudeFiles(root: string, sync = false): string[] {
     const current = lstatSync(target, { throwIfNoEntry: false });
 
     if (current !== undefined && !current.isFile()) {
-      changes.push(`${sync ? "FAILED: " : ""}${name} is not a regular file; move it aside and run office sync`);
+      const text = `${name} is not a regular file; move it aside and run office sync`;
+
+      changes.push(sync ? failure(`FAILED: ${text}`) : text);
       continue;
     }
 

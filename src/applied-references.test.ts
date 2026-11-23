@@ -3,7 +3,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appliedReferences, referenceFile, writeAppliedReferences } from "./applied-references.ts";
-import { sync } from "./commands/sync.ts";
+import { syncLines as sync } from "./sync.fixture.ts";
 import { gatherPackages } from "./gather.ts";
 import { sources } from "./github.ts";
 import { officeInstructions } from "../packages/office/plugin/instructions.ts";

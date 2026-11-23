@@ -5,7 +5,8 @@
 // It also moves the office.lock commit of each untracked package whose ref is a tag or branch to
 // where that ref points now, leaving office.yaml as it is.
 import { type Office, OfficeError, withScalar } from "../office.ts";
-import { fullCommit, requirePackageOwnership, resolvePackages } from "../packages.ts";
+import { failure, isFailure, type Change } from "../change.ts";
+import { fullCommit, sourceDifferences, requirePackageOwnership, resolvePackages } from "../packages.ts";
 import type { Stage } from "../report/index.ts";
 import { resolveRef, resolveTrack, type Resolved, short } from "../track.ts";
 import { publishPackages } from "../package-operation.ts";
@@ -28,11 +29,11 @@ class UpdateProgress {
 
   constructor(private readonly stage: Stage) {}
 
-  push(...lines: string[]): void {
+  push(...lines: Change[]): void {
     for (const line of lines) {
-      if (line.startsWith("FAILED")) {
+      if (isFailure(line)) {
         this.failed++;
-        this.stage.error(line);
+        this.stage.error(line.failure);
       } else this.stage.note(line);
     }
   }
@@ -82,14 +83,14 @@ export async function updatePackages(loaded: Office, stage: Stage, { apply = tru
       // The commit the lock holds while its entry matches. Without one, the entry is published
       // even when the installed copy is already at the ref's commit, which it is then reused from.
       const held = lock.get(entry.name);
-      const current = held?.repo === source.repo && held.path === source.path && held.ref === source.ref ? held.commit : undefined;
+      const current = held && !sourceDifferences(held, source).length ? held.commit : undefined;
 
       stage.detail(`checking ${entry.name} (${source.ref})`);
 
       const found = await resolve(source.repo, source.ref, resolveRef);
 
       if (!found.ok) {
-        lines.push(`FAILED package ${entry.name}: ${found.reason}; lock left at ${current === undefined ? "(none)" : short(current)}`);
+        lines.push(failure(`FAILED package ${entry.name}: ${found.reason}; lock left at ${current === undefined ? "(none)" : short(current)}`));
 
         continue;
       }
@@ -110,7 +111,7 @@ export async function updatePackages(loaded: Office, stage: Stage, { apply = tru
     const found = await resolve(source.repo, source.track);
 
     if (!found.ok) {
-      lines.push(`FAILED package ${entry.name}: ${found.reason}; pin left at ${short(source.ref)}`);
+      lines.push(failure(`FAILED package ${entry.name}: ${found.reason}; pin left at ${short(source.ref)}`));
 
       continue;
     }
@@ -152,10 +153,10 @@ export async function updatePackages(loaded: Office, stage: Stage, { apply = tru
       lines.push(...batch.map(moved), ...result.lines);
       break;
     } else {
-      const reason = result.lines.filter(line => line.startsWith("FAILED")).join("; ");
+      const reason = result.lines.filter(isFailure).map(change => change.failure).join("; ");
       const implicated = batch.filter(pin => result.rejected?.includes(pin.name));
       const refused = implicated.length ? implicated : batch;
-      lines.push(...refused.map(pin => `FAILED package ${pin.name}: found ${short(pin.commit)} (${pin.via}), but ${reason}; ${pin.kind === "locked" ? "lock" : "pin"} left at ${short(pin.previous)}`));
+      lines.push(...refused.map(pin => failure(`FAILED package ${pin.name}: found ${short(pin.commit)} (${pin.via}), but ${reason}; ${pin.kind === "locked" ? "lock" : "pin"} left at ${short(pin.previous)}`)));
       batch = batch.filter(pin => !refused.includes(pin));
     }
   }

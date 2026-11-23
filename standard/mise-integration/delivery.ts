@@ -21,6 +21,7 @@
 // project's) wins over all of them in its folder, as project config wins over global. mise does
 // load `mise/config.toml` and `mise.toml` in place below `.office/`, so `config` and `mise` are
 // reserved package names, as is `machine`.
+import { failure, type Change } from "../../src/change.ts";
 import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
@@ -369,8 +370,8 @@ function sectionChanges(office: Office, item: GatheredPackage, before: string, w
  * fragment of a package with none or that office.yaml no longer lists. `declared` names every
  * package office.yaml lists, so a package that fails to read keeps its fragment.
  */
-function syncFragments(office: Office, installed: GatheredPackage[], declared: string[]): string[] {
-  const changes: string[] = [];
+function syncFragments(office: Office, installed: GatheredPackage[], declared: string[]): Change[] {
+  const changes: Change[] = [];
 
   for (const item of installed) {
     const name = item.entry.name;
@@ -380,13 +381,13 @@ function syncFragments(office: Office, installed: GatheredPackage[], declared: s
     const composed = fragmentSection(office, item);
 
     if (current !== undefined && fragmentPackage(current) !== name) {
-      changes.push(`FAILED package ${name}: ${where} is not the fragment office sync writes for it, so its mise setup isn't written; rename that file`);
+      changes.push(failure(`FAILED package ${name}: ${where} is not the fragment office sync writes for it, so its mise setup isn't written; rename that file`));
 
       continue;
     }
 
     if (!composed.ok) {
-      changes.push(`FAILED package ${name}: ${composed.errors.join("; ")}; ${where} is left as it was`);
+      changes.push(failure(`FAILED package ${name}: ${composed.errors.join("; ")}; ${where} is left as it was`));
 
       continue;
     }
@@ -431,7 +432,7 @@ function syncFragments(office: Office, installed: GatheredPackage[], declared: s
  * `declared` names every package office.yaml lists. Returns one line per change; a refusal starts
  * with FAILED.
  */
-export function syncTools(office: Office, installed: GatheredPackage[], declared: string[]): string[] {
+export function syncTools(office: Office, installed: GatheredPackage[], declared: string[]): Change[] {
   return [...syncPackageTools(office, installed, declared), ...syncFragments(office, installed, declared)];
 }
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { openCheckoutLease } from "./checkout-lease.ts";
-import { sync } from "./commands/sync.ts";
+import { syncLines as sync } from "./sync.fixture.ts";
 import { loadOffice, type PackageEntry } from "./office.ts";
 import { boundCommit, candidatePackageLock, packageLockProblems } from "./package-operation.ts";
 import { editLock } from "./versions.ts";

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 
-import { sync } from "./commands/sync.ts";
+import { syncLines as sync } from "./sync.fixture.ts";
 import { envFilePath } from "./host-env.ts";
 import { gatherPackages } from "./gather.ts";
 import { grantConsent } from "./machine.ts";

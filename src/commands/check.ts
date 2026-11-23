@@ -38,7 +38,7 @@ import { wrappedCommands } from "../sfw.ts";
 import { toolPins } from "../mise-toml.ts";
 import { destinationProblems } from "../../standard/mise-integration/projection.ts";
 import { fragmentNotes, machineBelowFloors, machineFile, orphanFragments, packagesFile, packagesFileProblems, strayFragments } from "../package-tools.ts";
-import { describeRecord, fileHashes, type InstalledPackage, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceFile } from "../packages.ts";
+import { describeRecord, fileHashes, type InstalledPackage, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceDifferences, sourceFile } from "../packages.ts";
 import { describeIgnoredSkills, ignoredSkills, readIgnoredFolders } from "../../packages/office/plugin/ignored-skills.ts";
 import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces, shadowing, withLoaded } from "../outside.ts";
 import { pinnedTools } from "../schema.ts";
@@ -227,7 +227,7 @@ async function packageChecks(office: Office, report: Report, { gathered, loaded,
     reported.add(entry.name);
 
     const item = installed.find((candidate) => candidate.entry.name === entry.name);
-    const own = problems.filter((problem) => problem.packages.includes(entry.name)).map((problem) => problem.message);
+    const own = problems.flatMap(problem => problem.packages.includes(entry.name) ? [problem.message] : []);
 
     if (item === undefined) {
       report(false, `package ${entry.name}`, own.join("; ") || (loaded.blocked ? "not loaded: other selected packages failed the checks before loading" : ""));
@@ -243,7 +243,7 @@ async function packageChecks(office: Office, report: Report, { gathered, loaded,
 
       const record = readRecord(dir);
 
-      if (kind === "remote" && entry.source !== undefined && record !== undefined && !("repo" in record && record.repo === entry.source.repo && record.path === entry.source.path && record.ref === entry.source.ref)) {
+      if (kind === "remote" && entry.source !== undefined && record !== undefined && !("repo" in record && !sourceDifferences(record, entry.source).length)) {
         notes.push(`office.yaml asks for ${entry.source.ref}; office sync updates it`);
         ok = false;
       }

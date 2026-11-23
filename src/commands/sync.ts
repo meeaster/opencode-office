@@ -8,32 +8,24 @@
 // (standard/opencode/ownership.ts) and kept out of commits through the repository's info/exclude,
 // with the paths packages' sync functions exclude. It never rewrites AGENTS.md, other hand-written
 // content or an existing app; what packages write in the office is their own `sync` functions' work.
-import { readdirSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
-import * as v from "valibot";
-import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
-
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { join, relative } from "node:path";
 import { prepareReferenceRefresh } from "../../packages/references/tasks/refresh.ts";
 import { claudeFiles } from "../claude.ts";
 import { appliedReferences } from "../applied-references.ts";
 import { publishPackages } from "../package-operation.ts";
-import { editorLinks, linkForEditors } from "../package-imports.ts";
 import { openCheckoutLease } from "../checkout-lease.ts";
-import type { Gathered } from "../gather.ts";
-import { officeInfo, packageLines } from "../lifecycle-inputs.ts";
-import { installPanel, locate, panelId, removalNote } from "../desktop.ts";
-import { syncMachine } from "../machine.ts";
 import { cloneOrFetchStreamed, clonePluginStreamed, existingPluginDestination, git, isClone, PluginCheckoutProblem, referenceGit, referenceOriginProblem, refreshCloneStreamed, verifiedHead } from "../git.ts";
 import { type Clone, clones } from "../layout.ts";
-import { cloneTarget, linkPlugins, placeLink, requirePluginDestination, stagingFolder, withPluginPlan } from "../../standard/opencode/delivery.ts";
-import { type Declaration, readDeclarations } from "../../standard/opencode/declarations.ts";
-import { cloneFolder, entry as entryAt, officeEntries, pluginFolder } from "../../standard/opencode/ownership.ts";
-import { atomicWrite } from "../secrets.ts";
-import { syncTools } from "../package-tools.ts";
-import { type Desk, type Office, OfficeError } from "../office.ts";
+import { cloneTarget, placeLink, requirePluginDestination, stagingFolder } from "../../standard/opencode/delivery.ts";
+import { cloneFolder, entry as entryAt, pluginFolder } from "../../standard/opencode/ownership.ts";
+import { type Desk, type Office } from "../office.ts";
 import { silentStage, type Stage } from "../report/index.ts";
-import { installPackage, removePackage, requirePackageOwnership } from "../packages.ts";
+import { requirePackageOwnership } from "../packages.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
 import { requireKnownLockKeys } from "../versions.ts";
+import { changeText, failure, isFailure, type Change } from "../change.ts";
+import { excludePlumbing } from "../exclude-plumbing.ts";
 
 /** "release-notes" → "Release notes", for titles in scaffolded files. */
 function title(name: string): string {
@@ -239,19 +231,19 @@ async function syncPlugin(office: Office, clone: Clone, present: boolean, linked
  * as a part of `stage` as it runs. Returns one line per change, in office.yaml's
  * order, with a FAILED line for each that failed.
  */
-async function syncClones(office: Office, scope: "references" | "others" | "all", stage: Stage, verbose: boolean): Promise<string[]> {
+async function syncClones(office: Office, scope: "references" | "others" | "all", stage: Stage, verbose: boolean): Promise<Change[]> {
   const references = scope === "others" ? undefined : appliedReferences(office.dir, office);
 
   if (references && !references.ok) {
-    const errors = references.errors.map(error => `FAILED ${error}`);
+    const errors = references.errors.map(error => failure(`FAILED ${error}`));
 
-    for (const error of errors) stage.error(error);
+    for (const error of errors) stage.error(changeText(error));
 
     return errors;
   }
 
   const work = clones(office, references?.value ?? []).filter((clone) => scope !== "references" || clone.kind === "reference");
-  const lines: string[][] = work.map(() => []);
+  const lines: Change[][] = work.map(() => []);
 
   // A clone's result shows as its part; other changes it makes show as notes.
   const noted = (index: number, notes: string[]) => {
@@ -271,7 +263,7 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
     const where = relative(office.dir, clone.dir);
 
     const failed = (message: string) => {
-      lines[index].push(`FAILED ${clone.kind} ${where}: ${message}`);
+      lines[index].push(failure(`FAILED ${clone.kind} ${where}: ${message}`));
 
       return message;
     };
@@ -331,9 +323,9 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
 }
 
 /** One line for a stage's result from sync's lines: what it cloned and updated, and how many other changes. */
-export function summarize(changes: string[]): string {
-  const count = (pattern: RegExp) => changes.filter((line) => pattern.test(line)).length;
-  const failed = count(/^FAILED/);
+export function summarize(changes: Change[]): string {
+  const count = (pattern: RegExp) => changes.filter((line) => !isFailure(line) && pattern.test(line)).length;
+  const failed = changes.filter(isFailure).length;
   // Clone lines name a kind: reference, plugin or "<desk> repo".
   const cloned = count(/^cloned (reference|plugin|\S+ repo) /);
   const updated = count(/^updated (reference|plugin|\S+ repo) /);
@@ -359,19 +351,19 @@ type SyncOptions = {
 
 /**
  * Runs the sync and returns one line per change, each also reported to `stage` as it happens
- * (clones as parts, a line starting with FAILED as an error, the rest as notes).
+ * (clones as parts, a failure as an error, the rest as notes).
  */
-export async function sync(loaded: Office, { scope = "all", stage = silentStage, verbose = false }: SyncOptions = {}): Promise<string[]> {
+export async function sync(loaded: Office, { scope = "all", stage = silentStage, verbose = false }: SyncOptions = {}): Promise<Change[]> {
   let office = loaded;
-  const reported: string[] = [];
+  const reported: Change[] = [];
 
   // Every line reported except the clones', which their parts already showed.
   const changes = {
-    push(...lines: string[]) {
+    push(...lines: Change[]) {
       for (const line of lines) {
         reported.push(line);
 
-        if (line.startsWith("FAILED")) stage.error(line);
+        if (isFailure(line)) stage.error(line.failure);
         else stage.note(line);
       }
     },
@@ -419,7 +411,7 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
  * `changes`. Returns whether the switch recorded the references it resolved, whether a package's
  * sync function stopped the sync, and, when the set was applied whole, the committed folders.
  */
-export async function syncPackages(office: Office, changes: { push: (...lines: string[]) => void }, stage: Stage = silentStage, exclude = true) {
+export async function syncPackages(office: Office, changes: { push: (...lines: Change[]) => void }, stage: Stage = silentStage, exclude = true) {
   requirePluginDestination(office);
   const result = await publishPackages(office, exclude);
 
@@ -427,233 +419,4 @@ export async function syncPackages(office: Office, changes: { push: (...lines: s
   changes.push(...result.lines);
 
   return { recorded: result.recorded === true, stopped: result.stopped === true, committed: result.committed, excluded: result.excluded ?? [] };
-}
-
-/**
- * Applies a published package set from its gathering. While a selected package is unread (this
- * sync couldn't fetch it), what it claims is unknown, so no package's sync function runs and no
- * package's tools or machine files are reconciled; the others' OpenCode plugins and panels are
- * still delivered, and the unread package's stay as the last sync left them. Returns the paths the
- * sync functions excluded from commits.
- */
-export async function applyPackages(office: Office, gathered: Gathered, changes: string[], exclude: boolean, withdrawals: string): Promise<string[]> {
-  const installed = gathered.inventory;
-
-  // .office/packages/ holds only what sync pulled in, so a folder no package wants goes. Its panel
-  // stays on the app's machine, where other offices may use it.
-  const removedPanels: string[] = [];
-  let declarations: Map<string, Declaration> | undefined;
-
-  for (const name of readdirSync(withdrawals)) {
-    if (installed.unread.has(name) || installed.selected.has(name)) continue;
-
-    // The last synced registration names the bundle.
-    const claim = (declarations ??= readDeclarations(office)).get(name);
-    const bundle = claim?.state === "declared" ? claim.paths.panel : undefined;
-
-    if (bundle !== undefined && existsSync(join(withdrawals, name, bundle))) removedPanels.push(name);
-
-    changes.push(...removePackage(office, name, join(withdrawals, name)));
-    rmSync(join(withdrawals, name), { recursive: true });
-  }
-
-  for (const item of installed.installed) changes.push(...installPackage(office, item));
-
-  // The machine is reconciled in either mode (container mode releases the host's files), and
-  // packages' sync functions run, only once every selected package loaded. A sync function that
-  // throws stops the rest, plugins and panels included.
-  let excluded: string[] = [];
-
-  if (gathered.unread.size) {
-    const unknown = [...gathered.unread].join(", ");
-
-    changes.push(`not running any package's sync function: what package ${unknown} registers is unknown until a sync loads it`, `not reconciling any package's tools or machine files: what package ${unknown} claims is unknown until a sync loads it`);
-  } else {
-    excluded = await runSyncFunctions(office, gathered, changes);
-    changes.push(...syncTools(office, gathered.packages, [...gathered.selected]), ...syncMachine(office, gathered));
-  }
-
-  const plan = withPluginPlan(office, { ...installed, problems: [] }, gathered.assets);
-  changes.push(...plan.problems.map((problem) => `FAILED package ${problem.packages.join(", ")}: ${problem.message}`));
-  changes.push(...linkPlugins(office, plan));
-  changes.push(...installPanels(office, plan.panels, removedPanels));
-  changes.push(...linkForEditors(office.dir));
-
-  if (exclude && !gathered.unread.size) changes.push(...excludePlumbing(office, gathered.committed, excluded));
-
-  return excluded;
-}
-
-/** A package's `sync` function threw: the sync stops there, with the package set switched. */
-export class SyncStopped extends Error {}
-
-// A package's code gives the path: its type is checked here, not trusted.
-const excludable = v.pipe(v.string(), v.check(path => {
-  const normal = normalize(path);
-
-  return path !== "" && !isAbsolute(path) && normal === path && normal !== ".." && !normal.startsWith(`..${sep}`) && !/[\n\r]/.test(path) && normal !== ".office" && !normal.startsWith(`.office${sep}`);
-}));
-
-/**
- * An office-relative path a package's sync function excludes from commits, checked: inside the
- * office, outside `.office/` (excluded whole already) and on one line.
- */
-export function excludedPath(path: string): string {
-  const read = v.safeParse(excludable, path);
-
-  if (!read.success) throw new OfficeError(`can't exclude ${JSON.stringify(path)}: it must be a normalized path inside the office and outside .office/`);
-
-  return read.output;
-}
-
-/**
- * Runs each package's `sync` function, in the order the packages loaded, each line it returns going
- * to `changes` under the package's name as it finishes. The first that throws, or returns something
- * other than lines, stops the rest: SyncStopped names the package. Returns the paths they excluded
- * from commits, sorted.
- */
-export async function runSyncFunctions(office: Office, gathered: Pick<Gathered, "packages" | "entries">, changes: string[]): Promise<string[]> {
-  const excluded = new Set<string>();
-
-  for (const item of gathered.packages) {
-    const name = item.entry.name;
-    const run = item.manifest.sync?.bind(item.manifest);
-
-    if (!run) continue;
-
-    const exclude = (paths: readonly string[]) => {
-      for (const path of paths) excluded.add(excludedPath(path));
-    };
-
-    const result = await packageLines(name, "sync", () => run({ office: officeInfo(office), entries: gathered.entries, settings: structuredClone(item.settings), exclude, updateExcluded: change => updateExcluded(office, change) }));
-
-    if (!result.ok) throw new SyncStopped(result.problem);
-    changes.push(...result.lines);
-  }
-
-  return [...excluded].sort();
-}
-
-/**
- * Installs each package's desktop app panel on the machine the app runs on, and says how to remove
- * the panel of a package that left office.yaml. The app machine is looked up only when there is a
- * panel to handle; inside the container, or when it can't be reached, nothing is installed.
- */
-function installPanels(office: Office, bundles: ReadonlyMap<string, string>, removed: string[]): string[] {
-  const panels = [...bundles].map(([name, bundle]) => ({ name, bundle }));
-
-  if (panels.length === 0 && removed.length === 0) return [];
-
-  const where = locate();
-  const names = panels.map((panel) => panelId(panel.name)).join(", ");
-
-  if (where.kind === "container") return panels.length === 0 ? [] : [`not installing panels (${names}) from the container: they install on the desktop app's machine, so run office sync on the host`];
-
-  if (where.kind === "unreachable") return panels.length === 0 ? [] : [`not installing panels (${names}): ${where.reason}`];
-
-  return [...panels.flatMap((panel) => installPanel(where.machine, office, panel)), ...removed.map((name) => removalNote(where.machine, name))];
-}
-
-export const excludeStart = "# office sync: its plumbing, rewritten on each sync. Add your own lines outside this block.";
-export const excludeEnd = "# end of office sync";
-
-/**
- * Keeps Office's plumbing out of commits without touching the owner's .gitignore: one block in the
- * repository's info/exclude naming every entry of `.office/` (packages, clones, staging and
- * generated state) but the `committed` folders packages declare, sorted, each written
- * `.office/<name>/`, which are committed, each Office plugin link, and each path packages' sync
- * functions `excluded`, with a leading slash and no trailing one so a link matches, and a path's
- * pattern characters escaped so it names that one path. Lines outside the block are the
- * owner's and stay, byte for byte, CRLF endings included. An office that isn't a Git repository's
- * root gets nothing.
- *
- * A file whose markers don't form exactly one block is left alone and reported: guessing where an
- * unterminated block ends could delete the owner's lines. The file is replaced whole by rename, from
- * a read made just before, so a reader (Git, or another sync) never sees it truncated. Two syncs
- * writing at once each keep every owner line they read, and the last rename wins; only an owner
- * edit made within that moment, between a sync's read and its rename, can be overwritten.
- */
-export function excludePlumbing(office: Office, committed: readonly string[], excluded: readonly string[] = []): string[] {
-  const links = [...new Set([...officeEntries(office), ...excluded])].sort();
-  const wanted = ["/.office/*", ...[...committed].sort().map(folder => `!/${folder}`), `/${dirname(editorLinks)}/`, ...links.map(literal)];
-
-  return editExcludeBlock(office, () => wanted);
-}
-
-/** An office-relative path as an exclude line naming that one path: leading slash, pattern characters escaped. */
-function literal(path: string) {
-  return `/${path.replaceAll(/[\\*?[]/g, "\\$&").replace(/ $/, "\\ ")}`;
-}
-
-/**
- * Changes only the given paths' lines in the exclude block, at once: each of `remove` stops being
- * excluded and each of `add` is excluded, every other line of the block and the file kept. For a
- * package that placed or gave up paths outside a whole sync, which rewrites the block from every
- * package's paths: its command, or its sync that is about to stop the rest.
- */
-export function updateExcluded(office: Office, { add = [], remove = [] }: { add?: readonly string[]; remove?: readonly string[] }): string[] {
-  const adding = add.map(path => literal(excludedPath(path)));
-  const removing = new Set(remove.map(path => literal(excludedPath(path))));
-
-  return editExcludeBlock(office, block => {
-    const kept = block.filter(line => !removing.has(line) || adding.includes(line));
-
-    return [...kept, ...adding.filter(line => !kept.includes(line))];
-  });
-}
-
-/**
- * Replaces the lines of Office's block in info/exclude with what `next` makes of them (none when
- * there is no block yet), and returns one line per exclusion added or removed.
- */
-function editExcludeBlock(office: Office, next: (block: readonly string[]) => string[]): string[] {
-  if (!existsSync(join(office.dir, ".git"))) return [];
-
-  let exclude: string;
-
-  try {
-    // In a worktree office .git is a file; Git names the exclude file the worktrees share.
-    exclude = resolve(office.dir, git(["rev-parse", "--git-path", "info/exclude"], office.dir));
-  } catch {
-    return ["could not locate the office repository's info/exclude; Office's plumbing is not excluded from commits"];
-  }
-
-  if (existsSync(exclude)) exclude = realpathSync(exclude);
-  const text = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
-  const raw = text === "" ? [] : text.replace(/\n$/, "").split("\n");
-  const lines = raw.map((line) => line.replace(/\r$/, ""));
-  const starts = lines.flatMap((line, index) => (line === excludeStart ? [index] : []));
-  const ends = lines.flatMap((line, index) => (line === excludeEnd ? [index] : []));
-
-  if (starts.length > 1 || ends.length !== starts.length || (starts.length === 1 && ends[0] < starts[0])) {
-    const at = relative(office.dir, exclude).startsWith("..") ? exclude : relative(office.dir, exclude);
-
-    return [`FAILED ${at} has ${starts.length} "${excludeStart}" and ${ends.length} "${excludeEnd}" lines, not one block; left unchanged, so Office's plumbing may not be excluded from commits. Delete the stray marker lines (or the whole block, which office sync writes again), keeping your own lines, then sync again`];
-  }
-
-  // The block stays where it is; a file without one gets it at the end.
-  const [start, end] = starts.length === 1 ? [starts[0], ends[0]] : [raw.length, raw.length - 1];
-  const block = lines.slice(start + 1, end);
-  const wanted = next(block);
-
-  if (starts.length === 0 && wanted.length === 0) return [];
-  const [before, after] = [raw.slice(0, start), raw.slice(end + 1)];
-  // Office's lines take the file's line ending: CRLF when all of its lines have one.
-  const cr = text.includes("\r\n") && !/(^|[^\r])\n/.test(text) ? "\r" : "";
-  const updated = `${[...before, ...[excludeStart, ...wanted, excludeEnd].map((line) => line + cr), ...after].join("\n")}\n`;
-
-  if (updated === text) return [];
-
-  atomicWrite(exclude, updated, 0o644);
-
-  const added = wanted.filter((line) => !block.includes(line));
-  const removed = block.filter((line) => !wanted.includes(line));
-
-  // A `!` line takes a path back out of the exclusions, so adding one stops excluding the path.
-  const describe = (line: string, adding: boolean) => `${adding !== line.startsWith("!") ? "excluded" : "stopped excluding"} ${line.replace(/^!/, "")} from commits (info/exclude)`;
-
-  return [
-    ...added.map((line) => describe(line, true)),
-    ...removed.map((line) => describe(line, false)),
-  ];
 }

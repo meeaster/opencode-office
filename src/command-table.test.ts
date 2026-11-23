@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { sync } from "./commands/sync.ts";
+import { syncLines as sync } from "./sync.fixture.ts";
 import { declaredCommands, nameProblems, packageRoute } from "./command-table.ts";
 import { OfficeError } from "./office.ts";
 import { git } from "./git.ts";

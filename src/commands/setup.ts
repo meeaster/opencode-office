@@ -1,3 +1,4 @@
+import { isFailure } from "../change.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -145,7 +146,7 @@ export async function setup(initial: Office, options: SetupOptions, reporter: Re
 
   const changes = await sync(office, { stage, verbose: options.verbose === true });
 
-  if (changes.some((line) => line.startsWith("FAILED"))) {
+  if (changes.some(isFailure)) {
     stage.fail(summarize(changes));
 
     throw new OfficeError("sync failed; fix the reported source and rerun office setup");

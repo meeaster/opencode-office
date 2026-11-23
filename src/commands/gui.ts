@@ -1,6 +1,7 @@
 // `office gui dev <package>`: while a local package's panel is being built, installs its bundle on
 // the desktop app's machine each time the build writes it, so the app reloads the panel within
 // seconds. Building is the package's own script (such as a `vite build --watch` in its gui/).
+import { changeText } from "../change.ts";
 import { lstatSync, mkdirSync, readFileSync, realpathSync, watch } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 
@@ -84,7 +85,7 @@ export async function guiDev(office: Office, name: string): Promise<void> {
 
     installed = sha256(content);
 
-    for (const line of installPanel(where.machine, office, panel)) console.log(`${new Date().toLocaleTimeString()} ${line}`);
+    for (const line of installPanel(where.machine, office, panel)) console.log(`${new Date().toLocaleTimeString()} ${changeText(line)}`);
   };
 
   // The build may replace the file rather than write it, so its folder is watched. Builds empty

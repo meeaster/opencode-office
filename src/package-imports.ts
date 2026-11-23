@@ -1,6 +1,7 @@
 // How packages reach each other: one directory link per package in a package set's
 // node_modules/@office, so `@office/<name>/…` resolves by ordinary node_modules lookup with the
 // package's package.json `exports` enforced by Bun. And which packages an update must move together.
+import { failure, type Change } from "./change.ts";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { packageLinks } from "./bound-paths.ts";
@@ -44,7 +45,7 @@ export const editorLinks = "packages/node_modules/@office";
  * folder, so nothing is written through it. An office without a packages/ folder gets none.
  * Never throws: sync runs it after publishing, so a failure is reported as a line.
  */
-export function linkForEditors(dir: string): string[] {
+export function linkForEditors(dir: string): Change[] {
   if (!existsSync(join(dir, "packages"))) return [];
   const path = join(dir, editorLinks);
   const parent = lstatSync(dirname(path), { throwIfNoEntry: false });
@@ -68,7 +69,7 @@ export function linkForEditors(dir: string): string[] {
 
     return [`${entry ? "corrected" : "linked"} ${editorLinks} to the published package set, for editors`];
   } catch (error) {
-    return [`FAILED ${editorLinks}: ${error instanceof Error ? error.message : String(error)}`];
+    return [failure(`FAILED ${editorLinks}: ${error instanceof Error ? error.message : String(error)}`)];
   }
 }
 

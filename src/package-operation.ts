@@ -1,3 +1,4 @@
+import { changeSchema, failure, isFailure, type Change } from "./change.ts";
 import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -8,11 +9,11 @@ import * as v from "valibot";
 import { type LockedPackage, officeSchema, type PackageLock, parsePackageLock } from "./schema.ts";
 import { activeGeneration, beginGeneration, managedDirectory, pinActive, publishGeneration, type Candidate } from "./package-generation.ts";
 import { coupledFailures, writePackageLinks, writeSdk } from "./package-imports.ts";
-import { type GatheredPackage, type GatherProblem, gatherPackages, problemLines } from "./gather.ts";
-import { materializePackage, readRecord, type ResolvedPackage, resolvePackages, validateReplacement, verifiedCommit, writePackageSettings } from "./packages.ts";
+import { publishedView, type GatheredPackage, type GatherProblem, gatherPackages, problemLines } from "./gather.ts";
+import { materializePackage, readRecord, type ResolvedPackage, resolvePackages, validateReplacement, sourceDifferences, verifiedCommit, writePackageSettings } from "./packages.ts";
 import { lockFile, lockSections, packageLockChanges, readLockSection } from "./versions.ts";
 import { writeAppliedReferences } from "./applied-references.ts";
-import { applyPackages, SyncStopped } from "./commands/sync.ts";
+import { applyPackages, SyncStopped } from "./package-application.ts";
 import { claimAssetProblems, destinationProblems } from "../standard/mise-integration/projection.ts";
 import { openCheckoutLease } from "./checkout-lease.ts";
 import { validateAssets } from "../standard/opencode/assets.ts";
@@ -41,7 +42,18 @@ type Admission = {
  * functions exclude, are set only when the set was applied with every package loaded and no sync
  * function threw; without them the exclude block is left as it is.
  */
-type Outcome = { published: boolean; recorded?: boolean; stopped?: boolean; committed?: string[]; excluded?: string[]; lines: string[]; rejected?: string[]; generation?: string };
+const outcomeSchema = v.object({
+  published: v.boolean(),
+  recorded: v.optional(v.boolean()),
+  stopped: v.optional(v.boolean()),
+  excluded: v.optional(v.array(v.string())),
+  committed: v.optional(v.array(v.string())),
+  lines: v.array(changeSchema),
+  rejected: v.optional(v.array(v.string())),
+  generation: v.optional(v.string()),
+});
+
+type Outcome = v.InferOutput<typeof outcomeSchema>;
 
 function program() {
   return Bun.isStandaloneExecutable ? [process.execPath] : [process.execPath, "--no-install", join(import.meta.dir, "cli.ts")];
@@ -122,9 +134,9 @@ export function bindReader(dir: string, name: string) {
  * installed copy is kept from its source record, else the ref is resolved (`fetchPackage`).
  */
 export function boundCommit(lock: PackageLock, entry: PackageEntry): string | undefined {
-  const locked = entry.source && lock.get(entry.name);
+  const locked = lock.get(entry.name);
 
-  if (locked && locked.repo === entry.source?.repo && locked.path === entry.source.path && locked.ref === entry.source.ref && verifiedCommit(locked.ref, locked.commit)) return locked.commit;
+  if (locked && entry.source && !sourceDifferences(locked, entry.source).length && verifiedCommit(locked.ref, locked.commit)) return locked.commit;
 }
 
 /**
@@ -140,7 +152,7 @@ export function candidatePackageLock(selected: ResolvedPackage[], staged: string
     const record = rejected.includes(entry.name) ? undefined : readRecord(join(staged, entry.name));
     const { repo, path, ref } = entry.source;
 
-    if (record && "repo" in record && record.repo === repo && record.path === path && record.ref === ref && verifiedCommit(ref, record.commit)) {
+    if (record && "repo" in record && !sourceDifferences(record, entry.source).length && verifiedCommit(ref, record.commit)) {
       lock.set(entry.name, { repo, path, ref, commit: record.commit.toLowerCase() });
 
       continue;
@@ -177,19 +189,21 @@ export function packageLockProblems(office: Office): string[] {
   return [...stale, ...remote.flatMap(({ entry, dir }) => {
     if (entry.source === undefined) return [];
     const locked = lock.get(entry.name);
-    const { repo, path, ref } = entry.source;
+    const { ref } = entry.source;
 
     if (locked === undefined) return [`${lockFile} has no entry for package ${entry.name} (office sync locks its commit)`];
 
-    if (locked.repo !== repo || locked.path !== path || locked.ref !== ref) {
-      const differs = [locked.repo !== repo && "repo", locked.path !== path && "path", locked.ref !== ref && `ref (${locked.ref}, office.yaml ${ref})`].filter(Boolean).join(", ");
+    const differences = sourceDifferences(locked, entry.source);
+
+    if (differences.length) {
+      const differs = differences.map(field => field === "ref" ? `ref (${locked.ref}, office.yaml ${ref})` : field).join(", ");
 
       return [`${lockFile} doesn't match office.yaml for package ${entry.name}: ${differs} (office sync resolves it again and rewrites the entry)`];
     }
 
     const record = readRecord(dir);
 
-    if (record && "repo" in record && record.repo === repo && record.path === path && record.ref === ref && record.commit.toLowerCase() !== locked.commit) {
+    if (record && "repo" in record && !sourceDifferences(record, entry.source).length && record.commit.toLowerCase() !== locked.commit) {
       return [`package ${entry.name} is installed at ${record.commit.slice(0, 12)}, but ${lockFile} locks ${locked.commit.slice(0, 12)} (office sync installs the locked commit)`];
     }
 
@@ -215,7 +229,7 @@ function applicationLease(dir: string) {
   }
 }
 
-async function prepareSources(office: Office, selection: ReturnType<typeof resolvePackages>, folder: string, previous: string, lock: PackageLock, commits: ReadonlyMap<string, string>, lines: string[]) {
+async function prepareSources(office: Office, selection: ReturnType<typeof resolvePackages>, folder: string, previous: string, lock: PackageLock, commits: ReadonlyMap<string, string>, lines: Change[]) {
   const packages = join(folder, "packages");
   mkdirSync(packages);
   const validate: string[] = [];
@@ -242,9 +256,9 @@ async function prepareSources(office: Office, selection: ReturnType<typeof resol
 
       const materialized = await materializePackage(office, item, packages, bound);
 
-      lines.push(...materialized.changes.map(line => line.replaceAll(relative(office.dir, packages), ".office/packages")));
+      lines.push(...materialized.changes);
 
-      if (materialized.changes.some(line => line.startsWith("FAILED"))) {
+      if (materialized.changes.some(isFailure)) {
         rejected.push(item.entry.name);
       } else if (materialized.changes.length) {
         validate.push(item.entry.name);
@@ -263,7 +277,7 @@ async function prepareSources(office: Office, selection: ReturnType<typeof resol
       }
     } catch (error) {
       rejected.push(item.entry.name);
-      lines.push(`FAILED package ${item.entry.name}: ${String(error)}`);
+      lines.push(failure(`FAILED package ${item.entry.name}: ${String(error)}`));
 
       if (!copiedPrevious) rmSync(dir, { force: true, recursive: true });
     }
@@ -297,10 +311,10 @@ async function prepareSources(office: Office, selection: ReturnType<typeof resol
  * section is published with the package set.
  */
 export async function publishPackages(office: Office, exclude: boolean, update?: { yaml: (text: string) => string; apply: boolean; names: string[]; commits?: ReadonlyMap<string, string> }): Promise<Outcome> {
-  const lines: string[] = [];
+  const lines: Change[] = [];
   const selection = resolvePackages(office);
 
-  if (selection.problems.length) return { published: false, lines: selection.problems.map(p => `FAILED ${p.message}`) };
+  if (selection.problems.length) return { published: false, lines: selection.problems.map(p => failure(`FAILED ${p.message}`)) };
   using reservation = beginGeneration(office.dir);
   const { transaction } = reservation;
   const folder = managedDirectory(office.dir, transaction.name);
@@ -331,17 +345,17 @@ export async function publishPackages(office: Office, exclude: boolean, update?:
     const { status: code } = await run(["--package-admission", temporary], [reservation.fd]);
 
     if (code !== 0) throw new OfficeError(`package evaluator exited ${code}`);
-    const result: Outcome = JSON.parse(readFileSync(join(temporary, "output"), "utf8"));
+    const result = v.parse(outcomeSchema, JSON.parse(readFileSync(join(temporary, "output"), "utf8")));
     lines.push(...result.lines);
 
     if (result.published) lines.push(...packageLockChanges(locked, packages));
 
-    return { ...result, rejected: result.rejected && coupled(result.rejected), lines: result.published ? lines : lines.filter(line => line.startsWith("FAILED")) };
+    return { ...result, rejected: result.rejected && coupled(result.rejected), lines: result.published ? lines : lines.filter(isFailure) };
   } catch (error) {
     const published = activeGeneration(office.dir) === transaction.name;
     const reason = error instanceof Error ? error.message : String(error);
 
-    return { published, lines: [`FAILED ${reason}${published ? `; generation ${transaction.name} is active, rerun office sync --packages to reconcile external files` : ""}`] };
+    return { published, lines: [failure(`FAILED ${reason}${published ? `; generation ${transaction.name} is active, rerun office sync --packages to reconcile external files` : ""}`)] };
   } finally {
     rmSync(temporary, { recursive: true, force: true });
     // A pending switch may need the candidate even when its publisher died.
@@ -380,7 +394,7 @@ export async function evaluateAdmission(temporary: string) {
   let committed: string[] | undefined;
   let excluded: string[] | undefined;
   let rejectedOwners: string[] | undefined;
-  const lines: string[] = [];
+  const lines: Change[] = [];
 
   try {
     bindReader(office.dir, transaction.name);
@@ -389,7 +403,7 @@ export async function evaluateAdmission(temporary: string) {
     const gathered = await gatherPackages(office, { skip: new Set(input.rejected), machine: true });
 
     const refuse = (problems: GatherProblem[], reason: string) => {
-      lines.push(...problemLines(problems).map(line => `FAILED ${line}`));
+      lines.push(...problemLines(problems).map(line => failure(`FAILED ${line}`)));
 
       // The packages the problems belong to; the caller's coupledFailures widens them to their dependents.
       if (input.tracked) rejectedOwners = [...new Set(problems.flatMap(problem => problem.packages))];
@@ -445,35 +459,30 @@ export async function evaluateAdmission(temporary: string) {
       writeAppliedReferences(office.dir, gathered.references);
       recorded = true;
     } catch (error) {
-      lines.push(`FAILED the references were not recorded (${error instanceof Error ? error.message : String(error)}), so no reference checkout is cloned or updated; run office sync again`);
+      lines.push(failure(`FAILED the references were not recorded (${error instanceof Error ? error.message : String(error)}), so no reference checkout is cloned or updated; run office sync again`));
     }
 
     if (input.apply) {
-      for (const item of [...gathered.packages, ...gathered.inventory.installed]) {
-        if (item.kind === "local") continue;
-        item.dir = join(office.dir, ".office/packages", item.entry.name);
-      }
-
       // Lines a step returned before one threw are still reported.
-      const applied: string[] = [];
+      const applied: Change[] = [];
 
       try {
-        excluded = await applyPackages(office, gathered, applied, input.exclude, join(folder, "withdrawals"));
+        excluded = await applyPackages(office, publishedView(office, gathered), applied, input.exclude, join(folder, "withdrawals"));
       } finally {
         lines.push(...applied);
       }
 
       if (!gathered.unread.size) committed = gathered.committed;
 
-      if (applied.some(line => line.startsWith("FAILED"))) lines.push(`generation ${transaction.name} is active; retry the incomplete application with office sync --packages`);
+      if (applied.some(isFailure)) lines.push(`generation ${transaction.name} is active; retry the incomplete application with office sync --packages`);
     }
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
 
     stopped = error instanceof SyncStopped;
 
-    if (stopped) lines.push(`FAILED ${text}; the new package set is active and the rest of this sync did not run: fix the package, then run office sync again`);
-    else lines.push(`FAILED ${published ? `generation ${transaction.name} is active; retry application with office sync --packages: ` : ""}${text}`);
+    if (stopped) lines.push(failure(`FAILED ${text}; the new package set is active and the rest of this sync did not run: fix the package, then run office sync again`));
+    else lines.push(failure(`FAILED ${published ? `generation ${transaction.name} is active; retry application with office sync --packages: ` : ""}${text}`));
   }
 
   writeFileSync(join(temporary, "output"), JSON.stringify({ published, recorded, stopped, committed, excluded, lines, rejected: rejectedOwners, generation: published ? transaction.name : undefined } satisfies Outcome));

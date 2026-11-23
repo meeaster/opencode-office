@@ -8,6 +8,7 @@
 // The app machine is the host itself, or Windows when the CLI runs in WSL. Inside the office's
 // container there is none: panels install from the host. The install is per machine, so the last
 // office to sync a panel wins; a record beside the bundle says which office that was.
+import { failure, type Change } from "./change.ts";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
@@ -325,7 +326,7 @@ export function isRegistered(machine: AppMachine, url: string): boolean | undefi
  * none. Returns one line per change; a refusal starts with FAILED. Messages never quote the file,
  * which can hold credentials.
  */
-export function register(machine: AppMachine, url: string): string[] {
+export function register(machine: AppMachine, url: string): Change[] {
   const path = configFile(machine);
 
   if (!existsSync(path)) {
@@ -339,7 +340,7 @@ export function register(machine: AppMachine, url: string): string[] {
 
   if (edit.kind === "present") return [];
 
-  if (edit.kind === "failed") return [`FAILED to add ${url} to plugins in ${path}: ${edit.reason}; add it yourself`];
+  if (edit.kind === "failed") return [failure(`FAILED to add ${url} to plugins in ${path}: ${edit.reason}; add it yourself`)];
 
   writeFileSync(path, edit.text);
 
@@ -420,7 +421,7 @@ export function panelState(machine: AppMachine, panel: Panel): PanelState {
  * The bundle is renamed into place, so the watching sidecar never loads half a file. Returns one
  * line per change.
  */
-export function installPanel(machine: AppMachine, office: { name: string; dir: string }, panel: Panel): string[] {
+export function installPanel(machine: AppMachine, office: { name: string; dir: string }, panel: Panel): Change[] {
   const dir = panelDir(machine, panel.name);
   const content = readFileSync(panel.bundle);
   const hash = sha256(content);

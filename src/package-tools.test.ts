@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 
 
 import { withVersion } from "./commands/upgrade.ts";
-import { sync } from "./commands/sync.ts";
+import { syncLines as sync } from "./sync.fixture.ts";
 import { gatherPackages } from "./gather.ts";
 import { globalConfD, grantConsent, machineRecordPath } from "./machine.ts";
 import { toolPins } from "./mise-toml.ts";

@@ -25,6 +25,7 @@
 // folder whose conf.d gets the links, and OFFICE_MACHINE_DIR the office tool's data folder, so
 // tests and scratch offices never touch the real ones. A scratch office that runs mise sets
 // MISE_CONFIG_DIR to the same folder, so mise reads the links.
+import { changeText, failure, isFailure, type Change } from "./change.ts";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
@@ -361,13 +362,13 @@ function occupied(path: string): boolean {
 }
 
 /** Whether a recorded file is gone, and what to say about it. */
-type Removal = { removed: boolean; line: string | undefined };
+type Removal = { removed: boolean; line: Change | undefined };
 
 /** Removes a recorded file that is still as the office wrote it. A changed one stays, reported. */
 function removeFile(file: MachineFile, why: string): Removal {
   const state = fileState(file);
 
-  if (state === "changed") return { removed: false, line: `FAILED to remove ${file.path}: it changed since office wrote it, so it stays; delete it yourself` };
+  if (state === "changed") return { removed: false, line: failure(`FAILED to remove ${file.path}: it changed since office wrote it, so it stays; delete it yourself`) };
 
   if (file.kind === "file" && file.service === "opencode") {
     try {
@@ -378,7 +379,7 @@ function removeFile(file: MachineFile, why: string): Removal {
 
       return { removed: true, line: `removed ${file.path}, ${why}` };
     } catch (error) {
-      return { removed: false, line: `FAILED to remove ${file.path}: ${error instanceof Error ? error.message : String(error)}` };
+      return { removed: false, line: failure(`FAILED to remove ${file.path}: ${error instanceof Error ? error.message : String(error)}`) };
     }
   }
 
@@ -415,8 +416,8 @@ function removeEmptyFolders(): void {
 }
 
 /** Removes every file the record lists and the record itself, ending this office's management of the machine. */
-function release(record: MachineRecord, why: string): string[] {
-  const lines: string[] = [];
+function release(record: MachineRecord, why: string): Change[] {
+  const lines: Change[] = [];
   const kept: MachineFile[] = [];
 
   for (const file of record.files) {
@@ -432,7 +433,7 @@ function release(record: MachineRecord, why: string): string[] {
   if (kept.length > 0) {
     writeMachine({ ...record, files: kept });
 
-    return [...lines, `FAILED to release this machine: ${machineRecordPath()} still lists what couldn't be removed; deal with it, then run office sync --release-machine again`];
+    return [...lines, failure(`FAILED to release this machine: ${machineRecordPath()} still lists what couldn't be removed; deal with it, then run office sync --release-machine again`)];
   }
 
   rmSync(machineRecordPath(), { force: true });
@@ -441,18 +442,18 @@ function release(record: MachineRecord, why: string): string[] {
 }
 
 /** `office sync --release-machine`: removes everything this office wrote on the machine and its consent. */
-export function releaseMachine(office: Office): string[] {
+export function releaseMachine(office: Office): Change[] {
   const current = claim(office);
 
   if (current.kind === "free") return [`office ${office.name} doesn't manage this machine; nothing to remove`];
 
-  if (current.kind === "other") return [`FAILED: ${ownedElsewhere(current.record)}`];
+  if (current.kind === "other") return [failure(`FAILED: ${ownedElsewhere(current.record)}`)];
 
   return release(current.record, "as office sync --release-machine asked");
 }
 
 /** What to say about a wanted link, and what the record lists at its path afterwards. */
-type Placement = { line: string | undefined; file: MachineFile | undefined };
+type Placement = { line: Change | undefined; file: MachineFile | undefined };
 
 /** Writes or links one wanted file in place, its folder made first. */
 function make(wanted: Wanted): void {
@@ -490,7 +491,7 @@ function place(wanted: Wanted, recorded: MachineFile | undefined): Placement {
   if ("text" in wanted && wanted.text === undefined) return { line: undefined, file: recorded };
 
   if (recorded === undefined) {
-    if (occupied(file.path)) return { line: `FAILED to ${verb} ${what}: ${file.path} exists and ${machineRecordPath()} doesn't list it, so office leaves it; move it away and run office sync`, file: undefined };
+    if (occupied(file.path)) return { line: failure(`FAILED to ${verb} ${what}: ${file.path} exists and ${machineRecordPath()} doesn't list it, so office leaves it; move it away and run office sync`), file: undefined };
 
     make(wanted);
 
@@ -499,7 +500,7 @@ function place(wanted: Wanted, recorded: MachineFile | undefined): Placement {
 
   const state = fileState(recorded);
 
-  if (state === "changed") return { line: `FAILED to ${verb} ${what}: ${file.path} changed since office wrote it, so office leaves it; delete it and run office sync`, file: recorded };
+  if (state === "changed") return { line: failure(`FAILED to ${verb} ${what}: ${file.path} changed since office wrote it, so office leaves it; delete it and run office sync`), file: recorded };
 
   if (state === "present" && same(recorded, file)) return { line: undefined, file };
 
@@ -619,12 +620,12 @@ export function removeUnwantedServer(office: Office): void {
 
     const result = removeFile(file, removalReason(office, file));
 
-    if (!result.removed) throw new OfficeError(result.line);
+    if (!result.removed) throw new OfficeError(result.line === undefined ? undefined : changeText(result.line));
 
     files = files.filter((entry) => entry !== file);
     writeMachine({ ...current.record, files });
 
-    if (result.line !== undefined) say(result.line);
+    if (result.line !== undefined) say(changeText(result.line));
   }
 }
 
@@ -634,12 +635,12 @@ export function removeUnwantedServer(office: Office): void {
  * of an office that moved; in container mode it removes everything the office wrote and the record.
  * Returns one line per change; a refusal starts with FAILED.
  */
-export function syncMachine(office: Office, packages?: MachinePackages): string[] {
+export function syncMachine(office: Office, packages?: MachinePackages): Change[] {
   const current = claim(office);
 
   if (office.opencode.mode !== "host") return current.kind === "ours" ? release(current.record, "as the office now runs OpenCode in its container") : [];
 
-  if (current.kind === "other") return [`FAILED to link this office's tools on the machine: ${ownedElsewhere(current.record)}`];
+  if (current.kind === "other") return [failure(`FAILED to link this office's tools on the machine: ${ownedElsewhere(current.record)}`)];
 
   if (current.kind === "free") {
     const firewall = office.socketFirewall ? ", and package downloads don't go through Socket Firewall" : "";
@@ -650,7 +651,7 @@ export function syncMachine(office: Office, packages?: MachinePackages): string[
   if (packages === undefined) throw new Error("linking a host office's machine files needs its gathered packages");
   const { record, movedFrom } = current;
   const { wanted, problems } = wantedFiles(office, record, packages);
-  const lines = [...(movedFrom === undefined ? [] : [`office ${office.name} moved from ${movedFrom}; ${machineRecordPath()} now names ${office.dir}`]), ...problems.map((problem) => `FAILED ${problem}`)];
+  const lines = [...(movedFrom === undefined ? [] : [`office ${office.name} moved from ${movedFrom}; ${machineRecordPath()} now names ${office.dir}`]), ...problems.map((problem) => failure(`FAILED ${problem}`))];
   const files: MachineFile[] = [];
 
   for (const file of record.files) {
@@ -680,7 +681,7 @@ export function syncMachine(office: Office, packages?: MachinePackages): string[
     if (result.file !== undefined) files.push(result.file);
   }
 
-  if (office.socketFirewall && lines.some((line) => line.startsWith(`wrote ${hostLayout("").script}`)) && !files.some(isSfw)) {
+  if (office.socketFirewall && lines.some((line) => !isFailure(line) && line.startsWith(`wrote ${hostLayout("").script}`)) && !files.some(isSfw)) {
     lines.push(`Socket Firewall itself isn't installed yet, so the wrappers refuse to run downloads: office up installs sfw ${appliedSfw(office).version}`);
   }
 

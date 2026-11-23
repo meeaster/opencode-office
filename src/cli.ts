@@ -1,4 +1,5 @@
 // The `office` command: initialize, sync, check and run an office. See README.md.
+import { changeText, isFailure, type Change } from "./change.ts";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -364,7 +365,7 @@ async function main(): Promise<void> {
 
     const { dir, changes } = await init(rest[0], flags.name);
 
-    for (const line of changes) console.log(line);
+    for (const line of changes) console.log(changeText(line));
 
     console.log(`created the office in ${dir}`);
     console.log(nextSteps(dir));
@@ -391,11 +392,11 @@ async function main(): Promise<void> {
     if (flags["release-machine"]) {
       const changes = releaseMachine(currentOffice(flags));
 
-      for (const line of changes) console.log(line);
+      for (const line of changes) console.log(changeText(line));
 
       if (changes.length === 0) console.log("already in sync");
 
-      if (changes.some((line) => line.startsWith("FAILED"))) process.exitCode = 1;
+      if (changes.some(isFailure)) process.exitCode = 1;
 
       return;
     }
@@ -579,10 +580,10 @@ async function refreshSkills(office: Office, stage: Stage): Promise<void> {
   stage.done("office skills update finished");
 }
 
-function finishSync(stage: Stage, changes: string[]) {
+function finishSync(stage: Stage, changes: Change[]) {
   const summary = summarize(changes);
 
-  if (changes.some(line => line.startsWith("FAILED"))) {
+  if (changes.some(isFailure)) {
     stage.fail(summary);
 
     throw new OfficeError("Fix the sync failures above and run the command again");

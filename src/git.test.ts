@@ -1,10 +1,13 @@
+import { changeText, failure } from "./change.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { excludedPath, excludeEnd, excludeStart, excludePlumbing, summarize, sync, updateExcluded } from "./commands/sync.ts";
+import { excludedPath, updateExcluded, excludeEnd, excludeStart, excludePlumbing } from "./exclude-plumbing.ts";
+import { summarize, sync as syncChanges } from "./commands/sync.ts";
+import { syncLines as sync } from "./sync.fixture.ts";
 import { cloneShallow, git } from "./git.ts";
 import { loadOffice } from "./office.ts";
 import { readReceipts, sha256 } from "../packages/seeds/store.ts";
@@ -72,11 +75,12 @@ test("sync reports each clone as a part while it runs, keeps git's error for one
   const capture = (line: string) => lines.push(line.replace(/ \((\d+m )?\d+s\)$/, ""));
   const reporter = new PlainReporter("office sync", false, capture, capture);
   const stage = reporter.stage("Repositories and packages", { key: "repos" });
-  const changes = await sync(loadOffice(office), { scope: "references", stage });
+  const results = await syncChanges(loadOffice(office), { scope: "references", stage });
+  const changes = results.map(changeText);
 
   expect(changes.slice(0, 5)).toEqual(["a", "b", "c", "d", "e"].map((name) => `cloned reference references/${name}`));
   expect(changes[5]).toStartWith("FAILED reference references/missing: Command failed: git fetch --quiet --depth 1 origin HEAD\n");
-  expect(summarize(changes)).toBe("5 cloned, 1 failed");
+  expect(summarize(results)).toBe("5 cloned, 1 failed");
 
   expect(lines[0]).toBe("repos: cloning and updating 6 sources, up to 8 at a time (4 new clones)");
 
@@ -108,6 +112,11 @@ test("sync reports each clone as a part while it runs, keeps git's error for one
   expect(lines.indexOf("repos: updating references/i")).toBeGreaterThan(firstCurrent);
   expect(lines.filter(line => line.endsWith(": current"))).toHaveLength(9);
   expect(summarize([])).toBe("already in sync");
+});
+
+test("sync counts failures independently of diagnostic wording", () => {
+  expect(summarize(["FAILED is part of this note"])).toBe("1 other change");
+  expect(summarize([failure("source unavailable")])).toBe("1 failed");
 });
 
 test("a full sync reports its change lines as notes and FAILED lines as errors while returning them", async () => {
@@ -287,7 +296,7 @@ test("info/exclude: a malformed block is left alone and reported, CRLF endings a
   const exclude = join(office, ".git/info/exclude");
   linkedOffice(office);
   git(["init", "--quiet", office]);
-  const plumbing = () => excludePlumbing(loadOffice(office), []);
+  const plumbing = () => excludePlumbing(loadOffice(office), []).map(changeText);
   const lines = ["/.office/*", "/packages/node_modules/", "/.opencode/plugins/common", "/.opencode/plugins/imported", "/.opencode/plugins/office"];
   const block = (eol: string) => [excludeStart, ...lines, excludeEnd].map(line => line + eol).join("");
 

@@ -1,6 +1,7 @@
 // `office init <dir>`: a new office from the template, with one example desk and the built-in
 // knowledge and browser packages, as a git repository on branch main. Its office.yaml starts at the tool's
 // versions, which office.lock pins.
+import { changeText, isFailure } from "../change.ts";
 import { existsSync, readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
@@ -36,7 +37,7 @@ export async function init(target: string, name: string | undefined) {
   // Installs the built-in office, knowledge and browser packages from this executable, writes the
   // browser package's mise tools, links the plugins they register and scaffolds the example desk.
   const changes = await sync(loadOffice(dir));
-  const failures = changes.filter(line => line.startsWith("FAILED"));
+  const failures = changes.filter(isFailure).map(changeText);
 
   // main whatever git's default branch is on this machine.
   if (!existsSync(resolve(dir, ".git"))) git(["init", "--quiet", "--initial-branch=main", dir]);
@@ -47,5 +48,5 @@ export async function init(target: string, name: string | undefined) {
   // pre-commit; otherwise office setup installs both.
   const hook = installHook(loadOffice(dir));
 
-  return { dir, changes: hook === undefined ? changes : [...changes, hook] };
+  return { dir, changes: hook === undefined ? changes.map(changeText) : [...changes.map(changeText), hook] };
 }

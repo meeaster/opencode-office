@@ -1,9 +1,10 @@
+import { changeText } from "./change.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { sync } from "./commands/sync.ts";
+import { syncLines as sync } from "./sync.fixture.ts";
 import { machineDirVariable } from "./host-env.ts";
 import { serverUnit, serverUnitPath } from "./host-server.ts";
 import { claim, grantConsent, machineRecordVariable, machineReport, matchesServerUnit, miseConfigVariable, readMachine, releaseMachine, syncMachine, writeServerUnit } from "./machine.ts";
@@ -92,7 +93,7 @@ test("the managed server unit needs consent and a recorded env.sh, and is not ov
   write(plan.path, "# edited\n");
   expect(matchesServerUnit(config, plan)).toBe(false);
   expect(() => writeServerUnit(config, plan)).toThrow("changed since office wrote it");
-  expect(releaseMachine(config).join("\n")).toContain(`FAILED to remove ${plan.path}`);
+  expect(releaseMachine(config).map(changeText).join("\n")).toContain(`FAILED to remove ${plan.path}`);
   expect(readFileSync(plan.path, "utf8")).toBe("# edited\n");
   unlinkSync(plan.path);
 });
@@ -166,7 +167,7 @@ test("office sync --release-machine removes everything and the consent, keeping 
   unlinkSync(join(confD, "office-t-1-demo.toml"));
   writeFileSync(join(confD, "office-t-1-demo.toml"), "# mine now\n");
 
-  const first = releaseMachine(loadOffice(office));
+  const first = releaseMachine(loadOffice(office)).map(changeText);
 
   expect(first).toContain(`FAILED to remove ${confD}/office-t-1-demo.toml: it changed since office wrote it, so it stays; delete it yourself`);
   expect(links()).toEqual(["office-t-1-demo.toml"]);

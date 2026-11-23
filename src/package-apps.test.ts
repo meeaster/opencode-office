@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { appFolders } from "./commands/apps.ts";
-import { sync } from "./commands/sync.ts";
+import { syncLines as sync } from "./sync.fixture.ts";
 import { loadOffice } from "./office.ts";
 import { writePackage } from "./test-package.ts";
 

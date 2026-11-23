@@ -11,6 +11,7 @@
 // sync` restores the copy. Only local packages are committed with the office; `.office/packages/` is not, so
 // a clone's first sync restores built-ins from the executable and fetches each remote package at
 // the commit office.lock locks for it.
+import { failure, type Change } from "./change.ts";
 import { boundUnavailable, definitionRoot, linkProblem, packageRoot, pulledFolder } from "./bound-paths.ts";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
@@ -327,8 +328,8 @@ export async function embeddedPackage(name: string) {
   return { wanted, hashes };
 }
 
-async function installBuiltinFiles(office: Office, entry: PackageEntry, dir: string, wanted: Map<string, string>, hashes: PackageRecord["files"]) {
-  const where = relative(office.dir, dir);
+async function installBuiltinFiles(entry: PackageEntry, dir: string, wanted: Map<string, string>, hashes: PackageRecord["files"]) {
+  const where = join(".office/packages", entry.name);
   const record = readRecord(dir);
 
   if (existsSync(dir) && Bun.deepEquals(fileHashes(dir), hashes)) {
@@ -357,6 +358,14 @@ async function installBuiltinFiles(office: Office, entry: PackageEntry, dir: str
   return [`updated ${where} from ${describeRecord(record)} to ${thisCopy()}`];
 }
 
+const sourceFields = ["repo", "path", "ref"] as const;
+
+type GitSource = Pick<NonNullable<PackageEntry["source"]>, typeof sourceFields[number]>;
+
+export function sourceDifferences(record: GitSource, selected: GitSource) {
+  return sourceFields.filter(field => record[field] !== selected[field]);
+}
+
 /** A full commit SHA. */
 export const fullCommit = /^[a-f0-9]{40}$/i;
 
@@ -371,12 +380,12 @@ export function verifiedCommit(ref: string, commit: string): boolean {
  * ref, and restores one whose files were edited. Returns one line per change; a failure starts
  * with FAILED.
  */
-export async function fetchPackage(office: Office, entry: PackageEntry, source: NonNullable<PackageEntry["source"]>, boundCommit?: string, commitPin?: () => void, destination?: string): Promise<string[]> {
+export async function fetchPackage(office: Office, entry: PackageEntry, source: NonNullable<PackageEntry["source"]>, boundCommit?: string, commitPin?: () => void, destination?: string): Promise<Change[]> {
   const { name } = entry;
   const dir = destination ?? pulledDir(office, name);
-  const where = relative(office.dir, dir);
+  const where = join(".office/packages", name);
   const record = readRecord(dir);
-  const current = record !== undefined && "repo" in record && record.repo === source.repo && record.path === source.path && record.ref === source.ref;
+  const current = record !== undefined && "repo" in record && !sourceDifferences(record, source).length;
   const edits = record === undefined ? [] : localEdits(dir, record);
 
   const known = current && verifiedCommit(source.ref, record.commit) && (!boundCommit || record.commit === boundCommit);
@@ -417,7 +426,7 @@ export async function fetchPackage(office: Office, entry: PackageEntry, source: 
 
     return [`updated ${where} from ${describeRecord(record)} to ${source.ref} (${commit})`];
   } catch (error) {
-    return [`FAILED ${where} from ${source.repo}:${source.path} @ ${source.ref} (revision ${revision}): ${error instanceof Error ? error.message.trim() : String(error)}`];
+    return [failure(`FAILED ${where} from ${source.repo}:${source.path} @ ${source.ref} (revision ${revision}): ${error instanceof Error ? error.message.trim() : String(error)}`)];
   }
 }
 
@@ -429,7 +438,7 @@ export async function materializePackage(office: Office, item: ResolvedPackage, 
   if (item.kind === "built-in") {
     const { wanted, hashes } = await embeddedPackage(item.entry.name);
 
-    return { changes: await installBuiltinFiles(office, item.entry, dir, wanted, hashes) };
+    return { changes: await installBuiltinFiles(item.entry, dir, wanted, hashes) };
   }
 
   if (!item.entry.source) throw new Error(`missing source for ${item.entry.name}`);
@@ -462,7 +471,7 @@ export function verifyInstalledCopy({ kind, entry, dir }: ResolvedPackage) {
 
   if (kind === "built-in" && "repo" in record) throw new Error("the installed copy is remote, not built-in; run office sync");
 
-  if (kind === "remote" && !("repo" in record && record.repo === entry.source?.repo && record.path === entry.source.path && record.ref === entry.source.ref)) {
+  if (kind === "remote" && !("repo" in record && entry.source && !sourceDifferences(record, entry.source).length)) {
     throw new Error("the installed copy is not from the selected source and ref; run office sync");
   }
 

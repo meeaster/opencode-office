@@ -11,7 +11,7 @@ import { loadOffice } from "../office.ts";
 import { silentStage, type Stage } from "../report/index.ts";
 import { editLock, readLockSection } from "../versions.ts";
 import { updatePackages } from "./pins.ts";
-import { sync } from "./sync.ts";
+import { syncLines as sync } from "../sync.fixture.ts";
 import { definitionText, markingDefinition, packageJsonText, settingsSchema } from "../test-package.ts";
 
 /** office.lock's `packages:` section in the office at `dir`, as an object. */
