@@ -82,3 +82,17 @@ test("an update holds back a package that declares a dependency on a rejected on
   writeFileSync(join(other.dir, "package.json"), "{");
   expect(coupledFailures(["other"], pending, [[consumer, provider, other]])).toEqual(pending);
 });
+
+test("an update holds back a consumer with its selected optional provider, active or not; an unselected provider couples nothing", () => {
+  const consumer = pkg("consumer", "remote", join(dir, "consumer"));
+  writeFileSync(join(consumer.dir, "skills.ts"), "");
+  writeFileSync(join(consumer.dir, "package.json"), JSON.stringify({ name: "@office/consumer", office: { definition: "./office.ts", integrations: { "@office/provider": "./skills.ts" } } }));
+  const provider = pkg("provider", "remote", join(dir, "provider"));
+  const other = pkg("other", "remote", join(dir, "other"));
+  // A selected provider whose copy isn't there still has its edge: selection, not the copy, decides.
+  const absent: ResolvedPackage = { ...provider, dir: join(dir, "gone") };
+
+  expect(coupledFailures(["provider"], ["consumer", "provider", "other"], [[consumer, provider, other]]).sort()).toEqual(["consumer", "provider"]);
+  expect(coupledFailures(["provider"], ["consumer", "provider"], [[consumer, absent]]).sort()).toEqual(["consumer", "provider"]);
+  expect(coupledFailures(["consumer"], ["consumer", "other"], [[consumer, other]])).toEqual(["consumer"]);
+});

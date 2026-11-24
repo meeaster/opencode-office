@@ -7,7 +7,7 @@ import { syncLines as sync } from "./sync.fixture.ts";
 import { git } from "./git.ts";
 import { loadOffice } from "./office.ts";
 import { settingsEnv } from "./package-services.ts";
-import { fetchPackage, readPackage, resolvePackages, writeOfficeDeclaration } from "./packages.ts";
+import { fetchPackage, readPackage, resolvePackages, validateReplacement, writeOfficeDeclaration } from "./packages.ts";
 import { publishAppliedSettings } from "./applied-settings.ts";
 import { readAppliedSettings } from "../sdk/applied-settings.ts";
 import { recordRequiredBuiltins } from "./test-builtin-record.ts";
@@ -446,4 +446,27 @@ test("the required office package ignores the Claude app's synced skills unless 
   expect(readFileSync(join(skills, "openai-skill-creator/SKILL.md"), "utf8")).toContain("\nname: openai-skill-creator\n");
   expect(existsSync(join(skills, "openai-skill-creator/NOTICE"))).toBe(true);
   expect(existsSync(join(skills, "openai-skill-creator/license.txt"))).toBe(true);
+});
+
+test("a replacement is checked with each selected optional provider it can import, active or not, and not with one office.yaml leaves out", () => {
+  const office = join(dir, "office");
+  const consumer = join(office, "packages/consumer");
+  const shared = "  - name: shared\n    repo: https://example.com/shared.git\n    path: packages/shared\n    ref: main\n";
+
+  writePackage(join(consumer, "office.ts"), definitionText("{}"));
+  write(join(consumer, "shared.ts"), "");
+  write(join(consumer, "package.json"), JSON.stringify({ name: "@office/consumer", office: { definition: "./office.ts", integrations: { "@office/shared": "./shared.ts" } } }));
+
+  const candidate = (yaml: string) => {
+    write(join(office, "office.yaml"), `name: t\npackages:\n  - name: consumer\n${yaml}`);
+    const loaded = loadOffice(office);
+    const item = resolvePackages(loaded).packages.find(pkg => pkg.entry.name === "consumer");
+
+    if (item === undefined) throw new Error("no consumer");
+
+    return () => validateReplacement(loaded, item);
+  };
+
+  expect(candidate(shared)).toThrow("package shared: not synced yet; run office sync");
+  expect(candidate("")().entry.name).toBe("consumer");
 });

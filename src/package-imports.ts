@@ -5,8 +5,8 @@ import { failure, type Change } from "./change.ts";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { packageLinks } from "./bound-paths.ts";
-import { readPackageJson } from "./package-manifest.ts";
-import { type ResolvedPackage, sdkName } from "./packages.ts";
+import { importEdges, readPackageJson, sdkName } from "./package-manifest.ts";
+import type { ResolvedPackage } from "./packages.ts";
 import { toolFiles, toolPath, writeToolFile } from "./tool.ts";
 
 /**
@@ -74,9 +74,14 @@ export function linkForEditors(dir: string): Change[] {
   }
 }
 
-/** Each present package's declared office dependencies; throws when a package.json can't be read. */
+/**
+ * Each present package's import edges in this view: its declared office dependencies and its
+ * optional providers the view selects, whether or not their copies are present. Throws when a
+ * package.json can't be read.
+ */
 function declaredDependencies(packages: ResolvedPackage[]) {
   const graph = new Map<string, Set<string>>();
+  const selected = new Set(packages.map(pkg => pkg.entry.name));
 
   for (const pkg of packages) {
     if (!existsSync(pkg.dir)) continue;
@@ -84,7 +89,7 @@ function declaredDependencies(packages: ResolvedPackage[]) {
 
     if (!read.ok) throw new Error(read.errors.join("; "));
     // @office/sdk is no package, so it couples nothing.
-    graph.set(pkg.entry.name, new Set(read.value.dependencies.filter(name => name !== sdkName)));
+    graph.set(pkg.entry.name, new Set(importEdges(read.value, selected).filter(name => name !== sdkName)));
   }
 
   return graph;
@@ -92,8 +97,8 @@ function declaredDependencies(packages: ResolvedPackage[]) {
 
 /**
  * Which of the `pending` packages an update must hold back, given those `rejected`: each that
- * depends on a rejected one, or that a rejected one depends on, in either view's declared
- * dependencies. An unreadable package.json is not evidence of independence: all are held back.
+ * depends on a rejected one, or that a rejected one depends on, in either view's import edges
+ * (selected optional providers included). An unreadable package.json is not evidence of independence: all are held back.
  */
 export function coupledFailures(rejected: string[], pending: string[], views: ResolvedPackage[][]) {
   try {

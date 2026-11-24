@@ -1,0 +1,15 @@
+{
+  // Development types: the providers' sources stand in for the packages an authoring office
+  // selects. Office reads none of this; an office without mock-executor never loads executor.ts.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@office/sdk": ["../../sdk/index.ts"],
+      "@office/sdk/applied-settings": ["../../sdk/applied-settings.ts"],
+      "@office/skills": ["../../packages/skills/handles.ts"],
+      "@office/mock-executor/apps": ["./packages/mock-executor/apps.ts"]
+    }
+  },
+  "include": ["packages"],
+  "exclude": []
+}

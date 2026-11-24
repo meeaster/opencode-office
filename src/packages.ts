@@ -22,7 +22,8 @@ import * as v from "valibot";
 import { copyFromRepository } from "./git.ts";
 import { type Office, OfficeError, type PackageEntry } from "./office.ts";
 import { readDefinition } from "./package-definition.ts";
-import { readPackageJson, scope } from "./package-manifest.ts";
+import type { OptionalIntegration } from "./package-integrations.ts";
+import { importEdges, readPackageJson, scope, sdkName } from "./package-manifest.ts";
 import { composeProblems, packageComposeFile } from "./package-services.ts";
 import { settingsEnv } from "../standard/compose/services.ts";
 import { gateDefaultProblem, systemSection } from "./package-system.ts";
@@ -44,13 +45,15 @@ export const officeFile = ".office.json";
 /** The office's own records in a package folder, left out of its file hashes. */
 const records = [sourceFile, officeFile];
 
-/** The name of the SDK every package can import as `@office/sdk`, which no package can have. */
-export const sdkName = "sdk";
-
 const sdkReserved = `the name ${sdkName} is reserved for ${scope}${sdkName}; rename the package`;
 
 /** The built-in packages every office has, without an entry in office.yaml. */
 export const requiredPackages = ["tooling", "mise-integration", "opencode", "office", "references", "seeds", "cron"];
+
+/** The names of the packages `office` selects: the required built-ins and each office.yaml entry, whether or not it resolves or loads. */
+export function selectedNames(office: Pick<Office, "packages">): Set<string> {
+  return new Set([...requiredPackages, ...office.packages.map(entry => entry.name)]);
+}
 
 const files = v.record(v.string(), v.string());
 
@@ -79,6 +82,8 @@ export type InstalledPackage = ResolvedPackage & {
   manifest: PackageManifest;
   /** The settings with defaults applied, as runtimes read them from the office's applied settings snapshot. */
   settings: Record<string, SettingValue>;
+  /** Its optional integrations, active or not, each with its module and policy. */
+  integrations: readonly OptionalIntegration[];
 };
 
 /** The folder of a built-in or remote package. */
@@ -112,7 +117,7 @@ export function localFolders(office: Office): string[] {
 function ownershipProblems(office: Pick<Office, "dir" | "packages">, builtins: string[], only?: string, live = false): PackageProblem[] {
   const problems: PackageProblem[] = [];
 
-  for (const name of new Set([...requiredPackages, ...office.packages.map(entry => entry.name)])) {
+  for (const name of selectedNames(office)) {
     if (only !== undefined && name !== only) continue;
 
     if (!builtins.includes(name)) continue;
@@ -488,7 +493,7 @@ export function rejectedPackages(packages: ResolvedPackage[], rejected: Readonly
  * `skip` isn't checked. Each problem names its package; messages don't repeat the name.
  */
 export function selectionProblems(office: Pick<Office, "packages">, packages: ResolvedPackage[], skip: ReadonlySet<string> = new Set()): PackageProblem[] {
-  const selected = new Set([...requiredPackages, ...office.packages.map(entry => entry.name)]);
+  const selected = selectedNames(office);
   const problems: PackageProblem[] = [];
 
   for (const pkg of packages) {
@@ -658,7 +663,7 @@ export function readPackage(office: Office, resolved: ResolvedPackage): { ok: tr
 
   if (!read.ok) return read;
 
-  const { manifest, file } = read.value;
+  const { manifest, file, integrations } = read.value;
   const errors: string[] = [];
   const settings = resolveSettings(resolved, manifest, file);
 
@@ -676,7 +681,7 @@ export function readPackage(office: Office, resolved: ResolvedPackage): { ok: tr
 
     if (errors.length > 0) return { ok: false, errors, manifest };
 
-    return { ok: true, value: { ...resolved, manifest, settings: settings.value } };
+    return { ok: true, value: { ...resolved, manifest, settings: settings.value, integrations } };
   } catch (error) {
     // A file the package's folder can't give (an unreadable script) fails this package alone.
     return { ok: false, errors: [`${file}: ${error instanceof Error ? error.message : String(error)}`], manifest };
@@ -686,12 +691,13 @@ export function readPackage(office: Office, resolved: ResolvedPackage): { ok: tr
 /**
  * What must pass before a candidate is imported: in the selection with the candidate in its
  * entry's place, the copy, package.json and declared dependencies of the candidate and of every
- * package it can import through them. A staged candidate has no link in the package set yet.
+ * package it can import through them or through a selected optional provider, active or not. A staged candidate has no link in the package set yet.
  */
 function candidateProblems(office: Pick<Office, "dir" | "packages">, candidate: ResolvedPackage): PackageProblem[] {
   const name = candidate.entry.name;
   const effective = { ...office, packages: office.packages.map(entry => entry.name === name ? candidate.entry : entry) };
   const peers = new Map(resolvePackages(effective).packages.map(peer => [peer.entry.name, peer]));
+  const selected = selectedNames(effective);
   const reached = new Map<string, ResolvedPackage>();
   const queue = [candidate];
 
@@ -700,7 +706,7 @@ function candidateProblems(office: Pick<Office, "dir" | "packages">, candidate: 
     reached.set(pkg.entry.name, pkg);
     const json = readPackageJson(pkg.dir, pkg.entry.name, pkg.kind);
 
-    for (const dependency of json.ok ? json.value.dependencies : []) {
+    for (const dependency of json.ok ? importEdges(json.value, selected) : []) {
       const peer = dependency === name ? undefined : peers.get(dependency);
 
       if (peer) queue.push(peer);

@@ -3,8 +3,8 @@
 // registered in each process (and worker) before its first definition is required.
 import { Package, Registry } from "../sdk/index.ts";
 
-/** Whether a value was made by this process's `Package.define`. */
-export { marked as madeWithSdk } from "../sdk/mark.ts";
+/** Whether a value was made by this process's `Package.define`, and by its `Package.integration`. */
+export { marked as madeWithSdk, markedIntegration as integrationWithSdk } from "../sdk/mark.ts";
 
 let registered = false;
 

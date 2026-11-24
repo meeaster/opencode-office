@@ -1,5 +1,6 @@
 // The one gathering of what packages register: every selected package's definition is read and its
-// settings checked; when every package's settings are valid, every setup runs; then every entry is
+// settings checked; when every package's settings are valid, every setup runs, each followed by its
+// active integrations' (decided from those settings and this selection, never from links); then every entry is
 // parsed by its registry's parser and checked against the registry's key, and each package's machine
 // entries become its claims. Commands, help, sync's admission and `office check` all gather this way,
 // once per evaluated package set, and each decides what a problem means. Nothing is read from an
@@ -15,6 +16,7 @@ import { declaredCommands, nameProblems, type NameProblem, type RegisteredComman
 import { installedPackages, type InstalledPackages } from "./layout.ts";
 import type { Office } from "./office.ts";
 import { type InstalledPackage, type PackageProblem, problemLine } from "./packages.ts";
+import { activeIntegrations, loadIntegrations } from "./package-integrations.ts";
 import { jsonObject, type Registered, registerPackage } from "./package-setup.ts";
 import type { PackageManifest } from "./schema.ts";
 
@@ -109,8 +111,13 @@ export async function gatherPackages(office: Office, { skip = new Set<string>(),
   // With any invalid settings, or nothing loaded, no setup runs: commands and help still see what definitions declare.
   if (!inventory.blocked && !inventory.invalidSettings.length) {
     for (const item of inventory.installed) {
+      const name = item.entry.name;
+      const folder = definitionRoot(office.dir, item);
+
       try {
-        setUp.push({ name: item.entry.name, folder: definitionRoot(office.dir, item), root: packageDeliveryDir(office.dir, item), registered: await registerPackage({ name: item.entry.name, manifest: item.manifest, settings: item.settings }) });
+        const integrations = loadIntegrations(folder, activeIntegrations(name, item.integrations, item.settings, inventory));
+
+        setUp.push({ name, folder, root: packageDeliveryDir(office.dir, item), registered: await registerPackage({ name, manifest: item.manifest, settings: item.settings, integrations }) });
       } catch (error) {
         problems.push({ packages: [item.entry.name], message: message(error) });
       }

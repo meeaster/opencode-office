@@ -1,26 +1,29 @@
 // `office down`'s part for packages, run in a reader bound to the published package set: the one
 // exception to "nothing loads from a set that fails its checks". Every check made before an import
 // runs on the whole selection as for any reader; a package that fails one, and every package that
-// depends on it at any depth, is left out unimported. The rest are imported providers first, a
+// depends on it at any depth (through a selected optional provider too), is left out unimported. The rest are imported providers first, a
 // package whose provider failed to import is left out unimported too, and each that has a `down`
 // gets its settings, checked against its own schema, and the host helpers. No `setup` runs, so
 // there are no registries. Every package left out is named, and the reader exits 1; the kernel's
 // own shutdown runs in the process that started this one, whatever happens here.
 import { officeInfo, packageHost, packageLines } from "./lifecycle-inputs.ts";
 import type { Office } from "./office.ts";
-import { readPackageJson } from "./package-manifest.ts";
-import { definitionGate, installedDefinition, type ResolvedPackage, resolvePackages, schemaSettings } from "./packages.ts";
+import { importEdges, readPackageJson } from "./package-manifest.ts";
+import { definitionGate, installedDefinition, type ResolvedPackage, resolvePackages, schemaSettings, selectedNames } from "./packages.ts";
 import type { PackageManifest } from "./schema.ts";
 import { say } from "./report/index.ts";
 
-/** Each package's declared dependencies, for those whose package.json reads. */
-function dependencies(packages: ResolvedPackage[]): Map<string, string[]> {
+/**
+ * Each package's import edges, for those whose package.json reads: its optional providers office.yaml
+ * `selected` included, even one resolution left out for an ownership conflict.
+ */
+function dependencies(packages: ResolvedPackage[], selected: ReadonlySet<string>): Map<string, string[]> {
   const declared = new Map<string, string[]>();
 
   for (const item of packages) {
     const json = readPackageJson(item.dir, item.entry.name, item.kind);
 
-    if (json.ok) declared.set(item.entry.name, json.value.dependencies);
+    if (json.ok) declared.set(item.entry.name, importEdges(json.value, selected));
   }
 
   return declared;
@@ -78,7 +81,7 @@ export async function shutdownPackages(office: Office): Promise<boolean> {
     for (const name of problem.packages) leave(name, problem.message);
   }
 
-  const declared = dependencies(resolved.packages);
+  const declared = dependencies(resolved.packages, selectedNames(office));
 
   dependents(left, declared);
   const imported: { item: ResolvedPackage; manifest: PackageManifest; file: string }[] = [];

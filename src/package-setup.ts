@@ -1,7 +1,7 @@
 // One package's setup, run in this process: what it registered. Sync and package commands both
 // call it; each decides what to do with the result.
 import * as v from "valibot";
-import type { Registry, RegistryEntry, SettingValue } from "../sdk/index.ts";
+import type { Integration, Registry, RegistryEntry, SettingValue, SetupContext } from "../sdk/index.ts";
 import { type PackageManifest, settingValue } from "./schema.ts";
 
 /** A registry entry: a JSON object, which sync and commands can copy and compare. */
@@ -19,14 +19,19 @@ type SetupInput = {
   manifest: PackageManifest;
   /** The validated settings with defaults applied, as `ctx.settings`. */
   settings: Record<string, SettingValue>;
+  /** Its active integrations, whose setups run after its own, adding as this package. */
+  integrations?: readonly Integration[];
 };
 
-/** Runs `setup` and gathers its registrations. Throws when setup or a registration call throws. */
-export async function registerPackage({ name, manifest, settings }: SetupInput): Promise<Registered> {
+/**
+ * Runs `setup`, then each active integration's, and gathers their registrations. Throws when a setup
+ * or a registration call throws.
+ */
+export async function registerPackage({ name, manifest, settings, integrations = [] }: SetupInput): Promise<Registered> {
   const registries = new Map<string, Registry<RegistryEntry>>();
   const additions: Registered["additions"] = [];
 
-  await manifest.setup?.({
+  const ctx: SetupContext = {
     settings: structuredClone(settings),
     registry(handle) {
       if (!handle.id.startsWith(`${name}.`) || !/^[a-z0-9-]+\.[a-z0-9-]+$/.test(handle.id) || !v.is(v.function(), handle.parse) || registries.has(handle.id)) throw new Error(`invalid or duplicate registry ${handle.id}`);
@@ -36,7 +41,11 @@ export async function registerPackage({ name, manifest, settings }: SetupInput):
       if (!v.is(jsonObject, value)) throw new Error(`${handle.id}: an entry must be a JSON object`);
       additions.push({ id: handle.id, value: structuredClone(value) });
     },
-  });
+  };
+
+  await manifest.setup?.(ctx);
+
+  for (const integration of integrations) await integration.setup({ settings: structuredClone(settings), add: ctx.add });
 
   return { registries, additions };
 }

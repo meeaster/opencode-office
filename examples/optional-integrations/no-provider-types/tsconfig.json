@@ -1,0 +1,12 @@
+{
+  // An authoring office without mock-executor's sources: only the adapter's static provider import fails.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@office/sdk": ["../../../sdk/index.ts"],
+      "@office/sdk/applied-settings": ["../../../sdk/applied-settings.ts"],
+      "@office/skills": ["../../../packages/skills/handles.ts"]
+    }
+  },
+  "include": ["../packages/chatgpt-routing"]
+}

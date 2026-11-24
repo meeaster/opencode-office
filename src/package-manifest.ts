@@ -4,7 +4,7 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, relative, sep } from "node:path";
 import * as v from "valibot";
-import { check, type Parsed } from "./schema.ts";
+import { check, ownEntries, type Parsed } from "./schema.ts";
 
 export const scope = "@office/";
 
@@ -15,6 +15,8 @@ export type PackageJson = {
   definition: string;
   /** The office packages it declares, by name without the scope. */
   dependencies: string[];
+  /** Each optional provider it integrates with, by name without the scope, and the module, inside the package, that office loads only while the integration is active. */
+  integrations: ReadonlyMap<string, string>;
   exports: unknown;
 };
 
@@ -29,11 +31,43 @@ const schema = v.looseObject({
   office: v.looseObject({
     definition: v.string(definitionMessage),
     dependencies: v.optional(v.array(dependency, "must be a list of @office/<name> strings")),
+    integrations: v.optional(v.pipe(ownEntries("must map @office/<name> strings to module paths"), v.map(dependency, v.pipe(v.string("must map @office/<name> to a module path"), v.nonEmpty("must map @office/<name> to a module path"))))),
   }, definitionMessage),
 });
 
 function outside(path: string) {
   return path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path);
+}
+
+/** The name of the SDK every package can import as `@office/sdk`, which no package can have. */
+export const sdkName = "sdk";
+
+/**
+ * `path`, normalized, when it names a file inside the package `dir`, followed through links, with
+ * the real file it resolves to; else what is wrong, starting with `path`.
+ */
+function packageFile(dir: string, path: string): { ok: true; path: string; real: string } | { ok: false; problem: string } {
+  const normalized = normalize(path);
+  const file = join(dir, normalized);
+
+  if (outside(normalized)) return { ok: false, problem: `${path} is outside the package` };
+
+  if (!statSync(file, { throwIfNoEntry: false })?.isFile()) return { ok: false, problem: `${path} is not a file in the package` };
+  const real = realpathSync(file);
+
+  if (outside(relative(realpathSync(dir), real))) return { ok: false, problem: `${path} links outside the package` };
+
+  return { ok: true, path: normalized, real };
+}
+
+/**
+ * The packages whose code this one's may import, given the names `selected`: what it declares in
+ * office.dependencies, and each optional provider that is selected, whether or not its integration
+ * is active. An unselected provider couples nothing. Updates, replacement checks and shutdown
+ * follow these edges.
+ */
+export function importEdges(json: Pick<PackageJson, "dependencies" | "integrations">, selected: ReadonlySet<string>): string[] {
+  return [...json.dependencies, ...[...json.integrations.keys()].filter(provider => selected.has(provider))];
 }
 
 /** What to add, for a package with no usable package.json. */
@@ -85,16 +119,34 @@ function readChecked(dir: string, name: string, kind: "local" | "built-in" | "re
   const { name: found, description, office, exports } = read.value;
 
   if (found !== `${scope}${name}`) return fail(`package.json names ${found}; expected ${scope}${name}`);
-  const definition = normalize(office.definition);
-  const file = join(dir, definition);
+  const definition = packageFile(dir, office.definition);
 
-  if (outside(definition)) return fail(`office.definition ${office.definition} is outside the package`);
+  if (!definition.ok) return fail(`office.definition ${definition.problem}`);
+  const dependencies = (office.dependencies ?? []).map(entry => entry.slice(scope.length));
+  const integrations = new Map<string, string>();
+  // An integration module that is also the definition or another provider's would load while its own integration is off.
+  const claimed = new Map([[definition.real, "office.definition"]]);
 
-  if (!statSync(file, { throwIfNoEntry: false })?.isFile()) return fail(`office.definition ${office.definition} is not a file in the package`);
+  for (const [provider, path] of office.integrations ?? []) {
+    const key = provider.slice(scope.length);
+    const at = `office.integrations ${provider}`;
 
-  if (outside(relative(realpathSync(dir), realpathSync(file)))) return fail(`office.definition ${office.definition} links outside the package`);
+    if (key === sdkName) return fail(`${at}: ${scope}${sdkName} is always available, so it is no optional provider; remove it`);
 
-  const value: PackageJson = { definition, dependencies: (office.dependencies ?? []).map(entry => entry.slice(scope.length)), exports };
+    if (key === name) return fail(`${at}: names the package itself; remove it`);
+
+    if (dependencies.includes(key)) return fail(`${at}: is also in office.dependencies; a provider is either required or optional, so remove one`);
+    const module = packageFile(dir, path);
+
+    if (!module.ok) return fail(`${at}: ${module.problem}`);
+    const owner = claimed.get(module.real);
+
+    if (owner !== undefined) return fail(`${at}: ${path} is the same file as ${owner}; give each integration a module of its own`);
+    claimed.set(module.real, `office.integrations ${provider}`);
+    integrations.set(key, module.path);
+  }
+
+  const value: PackageJson = { definition: definition.path, dependencies, integrations, exports };
 
   if (description !== undefined) value.description = description;
 

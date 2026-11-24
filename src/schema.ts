@@ -548,12 +548,19 @@ const packageCommand = v.pipe(
 );
 
 /**
- * The commands a package declares, by name. Read as a map of its own entries: Valibot's record
- * parser would silently drop the valid routes `constructor` and `prototype`.
+ * A mapping, not an array, as a Map of its own entries for `v.map` to check each key and value:
+ * Valibot's record parser would silently drop own keys such as `constructor`, `prototype` and `__proto__`.
  */
+export function ownEntries(message: string) {
+  return v.pipe(
+    v.custom<Record<string, unknown>>(input => typeof input === "object" && input !== null && !Array.isArray(input), message),
+    v.transform(entries => new Map(Object.entries(entries))),
+  );
+}
+
+/** The commands a package declares, by name; `constructor` and `prototype` are valid routes. */
 const packageCommands = v.pipe(
-  v.custom<Record<string, unknown>>(value => typeof value === "object" && value !== null && !Array.isArray(value), "must map command names to commands"),
-  v.transform(commands => new Map(Object.entries(commands))),
+  ownEntries("must map command names to commands"),
   v.map(commandRoute, packageCommand),
   v.transform(commands => Object.fromEntries(commands)),
 );
@@ -583,6 +590,19 @@ const settingsSchema = v.union([
   v.pipe(v.unknown(), v.transform(() => new MalformedSettings())),
 ]);
 
+// When each optional provider is used; package-definition.ts checks each key against package.json.
+const integrationPolicies = v.pipe(
+  ownEntries("must map @office/<name> to when that integration is used"),
+  v.map(
+    v.pipe(v.string(), v.regex(/^@office\/[a-z0-9][a-z0-9-]*$/, "must be keyed @office/<name>")),
+    v.strictObject({
+      enabledByDefault: v.optional(v.boolean("must be true or false")),
+      requested: v.optional(v.custom<(settings: Readonly<Record<string, SettingValue>>) => boolean | undefined>(value => v.is(v.function(), value), "must be a function in office.ts")),
+    }, "must be a mapping of enabledByDefault and requested"),
+  ),
+  v.transform(policies => Object.fromEntries(policies)),
+);
+
 /**
  * The definition of the package named `name`: what can't be discovered from its folders. Its name
  * and description are in its package.json; the namespace defaults to the name.
@@ -595,6 +615,7 @@ export function packageManifestSchema(packageName: string) {
         namespace: v.optional(name),
         setup: v.optional(v.custom<(ctx: SetupContext) => void | Promise<void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
         settings: v.optional(settingsSchema),
+        integrations: v.optional(integrationPolicies, {}),
         commands: v.optional(packageCommands, {}),
         sync: v.optional(v.custom<(inputs: SyncInputs) => readonly string[] | void | Promise<readonly string[] | void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
         check: v.optional(v.custom<(inputs: CheckInputs) => readonly Problem[] | Promise<readonly Problem[]>>(value => v.is(v.function(), value), "must be a function in office.ts")),
@@ -612,7 +633,7 @@ export function packageManifestSchema(packageName: string) {
         // The label on Docker resources its services create themselves, which `office down` removes.
         spawns: v.optional(spawnsBlock),
       },
-      "must be a mapping of namespace, settings, commands, setup, sync, check, up, down, committed, secrets, tools, host, system, executor_app and spawns",
+      "must be a mapping of namespace, settings, integrations, commands, setup, sync, check, up, down, committed, secrets, tools, host, system, executor_app and spawns",
     ),
     v.transform((manifest) => ({ ...manifest, settings: manifest.settings ?? noSettings, namespace: manifest.namespace ?? packageName })),
     v.forward(

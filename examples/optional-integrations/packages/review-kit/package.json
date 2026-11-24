@@ -1,0 +1,10 @@
+{
+  "name": "@office/review-kit",
+  "description": "A review checklist command that also offers a standalone skill when the office selects skills",
+  "private": true,
+  "exports": {},
+  "office": {
+    "definition": "./office.ts",
+    "integrations": { "@office/skills": "./skills.ts" }
+  }
+}

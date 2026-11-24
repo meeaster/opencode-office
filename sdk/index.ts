@@ -5,7 +5,7 @@
 // it loads a definition, so a package always gets that copy, whatever is on disk. The copy sync
 // writes beside an office's packages gives editors and tsc these types; loading it throws.
 // Named exports only: there is no default export.
-import { mark } from "./mark.ts";
+import { mark, markIntegration } from "./mark.ts";
 
 /** A value an office.yaml setting can hold: what YAML and JSON share. */
 export type SettingValue = null | boolean | number | string | SettingValue[] | { [key: string]: SettingValue };
@@ -221,6 +221,29 @@ export type Settings<Schema> =
       : Readonly<Loose>
     : Readonly<Loose>;
 
+/**
+ * When a package's integration with an optional provider is active, decided from its validated
+ * settings before any integration module loads. `requested` returning true makes it active, and a
+ * provider office.yaml doesn't select fails the run, naming both; false keeps it off; undefined
+ * leaves it to `enabledByDefault`, which activates it only while the provider is selected. With
+ * neither, selecting the provider activates nothing.
+ */
+export type IntegrationPolicy<Settings = Readonly<Record<string, SettingValue>>> = {
+  enabledByDefault?: boolean;
+  requested?(settings: Settings): boolean | undefined;
+};
+
+/** What an integration's `setup` gets: its package's validated settings, and a way to add to the provider's registries as its package. */
+export type IntegrationContext<Settings = Readonly<Record<string, SettingValue>>> = Pick<SetupContext<Settings>, "settings" | "add">;
+
+/** An integration module's default export: the setup office runs, as its package, while the integration is active. */
+export type Integration<Settings = Readonly<Record<string, SettingValue>>> = {
+  setup(ctx: IntegrationContext<Settings>): void | Promise<void>;
+};
+
+/** The type of `ctx.settings` of a definition, from its `typeof`. */
+type DefinitionSettings<Parent> = Parent extends { readonly settings?: infer Schema } ? Settings<NonNullable<Schema>> : never;
+
 type Secret = { generate: "hex" | "base64"; bytes: number; prefix?: string };
 
 type HostBlock = {
@@ -247,6 +270,8 @@ type SystemBlock = {
 export type Definition<Schema extends SettingsSchema = NoSettings> = {
   /** The settings it accepts, as one JSON Schema. Without it, it accepts none. */
   settings?: Schema;
+  /** When each optional provider its package.json maps in office.integrations is used, keyed `@office/<name>`. */
+  integrations?: { readonly [provider: `@office/${string}`]: IntegrationPolicy<Settings<Schema>> };
   /** Its commands, by name. */
   commands?: { readonly [name: string]: Command<Settings<Schema>> };
   setup?(ctx: SetupContext<Settings<Schema>>): void | Promise<void>;
@@ -285,6 +310,13 @@ export const Package = {
   /** A package definition, as its definition module's default export. `ctx.settings` is typed from `settings`. */
   define<const Schema extends SettingsSchema = NoSettings>(definition: Definition<Schema>): Definition<Schema> {
     return mark(definition);
+  },
+  /**
+   * An integration module's default export, typed by its package's definition without loading it:
+   * `Package.integration<typeof definition>()({ setup })` with `import type definition from "./office.ts"`.
+   */
+  integration<Parent extends { readonly settings?: SettingsSchema }>() {
+    return (integration: Integration<DefinitionSettings<Parent>>): Integration<DefinitionSettings<Parent>> => markIntegration(integration);
   },
 };
 

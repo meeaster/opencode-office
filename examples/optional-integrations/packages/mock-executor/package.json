@@ -1,0 +1,7 @@
+{
+  "name": "@office/mock-executor",
+  "description": "A stand-in app host: a registry of apps and their tools, listed without calling a service",
+  "private": true,
+  "exports": { "./apps": "./apps.ts" },
+  "office": { "definition": "./office.ts" }
+}

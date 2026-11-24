@@ -3,7 +3,7 @@
 import { join } from "node:path";
 
 import { type Office, type Repository } from "./office.ts";
-import { definitionGate, type InstalledPackage, type PackageProblem, readPackage, requiredPackages, resolvePackages } from "./packages.ts";
+import { definitionGate, type InstalledPackage, type PackageProblem, readPackage, resolvePackages, selectedNames } from "./packages.ts";
 import type { PackageManifest } from "./schema.ts";
 import { pluginClones } from "../standard/opencode/delivery.ts";
 
@@ -30,7 +30,7 @@ export function installedPackages(office: Office, skip: ReadonlySet<string> = ne
   const installed: InstalledPackage[] = [];
   const resolved = resolvePackages(office, undefined, live);
   const problems = [...resolved.problems];
-  const selected = new Set([...requiredPackages, ...office.packages.map((entry) => entry.name)]);
+  const selected = selectedNames(office);
   const unread = new Set(selected);
   const gate = definitionGate(office, resolved.packages, skip);
   // resolvePackages already names a package called sdk.

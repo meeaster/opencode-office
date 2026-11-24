@@ -4,7 +4,7 @@
 // that record their calls; the kernel's shutdown shows in them as Compose's `down` and the removal of
 // the image refresh timer.
 import { expect, test } from "bun:test";
-import { existsSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture, type DefinitionFixture } from "./package-definition.fixture.ts";
@@ -123,6 +123,80 @@ test("a tampered provider, or one whose definition doesn't import, is left out w
   // A command with the same set imports nothing either, and fails naming the provider.
   expect(f.cli(1, "references", "list")).toContain("package provider: package files edited: items.ts (edited)");
   expect(existsSync(f.probe)).toBe(false);
+}, 60_000);
+
+/** A consumer of the optional `provider`, whose integration module would write the probe; `policy` is its definition's policy for it. */
+function consumer(f: DefinitionFixture, provider: string, policy: string) {
+  const dir = join(f.dir, "packages/consumer");
+
+  writePackage(join(dir, "office.ts"), removing("consumer", `settings: {type: "object", additionalProperties: false, properties: {lend: {type: "boolean"}}}, integrations: { "@office/${provider}": ${policy} },`));
+  write(join(dir, "adapter.ts"), `import { Package } from "@office/sdk"; ${marker}\nexport default Package.integration()({ setup() {} });\n`);
+  write(join(dir, "package.json"), JSON.stringify({ name: "@office/consumer", office: { definition: "./office.ts", integrations: { [`@office/${provider}`]: "./adapter.ts" } } }));
+}
+
+const leftOut = (name: string, why: string) => `package ${name}: left out of shutdown, so what it installed, such as its timers, stays installed: ${why}`;
+
+test("a selected optional provider is an edge in shutdown whether its integration is active or explicitly off, and no integration is evaluated; a deselected one is none", () => {
+  const f = fixture("optional");
+  const shutdown = rig(f);
+  consumer(f, "lender", "{ requested: settings => settings.lend }");
+  writePackage(join(f.dir, "packages/lender/office.ts"), definitionText("{}"));
+  writePackage(join(f.dir, "packages/third/office.ts"), removing("third"));
+  f.select("  - name: consumer\n    settings: {lend: true}\n  - name: lender\n  - name: third\n");
+  f.cli(0, "sync", "--packages");
+  // Sync ran the active integration; down must not.
+  expect(read(f.probe)).toBe("imported\n");
+  rmSync(f.probe);
+
+  // Healthy and active: every down runs, the integration unevaluated.
+  markers(f, "consumer", "third");
+  const healthy = f.cli(0, "down");
+  expect(healthy).toContain("package consumer: removed its marker");
+  expect(healthy).toContain("package third: removed its marker");
+  expect(existsSync(f.probe)).toBe(false);
+  shutdown();
+
+  // Explicitly off, with the provider failing to import: the consumer is still left out with it.
+  f.select("  - name: consumer\n    settings: {lend: false}\n  - name: lender\n  - name: third\n");
+  write(join(f.dir, "packages/lender/office.ts"), 'throw Error("lender on import");');
+  markers(f, "consumer", "third");
+  const output = f.cli(1, "down");
+  expect(output).toContain(leftOut("lender", "packages/lender/office.ts: lender on import"));
+  expect(output).toContain(leftOut("consumer", "depends on package lender, which is left out"));
+  expect(output).toContain("package third: removed its marker");
+  expect(exists(f, "consumer")).toBe(true);
+  expect(existsSync(f.probe)).toBe(false);
+  shutdown();
+
+  // Deselected, the provider is no edge: the consumer's down runs, its integration off and unevaluated.
+  f.select("  - name: consumer\n  - name: third\n");
+  f.cli(0, "sync", "--packages");
+  markers(f, "consumer", "third");
+  expect(f.cli(0, "down")).toContain("package consumer: removed its marker");
+  expect(exists(f, "consumer")).toBe(false);
+  expect(existsSync(f.probe)).toBe(false);
+  shutdown();
+}, 60_000);
+
+test("a selected optional provider left out of resolution for an ownership conflict still takes its inactive consumer with it; independent packages and the office's own shutdown run", () => {
+  const f = fixture("conflict");
+  const shutdown = rig(f);
+  consumer(f, "skills", "{ requested: () => false }");
+  writePackage(join(f.dir, "packages/third/office.ts"), removing("third"));
+  f.select("  - name: consumer\n  - name: skills\n  - name: third\n");
+  f.cli(0, "sync", "--packages");
+  expect(existsSync(f.probe)).toBe(false);
+
+  // A local folder now claims the built-in's name.
+  mkdirSync(join(f.dir, "packages/skills"));
+  markers(f, "consumer", "third");
+  const output = f.cli(1, "down");
+  expect(output).toContain(leftOut("skills", "built-in package skills conflicts with local packages/skills; rename one before syncing"));
+  expect(output).toContain(leftOut("consumer", "depends on package skills, which is left out"));
+  expect(output).toContain("package third: removed its marker");
+  expect(exists(f, "consumer")).toBe(true);
+  expect(existsSync(f.probe)).toBe(false);
+  shutdown();
 }, 60_000);
 
 test("with no published package set no package takes part, and a shutdown reader that can't start, or a redirected generations folder, doesn't keep the office's own shutdown from completing", () => {
