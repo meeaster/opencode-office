@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { describeIgnoredSkills, expandFolder, ignoredSkills, inFolders, readIgnoredFolders, skillsIn } from "../plugin/ignored-skills.ts";
+import { describeIgnoredSkills, expandFolder, ignoredFolders, ignoredSkills, inFolders, skillsIn } from "../plugin/ignored-skills.ts";
 
 let dir: string;
 let home: string;
@@ -32,19 +32,11 @@ test("a folder names ~ for the home, an absolute path, or a path from the office
 });
 
 test("the Claude app's synced folder is ignored unless the office turns that off, and the office's list adds to it", () => {
-  expect(readIgnoredFolders(dir)).toEqual(["~/.claude/skills/synced"]);
-
-  write(join(dir, ".settings.json"), JSON.stringify({ ignore_claude_synced_skills: true, ignore_skill_folders: ["~/other/skills", "", 3, "~/.claude/skills/synced"] }));
-  expect(readIgnoredFolders(dir)).toEqual(["~/.claude/skills/synced", "~/other/skills"]);
-
-  write(join(dir, ".settings.json"), JSON.stringify({ ignore_skill_folders: "~/other/skills" }));
-  expect(readIgnoredFolders(dir)).toEqual(["~/.claude/skills/synced"]);
-
-  write(join(dir, ".settings.json"), JSON.stringify({ ignore_claude_synced_skills: false, ignore_skill_folders: ["~/other/skills"] }));
-  expect(readIgnoredFolders(dir)).toEqual(["~/other/skills"]);
-
-  write(join(dir, ".settings.json"), JSON.stringify({ ignore_claude_synced_skills: false }));
-  expect(readIgnoredFolders(dir)).toEqual([]);
+  expect(ignoredFolders({ ignore_claude_synced_skills: true, ignore_skill_folders: ["~/other/skills", "", 3, "~/.claude/skills/synced"] })).toEqual(["~/.claude/skills/synced", "~/other/skills"]);
+  expect(ignoredFolders({ ignore_skill_folders: "~/other/skills" })).toEqual(["~/.claude/skills/synced"]);
+  expect(ignoredFolders({ ignore_claude_synced_skills: false, ignore_skill_folders: ["~/other/skills"] })).toEqual(["~/other/skills"]);
+  expect(ignoredFolders({ ignore_claude_synced_skills: false })).toEqual([]);
+  expect(ignoredFolders(undefined)).toEqual(["~/.claude/skills/synced"]);
 });
 
 test("skills are found as OpenCode finds them: SKILL.md folders inside group folders, and Markdown files at the top", () => {

@@ -6,6 +6,7 @@
     ".": {
       "types": "./index.ts",
       "default": "./disk.js"
-    }
+    },
+    "./applied-settings": "./applied-settings.ts"
   }
 }

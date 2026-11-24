@@ -26,8 +26,9 @@ export function writePackageLinks(folder: string, packages: ResolvedPackage[], r
 
 /**
  * Writes the SDK's source as `<folder>/node_modules/@office/sdk`, beside the package links, so
- * editors and tsc resolve a package's `@office/sdk` import. It is types only: its runtime entry
- * throws, since a package office loads gets the executable's own SDK.
+ * editors and tsc resolve a package's `@office/sdk` import. Its root is types only: its runtime
+ * entry throws, since a package office loads gets the executable's own SDK. Its
+ * `./applied-settings` entry runs, for a package's Bun scripts.
  */
 export function writeSdk(folder: string) {
   const target = join(packageLinks(folder), sdkName);

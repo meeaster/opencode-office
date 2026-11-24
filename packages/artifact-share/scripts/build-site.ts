@@ -4,13 +4,18 @@
 // and the date of its last commit. The index and rendered pages share the package's themes and
 // any of the office's own in artifacts/themes/. It needs only Bun:
 //
-//   bun .office/packages/artifact-share/scripts/build-site.ts <output>
+//   bun --no-install .office/packages/artifact-share/scripts/build-site.ts <output>
 //
 // An office whose own site publishes more can build into a subfolder of it, such as
 // <site>/artifacts. Files already in <output> are overwritten, never removed.
+//
+// Its settings are the package's entry in the office's applied settings, which `office sync`
+// publishes; `@office/sdk/applied-settings` resolves from the package set sync installed.
+// --no-install keeps Bun from fetching it from a registry should that ever fail.
 import { execFileSync } from "node:child_process";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
+import { type AppliedSettings, AppliedSettingsError, officeRootOf, readAppliedSettings } from "@office/sdk/applied-settings";
 import { renderBlocks } from "./blocks.ts";
 import { safeLinks } from "./links.ts";
 import { coverTones, parseTheme, themeCss, type Theme } from "./theme.ts";
@@ -24,31 +29,29 @@ type Artifact = { name: string; markdown: string | undefined; title: string; des
 const output = process.argv[2];
 
 if (output === undefined) {
-  console.error("usage: bun .office/packages/artifact-share/scripts/build-site.ts <output folder>");
+  console.error("usage: bun --no-install .office/packages/artifact-share/scripts/build-site.ts <output folder>");
   process.exit(2);
 }
-
-// The office is the nearest folder above the script with an office.yaml: the package is in
-// .office/packages/artifact-share/, or in packages/<name>/ as a copy of the office's own.
-function findOffice(): string {
-  for (let dir = import.meta.dir; ; dir = dirname(dir)) {
-    if (existsSync(join(dir, "office.yaml"))) return dir;
-
-    if (dirname(dir) === dir) {
-      console.error(`${import.meta.dir} is in no office: no office.yaml above it`);
-      process.exit(1);
-    }
-  }
-}
-
-const office = findOffice();
-const settingsPath = resolve(import.meta.dir, "../.settings.json");
-const artifacts = join(office, "artifacts");
 
 function fail(message: string): never {
   console.error(message);
   process.exit(1);
 }
+
+// The office is the nearest folder above the package with an office.yaml: the package is in
+// .office/packages/artifact-share/, or in packages/<name>/ as a copy of the office's own, which
+// its folder names.
+const packageDir = dirname(import.meta.dir);
+let office: string;
+
+try {
+  office = officeRootOf(packageDir);
+} catch (error) {
+  fail(`${packageDir} is in no office: ${error instanceof Error ? error.message : String(error)}`);
+}
+
+const packageName = basename(packageDir);
+const artifacts = join(office, "artifacts");
 
 function escape(text: string): string {
   return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
@@ -124,26 +127,38 @@ function viewable(name: string): Artifact | undefined {
 }
 
 /**
- * What the package's settings give the pages; the defaults apply before `office sync` writes them,
- * and to settings a file written by an older version of the package lacks.
+ * What the package's settings give the pages, as `office sync` last applied them, and where they
+ * came from (`source`), for messages. Before a sync has applied any for the package, the
+ * renderer's own defaults apply, with no url, and it says so; an applied settings file that isn't
+ * one, or is reached through a link, stops the build.
  */
 function siteSettings() {
-  if (!existsSync(settingsPath)) return { url: undefined, title: "Artifacts", theme: "paper" };
+  let settings: AppliedSettings;
 
-  const settings: unknown = JSON.parse(readFileSync(settingsPath, "utf8"));
-  const values = new Map<string, unknown>(typeof settings === "object" && settings !== null ? Object.entries(settings) : []);
+  try {
+    settings = readAppliedSettings(office, packageName);
+  } catch (error) {
+    if (!(error instanceof AppliedSettingsError)) throw error;
+
+    if (error.problem !== "missing-snapshot" && error.problem !== "missing-package") fail(error.message);
+    console.error(`${error.message}; building with the renderer's defaults`);
+
+    return { source: "the renderer's defaults", url: undefined, title: "Artifacts", theme: "paper" };
+  }
+
+  const source = `package ${packageName}'s applied settings`;
 
   const field = (key: string) => {
-    const value = values.get(key);
+    const value = settings[key];
 
-    if (value !== undefined && typeof value !== "string") fail(`${relative(office, settingsPath)}: ${key} must be a string; run office sync to rewrite it`);
+    if (value !== undefined && typeof value !== "string") fail(`${source}: ${key} must be a string; run office sync to publish them again`);
 
     return value;
   };
 
   const url = field("url");
 
-  return { url: url?.replace(/\/+$/, ""), title: field("title") ?? "Artifacts", theme: field("theme") ?? "paper" };
+  return { source, url: url?.replace(/\/+$/, ""), title: field("title") ?? "Artifacts", theme: field("theme") ?? "paper" };
 }
 
 /** The themes in a folder, each file `<id>.json`; `label` names the folder in errors. */
@@ -172,7 +187,7 @@ for (const theme of [...readThemes(join(import.meta.dir, "themes"), relative(off
 }
 
 const themeList = [...themes.values()].sort((a, b) => a.name.localeCompare(b.name));
-const defaultTheme = themes.get(site.theme) ?? fail(`${relative(office, settingsPath)}: theme ${JSON.stringify(site.theme)} isn't one of the site's themes: ${themeList.map((theme) => theme.id).join(", ")}`);
+const defaultTheme = themes.get(site.theme) ?? fail(`${site.source}: theme ${JSON.stringify(site.theme)} isn't one of the site's themes: ${themeList.map((theme) => theme.id).join(", ")}`);
 
 function day(date: string): string {
   return new Date(`${date}T00:00:00Z`).toLocaleDateString("en", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });

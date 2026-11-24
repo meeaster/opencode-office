@@ -41,6 +41,7 @@ import { age } from "./schema.ts";
 import { writeContainerWrappers } from "./sfw.ts";
 import { requireKnownLockKeys } from "./versions.ts";
 import { version } from "./tool.ts";
+import { AppliedSettingsError, canonicalJson, readAppliedSettings } from "../sdk/applied-settings.ts";
 
 const usage = `usage: office <command> [--office <dir>]
 
@@ -58,6 +59,10 @@ const usage = `usage: office <command> [--office <dir>]
                                deliberately reveal the stored encrypted owner login, even offline
   secrets get <package> <key>  write one declared, generated package secret to stdout
   secrets decrypt <file>       decrypt an office-relative SOPS JSON/YAML file to stdout as JSON
+  settings get <package> --office <dir>
+                               write the package's settings the office last applied to stdout as
+                               JSON, read from its applied settings snapshot alone: no package is
+                               loaded and office.yaml isn't read, so --office is required
   sync [--packages | --references | --release-machine]
                                clone and update, scaffold missing desks, install, restore and
                                apply packages (their sync functions, such as the skills package's
@@ -75,7 +80,8 @@ const usage = `usage: office <command> [--office <dir>]
                                where it points now, then apply them as sync does. It syncs nothing
                                else, and office sync applies pins without moving them
   check                        report drift from office.yaml and the tool, the running
-                               containers and opted-in managed OpenCode
+                               containers and opted-in managed OpenCode, the applied settings
+                               included; it writes nothing (office sync publishes them)
   refresh [--verbose]          update tracked package pins and the office.lock commits of
                                untracked package refs, run office skills update when the skills
                                package is selected, run a full sync, start services with
@@ -130,6 +136,7 @@ Commands other than init and update act on the office in the current folder or a
 --office.`;
 
 const updateUsage = "usage: office update [--check] [--minimum-release-age <age> | --version <release>]";
+const settingsUsage = "usage: office settings get <package> --office <dir>";
 const inspectUsage = "usage: office opencode inspect [folder] [--office <dir>]";
 
 /** `office update`'s own options: its --version names a release, unlike the global --version. */
@@ -160,6 +167,49 @@ async function updateCommand(args: string[]): Promise<void> {
   if (!v.is(age, minimumAge)) throw new OfficeError(`--minimum-release-age must be an age such as 36h, 1d or 2w, not ${minimumAge}`);
 
   await update({ check: flags.check === true, age: minimumAge, version: flags.version });
+}
+
+/**
+ * `office settings get`: one package's applied settings, from the snapshot of the office --office
+ * names. It runs before discovery, so nothing is repaired, gathered or parsed on its way.
+ */
+function settingsCommand(args: string[]) {
+  let parsed;
+
+  try {
+    parsed = parseArgs({ args, allowPositionals: true, options: { office: { type: "string" }, help: { type: "boolean", short: "h" } } });
+  } catch (error) {
+    throw new OfficeError(`${error instanceof Error ? error.message : String(error)}\n${settingsUsage}`);
+  }
+
+  const { values: flags, positionals } = parsed;
+
+  if (flags.help) {
+    console.log(settingsUsage);
+
+    return;
+  }
+
+  if (positionals.length !== 2 || positionals[0] !== "get" || !flags.office) throw new OfficeError(settingsUsage);
+
+  try {
+    process.stdout.write(`${canonicalJson(readAppliedSettings(flags.office, positionals[1]), 2)}\n`);
+  } catch (error) {
+    if (error instanceof AppliedSettingsError) throw new OfficeError(error.message);
+    throw error;
+  }
+}
+
+/**
+ * The words of `office settings`, with any `--office` given before it, as the established
+ * `office --office <dir> <command>` form puts it, moved after them; undefined for another command.
+ */
+function settingsArgs(args: string[]): string[] | undefined {
+  let index = 0;
+
+  while (args[index] === "--office" || args[index]?.startsWith("--office=")) index += args[index] === "--office" ? 2 : 1;
+
+  return args[index] === "settings" ? [...args.slice(index + 1), ...args.slice(0, index)] : undefined;
 }
 
 function commandArgs(args: string[]) {
@@ -251,6 +301,10 @@ async function main(): Promise<void> {
 
     return;
   }
+
+  const settings = settingsArgs(args);
+
+  if (settings) return settingsCommand(settings);
 
   // A package command gets its words as typed: they never reach the CLI's own option parser.
   const route = packageRoute(args);

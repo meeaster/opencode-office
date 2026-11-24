@@ -3,24 +3,25 @@
 // removes each loaded skill whose file is inside one of them; `ignoredSkills` reads the same
 // folders to say which those are. Nothing here lists skill IDs by hand, so a skill that appears in
 // a folder later is covered.
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /** Where the Claude desktop app syncs account skills, which `ignore_claude_synced_skills` covers. */
 export const claudeSyncedSkills = "~/.claude/skills/synced";
 
-/** The folders the two settings name, as `office sync` wrote them to the package's `.settings.json`; none when it is unreadable. */
-export function readIgnoredFolders(packageDir: string): string[] {
-  try {
-    const read: { ignore_claude_synced_skills?: unknown; ignore_skill_folders?: unknown } = JSON.parse(readFileSync(join(packageDir, ".settings.json"), "utf8"));
-    const folders = read.ignore_skill_folders;
-    const more = Array.isArray(folders) ? folders.filter((folder): folder is string => typeof folder === "string" && folder !== "") : [];
+type FolderSettings = { ignore_claude_synced_skills?: unknown; ignore_skill_folders?: unknown };
 
-    // On unless the office turned it off: the office's own list adds to it, never replaces it.
-    return [...new Set([...(read.ignore_claude_synced_skills === false ? [] : [claudeSyncedSkills]), ...more])];
-  } catch {
-    return [claudeSyncedSkills];
-  }
+/**
+ * The folders the two settings name, as `office sync` last applied them; only the Claude app's
+ * before it has applied any.
+ */
+export function ignoredFolders(settings: FolderSettings | undefined): string[] {
+  if (settings === undefined) return [claudeSyncedSkills];
+  const folders = settings.ignore_skill_folders;
+  const more = Array.isArray(folders) ? folders.filter((folder): folder is string => typeof folder === "string" && folder !== "") : [];
+
+  // On unless the office turned it off: the office's own list adds to it, never replaces it.
+  return [...new Set([...(settings.ignore_claude_synced_skills === false ? [] : [claudeSyncedSkills]), ...more])];
 }
 
 /** A folder as the setting names it: `~` is the session's home, a relative path is from the office root. */

@@ -88,8 +88,8 @@ plugins: []
 #   pattern such as v1.*), office packages update moves ref to the newest match's commit.
 # - written in this office, listed by name alone: packages/<name>/.
 # .office/packages/ is read-only: office sync restores edited files there. To change such a
-# package, copy it into packages/ under a name of your own. Settings aren't secrets: sync writes
-# them to the package's .settings.json, which is committed. Packages' mise tools go in
+# package, copy it into packages/ under a name of your own. Settings aren't secrets: sync publishes
+# them in .office/runtime/settings.json, which isn't committed. Packages' mise tools go in
 # machine.packages.toml, whose versions are this office's to change (sync only raises one below
 # what a package needs). Commit what sync writes.
 # Removing an entry and syncing uninstalls an official or copied package; the files it seeded stay.

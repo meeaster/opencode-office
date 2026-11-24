@@ -12,11 +12,12 @@
 // imports into the one index.js an office holds; `office sync` restores that copy.
 import { closeSync, constants, existsSync, openSync, readdirSync, readFileSync, realpathSync, watch } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { type AppliedSettings, officeRootOf, watchAppliedSettings } from "@office/sdk/applied-settings";
 import { compactSessionTool } from "./compact-session.ts";
-import { expandFolder, inFolders, readIgnoredFolders } from "./ignored-skills.ts";
+import { expandFolder, ignoredFolders, inFolders } from "./ignored-skills.ts";
 import { findOffice, officeInstructions } from "./instructions.ts";
 import { tryFileLock } from "../../../src/file-lock.ts";
 
@@ -45,9 +46,10 @@ type Context = {
 };
 
 // OpenCode loads the plugin through the link `.opencode/plugins/office`; the real folder is the
-// one beside the package's skills/ and .settings.json.
+// one beside the package's skills/.
 const sourceDir = dirname(realpathSync(dirname(fileURLToPath(import.meta.url))));
 const packageDir = sourceDir.replace(/\/\.office\/generations\/g-[a-f0-9-]+\/packages\/([^/]+)$/, "/.office/packages/$1");
+const packageName = basename(packageDir);
 const skillsDir = join(packageDir, "skills");
 
 /** A skill as OpenCode registers it: the description from its front matter and the body after it. */
@@ -83,6 +85,27 @@ function executorValue(office: string, variable: string, file: string): string |
 
 async function register(ctx: Context) {
   const office = findOffice(ctx.location.directory);
+  // The office whose settings apply: the one holding this package, which a session in a
+  // repository nested in it, with an office.yaml of its own, doesn't change.
+  const settingsOffice = officeRootOf(packageDir);
+  const reload = () => void ctx.skill.reload().catch(console.error);
+
+  // The setting as the next `office sync` applies it takes effect at once, a folder taken out of
+  // it included; another package's settings reload nothing. Until a sync has applied it, the
+  // Claude app's folder is ignored.
+  const watcher = office === undefined ? undefined : watchAppliedSettings(settingsOffice, packageName, (next) => {
+    settings = next;
+    reload();
+  }, console.error);
+
+  // The skill-folder settings as `office sync` last applied them.
+  let settings: AppliedSettings | undefined = watcher?.settings;
+
+  // A new package set can bring new skill text with the same settings. The office's folder is
+  // watched, since sync replaces `current`; a local copy has no package set to follow.
+  const generations = office === undefined || sourceDir === packageDir ? undefined : watch(dirname(dirname(packageDir)), (_event, file) => {
+    if (file === "current") reload();
+  });
 
   // The text last attached to each session, so an unchanged text isn't announced again.
   const attached = new Map<string, string>();
@@ -98,11 +121,11 @@ async function register(ctx: Context) {
   });
 
   // Which loaded skills the office's skill-folder settings hide: those whose file is in one of its
-  // folders. Read on each use, so the next `office sync`'s setting applies.
+  // folders, as the settings are when they're asked.
   const hidden = (skills: readonly { id: string; path: string }[]): string[] => {
     if (office === undefined) return [];
 
-    const folders = readIgnoredFolders(packageDir).map((folder) => expandFolder(folder, homedir(), office));
+    const folders = ignoredFolders(settings).map((folder) => expandFolder(folder, homedir(), office));
 
     if (folders.length === 0) return [];
 
@@ -152,12 +175,6 @@ async function register(ctx: Context) {
   // A prompt never starts with one still listed.
   await ctx.session.hook("prompt", removeIgnored);
 
-  // The setting as the next `office sync` writes it applies at once, a folder taken out of it
-  // included. The directory is watched, since sync replaces the file.
-  const watcher = watch(sourceDir === packageDir ? packageDir : dirname(dirname(packageDir)), (_event, file) => {
-    if (file === "current" || file === ".settings.json") void ctx.skill.reload().catch(console.error);
-  });
-
   // Read on each load of the MCP servers. Without an address there is nothing to connect to
   // yet; `office check` says what is missing.
   await ctx.mcp.transform((editor) => {
@@ -171,7 +188,8 @@ async function register(ctx: Context) {
   return () => {
     stopped = true;
     clearTimeout(check);
-    watcher.close();
+    watcher?.close();
+    generations?.close();
   };
 }
 

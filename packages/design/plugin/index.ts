@@ -9,10 +9,13 @@
 // key lives in the office's `.opencode/doop/agent-key`, which the package's seed keeps out of
 // git; the office folder is the one place both a container session and a host session can read.
 //
-// It imports only Node's built-ins, so it runs with nothing installed.
+// The office bundles it with the applied settings reader into the one index.js an office holds,
+// so it runs with nothing installed.
 import { existsSync, readFileSync, realpathSync, watch } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { type AppliedSettings, officeRootOf, watchAppliedSettings } from "@office/sdk/applied-settings";
 
 type Skill = { id: string; name: string; description: string; path: string; content: string };
 
@@ -33,20 +36,16 @@ type Context = {
 type Settings = { port: number; url: string; executorApp: boolean; oauth: boolean };
 
 // OpenCode loads the plugin through the link `.opencode/plugins/design`; the real folder is the
-// package's, beside its skills/ and .settings.json.
+// package's, beside its skills/.
 const sourceDir = dirname(realpathSync(dirname(fileURLToPath(import.meta.url))));
 const packageDir = sourceDir.replace(/\/\.office\/generations\/g-[a-f0-9-]+\/packages\/([^/]+)$/, "/.office/packages/$1");
+const packageName = basename(packageDir);
 
 const skillFile = join(packageDir, "skills/doop/SKILL.md");
 
-/**
- * The package's settings as `office sync` last wrote them, defaults applied. office.yaml may give
- * the port as text, which reaches the compose file the same way.
- */
-function readSettings(): Settings {
-  const read: { port: number | string; url: string; executor_app?: boolean | string; oauth?: boolean | string } = JSON.parse(readFileSync(join(packageDir, ".settings.json"), "utf8"));
-
-  return { port: Number(read.port), url: read.url, executorApp: String(read.executor_app) === "true", oauth: String(read.oauth) === "true" };
+/** The package's applied settings, defaults included. */
+function settingsOf(read: AppliedSettings): Settings {
+  return { port: Number(read.port), url: String(read.url), executorApp: String(read.executor_app) === "true", oauth: String(read.oauth) === "true" };
 }
 
 /**
@@ -109,14 +108,37 @@ export default {
   async setup(ctx: Context) {
     const office = findOffice(ctx.location.directory);
 
-    await ctx.skill.transform((editor) => editor.add(doopSkill(readSettings())));
+    const reload = () => {
+      void ctx.skill.reload().catch(console.error);
+      void ctx.mcp.reload().catch(console.error);
+    };
 
-    // Watch the directory so sync replacing the settings file doesn't detach the watcher.
-    const settingsWatcher = watch(sourceDir === packageDir ? packageDir : dirname(dirname(packageDir)), (_event, file) => {
-      if (file === "current" || file === ".settings.json") {
-        void ctx.skill.reload().catch(console.error);
-        void ctx.mcp.reload().catch(console.error);
-      }
+    // The settings `office sync` last applied in the office holding the package. Only a change to
+    // this package's reloads, not another package's.
+    const appliedWatcher = watchAppliedSettings(officeRootOf(packageDir), packageName, (next) => {
+      applied = next;
+      reload();
+    }, console.error);
+
+    let applied = appliedWatcher.settings;
+
+    // A new package set can bring new skill text with the same settings. The office's folder is
+    // watched, since sync replaces `current`; a local copy has no package set to follow.
+    const generations = sourceDir === packageDir ? undefined : watch(dirname(dirname(packageDir)), (_event, file) => {
+      if (file === "current") reload();
+    });
+
+    const settingsWatcher = {
+      close() {
+        appliedWatcher.close();
+        generations?.close();
+      },
+    };
+
+    // Without applied settings there is no address to give yet: the skill and server are
+    // registered once a sync applies them.
+    await ctx.skill.transform((editor) => {
+      if (applied !== undefined) editor.add(doopSkill(settingsOf(applied)));
     });
 
     if (office === undefined) return () => settingsWatcher.close();
@@ -127,7 +149,8 @@ export default {
     // Read on each load of the MCP servers. Without a key there is nothing to connect with yet; the
     // skill tells the agent how the user creates one.
     await ctx.mcp.transform((editor) => {
-      const settings = readSettings();
+      if (applied === undefined) return;
+      const settings = settingsOf(applied);
       const key = !settings.executorApp && existsSync(keyFile) ? readFileSync(keyFile, "utf8").trim() : "";
 
       if (key !== "") editor.set("doop", { type: "remote", url: `${serverAddress(settings)}/mcp`, oauth: false, headers: { Authorization: `Bearer ${key}` } });

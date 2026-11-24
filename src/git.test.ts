@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { excludedPath, updateExcluded, excludeEnd, excludeStart, excludePlumbing } from "./exclude-plumbing.ts";
+import { excludeAppliedSettings, excludedPath, updateExcluded, excludeEnd, excludeStart, excludePlumbing } from "./exclude-plumbing.ts";
 import { summarize, sync as syncChanges } from "./commands/sync.ts";
 import { syncLines as sync } from "./sync.fixture.ts";
 import { cloneShallow, git } from "./git.ts";
@@ -14,6 +14,7 @@ import { readReceipts, sha256 } from "../packages/seeds/store.ts";
 import { PlainReporter } from "./report/plain.ts";
 import { silentStage } from "./report/reporter.ts";
 import { pluginDefinition, seedingDefinition, writePackage } from "./test-package.ts";
+import { readAppliedSettings } from "../sdk/applied-settings.ts";
 
 let dir: string;
 
@@ -182,7 +183,9 @@ test("packages-only sync applies changed settings and plugin links without visit
   const changes = await sync(loadOffice(dir), { scope: "packages" });
 
   expect(changes.filter(line => line.startsWith("FAILED"))).toEqual([]);
-  expect(JSON.parse(readFileSync(join(pkg, ".settings.json"), "utf8")).title).toBe("After");
+  expect(readAppliedSettings(dir, "demo").title).toBe("After");
+  // Settings are the office's runtime state, not the local package's source.
+  expect(existsSync(join(pkg, ".settings.json"))).toBe(false);
   expect(existsSync(join(dir, ".opencode/plugins/demo"))).toBe(true);
 
   for (const path of ["references/docs", "work/repos/example", ".opencode/plugins/other"]) expect(existsSync(join(dir, path))).toBe(false);
@@ -254,7 +257,7 @@ test("sync of an office that is a Git worktree excludes its plumbing in the excl
   writeFileSync(join(office, "office.yaml"), `name: t\nplugins: [{ name: demo, repo: ${upstream} }]\n`);
 
   const changes = await sync(loadOffice(office));
-  const block = `# mine\n${excludeStart}\n/.office/*\n!/.office/seeds/\n/packages/node_modules/\n/.opencode/plugins/demo\n/.opencode/plugins/office\n${excludeEnd}\n`;
+  const block = `# mine\n${excludeStart}\n/.office/*\n/.office/runtime/\n!/.office/seeds/\n/packages/node_modules/\n/.opencode/plugins/demo\n/.opencode/plugins/office\n${excludeEnd}\n`;
 
   expect(changes.filter(line => line.startsWith("FAILED"))).toEqual([]);
   expect(changes).toContain("excluded /.opencode/plugins/demo from commits (info/exclude)");
@@ -297,7 +300,7 @@ test("info/exclude: a malformed block is left alone and reported, CRLF endings a
   linkedOffice(office);
   git(["init", "--quiet", office]);
   const plumbing = () => excludePlumbing(loadOffice(office), []).map(changeText);
-  const lines = ["/.office/*", "/packages/node_modules/", "/.opencode/plugins/common", "/.opencode/plugins/imported", "/.opencode/plugins/office"];
+  const lines = ["/.office/*", "/.office/runtime/", "/packages/node_modules/", "/.opencode/plugins/common", "/.opencode/plugins/imported", "/.opencode/plugins/office"];
   const block = (eol: string) => [excludeStart, ...lines, excludeEnd].map(line => line + eol).join("");
 
   // A start without an end (an end without a start, duplicates): nothing is guessed or rewritten.
@@ -350,7 +353,7 @@ test("info/exclude holds Office's plumbing in one block after the owner's lines,
   writeFileSync(join(office, ".gitignore"), "/builder/repos/\n");
   // The owner's lines around a block that holds other lines than office sync wants.
   writeFileSync(exclude, `# the owner's\n*.log\n${excludeStart}\n/.office/\n${excludeEnd}\n/after\n`);
-  const block = (lines: string[]) => [excludeStart, "/.office/*", "/packages/node_modules/", ...lines, excludeEnd].join("\n");
+  const block = (lines: string[]) => [excludeStart, "/.office/*", "/.office/runtime/", "/packages/node_modules/", ...lines, excludeEnd].join("\n");
   const all = block(["/.agents/skills/alpha", "/.opencode/plugins/common", "/.opencode/plugins/imported", "/.opencode/plugins/office"]);
   const changes = excludePlumbing(loadOffice(office), [], [".agents/skills/alpha"]);
 
@@ -383,7 +386,7 @@ test("info/exclude holds Office's plumbing in one block after the owner's lines,
 
   // Committed folders packages declare are taken back out, sorted; an empty list drops them again.
   const kept = ["/.opencode/plugins/imported", "/.opencode/plugins/office"];
-  const committed = [excludeStart, "/.office/*", "!/.office/alpha/", "!/.office/notes/", "/packages/node_modules/", ...kept, excludeEnd].join("\n");
+  const committed = [excludeStart, "/.office/*", "/.office/runtime/", "!/.office/alpha/", "!/.office/notes/", "/packages/node_modules/", ...kept, excludeEnd].join("\n");
   mkdirSync(join(office, ".office/notes"));
   writeFileSync(join(office, ".office/notes/x.md"), "x\n");
   expect(excludePlumbing(loadOffice(office), [".office/notes/", ".office/alpha/"])).toEqual(["stopped excluding /.office/alpha/ from commits (info/exclude)", "stopped excluding /.office/notes/ from commits (info/exclude)"]);
@@ -392,6 +395,21 @@ test("info/exclude holds Office's plumbing in one block after the owner's lines,
   expect(excludePlumbing(loadOffice(office), [])).toEqual(["excluded /.office/alpha/ from commits (info/exclude)", "excluded /.office/notes/ from commits (info/exclude)"]);
   expect(readFileSync(exclude, "utf8")).toBe(`# the owner's\n*.log\n${block(kept)}\n/after\n`);
   expect(git(["status", "--porcelain", "--untracked-files=all"], office)).not.toContain(".office/");
+});
+
+test("the applied settings' folder is excluded at once, owner lines kept, and the whole block that follows keeps it without reporting it again", () => {
+  const office = join(dir, "office");
+  const exclude = join(office, ".git/info/exclude");
+
+  linkedOffice(office);
+  git(["init", "--quiet", office]);
+  writeFileSync(exclude, "# mine\n/owner\n");
+
+  expect(excludeAppliedSettings(loadOffice(office)).map(changeText)).toEqual(["excluded /.office/runtime/ from commits (info/exclude)"]);
+  expect(readFileSync(exclude, "utf8")).toBe(`# mine\n/owner\n${excludeStart}\n/.office/runtime/\n${excludeEnd}\n`);
+  expect(excludeAppliedSettings(loadOffice(office))).toEqual([]);
+  expect(excludePlumbing(loadOffice(office), []).map(changeText)).not.toContain("excluded /.office/runtime/ from commits (info/exclude)");
+  expect(readFileSync(exclude, "utf8")).toStartWith(`# mine\n/owner\n${excludeStart}\n/.office/*\n/.office/runtime/\n`);
 });
 
 test("an immediate exclusion update changes only its paths' lines, literally, so Git sees an owner's replacement", () => {

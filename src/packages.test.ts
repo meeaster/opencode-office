@@ -7,7 +7,9 @@ import { syncLines as sync } from "./sync.fixture.ts";
 import { git } from "./git.ts";
 import { loadOffice } from "./office.ts";
 import { settingsEnv } from "./package-services.ts";
-import { fetchPackage, installPackage, readPackage, resolvePackages } from "./packages.ts";
+import { fetchPackage, readPackage, resolvePackages, writeOfficeDeclaration } from "./packages.ts";
+import { publishAppliedSettings } from "./applied-settings.ts";
+import { readAppliedSettings } from "../sdk/applied-settings.ts";
 import { recordRequiredBuiltins } from "./test-builtin-record.ts";
 import { readLockSection } from "./versions.ts";
 import { readReceipts } from "../packages/seeds/store.ts";
@@ -72,8 +74,8 @@ test("settings are one JSON Schema, checked with its defaults applied: types, un
 
   if (!result.ok) throw new Error(result.errors.join("\n"));
 
-  installPackage(loaded, result.value);
-  expect(JSON.parse(readFileSync(join(dir, "packages/demo/.settings.json"), "utf8"))).toEqual({ port: 4600, enabled: true, roles: { review: ["fast", "deep"] } });
+  publishAppliedSettings(loaded, [result.value]);
+  expect(readAppliedSettings(dir, "demo")).toEqual({ port: 4600, enabled: true, roles: { review: ["fast", "deep"] } });
   // Lists and objects don't reach a compose file.
   expect(settingsEnv(result.value)).toBe("DEMO_PORT='4600'\nDEMO_ENABLED='true'\n");
   expect(errors("{ roles: { review: [other] } }")).toEqual(["packages.demo.settings.roles.review.0: must be equal to one of the allowed values"]);
@@ -135,7 +137,7 @@ test("an install ignores the source office's records, an update by full commit S
   write(join(repo, "pkgs/demo/scripts/run.sh"), "echo one\n");
   // Committed by the office that authored the package, as when sharing from its packages/.
   write(join(repo, "pkgs/demo/.template.json"), '["out/AGENTS.md"]\n');
-  write(join(repo, "pkgs/demo/.settings.json"), '{"url":"https://example.com","title":"Shared"}\n');
+  write(join(repo, "pkgs/demo/.office.json"), '{"opencode":"host"}\n');
   git(["init", "--quiet", repo]);
 
   const first = commit("one");
@@ -160,7 +162,7 @@ test("an install ignores the source office's records, an update by full commit S
 
   if (!installed.ok) throw new Error(installed.errors.join("\n"));
 
-  expect(installPackage(loaded, installed.value)).toEqual(["wrote .office/packages/demo/.settings.json", "wrote .office/packages/demo/.office.json (opencode: container)"]);
+  expect(writeOfficeDeclaration(loaded, installed.value)).toEqual(["wrote .office/packages/demo/.office.json (opencode: container)"]);
   write(script, "echo edited\n");
 
   const [restored] = await fetchPackage(loaded, loaded.packages[0], source);
@@ -176,7 +178,7 @@ test("an install ignores the source office's records, an update by full commit S
 
   if (!updated.result.ok) throw new Error(updated.result.errors.join("\n"));
 
-  expect(installPackage(updated.loaded, updated.result.value)).toEqual([]);
+  expect(writeOfficeDeclaration(updated.loaded, updated.result.value)).toEqual([]);
 });
 
 test("a package plugin is linked while declared, gives way to a plugins: entry of its name without git running through the link, and is unlinked when the entry goes", async () => {
@@ -242,10 +244,12 @@ test("sync removes a copied package whose entry is gone, even an edited copy, an
 
   expect(changes).toEqual([
     "removed .office/packages/demo/, which office.yaml no longer lists",
+    "wrote .office/runtime/settings.json",
     "linked packages/node_modules/@office to the published package set, for editors",
     "office.lock: removed demo",
   ]);
   expect(existsSync(join(office, ".office/packages/demo"))).toBe(false);
+  expect(() => readAppliedSettings(office, "demo")).toThrow("has no settings for package demo");
   expect(readFileSync(join(office, "out/marker.md"), "utf8")).toBe("from the package\n");
   expect(readFileSync(join(office, "out/my-page/index.md"), "utf8")).toBe("the office's own\n");
   expect(existsSync(join(office, "packages/own/package.yaml"))).toBe(true);
@@ -311,14 +315,15 @@ test("sync locks a Git package's commit in office.lock, keeps the entry when a c
 
   // A changed ref whose copy fails validation publishes nothing: the copy, its settings and the lock stay at v1.
   const record = join(office, ".office/packages/demo/.source.json");
-  const installed = [readFileSync(record, "utf8"), readFileSync(join(office, ".office/packages/demo/.settings.json"), "utf8")];
+  const applied = join(office, ".office/runtime/settings.json");
+  const installed = [readFileSync(record, "utf8"), readFileSync(applied, "utf8")];
 
   writePackage(join(repo, "pkgs/demo/office.ts"), "throw new Error('broken candidate')");
   const broken = commit();
 
   write(join(office, "office.yaml"), yaml(broken));
   expect((await sync(loadOffice(office), { scope: "packages" })).join("\n")).toContain("broken candidate");
-  expect([readFileSync(record, "utf8"), readFileSync(join(office, ".office/packages/demo/.settings.json"), "utf8")]).toEqual(installed);
+  expect([readFileSync(record, "utf8"), readFileSync(applied, "utf8")]).toEqual(installed);
   expect(readFileSync(lock, "utf8")).toBe(locked);
 
   // A locked commit the repository no longer has fails, naming it, and changes neither the copy nor the lock.
@@ -411,17 +416,15 @@ test("sync installs the built-in packages from the tool and restores an edited c
 
 test("the required office package ignores the Claude app's synced skills unless turned off, and takes more folders as a list", async () => {
   const office = join(dir, "office");
-  const settings = join(office, ".office/packages/office/.settings.json");
-
   write(join(office, "office.yaml"), "name: t\n");
   await sync(loadOffice(office));
 
-  expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ ignore_claude_synced_skills: true, ignore_skill_folders: [] });
+  expect(readAppliedSettings(office, "office")).toEqual({ ignore_claude_synced_skills: true, ignore_skill_folders: [] });
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: office\n    settings:\n      ignore_claude_synced_skills: false\n      ignore_skill_folders:\n        - ~/other/skills\n");
 
-  expect(await sync(loadOffice(office))).toEqual(["wrote .office/packages/office/.settings.json"]);
-  expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ ignore_claude_synced_skills: false, ignore_skill_folders: ["~/other/skills"] });
+  expect(await sync(loadOffice(office))).toEqual(["wrote .office/runtime/settings.json"]);
+  expect(readAppliedSettings(office, "office")).toEqual({ ignore_claude_synced_skills: false, ignore_skill_folders: ["~/other/skills"] });
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: office\n    settings:\n      ignore_skill_folders: ~/.claude/skills/synced\n");
   expect(read(office, "office").result).toMatchObject({ ok: false, errors: ["packages.office.settings.ignore_skill_folders: must be array"] });

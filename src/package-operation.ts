@@ -10,7 +10,7 @@ import { type LockedPackage, officeSchema, type PackageLock, parsePackageLock } 
 import { activeGeneration, beginGeneration, managedDirectory, pinActive, publishGeneration, type Candidate } from "./package-generation.ts";
 import { coupledFailures, writePackageLinks, writeSdk } from "./package-imports.ts";
 import { publishedView, type GatheredPackage, type GatherProblem, gatherPackages, problemLines } from "./gather.ts";
-import { materializePackage, readRecord, type ResolvedPackage, resolvePackages, validateReplacement, sourceDifferences, verifiedCommit, writePackageSettings } from "./packages.ts";
+import { materializePackage, readRecord, type ResolvedPackage, resolvePackages, validateReplacement, sourceDifferences, verifiedCommit, writeOfficeDeclaration } from "./packages.ts";
 import { lockFile, lockSections, packageLockChanges, readLockSection } from "./versions.ts";
 import { writeAppliedReferences } from "./applied-references.ts";
 import { applyPackages, SyncStopped } from "./package-application.ts";
@@ -449,7 +449,7 @@ export async function evaluateAdmission(temporary: string) {
     using application = applicationLease(office.dir);
 
     for (const item of gathered.packages) {
-      if (item.kind !== "local") lines.push(...writePackageSettings(office, item).map(line => line.replace(relative(office.dir, folder) + "/packages", ".office/packages")));
+      if (item.kind !== "local") lines.push(...writeOfficeDeclaration(office, item).map(line => line.replace(relative(office.dir, folder) + "/packages", ".office/packages")));
     }
 
     publishGeneration(transaction, yaml, packages.value);

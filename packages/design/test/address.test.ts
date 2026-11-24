@@ -1,12 +1,15 @@
 import { afterAll, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parse } from "yaml";
 
+import { writeAppliedSnapshot } from "../../../src/applied-settings.ts";
+import { officePlugin, settle } from "../../../src/plugin-office.fixture.ts";
 import { type AddressSettings, browserAddress } from "../executor-app/address.ts";
+import type designPlugin from "../plugin/index.ts";
 
 const packageDir = join(import.meta.dir, "..");
 const scratch = mkdtempSync(join(tmpdir(), "design-address-"));
@@ -35,19 +38,16 @@ function composeAddress(settings: AddressSettings): string {
   });
 }
 
-/** The address the plugin gives the doop skill, from a copy of the package with these settings. */
-async function pluginAddress(settings: AddressSettings, copy: string): Promise<string> {
-  mkdirSync(copy);
-  cpSync(join(packageDir, "plugin"), join(copy, "plugin"), { recursive: true });
-  cpSync(join(packageDir, "skills"), join(copy, "skills"), { recursive: true });
-  writeFileSync(join(copy, ".settings.json"), JSON.stringify(settings));
+type Plugin = typeof designPlugin;
 
-  const plugin = (await import(join(copy, "plugin/index.ts"))).default;
+/** The address the plugin gives the doop skill, as delivered to an office that applied these settings. */
+async function pluginAddress(settings: AddressSettings, office: string): Promise<string> {
+  const plugin = await officePlugin<Plugin>("design", office, { design: settings });
   let content = "";
 
   const close = await plugin.setup({
-    location: { directory: copy },
-    skill: { transform: async (add: (editor: { add(skill: { content: string }): void }) => void) => add({ add: (skill) => (content = skill.content) }), reload: async () => {} },
+    location: { directory: office },
+    skill: { transform: async (add: (editor: { add(skill: { content: string }): void }) => void) => (add({ add: (skill) => (content = skill.content) }), { dispose: async () => {} }), reload: async () => {} },
     mcp: { transform: async () => ({ dispose: async () => {} }), reload: async () => {} },
   });
 
@@ -66,4 +66,39 @@ for (const [index, item] of cases.entries()) {
 
 test("the doop service answers to doop.localhost on the compose network", () => {
   expect(compose.services.doop.networks.default.aliases).toEqual(["doop.localhost"]);
+});
+
+test("before its settings are applied the plugin registers neither skill nor server, and does once a sync applies them", async () => {
+  const office = join(scratch, "unapplied");
+  const plugin = await officePlugin<Plugin>("design", office, { other: {} });
+  let skill: ((editor: { add(skill: { content: string }): void }) => void) | undefined;
+  let mcp: ((editor: { set(name: string, server: { type: "remote"; url: string }): void }) => void) | undefined;
+  let reloads = 0;
+
+  mkdirSync(join(office, ".opencode/doop"), { recursive: true });
+  writeFileSync(join(office, ".opencode/doop/agent-key"), "key\n");
+
+  const close = await plugin.setup({
+    location: { directory: office },
+    skill: { transform: async (callback: typeof skill) => ((skill = callback), { dispose: async () => {} }), reload: async () => void reloads++ },
+    mcp: { transform: async (callback: typeof mcp) => ((mcp = callback), { dispose: async () => {} }), reload: async () => {} },
+  });
+
+  const registered = () => {
+    const names: string[] = [];
+
+    skill?.({ add: () => names.push("skill") });
+    mcp?.({ set: (name) => names.push(name) });
+
+    return names;
+  };
+
+  try {
+    expect(registered()).toEqual([]);
+    writeAppliedSnapshot(office, { design: { port: 41441, url: "", executor_app: false, oauth: false }, other: {} });
+    await settle(() => reloads > 0);
+    expect(registered()).toEqual(["skill", "doop"]);
+  } finally {
+    close?.();
+  }
 });

@@ -189,7 +189,7 @@ export const track = v.pipe(
 
 export const scalarSetting = v.union([v.string(), v.pipe(v.number(), v.finite()), v.boolean()], "must be text, a number or true/false");
 
-/** YAML aliases may form cycles; only data that survives .settings.json belongs here. */
+/** YAML aliases may form cycles; only data that survives the applied settings snapshot's JSON belongs here. */
 function jsonValue(value: unknown, ancestors = new Set<object>()): value is SettingValue {
   if (value === null || v.is(scalarSetting, value)) return true;
 
@@ -559,7 +559,7 @@ const packageCommands = v.pipe(
 );
 
 /** The entries of `.office/` office itself keeps, which no package may declare committed. */
-export const officeFolders = new Set(["cache", "claude", "current", "generation-ticket", "generations", "mise", "node_modules", "packages", "plugins", "publishing.json", "resolved", "tmp"]);
+export const officeFolders = new Set(["cache", "claude", "current", "generation-ticket", "generations", "mise", "node_modules", "packages", "plugins", "publishing.json", "resolved", "runtime", "tmp"]);
 
 /** A committed folder: one plain folder name directly under `.office/`, written `.office/<name>/`, that office doesn't keep itself. */
 const committedFolder = v.pipe(

@@ -16,6 +16,7 @@ import { recipes } from "../packages/mise-integration/claims.ts";
 import { fragmentNotes } from "./package-tools.ts";
 import { parseManifest } from "./schema.ts";
 import { definitionText, writePackage } from "./test-package.ts";
+import { readAppliedSettings } from "../sdk/applied-settings.ts";
 
 let dir: string;
 
@@ -272,7 +273,7 @@ test("the built-in browser package leaves agent-browser's own Chromium alone by 
 
   expect(fragmentText).toContain('"origin=Google LLC,label=Google,codename=stable,site=dl.google.com";');
   expect(readFileSync(envFilePath(), "utf8")).toContain("export AGENT_BROWSER_EXECUTABLE_PATH='/usr/bin/google-chrome-stable'\n");
-  expect(JSON.parse(readFileSync(join(office, ".office/packages/browser/.settings.json"), "utf8"))).toMatchObject({ browse: false, system_chrome: true });
+  expect(readAppliedSettings(office, "browser")).toMatchObject({ browse: false, system_chrome: true });
 
   // A container-mode office never gets it, whatever the setting says.
   write(join(office, "office.yaml"), "name: t\nopencode: container\npackages:\n  - name: browser\n    settings:\n      system_chrome: true\n");

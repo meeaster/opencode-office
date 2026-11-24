@@ -13,6 +13,7 @@ import { editLock, readLockSection } from "../versions.ts";
 import { updatePackages } from "./pins.ts";
 import { syncLines as sync } from "../sync.fixture.ts";
 import { definitionText, markingDefinition, packageJsonText, settingsSchema } from "../test-package.ts";
+import { readAppliedSettings } from "../../sdk/applied-settings.ts";
 
 /** office.lock's `packages:` section in the office at `dir`, as an object. */
 const readPackageLock = (dir: string) => Object.fromEntries(readLockSection(dir, "packages"));
@@ -353,10 +354,10 @@ test("packages update retries without a provider whose newer commit fails setup 
   expect(office("provider", "show").out).toBe("entries:one\n");
 });
 
-test("an update that doesn't apply still records the references its switch resolved", async () => {
+test("an update that doesn't apply still records the references its switch resolved, and publishes no settings", async () => {
   const repo = join(dir, "recorded");
   const yaml = join(dir, "office", "office.yaml");
-  const docs = (name: string) => definitionText(`{setup(c){c.add(repositories,{name:"${name}",url:"https://example.invalid/${name}.git"})}}`, 'import {repositories} from "@office/references/repositories";');
+  const docs = (name: string) => definitionText(`{settings:{type:"object",properties:{edition:{type:"string",default:"${name}"}}},setup(c){c.add(repositories,{name:"${name}",url:"https://example.invalid/${name}.git"})}}`, 'import {repositories} from "@office/references/repositories";');
   const first = commit(repo, { "docs/package.json": packageJsonText("docs", "office.ts", { dependencies: ["references"] }), "docs/office.ts": docs("old-docs") });
   write(yaml, `name: test\npackages:\n  - {name: docs, repo: ${repo}, ref: ${first}, track: main, path: docs}\n`);
   await synced("packages");
@@ -367,4 +368,7 @@ test("an update that doesn't apply still records the references its switch resol
   await updatePackages(loadOffice(join(dir, "office")), silentStage, { apply: false });
   expect(read(applied)).toContain("new-docs");
   expect(read(applied)).not.toContain("old-docs");
+  expect(readAppliedSettings(join(dir, "office"), "docs")).toEqual({ edition: "old-docs" });
+  await synced("packages");
+  expect(readAppliedSettings(join(dir, "office"), "docs")).toEqual({ edition: "new-docs" });
 });

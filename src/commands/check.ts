@@ -38,8 +38,9 @@ import { wrappedCommands } from "../sfw.ts";
 import { toolPins } from "../mise-toml.ts";
 import { destinationProblems } from "../../standard/mise-integration/projection.ts";
 import { fragmentNotes, machineBelowFloors, machineFile, orphanFragments, packagesFile, packagesFileProblems, strayFragments } from "../package-tools.ts";
-import { describeRecord, fileHashes, type InstalledPackage, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, settingsFile, settingsText, sourceDifferences, sourceFile } from "../packages.ts";
-import { describeIgnoredSkills, ignoredSkills, readIgnoredFolders } from "../../packages/office/plugin/ignored-skills.ts";
+import { describeRecord, fileHashes, type InstalledPackage, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, sourceDifferences, sourceFile } from "../packages.ts";
+import { appliedDifference, type AppliedState, appliedState, staleApplied } from "../applied-settings.ts";
+import { describeIgnoredSkills, ignoredFolders, ignoredSkills } from "../../packages/office/plugin/ignored-skills.ts";
 import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces, shadowing, withLoaded } from "../outside.ts";
 import { pinnedTools } from "../schema.ts";
 import { builtinFiles, builtinPackages, version } from "../tool.ts";
@@ -58,17 +59,19 @@ type Report = (ok: boolean | "warn", name: string, detail: string) => void;
  * `claims` only when the gathering is complete (what every package claims is known), and the
  * references to compare checkouts with: the gathering's, or with a package broken office.yaml's own.
  */
-type Context = { gathered: Gathered; loaded: ReturnType<typeof withPluginPlan>; claims?: Gathered; references: readonly Repository[] };
+type Context = { gathered: Gathered; loaded: ReturnType<typeof withPluginPlan>; claims?: Gathered; references: readonly Repository[]; applied: AppliedState };
 
 function context(office: Office, gathered: Gathered): Context {
   return {
     gathered, loaded: withPluginPlan(office, gathered.inventory, gathered.complete ? contributedAssets(gathered.entries) : undefined),
     claims: gathered.complete ? gathered : undefined,
     references: gathered.complete ? gathered.references : office.references,
+    // Read once, for every report about what sessions get; check never writes it.
+    applied: appliedState(office),
   };
 }
 
-async function drift(office: Office, { loaded, claims, references }: Context): Promise<string[]> {
+async function drift(office: Office, { loaded, claims, references, applied: appliedSettings }: Context): Promise<string[]> {
   const problems: string[] = [];
   const declared = new Set(office.desks.map((desk) => desk.name));
 
@@ -141,7 +144,7 @@ async function drift(office: Office, { loaded, claims, references }: Context): P
 
   problems.push(...orphanFragments(office, listed), ...strayFragments(office), ...(claims ? packagesFileProblems(office, claims.packages, listed) : []));
 
-  problems.push(...packageLockProblems(office));
+  problems.push(...packageLockProblems(office), ...staleApplied(appliedSettings, loaded.selected));
 
   return problems;
 }
@@ -201,9 +204,9 @@ async function pulledCopy(dir: string, kind: "built-in" | "remote", name: string
 
 /**
  * One line per package: its kind and where it came from, whether a pulled-in copy was edited,
- * whether its settings are valid and written, its mise tools, and the plugin it links.
+ * whether its settings are valid and applied, its mise tools, and the plugin it links.
  */
-async function packageChecks(office: Office, report: Report, { gathered, loaded, claims }: Context): Promise<void> {
+async function packageChecks(office: Office, report: Report, { gathered, loaded, claims, applied }: Context): Promise<void> {
   const { installed, plugins } = loaded;
   const problems = [...gathered.problems, ...loaded.problems.filter(problem => !gathered.problems.some(known => known.message === problem.message))];
   const shared = sharedNamespaces(installed);
@@ -249,19 +252,11 @@ async function packageChecks(office: Office, report: Report, { gathered, loaded,
       }
     }
 
-    const settingsPath = join(item.dir, settingsFile);
+    const difference = appliedDifference(applied, item);
 
-    // A settings file the package's folder can't give fails this package alone.
-    try {
-      const written = existsSync(settingsPath) && readFileSync(settingsPath, "utf8") === settingsText(item);
+    notes.push(difference === undefined ? "settings valid and applied" : `settings valid, but ${difference}`);
 
-      notes.push(written ? `settings valid; settings written to ${relative(office.dir, settingsPath)}` : `settings valid, but ${relative(office.dir, settingsPath)} doesn't hold them; office sync writes it`);
-
-      if (!written) ok = false;
-    } catch (error) {
-      notes.push(`settings valid, but ${relative(office.dir, settingsPath)} can't be read: ${error instanceof Error ? error.message : String(error)}`);
-      ok = false;
-    }
+    if (difference !== undefined) ok = false;
 
     const officePath = join(item.dir, officeFile);
 
@@ -1040,7 +1035,7 @@ function officeSkills(office: Office): Map<string, string> {
  * come from the server's answer when there is one, the rest from reading the session's home. The
  * one warning is an outside skill or plugin with the name of one the office provides.
  */
-function outsideSection(office: Office, report: Report, root: RootAnswer | undefined, info: (line: string) => void, { loaded: installed }: Context): void {
+function outsideSection(office: Office, report: Report, root: RootAnswer | undefined, info: (line: string) => void, { loaded: installed, applied }: Context): void {
   const places = sessionPlaces(office);
   const onHost = (path: string) => places.fromSession(path);
 
@@ -1080,9 +1075,10 @@ function outsideSection(office: Office, report: Report, root: RootAnswer | undef
 
   for (const warning of shadowing(items, provided, places.home, office.dir, loaded)) report("warn", "outside the office", warning);
 
-  // What the office package's skill-folder settings hide from sessions, and what it can't.
+  // What the office package's skill-folder settings hide from sessions, and what it can't: as
+  // sync last applied them, which is what its plugin reads, with the plugin's default before then.
   const officePackage = installed.installed.find((item) => item.entry.name === "office");
-  const ignored = officePackage === undefined ? [] : readIgnoredFolders(officePackage.dir);
+  const ignored = officePackage === undefined ? [] : ignoredFolders(applied.ok ? applied.packages.get("office") : undefined);
 
   if (ignored.length === 0) return;
 

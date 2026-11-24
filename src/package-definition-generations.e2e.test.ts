@@ -3,6 +3,7 @@ import { chmodSync, existsSync, readlinkSync, realpathSync, renameSync, rmSync }
 import { join } from "node:path";
 import { git } from "./git.ts";
 import { appliedReferences } from "./applied-references.ts";
+import { readAppliedSettings } from "../sdk/applied-settings.ts";
 import { loadOffice } from "./office.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
 import { definitionText, writePackage } from "./test-package.ts";
@@ -13,7 +14,7 @@ test("a built-in's bytes and a Git contributor's resolved commit survive separat
   const { dir, env, cli, newer, probe, select } = fixture("reference-repair");
   select("  - {name: aws-emulator, settings: {port: 14566, storage: hybrid}}\n");
   cli(0, "sync", "--packages");
-  const delivered = ["office.ts", ".settings.json", ".source.json", "compose.yaml"].map(path => join(dir, ".office/packages/aws-emulator", path));
+  const delivered = [...["office.ts", ".source.json", "compose.yaml"].map(path => join(dir, ".office/packages/aws-emulator", path)), join(dir, ".office/runtime/settings.json")];
   const before = delivered.map(read);
 
   // Exercise setup's real planner, on the references sync recorded, with Git restricted to file
@@ -201,8 +202,9 @@ test("the executable syncs mixed definitions and keeps applied state when a sele
   write(join(pkg, "compose.yaml"), "services:\n  notes:\n    image: example/notes\n");
   cli(0, "sync");
   expect(read(join(dir, "notes/example"))).toBe("ran\n");
-  expect(JSON.parse(read(join(dir, "packages/legacy/.settings.json")))).toEqual({ label: "old" });
-  expect(JSON.parse(read(join(pkg, ".settings.json")))).toEqual({ count: 3 });
+  expect(readAppliedSettings(dir, "legacy")).toEqual({ label: "old" });
+  expect(readAppliedSettings(dir, "notes")).toEqual({ count: 3 });
+  expect(existsSync(join(pkg, ".settings.json")) || existsSync(join(dir, "packages/legacy/.settings.json"))).toBe(false);
   expect(cli(0, "check")).toMatch(/ok   package notes: .*compose.yaml contributes services notes/);
   write(join(pkg, "defaults.ts"), "export const count: number = 7;");
   cli(0, "sync", "--packages");
@@ -220,7 +222,7 @@ test("the executable syncs mixed definitions and keeps applied state when a sele
   expect(cli(1, "check")).toContain(reason);
   expect(readlinkSync(link)).toBe("../../packages/notes/plugin");
   expect(read(pins)).toBe(applied);
-  expect(JSON.parse(read(join(pkg, ".settings.json")))).toEqual({ count: 7 });
+  expect(readAppliedSettings(dir, "notes")).toEqual({ count: 7 });
   expect(read(join(dir, "notes/example"))).toBe(marked);
 
   select("  - name: legacy\n");

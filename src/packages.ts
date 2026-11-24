@@ -34,21 +34,15 @@ import { build, buildCommit, builtinFiles, builtinPackages } from "./tool.ts";
 export const sourceFile = ".source.json";
 
 /**
- * The resolved settings `office sync` writes for a package's plugin and scripts. A dot-file beside
- * `.source.json` marks it as the office's record rather than package content, so it is left out
- * of the content hash. Settings aren't secrets: it is committed, so scripts in CI can read it.
- */
-export const settingsFile = ".settings.json";
-
-/**
- * What the office declares that any package's plugin and scripts may read, beside its settings and
- * kept apart from them, so no setting name can collide: `{ "opencode": "host" | "container" }`,
- * office.yaml's mode. `office sync` writes it, and it is committed like `.settings.json`.
+ * What the office declares that any package's plugin and scripts may read, kept apart from its
+ * settings (the office's applied settings snapshot, `src/applied-settings.ts`):
+ * `{ "opencode": "host" | "container" }`, office.yaml's mode. `office sync` writes it into each
+ * package folder, and a local package's copy is committed.
  */
 export const officeFile = ".office.json";
 
 /** The office's own records in a package folder, left out of its file hashes. */
-const records = [sourceFile, settingsFile, officeFile];
+const records = [sourceFile, officeFile];
 
 /** The name of the SDK every package can import as `@office/sdk`, which no package can have. */
 export const sdkName = "sdk";
@@ -83,7 +77,7 @@ export type ResolvedPackages = { packages: ResolvedPackage[]; problems: PackageP
 
 export type InstalledPackage = ResolvedPackage & {
   manifest: PackageManifest;
-  /** The settings with defaults applied, as the plugin and scripts read them from `.settings.json`. */
+  /** The settings with defaults applied, as runtimes read them from the office's applied settings snapshot. */
   settings: Record<string, SettingValue>;
 };
 
@@ -263,8 +257,8 @@ function writeJson(path: string, value: PackageRecord): void {
 
 /**
  * Fills a new copy of the package folder `dir` with `fill`, beside it, then swaps it in, so a
- * failed copy leaves the installed one as it was. The office's records stay: sync reports the
- * settings file only when the settings change.
+ * failed copy leaves the installed one as it was. The office's mode record stays: sync reports it
+ * only when the mode changes.
  */
 async function replaceFolder<Result>(dir: string, fill: (staging: string) => Result, commitPin?: () => void): Promise<Awaited<Result>> {
   mkdirSync(dirname(dir), { recursive: true });
@@ -273,9 +267,7 @@ async function replaceFolder<Result>(dir: string, fill: (staging: string) => Res
   try {
     const result = await fill(staging);
 
-    for (const kept of [settingsFile, officeFile]) {
-      if (existsSync(join(dir, kept))) copyFileSync(join(dir, kept), join(staging, kept));
-    }
+    if (existsSync(join(dir, officeFile))) copyFileSync(join(dir, officeFile), join(staging, officeFile));
 
     const backup = existsSync(dir) ? mkdtempSync(join(dirname(dir), `.${basename(dir)}.old-`)) : undefined;
 
@@ -763,33 +755,13 @@ export function officeText(office: Office): string {
   return `${JSON.stringify({ opencode: office.opencode.mode }, null, 2)}\n`;
 }
 
-/** `.settings.json`'s content for a package's resolved settings. */
-export function settingsText(installed: InstalledPackage): string {
-  return `${JSON.stringify(installed.settings, null, 2)}\n`;
-}
-
-export function writePackageSettings(office: Office, installed: InstalledPackage): string[] {
-  const changes: string[] = [];
-  const settingsPath = join(installed.dir, settingsFile);
-  const settings = settingsText(installed);
-
-  if (!existsSync(settingsPath) || readFileSync(settingsPath, "utf8") !== settings) {
-    writeFileSync(settingsPath, settings);
-    changes.push(`wrote ${relative(office.dir, settingsPath)}`);
-  }
-
+/** Writes a package's .office.json. Returns one line per change. */
+export function writeOfficeDeclaration(office: Office, installed: Pick<InstalledPackage, "dir">): string[] {
   const officePath = join(installed.dir, officeFile);
   const declared = officeText(office);
 
-  if (!existsSync(officePath) || readFileSync(officePath, "utf8") !== declared) {
-    writeFileSync(officePath, declared);
-    changes.push(`wrote ${relative(office.dir, officePath)} (opencode: ${office.opencode.mode})`);
-  }
+  if (existsSync(officePath) && readFileSync(officePath, "utf8") === declared) return [];
+  writeFileSync(officePath, declared);
 
-  return changes;
-}
-
-/** Writes a package's settings file and .office.json. Returns one line per change. */
-export function installPackage(office: Office, installed: InstalledPackage): string[] {
-  return writePackageSettings(office, installed);
+  return [`wrote ${relative(office.dir, officePath)} (opencode: ${office.opencode.mode})`];
 }

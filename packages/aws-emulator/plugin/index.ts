@@ -1,9 +1,12 @@
 // Registers the package's floci skill in every session, with where this office's Floci answers.
 //
-// It imports only Node's built-ins, so it runs with nothing installed.
+// The office bundles it with the applied settings reader into the one index.js an office holds,
+// so it runs with nothing installed.
 import { readFileSync, realpathSync, watch } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { type AppliedSettings, officeRootOf, watchAppliedSettings } from "@office/sdk/applied-settings";
 
 type Skill = { id: string; name: string; description: string; path: string; content: string };
 
@@ -17,19 +20,15 @@ type Context = {
 type Settings = { port: number; uiPort: number; storage: string };
 
 // OpenCode loads the plugin through the link `.opencode/plugins/aws-emulator`; the real folder is
-// the package's, beside its skills/ and .settings.json.
+// the package's, beside its skills/.
 const sourceDir = dirname(realpathSync(dirname(fileURLToPath(import.meta.url))));
 const packageDir = sourceDir.replace(/\/\.office\/generations\/g-[a-f0-9-]+\/packages\/([^/]+)$/, "/.office/packages/$1");
+const packageName = basename(packageDir);
 
 const skillFile = join(packageDir, "skills/floci/SKILL.md");
 
-/**
- * The package's settings as `office sync` last wrote them, defaults applied. office.yaml may give
- * a port as text, which reaches the compose file the same way.
- */
-function readSettings(): Settings {
-  const read: { port: number | string; ui_port: number | string; storage: string } = JSON.parse(readFileSync(join(packageDir, ".settings.json"), "utf8"));
-
+/** The package's applied settings, defaults included. */
+function settingsOf(read: AppliedSettings): Settings {
   return { port: Number(read.port), uiPort: Number(read.ui_port), storage: String(read.storage) };
 }
 
@@ -76,13 +75,32 @@ function flociSkill(settings: Settings, container: boolean): Skill {
 export default {
   id: "aws-emulator",
   async setup(ctx: Context) {
-    await ctx.skill.transform((editor) => editor.add(flociSkill(readSettings(), process.env.OFFICE_CONTAINER === "1")));
+    const reload = () => void ctx.skill.reload().catch(console.error);
 
-    // Watch the directory so sync replacing the settings file doesn't detach the watcher.
-    const watcher = watch(sourceDir === packageDir ? packageDir : dirname(dirname(packageDir)), (_event, file) => {
-      if (file === "current" || file === ".settings.json") void ctx.skill.reload().catch(console.error);
+    // The settings `office sync` last applied in the office holding the package. Only a change to
+    // this package's reloads the skill, not another package's.
+    const watcher = watchAppliedSettings(officeRootOf(packageDir), packageName, (next) => {
+      applied = next;
+      reload();
+    }, console.error);
+
+    let applied = watcher.settings;
+
+    // A new package set can bring new skill text with the same settings. The office's folder is
+    // watched, since sync replaces `current`; a local copy has no package set to follow.
+    const generations = sourceDir === packageDir ? undefined : watch(dirname(dirname(packageDir)), (_event, file) => {
+      if (file === "current") reload();
     });
 
-    return () => watcher.close();
+    // Without applied settings there is no address to give yet: the skill is registered once a
+    // sync applies them.
+    await ctx.skill.transform((editor) => {
+      if (applied !== undefined) editor.add(flociSkill(settingsOf(applied), process.env.OFFICE_CONTAINER === "1"));
+    });
+
+    return () => {
+      watcher.close();
+      generations?.close();
+    };
   },
 };

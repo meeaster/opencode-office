@@ -1,7 +1,7 @@
 // The check before loading, in the compiled office: with any problem in the selection, no
 // package's code runs, and a command, help and sync each name it.
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readlinkSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
@@ -73,18 +73,35 @@ test("an office never synced loads no package: the required built-ins aren't the
   expect(existsSync(env.PROBE)).toBe(false);
 });
 
-test("a package whose .settings.json can't be read fails check alone, and the next package is still checked", () => {
-  const { dir, cli, select } = fixture("unreadable-settings");
+test("check reports a package's applied settings that differ, are missing or malformed, and an entry for a package no longer selected, without writing", () => {
+  const { dir, cli, select } = fixture("applied-settings-drift");
+  const snapshot = join(dir, ".office/runtime/settings.json");
 
   writePackage(join(dir, "packages/blocked/office.ts"), definitionText("{}"));
   writePackage(join(dir, "packages/healthy/office.ts"), definitionText("{}"));
   select("  - name: blocked\n  - name: healthy\n");
   cli(0, "sync", "--packages");
-  rmSync(join(dir, "packages/blocked/.settings.json"));
-  mkdirSync(join(dir, "packages/blocked/.settings.json"));
+  const published = JSON.parse(readFileSync(snapshot, "utf8"));
 
-  const checked = cli(1, "check");
+  expect(published.packages).toMatchObject({ blocked: {}, healthy: {} });
+  writeFileSync(snapshot, JSON.stringify({ packages: { ...published.packages, blocked: { stale: true }, gone: {} } }));
+  const edited = readFileSync(snapshot, "utf8");
+  let checked = cli(1, "check");
 
-  expect(checked).toMatch(/^FAIL\s+package blocked: .*packages\/blocked\/\.settings\.json can't be read: .*EISDIR/m);
-  expect(checked).toMatch(/^ok\s+package healthy\b/m);
+  expect(checked).toMatch(/^FAIL\s+package blocked: .*settings valid, but \.office\/runtime\/settings\.json holds other settings for it; office sync publishes them/m);
+  expect(checked).toMatch(/^ok\s+package healthy: .*settings valid and applied/m);
+  expect(checked).toContain(".office/runtime/settings.json holds settings for package gone, which office.yaml no longer selects (office sync removes them)");
+  expect(readFileSync(snapshot, "utf8")).toBe(edited);
+
+  writeFileSync(snapshot, "{");
+  checked = cli(1, "check");
+  expect(checked).toMatch(/^FAIL\s+package healthy: .*settings\.json is malformed: .*run office sync to publish it again/m);
+  expect(readFileSync(snapshot, "utf8")).toBe("{");
+
+  rmSync(snapshot);
+  expect(cli(1, "check")).toMatch(/^FAIL\s+package healthy: .*settings valid, but no applied settings at .*settings\.json/m);
+  expect(existsSync(snapshot)).toBe(false);
+
+  cli(0, "sync", "--packages");
+  expect(cli(0, "check")).toMatch(/^ok\s+package blocked: .*settings valid and applied/m);
 });

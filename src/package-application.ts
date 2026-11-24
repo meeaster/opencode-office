@@ -9,19 +9,24 @@ import { linkPlugins, withPluginPlan } from "../standard/opencode/delivery.ts";
 import { type Declaration, readDeclarations } from "../standard/opencode/declarations.ts";
 import { syncTools } from "./package-tools.ts";
 import { type Office } from "./office.ts";
-import { installPackage, removePackage } from "./packages.ts";
-import { failure, type Change } from "./change.ts";
-import { excludedPath, excludePlumbing, updateExcluded } from "./exclude-plumbing.ts";
+import { removePackage, writeOfficeDeclaration } from "./packages.ts";
+import { prepareAppliedSettings, publishAppliedSettings } from "./applied-settings.ts";
+import { failure, isFailure, type Change } from "./change.ts";
+import { appliedSettingsPath } from "../sdk/applied-settings.ts";
+import { excludeAppliedSettings, excludedPath, excludePlumbing, updateExcluded } from "./exclude-plumbing.ts";
 
 /**
  * Applies a published package set from its gathering. While a selected package is unread (this
- * sync couldn't fetch it), what it claims is unknown, so no package's sync function runs and no
- * package's tools or machine files are reconciled; the others' OpenCode plugins and panels are
- * still delivered, and the unread package's stay as the last sync left them. Returns the paths the
- * sync functions excluded from commits.
+ * sync couldn't fetch it), what it claims is unknown, so the applied settings aren't published, no
+ * package's sync function runs and no package's tools or machine files are reconciled; the
+ * others' OpenCode plugins and panels are still delivered, and the unread package's stay as the
+ * last sync left them. Returns the paths the sync functions excluded from commits.
  */
 export async function applyPackages(office: Office, gathered: Gathered, changes: Change[], exclude: boolean, withdrawals: string): Promise<string[]> {
   const installed = gathered.inventory;
+
+  // Before any plugin is linked, so a plugin can watch for settings even before they're published.
+  prepareAppliedSettings(office);
 
   // .office/packages/ holds only what sync pulled in, so a folder no package wants goes. Its panel
   // stays on the app's machine, where other offices may use it.
@@ -41,7 +46,7 @@ export async function applyPackages(office: Office, gathered: Gathered, changes:
     rmSync(join(withdrawals, name), { recursive: true });
   }
 
-  for (const item of installed.installed) changes.push(...installPackage(office, item));
+  for (const item of installed.installed) changes.push(...writeOfficeDeclaration(office, item));
 
   // The machine is reconciled in either mode (container mode releases the host's files), and
   // packages' sync functions run, only once every selected package loaded. A sync function that
@@ -51,8 +56,18 @@ export async function applyPackages(office: Office, gathered: Gathered, changes:
   if (gathered.unread.size) {
     const unknown = [...gathered.unread].join(", ");
 
-    changes.push(`not running any package's sync function: what package ${unknown} registers is unknown until a sync loads it`, `not reconciling any package's tools or machine files: what package ${unknown} claims is unknown until a sync loads it`);
+    changes.push(`not publishing the applied settings: package ${unknown} is selected but unread, so they would be incomplete`, `not running any package's sync function: what package ${unknown} registers is unknown until a sync loads it`, `not reconciling any package's tools or machine files: what package ${unknown} claims is unknown until a sync loads it`);
   } else {
+    // Before any hook or delivery, so each sees the settings it is applied with. A hook that
+    // throws later leaves them published, and excluded from commits. Settings Git wouldn't
+    // ignore aren't published: the application stops, any earlier snapshot left as it was.
+    const exclusion = excludeAppliedSettings(office);
+
+    changes.push(...exclusion);
+
+    if (exclusion.some(isFailure)) throw new Error(`not publishing the applied settings: ${appliedSettingsPath} isn't kept out of commits (above)`);
+    changes.push(...publishAppliedSettings(office, installed.installed));
+
     for await (const result of runPackageHooks(office, gathered, { phase: "sync", exclude: additions => {
       for (const path of additions) paths.add(excludedPath(path));
     }, updateExcluded: change => updateExcluded(office, change) })) {

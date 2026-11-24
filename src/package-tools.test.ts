@@ -150,7 +150,7 @@ test("two packages declaring one tool get one line at the higher version, naming
   // One package leaving keeps the line, naming the other.
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
 
-  expect(await sync(loadOffice(office))).toEqual(["rewrote the comments of machine.packages.toml, which say who changes what in it and which packages need each tool"]);
+  expect(await sync(loadOffice(office))).toEqual(["wrote .office/runtime/settings.json", "rewrote the comments of machine.packages.toml, which say who changes what in it and which packages need each tool"]);
   expect(lines()).toEqual(['"bun" = "1.5.0" # demo']);
 });
 

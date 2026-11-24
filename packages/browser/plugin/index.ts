@@ -15,12 +15,15 @@
 //   $XDG_BIN_HOME, or $OPENCODE_BROWSER_HOME/bin), and those are the only places this looks:
 //   xdg-utils ships an unrelated `browse` on the PATH.
 //
-// A missing command registers nothing, and nothing here fails a session. It imports only Node's
-// built-ins, so it runs with nothing installed.
+// A missing command registers nothing, and nothing here fails a session. The office bundles it
+// with the applied settings reader into the one index.js an office holds, so it runs with nothing
+// installed.
 import { accessSync, constants, readFileSync, realpathSync, watch } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { officeRootOf, readAppliedSettings, watchAppliedSettings } from "@office/sdk/applied-settings";
 
 type Skill = { id: string; name: string; description: string; path: string; content: string };
 
@@ -43,21 +46,23 @@ type Settings = { agentBrowserTools: string; browse: boolean; systemChrome: bool
 type Mode = "host" | "container" | undefined;
 
 // OpenCode loads the plugin through the link `.opencode/plugins/browser`; the real folder is the
-// package's, beside its skills/ and .settings.json.
+// package's, beside its skills/ and .office.json.
 const sourceDir = dirname(realpathSync(dirname(fileURLToPath(import.meta.url))));
 const packageDir = sourceDir.replace(/\/\.office\/generations\/g-[a-f0-9-]+\/packages\/([^/]+)$/, "/.office/packages/$1");
+const packageName = basename(packageDir);
 
 const skillFile = join(packageDir, "skills/browser-automation/SKILL.md");
 
 const defaults: Settings = { agentBrowserTools: "core", browse: true, systemChrome: false };
 
 /**
- * The settings `office sync` last wrote, which it checked against package.yaml; the package's
- * defaults when the file is missing or unreadable. office.yaml may give either as text.
+ * The settings `office sync` last applied in the office that holds the package, which it checked
+ * against the package's schema; the package's defaults when they can't be read. office.yaml may
+ * give either as text.
  */
 function readSettings(): Settings {
   try {
-    const read: { agent_browser_tools?: string | number | boolean; browse?: string | number | boolean; system_chrome?: string | number | boolean } = JSON.parse(readFileSync(join(packageDir, ".settings.json"), "utf8"));
+    const read = readAppliedSettings(officeRootOf(packageDir), packageName);
 
     return {
       agentBrowserTools: String(read.agent_browser_tools ?? defaults.agentBrowserTools).replaceAll(/\s+/g, ""),
@@ -99,7 +104,7 @@ function findBrowse(): string | undefined {
   return dirs.map((dir) => join(dir, "browse")).find(executable);
 }
 
-/** The office's mode from `.office.json`, which `office sync` writes beside `.settings.json`. */
+/** The office's mode from the package's `.office.json`, which `office sync` writes. */
 function readMode(): Mode {
   try {
     const read: { opencode?: string } = JSON.parse(readFileSync(join(packageDir, ".office.json"), "utf8"));
@@ -193,14 +198,39 @@ export default {
       }
     });
 
-    // Watch the directory so sync replacing the settings or mode file doesn't detach the watcher.
-    const watcher = watch(sourceDir === packageDir ? packageDir : dirname(dirname(packageDir)), (_event, file) => {
-      if (file === "current" || file === ".settings.json" || file === ".office.json") {
-        void ctx.skill.reload().catch(console.error);
-        void ctx.mcp.reload().catch(console.error);
-      }
+    const reload = () => {
+      void ctx.skill.reload().catch(console.error);
+      void ctx.mcp.reload().catch(console.error);
+    };
+
+    // A new package set (`current`) can bring new skill text or a new mode; a local package's mode
+    // is rewritten in its own folder, which reloads only when the mode changes. Either is watched
+    // as a directory, so a replaced file doesn't detach the watcher.
+    let mode = readMode();
+
+    const modeWatcher = watch(sourceDir === packageDir ? packageDir : dirname(dirname(packageDir)), (_event, file) => {
+      if (file !== "current" && file !== ".office.json") return;
+
+      const next = readMode();
+
+      if (file === ".office.json" && next === mode) return;
+      mode = next;
+      reload();
     });
 
-    return () => watcher.close();
+    // Only a change to this package's settings reloads, not another package's. Until a sync
+    // applies them, the session has the defaults.
+    let settingsWatcher: { close(): void } | undefined;
+
+    try {
+      settingsWatcher = watchAppliedSettings(officeRootOf(packageDir), packageName, reload, console.error);
+    } catch (error) {
+      console.error("browser plugin: its settings aren't watched:", error);
+    }
+
+    return () => {
+      modeWatcher.close();
+      settingsWatcher?.close();
+    };
   },
 };

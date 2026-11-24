@@ -1,12 +1,14 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { editorLinks } from "./package-imports.ts";
 import { git } from "./git.ts";
 import { officeEntries } from "../standard/opencode/ownership.ts";
 import { atomicWrite } from "./secrets.ts";
 import { type Office, OfficeError } from "./office.ts";
-import { changeText, failure, type Change } from "./change.ts";
+import { changeText, failure, isFailure, type Change } from "./change.ts";
 import * as v from "valibot";
+import { appliedSettingsPath } from "../sdk/applied-settings.ts";
 
 // A package's code gives the path: its type is checked here, not trusted.
 const excludable = v.pipe(v.string(), v.check(path => {
@@ -31,6 +33,15 @@ export const excludeStart = "# office sync: its plumbing, rewritten on each sync
 export const excludeEnd = "# end of office sync";
 
 /**
+ * The applied settings' folder, listed apart from `/.office/*` so it can be excluded on its own
+ * before the first whole block is written: sync publishes the snapshot before packages' sync
+ * functions, any of which can stop the rest.
+ */
+const runtimeLine = `/${dirname(appliedSettingsPath)}/`;
+
+const unlocated = "could not locate the office repository's info/exclude; Office's plumbing is not excluded from commits";
+
+/**
  * Keeps Office's plumbing out of commits without touching the owner's .gitignore: one block in the
  * repository's info/exclude naming every entry of `.office/` (packages, clones, staging and
  * generated state) but the `committed` folders packages declare, sorted, each written
@@ -48,7 +59,7 @@ export const excludeEnd = "# end of office sync";
  */
 export function excludePlumbing(office: Office, committed: readonly string[], excluded: readonly string[] = []): Change[] {
   const links = [...new Set([...officeEntries(office), ...excluded])].sort();
-  const wanted = ["/.office/*", ...[...committed].sort().map(folder => `!/${folder}`), `/${dirname(editorLinks)}/`, ...links.map(literal)];
+  const wanted = ["/.office/*", runtimeLine, ...[...committed].sort().map(folder => `!/${folder}`), `/${dirname(editorLinks)}/`, ...links.map(literal)];
 
   return editExcludeBlock(office, () => wanted);
 }
@@ -56,6 +67,79 @@ export function excludePlumbing(office: Office, committed: readonly string[], ex
 /** An office-relative path as an exclude line naming that one path: leading slash, pattern characters escaped. */
 function literal(path: string) {
   return `/${path.replaceAll(/[\\*?[]/g, "\\$&").replace(/ $/, "\\ ")}`;
+}
+
+/**
+ * Excludes the applied settings' folder at once, every other line kept, so a first sync that
+ * publishes them and then stops doesn't leave them to be committed. A sync that completes writes
+ * the same line in its whole block. Fails, for the caller not to publish, when Git still wouldn't
+ * ignore them.
+ */
+export function excludeAppliedSettings(office: Office): Change[] {
+  // Unlike the whole block's, an unlocated exclude file fails here: the caller must not publish.
+  const changes = editExcludeBlock(office, block => (block.includes(runtimeLine) ? [...block] : [...block, runtimeLine])).map(change => (change === unlocated ? failure(`FAILED ${unlocated}`) : change));
+
+  if (changes.some(isFailure)) return changes;
+  const committable = appliedSettingsCommittable(office);
+
+  return committable === undefined ? changes : [...changes, failure(`FAILED ${committable}`)];
+}
+
+/**
+ * Why Git would commit the applied settings, asked of Git with the office's real index, or nothing
+ * when it ignores them. An owner's rule can re-include what the block excludes, and an office
+ * inside another repository's worktree has no block of its own; an office in no worktree has
+ * nothing to commit. When Git can't say whether the office is in a worktree (missing, or failing),
+ * a `.git` in its folder or one above means it may be.
+ */
+function appliedSettingsCommittable(office: Office): string | undefined {
+  const ask = (...args: string[]) => spawnSync("git", args, { cwd: office.dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const unasked = (result: SpawnSyncReturns<string>) => `couldn't ask Git whether it ignores ${appliedSettingsPath}: ${result.error?.message ?? result.stderr.trim()}`;
+
+  if (!existsSync(join(office.dir, ".git"))) {
+    const inside = ask("rev-parse", "--is-inside-work-tree");
+
+    if (inside.status !== 0) {
+      const marker = gitMarkerAbove(office.dir);
+
+      return marker === undefined ? undefined : `${unasked(inside)}; ${marker} may make the office part of a Git worktree, so it could be committed. Make Git work there and sync again`;
+    }
+  }
+
+  const tracked = ask("ls-files", "-z", "--cached", "--", appliedSettingsPath);
+
+  if (tracked.status !== 0) return unasked(tracked);
+
+  if (tracked.stdout !== "") return `${appliedSettingsPath} is tracked in Git's index, so its changes would be committed; take it out of the index (git rm --cached ${appliedSettingsPath}) and sync again`;
+  const ignored = ask("check-ignore", "-q", "--", appliedSettingsPath);
+
+  if (ignored.status === 0) return undefined;
+
+  if (ignored.status !== 1) return unasked(ignored);
+
+  // Verbose also names a negating rule and exits 0 for it, so it only explains. The rule that
+  // re-includes the file can be one on a folder above it, which Git names only for that folder.
+  for (let path = appliedSettingsPath; path !== "."; path = dirname(path)) {
+    const [rule = ""] = ask("check-ignore", "-v", "-n", "--", path).stdout.split("\t");
+
+    if (rule !== "" && rule !== "::") return `Git doesn't ignore ${appliedSettingsPath}: ${rule} re-includes ${path}, so it would be committed; make Git ignore it and sync again`;
+  }
+
+  return `Git doesn't ignore ${appliedSettingsPath}, so it would be committed; make Git ignore it and sync again`;
+}
+
+/**
+ * The nearest `.git`, a repository folder or a linked worktree's file, in the folder or one above,
+ * found without Git. Walks the real folders, as Git does from its working folder.
+ */
+function gitMarkerAbove(dir: string): string | undefined {
+  for (let at = realpathSync(dir); ; at = dirname(at)) {
+    const marker = statSync(join(at, ".git"), { throwIfNoEntry: false });
+
+    if (marker?.isDirectory() || marker?.isFile()) return join(at, ".git");
+
+    if (dirname(at) === at) return undefined;
+  }
 }
 
 /**
@@ -88,7 +172,7 @@ function editExcludeBlock(office: Office, next: (block: readonly string[]) => st
     // In a worktree office .git is a file; Git names the exclude file the worktrees share.
     exclude = resolve(office.dir, git(["rev-parse", "--git-path", "info/exclude"], office.dir));
   } catch {
-    return ["could not locate the office repository's info/exclude; Office's plumbing is not excluded from commits"];
+    return [unlocated];
   }
 
   if (existsSync(exclude)) exclude = realpathSync(exclude);

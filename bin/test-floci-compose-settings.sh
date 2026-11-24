@@ -26,7 +26,8 @@ packages: [{name: aws-emulator, settings: {$1}}]
 EOF
 }
 applied=$base/state/packages/aws-emulator
-record=.office/packages/aws-emulator/.settings.json
+snapshot=.office/runtime/settings.json
+applied_settings() { "$exe" settings get aws-emulator --office "$base/work"; }
 observe() {
   "$exe" sync --packages >/dev/null
   if "$exe" up > "$base/up.log" 2>&1; then exit 1; fi
@@ -45,20 +46,21 @@ observe() {
 config ''
 observe 4566 4500 memory
 "$exe" references list | grep '^floci.*package aws-emulator$'
-config 'port: "14566", ui_port: 14500, storage: custom-mode, source_reference: false'
-observe 14566 14500 custom-mode
-jq -e '.port=="14566" and .ui_port==14500 and .storage=="custom-mode"' "$record"
+config 'port: 14566, ui_port: 14500, storage: hybrid, source_reference: false'
+observe 14566 14500 hybrid
+applied_settings | jq -e '.port==14566 and .ui_port==14500 and .storage=="hybrid"'
+if [ -e .office/packages/aws-emulator/.settings.json ]; then exit 1; fi
 "$exe" references list > "$base/list"
 grep '^manual.*office.yaml' "$base/list"
 if grep -q '^floci' "$base/list"; then exit 1; fi
-cp "$record" "$base/good"
+cp "$snapshot" "$base/good"
 cp "$applied/settings.env" "$base/env.good"
-for invalid in 'port: []' 'ui_port: {}' 'storage: null' 'storage: "can'\''t"' 'source_reference: "true"'; do
+for invalid in 'port: "14566"' 'storage: custom-mode' 'port: []' 'ui_port: {}' 'storage: null' 'storage: "can'\''t"' 'source_reference: "true"'; do
   config "$invalid"
   if "$exe" sync --packages > "$base/log" 2>&1; then exit 1; fi
   grep "FAILED package aws-emulator:.*${invalid%%:*}" "$base/log"
   if "$exe" up > "$base/up.log" 2>&1; then exit 1; fi
-  cmp "$base/good" "$record"
+  cmp "$base/good" "$snapshot"
   cmp "$base/env.good" "$applied/settings.env"
 done
 config 'storage: persistent'
@@ -66,9 +68,9 @@ observe 4566 4500 persistent
 "$exe" references list | grep '^floci.*package aws-emulator$'
 
 # Before the next sync, up uses the current selection; plugin delivery stays published.
-config 'port: "24566", storage: hybrid'
+config 'port: 24566, storage: wal'
 if "$exe" up > "$base/up.log" 2>&1; then exit 1; fi
 grep -q 'offline Docker stop' "$base/up.log"
 OFFICE_NAME=exercise "$docker" compose -p example -f "$applied/include.yaml" config --format json |
-  jq -e '.services.floci.ports[0].published=="24566" and .services.floci.environment.FLOCI_STORAGE_MODE=="hybrid"'
-jq -e '.port==4566 and .storage=="persistent"' "$record"
+  jq -e '.services.floci.ports[0].published=="24566" and .services.floci.environment.FLOCI_STORAGE_MODE=="wal"'
+applied_settings | jq -e '.port==4566 and .storage=="persistent"'
