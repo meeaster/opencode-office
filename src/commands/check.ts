@@ -1,6 +1,6 @@
 // `office check`: drift between office.yaml, the tool and the folders, the packages and their
 // panels on the desktop app's machine, then, when this office's
-// containers are running, whether Executor is ready, each desk loads what it should on the OpenCode
+// containers are running, whether Executor is ready, the root loads what it should on the OpenCode
 // server of the office's mode, the container runs the host's `office` and Supercronic runs the
 // cron package's jobs as they are now (packages' own checks report their host timers), and in
 // container mode the image refresh timer is
@@ -19,11 +19,12 @@ import { hasSystemd } from "../systemd.ts";
 import { officeInfo, packageHost } from "../lifecycle-inputs.ts";
 import { ownedUnits, packageUnits, refreshOwner, refreshTimer, timerStatus } from "../timers.ts";
 import { configFile, installedPanelNames, locate, panelDir, panelId, panelState, readPanelRecord, removalNote } from "../desktop.ts";
+import { declaredAccess, type DeclaredAccess } from "../package-access.ts";
 import { ghConfigDir, ghLogin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
 import { hookNote, hookState } from "../hook.ts";
 import { planServer, serverReport } from "../host-server.ts";
 import { officeCommands, officePins, officeTool, officeToolNamed, required } from "../host-tools.ts";
-import { clones } from "../layout.ts";
+import { clones, unignoredFolders } from "../layout.ts";
 import { cloneTarget, pluginClones, pluginLinks, restartNotice, withPluginPlan } from "../../standard/opencode/delivery.ts";
 import { cloneFolder, entry as entryAt } from "../../standard/opencode/ownership.ts";
 import { contributedAssets } from "../../standard/opencode/assets.ts";
@@ -73,29 +74,7 @@ function context(office: Office, gathered: Gathered): Context {
 
 async function drift(office: Office, { loaded, claims, references, applied: appliedSettings }: Context): Promise<string[]> {
   const problems: string[] = [];
-  const declared = new Set(office.desks.map((desk) => desk.name));
-
-  problems.push(...claudeFiles(office.dir));
-
-  for (const desk of office.desks) {
-    const app = `executor-apps/${desk.name}`;
-
-    for (const path of ["AGENTS.md", ".opencode/opencode.jsonc", ...(desk.app ? [`${app}/index.ts`] : [])]) {
-      if (!existsSync(join(office.dir, desk.name, path))) problems.push(`desk ${desk.name}: ${desk.name}/${path} is missing`);
-    }
-
-    // `office apps deploy` deploys every app folder, so a leftover one would still go out.
-    if (!desk.app && existsSync(join(office.dir, desk.name, app))) {
-      problems.push(`desk ${desk.name}: has app: false but ${desk.name}/${app}/ exists; delete it, and the ${desk.name} app in Executor if it was deployed`);
-    }
-  }
-
-  // A top-level folder with its own .opencode/ looks like a desk office.yaml doesn't declare.
-  for (const entry of readdirSync(office.dir, { withFileTypes: true })) {
-    if (entry.isDirectory() && !entry.name.startsWith(".") && !declared.has(entry.name) && existsSync(join(office.dir, entry.name, ".opencode"))) {
-      problems.push(`${entry.name}/ has a .opencode/ folder but is not a desk in office.yaml`);
-    }
-  }
+  problems.push(...claudeFiles(office.dir), ...unignoredFolders(office.dir));
 
   // The applied file is the plugin's and refresh's input, not check's: an invalid one is its own problem.
   const applied = appliedReferences(office.dir, office);
@@ -594,7 +573,7 @@ function officeToolChecks(office: Office, report: Report): void {
 
   if (found.length > 0) report(true, "office tools", `${found.join(", ")}: the versions ${packagesFile} pins, as mise installed them`);
 
-  const files = ["mise.toml", ...office.desks.map((desk) => join(desk.name, "mise.toml")), machineFile];
+  const files = ["mise.toml", machineFile];
 
   const duplicates = files.flatMap((file) => {
     const path = join(office.dir, file);
@@ -650,17 +629,18 @@ function spawnChecks(office: Office, report: Report): void {
 async function runtime(office: Office, report: Report, run: Context, stage?: Stage): Promise<RootAnswer | undefined> {
   stage?.detail("containers and Executor");
   const running = servicesRunning(office);
-  let root: RootAnswer | undefined;
+  // Only a shared gh login has hosts to check, the ones packages' declared repositories are on included.
+  const declared = office.git?.credentials === "gh" ? await accessChecks(office, report) : [];
 
   if (!running.includes("opencode") && !running.includes("executor")) {
     report(true, "containers", `not running (start them with office up)`);
-    gitChecks(office, report, false, run.references);
+    gitChecks(office, report, false, run.references, declared);
 
     return undefined;
   }
 
   report(office.opencode.mode === "container" || !running.includes("opencode"), "containers", `running: ${running.join(", ")}${office.opencode.mode === "host" ? ` (OpenCode on the host at ${office.opencode.url})` : ""}`);
-  gitChecks(office, report, office.opencode.mode === "container" && running.includes("opencode"), run.references);
+  gitChecks(office, report, office.opencode.mode === "container" && running.includes("opencode"), run.references, declared);
 
   if (office.opencode.mode === "container" && running.includes("opencode")) officeVersions(office, report);
 
@@ -680,72 +660,8 @@ async function runtime(office: Office, report: Report, run: Context, stage?: Sta
   const password = readEnvFile(join(office.state, "secrets.env")).OPENCODE_PASSWORD;
   const auth = { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}` };
   const opencode = office.opencode.url ?? `http://127.0.0.1:${port.opencode}`;
-  const base = office.opencode.directory;
   const hasToken = readEnvFile(executorEnvFile(office)).EXECUTOR_TOKEN !== undefined;
-
-  for (const desk of [undefined, ...office.desks.map((entry) => entry.name)]) {
-    const where = desk ?? "root";
-    stage?.detail(`${where}: agents, skills, plugins and MCP`);
-    const headers = { ...auth, "x-opencode-directory": desk === undefined ? base : `${base}/${desk}` };
-
-    try {
-      const agents = await settle(() => getJson<Listing<{ id: string }>>(`${opencode}/api/agent`, headers), (answer) => answer.data.length > 0);
-
-      report(agents.data.length > 0, `${where}: agents`, agents.data.map((agent) => agent.id).join(", "));
-
-      // Which skills load is the runtime's and its plugins' business; the root's list feeds the outside section.
-      const skills = desk === undefined ? (await getJson<Listing<{ id: string; path: string }>>(`${opencode}/api/skill`, headers)).data : [];
-
-      // The root's plugins, which every desk loads: each package's, the office package's
-      // included. A folder still loading lists none of them yet.
-      // Declared clones count once they are linked; a running server only loads a link it saw appear.
-      const linkedClones = office.plugins.filter((plugin) => {
-        const link = entryAt(office, plugin.name);
-
-        return link?.office === true && link.target === cloneTarget(plugin.name) && existsSync(join(office.dir, cloneFolder, plugin.name, ".git"));
-      });
-
-      const plugins = [...run.loaded.plugins.keys(), ...linkedClones.map((plugin) => plugin.name)];
-      const folder = `${base}/.opencode/plugins/`;
-
-      // Each plugin OpenCode loaded from the root's .opencode/plugins/, by folder name.
-      const byName = (answer: Listing<LoadedPlugin>) =>
-        new Map(answer.data.flatMap(({ source, state }) => (source.type === "local" && source.path?.startsWith(folder) ? [[source.path.slice(folder.length), state] as const] : [])));
-
-      const pluginAnswer = await settle(() => getJson<Listing<LoadedPlugin>>(`${opencode}/api/plugin`, headers), (answer) => plugins.every((name) => byName(answer).has(name)));
-      const states = byName(pluginAnswer);
-
-      // What loads from outside is the same in every desk, so the root's answer stands for all.
-      if (desk === undefined) root = { skills, plugins: pluginAnswer.data };
-
-      const pluginProblems = plugins.flatMap((name) => {
-        const state = states.get(name);
-
-        return state === undefined ? [`${name} not loaded`] : state.status === "active" ? [] : [`${name} failed: ${state.error ?? "no error given"}`];
-      });
-
-      const unloaded = plugins.filter((name) => !states.has(name));
-      const hint = unloaded.length === 0 ? "" : `; if office sync just linked or moved ${unloaded.join(", ")}, restart OpenCode: a running server keeps loading a plugin from where it first found it`;
-
-      report(pluginProblems.length === 0, `${where}: plugins`, pluginProblems.length === 0 ? `${plugins.join(", ")} active` : pluginProblems.join("; ") + hint);
-
-      const mcp = await settle(
-        () => getJson<Listing<McpServer>>(`${opencode}/api/mcp`, headers),
-        (answer) => !hasToken || answer.data.some((entry) => entry.name === "office-executor" && entry.status.status === "connected"),
-      );
-
-      const executor = mcp.data.find((entry) => entry.name === "office-executor");
-      const status = executor?.status.status ?? "missing";
-
-      report(
-        status === "connected" || !hasToken,
-        `${where}: office-executor MCP`,
-        hasToken ? `${status}${executor?.status.error === undefined ? "" : ` ${executor.status.error}`}` : `no token yet: office setup saves one in ${executorEnvFile(office)}`,
-      );
-    } catch (error) {
-      report(false, `${where}: OpenCode`, String(error));
-    }
-  }
+  const root = await rootSession(office, report, run, { auth, opencode, hasToken }, stage);
 
   await opencodeVersion(office, report, auth, opencode);
 
@@ -754,6 +670,78 @@ async function runtime(office: Office, report: Report, run: Context, stage?: Sta
   stage?.detail("services and timers");
   hostServiceStatus(office, report, run.gathered.inventory);
   scheduling(office, report, running, run);
+
+  return root;
+}
+
+/**
+ * What the OpenCode server loads at the office root: agents, plugins and the office-executor MCP.
+ * Returns the root's skills and plugins once the server listed them.
+ */
+async function rootSession(office: Office, report: Report, run: Context, { auth, opencode, hasToken }: { auth: { authorization: string }; opencode: string; hasToken: boolean }, stage?: Stage): Promise<RootAnswer | undefined> {
+  const base = office.opencode.directory;
+  const headers = { ...auth, "x-opencode-directory": base };
+  let root: RootAnswer | undefined;
+
+  stage?.detail("root: agents, skills, plugins and MCP");
+
+  try {
+    const agents = await settle(() => getJson<Listing<{ id: string }>>(`${opencode}/api/agent`, headers), (answer) => answer.data.length > 0);
+
+    report(agents.data.length > 0, "root: agents", agents.data.map((agent) => agent.id).join(", "));
+
+    // Which skills load is the runtime's and its plugins' business; the root's list feeds the outside section.
+    const skills = (await getJson<Listing<{ id: string; path: string }>>(`${opencode}/api/skill`, headers)).data;
+
+    // The root's plugins, which every folder of the office loads: each package's, the office package's
+    // included. A folder still loading lists none of them yet.
+    // Declared clones count once they are linked; a running server only loads a link it saw appear.
+    const linkedClones = office.plugins.filter((plugin) => {
+      const link = entryAt(office, plugin.name);
+
+      return link?.office === true && link.target === cloneTarget(plugin.name) && existsSync(join(office.dir, cloneFolder, plugin.name, ".git"));
+    });
+
+    const plugins = [...run.loaded.plugins.keys(), ...linkedClones.map((plugin) => plugin.name)];
+    const folder = `${base}/.opencode/plugins/`;
+
+    // Each plugin OpenCode loaded from the root's .opencode/plugins/, by folder name.
+    const byName = (answer: Listing<LoadedPlugin>) =>
+      new Map(answer.data.flatMap(({ source, state }) => (source.type === "local" && source.path?.startsWith(folder) ? [[source.path.slice(folder.length), state] as const] : [])));
+
+    const pluginAnswer = await settle(() => getJson<Listing<LoadedPlugin>>(`${opencode}/api/plugin`, headers), (answer) => plugins.every((name) => byName(answer).has(name)));
+    const states = byName(pluginAnswer);
+
+    // What loads from outside is the same in every folder, so the root's answer stands for all.
+    root = { skills, plugins: pluginAnswer.data };
+
+    const pluginProblems = plugins.flatMap((name) => {
+      const state = states.get(name);
+
+      return state === undefined ? [`${name} not loaded`] : state.status === "active" ? [] : [`${name} failed: ${state.error ?? "no error given"}`];
+    });
+
+    const unloaded = plugins.filter((name) => !states.has(name));
+    const hint = unloaded.length === 0 ? "" : `; if office sync just linked or moved ${unloaded.join(", ")}, restart OpenCode: a running server keeps loading a plugin from where it first found it`;
+
+    report(pluginProblems.length === 0, "root: plugins", pluginProblems.length === 0 ? `${plugins.join(", ")} active` : pluginProblems.join("; ") + hint);
+
+    const mcp = await settle(
+      () => getJson<Listing<McpServer>>(`${opencode}/api/mcp`, headers),
+      (answer) => !hasToken || answer.data.some((entry) => entry.name === "office-executor" && entry.status.status === "connected"),
+    );
+
+    const executor = mcp.data.find((entry) => entry.name === "office-executor");
+    const status = executor?.status.status ?? "missing";
+
+    report(
+      status === "connected" || !hasToken,
+      "root: office-executor MCP",
+      hasToken ? `${status}${executor?.status.error === undefined ? "" : ` ${executor.status.error}`}` : `no token yet: office setup saves one in ${executorEnvFile(office)}`,
+    );
+  } catch (error) {
+    report(false, "root: OpenCode", String(error));
+  }
 
   return root;
 }
@@ -948,11 +936,26 @@ async function appFrameworks(office: Office, report: Report, installed: Installe
   }
 }
 
+/** The repositories packages declare, each declaration that fails a failed check. */
+async function accessChecks(office: Office, report: Report): Promise<DeclaredAccess[]> {
+  try {
+    const { sources, problems } = await declaredAccess(office);
+
+    for (const problem of problems) report(false, "package access", problem);
+
+    return sources;
+  } catch (error) {
+    report(false, "package access", error instanceof Error ? error.message : String(error));
+
+    return [];
+  }
+}
+
 /**
  * The office's commit identity, and when office.yaml shares the host's gh login, whether it is
  * ready: on the host, and in a running opencode container. An office without it isn't failed.
  */
-function gitChecks(office: Office, report: Report, running: boolean, references: readonly Repository[]): void {
+function gitChecks(office: Office, report: Report, running: boolean, references: readonly Repository[], declared: readonly DeclaredAccess[]): void {
   report(
     true,
     "git identity",
@@ -980,7 +983,7 @@ function gitChecks(office: Office, report: Report, running: boolean, references:
   }
 
   const container = office.opencode.mode === "container";
-  const hosts = githubHosts(office, references);
+  const hosts = githubHosts(office, references, declared);
 
   for (const host of hosts) {
     const login = ghLogin(gh, host);

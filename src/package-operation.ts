@@ -40,7 +40,8 @@ type Admission = {
  * `stopped` is a package's sync function throwing: a full sync runs none of its later steps.
  * `committed`, the folders packages declare committed, and `excluded`, the paths their sync
  * functions exclude, are set only when the set was applied with every package loaded and no sync
- * function threw; without them the exclude block is left as it is.
+ * function threw; without them the exclude block is left as it is, and a full sync runs no
+ * packages' full-sync work.
  */
 const outcomeSchema = v.object({
   published: v.boolean(),
@@ -99,6 +100,31 @@ async function run(args: string[], descriptors: (number | "pipe")[]) {
   process.once("SIGINT", stop);
 
   try { return { status: await child.exited, result: await result }; } finally { process.off("SIGINT", stop); }
+}
+
+/** The selection a generation is published with, as its selection.json holds it. */
+export function selectionText(office: Pick<Office, "packages">) {
+  return JSON.stringify(office.packages.map(({ name, settings, source }) => ({ name, settings, ...source })));
+}
+
+/** Runs an evaluator that binds to no package set, such as the one running packages' access declarations; returns its exit status. */
+export async function runEvaluator(args: string[]) {
+  return (await run(args, [])).status;
+}
+
+/**
+ * Starts a reader bound to the pinned generation `active` running `args`, with a pipe as its
+ * result descriptor for the caller to read while it runs; Ctrl+C stops it too.
+ */
+export function startReader(dir: string, active: { name: string; fd: number }, args: string[]) {
+  const child = Bun.spawn([...program(), "--package-reader", dir, active.name, ...args], { env: evaluatorEnv(), stdio: ["inherit", "inherit", "inherit", active.fd, "pipe"] });
+  const pipe = child.stdio[resultDescriptor];
+
+  if (pipe === undefined || pipe === null) throw new OfficeError("the package reader has no result pipe");
+  const stop = () => child.kill("SIGINT");
+  process.once("SIGINT", stop);
+
+  return { pipe, exited: child.exited.finally(() => process.off("SIGINT", stop)) };
 }
 
 /**
@@ -339,7 +365,7 @@ export async function publishPackages(office: Office, exclude: boolean, update?:
     writePackageLinks(folder, selection.packages, rejected);
     writeSdk(folder);
     writeFileSync(join(folder, "unavailable.json"), JSON.stringify(rejected));
-    writeFileSync(join(folder, "selection.json"), JSON.stringify(office.packages.map(({ name, settings, source }) => ({ name, settings, ...source }))));
+    writeFileSync(join(folder, "selection.json"), selectionText(office));
     const request: Admission = { office, transaction, yaml, packages: Object.fromEntries(packages), validate, rejected, exclude, tracked: !!update, apply: update?.apply ?? true };
     writeFileSync(join(temporary, "input"), JSON.stringify(request));
     const { status: code } = await run(["--package-admission", temporary], [reservation.fd]);

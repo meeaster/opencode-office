@@ -20,7 +20,7 @@ When the docs run out, read the OpenCode source ([anomalyco/opencode](https://gi
 
 ## How a package becomes a plugin
 
-- **Loading.** `office sync` links `plugin/` as `.opencode/plugins/<name>`, which OpenCode loads for the root and every desk. The entry is `server.ts`, else `index.ts` or `index.js`, or what a `package.json` there exports. An edit to a file the entry imports inside `plugin/` reloads it.
+- **Loading.** `office sync` links `plugin/` as `.opencode/plugins/<name>`, which OpenCode loads for the root and every folder below it. The entry is `server.ts`, else `index.ts` or `index.js`, or what a `package.json` there exports. An edit to a file the entry imports inside `plugin/` reloads it.
 - **Imports.** Nothing is installed beside the plugin. Import only Node's and Bun's built-ins, `@opencode/plugin` and `effect`, which OpenCode provides; `import type` anything, since types go when it loads.
 - **Files beside `plugin/`.** OpenCode resolves relative imports from the link, so `../anything` fails. Find the package folder with `dirname(realpathSync(dirname(fileURLToPath(import.meta.url))))`, the office by walking up to `office.yaml`. Read the package's settings with `readAppliedSettings(officeRootOf(packageDir), name)` from `@office/sdk/applied-settings` inside a hook or transform, or keep them with `watchAppliedSettings` (its `settings` are undefined until a sync applies the package) and reload when sync applies new ones; the plugin then ships as a bundle, since nothing is installed beside it. Read `.office.json`, the office's declared mode, from the package folder the same way when behaviour depends on it.
 - **What it registers**, each from `setup(ctx)`:

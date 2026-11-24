@@ -1,4 +1,4 @@
-// `office init <dir>`: a new office from the template, with one example desk and the built-in
+// `office init <dir>`: a new office from the template, with the built-in
 // knowledge and browser packages, as a git repository on branch main. Its office.yaml starts at the tool's
 // versions, which office.lock pins.
 import { changeText, isFailure } from "../change.ts";
@@ -13,7 +13,7 @@ import { copyTemplate, sync } from "./sync.ts";
 
 /** What `office init` prints last: what a new office needs before it runs. */
 export function nextSteps(dir: string): string {
-  return `Next: review ${join(dir, "office.yaml")} (rename or replace the example desk, choose container or host mode, add a git identity),
+  return `Next: review ${join(dir, "office.yaml")} (choose container or host mode, add a git identity, select packages such as repos),
 then run office setup in ${dir}.`;
 }
 
@@ -35,7 +35,7 @@ export async function init(target: string, name: string | undefined) {
   writeLock(dir, defaultPins);
 
   // Installs the built-in office, knowledge and browser packages from this executable, writes the
-  // browser package's mise tools, links the plugins they register and scaffolds the example desk.
+  // browser package's mise tools and links the plugins they register.
   const changes = await sync(loadOffice(dir));
   const failures = changes.filter(isFailure).map(changeText);
 

@@ -1,0 +1,12 @@
+{
+  // Development types for the example: Office reads none of this.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@office/sdk": ["../../sdk/index.ts"],
+      "@office/sdk/applied-settings": ["../../sdk/applied-settings.ts"]
+    }
+  },
+  "include": ["packages"],
+  "exclude": []
+}

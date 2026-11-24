@@ -1,10 +1,11 @@
-// What every office needs from OpenCode, for every session at the root or in a desk:
+// What every office needs from OpenCode, for every session in any folder of the office:
 //
 // - the office's guidance for the session's folder, from instructions.ts, which `office
 //   instructions [folder]` also runs. It is attached as a session instruction entry, refreshed on
 //   each prompt, so it follows office.yaml and reaches every provider (claude-agent included);
 // - every skill in this package's skills/ directory;
 // - the `office-executor` MCP server, the office's Executor;
+// - the text the office's packages add to every session (`office instructions --packages`), once per session;
 // - the `compact_session` tool, from compact-session.ts, which compacts the session calling it;
 // - none of the skills in the folders the office's `ignore_claude_synced_skills` and `ignore_skill_folders` settings name.
 //
@@ -19,6 +20,7 @@ import { type AppliedSettings, officeRootOf, watchAppliedSettings } from "@offic
 import { compactSessionTool } from "./compact-session.ts";
 import { expandFolder, ignoredFolders, inFolders } from "./ignored-skills.ts";
 import { findOffice, officeInstructions } from "./instructions.ts";
+import { packageText } from "./package-text.ts";
 import { tryFileLock } from "../../../src/file-lock.ts";
 
 type Skill = { id: string; name: string; description: string; path: string; content: string };
@@ -174,6 +176,17 @@ async function register(ctx: Context) {
 
   // A prompt never starts with one still listed.
   await ctx.session.hook("prompt", removeIgnored);
+
+  // What packages add to every session, asked once per session as it starts.
+  const shared = new Set<string>();
+
+  await ctx.session.hook("prompt", async ({ sessionID }) => {
+    if (shared.has(sessionID)) return;
+    shared.add(sessionID);
+    const text = await packageText(office);
+
+    if (text !== "") await ctx.session.instructions.entry.put({ sessionID, key: "packages", value: text });
+  });
 
   // Read on each load of the MCP servers. Without an address there is nothing to connect to
   // yet; `office check` says what is missing.

@@ -6,6 +6,7 @@
     ".": "./handles.ts"
   },
   "office": {
-    "definition": "./office.ts"
+    "definition": "./office.ts",
+    "access": "./access.ts"
   }
 }

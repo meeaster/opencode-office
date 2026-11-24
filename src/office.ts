@@ -9,7 +9,7 @@ import { dirname, join, resolve } from "node:path";
 import * as v from "valibot";
 import { isMap, isNode, isScalar, isSeq, parse, parseDocument, stringify } from "yaml";
 
-import { check, type OfficeConfig, officeSchema, type Parsed, type ResolvedTools, resolveTools, scalarSetting, type SettingValue } from "./schema.ts";
+import { check, type OfficeConfig, officeSchema, removedDesks, type Parsed, type ResolvedTools, resolveTools, scalarSetting, type SettingValue } from "./schema.ts";
 
 /** Where the office is mounted in the `opencode` container, and so the folder sessions start in. */
 export const containerOfficeDir = "/home/office/workspace";
@@ -17,8 +17,6 @@ export const containerOfficeDir = "/home/office/workspace";
 export class OfficeError extends Error {}
 
 export type Repository = OfficeConfig["references"][number];
-
-export type Desk = { name: string } & OfficeConfig["desks"][string];
 
 export type PackageEntry = OfficeConfig["packages"][number];
 
@@ -36,6 +34,8 @@ export type Office = {
   state: string;
   opencode: OpencodeMode;
   catalogApps: string[];
+  /** The Executor app, by slug, whose `notifications.send` gets the office's own job notifications (`executor.notifications`). */
+  notificationsApp?: string;
   /** The commit identity and HTTPS credentials office.yaml sets; undefined leaves git's own config. */
   git: OfficeConfig["git"];
   secrets?: OfficeConfig["secrets"];
@@ -44,7 +44,6 @@ export type Office = {
   /** Whether package downloads go through Socket Firewall: on unless sfw's `enabled` under `tools` is false. */
   socketFirewall: boolean;
   references: Repository[];
-  desks: Desk[];
   plugins: { name: string; url: string; ref?: string }[];
   packages: PackageEntry[];
 };
@@ -102,6 +101,25 @@ export function readOfficeFields<S extends v.GenericSchema>(dir: string, schema:
   return result.value;
 }
 
+/** Whether office.yaml still declares desks, read without its schema; false when it doesn't read. */
+export function declaresDesks(dir: string): boolean {
+  try {
+    const document: unknown = parse(readFileSync(join(dir, "office.yaml"), "utf8"), { stringKeys: true, logLevel: "silent" });
+
+    return typeof document === "object" && document !== null && !Array.isArray(document) && "desks" in document;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Stops with the migration diagnostic, as reading office.yaml does, when it still declares desks:
+ * for a caller about to change something (repair discovery links, say) before it reads the office.
+ */
+export function refuseDesks(dir: string) {
+  if (declaresDesks(dir)) throw new OfficeError(`office.yaml is not valid:\n  desks: ${removedDesks}`);
+}
+
 export function readConfig(dir: string): OfficeConfig {
   return readOfficeFields(dir, officeSchema);
 }
@@ -119,12 +137,12 @@ export function loadOffice(dir: string, config = readConfig(dir)): Office {
     state: config.state === undefined ? join(homedir(), ".local/share/office", config.name) : resolve(dir, expandHome(config.state)),
     opencode: opencodeMode(config.opencode, dir),
     catalogApps: config.executor?.catalog_apps ?? [],
+    notificationsApp: config.executor?.notifications,
     git: config.git,
     secrets: config.secrets,
     tools,
     socketFirewall: tools.socketFirewall,
     references: config.references,
-    desks: Object.entries(config.desks).map(([deskName, desk]) => ({ name: deskName, ...desk })),
     plugins: config.plugins.map((plugin) => ({ name: plugin.name, url: plugin.repo, ref: plugin.ref })),
     packages: config.packages,
   };

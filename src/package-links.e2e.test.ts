@@ -115,10 +115,10 @@ test("the editor link stays out of Git without a node_modules rule, and check re
   expect(check).not.toMatch(/^FAIL\s+package/m);
   expect(check).not.toContain("node_modules");
 
-  // The template's tsconfig.json follows the same imports through the editor link, and leaves desks out.
+  // The template's tsconfig.json follows the same imports through the editor link, and leaves working repositories out.
   // A local package's typed definition: Package from @office/sdk, a handle from another package.
   write(join(dir, "packages/consumer/typed.ts"), 'import { Package } from "@office/sdk"; import { repositories } from "@office/references/repositories"; import { value } from "@office/provider";\nexport default Package.define({ settings: { type: "object", additionalProperties: false, properties: { url: { type: "string", default: "u" } } }, setup(ctx) { ctx.add(repositories, { name: value, url: ctx.settings.url }); } });\n');
-  write(join(dir, "example/repos/demo/broken.ts"), 'const broken: number = "not a number";');
+  write(join(dir, "repos/example/broken.ts"), 'const broken: number = "not a number";');
   const checkout = dirname(import.meta.dir);
   // With the template's own strict settings, nothing relaxed.
   const tsc = () => Bun.spawnSync([join(checkout, "node_modules/.bin/tsc"), "--noEmit", "-p", join(dir, "tsconfig.json")], { cwd: dir });

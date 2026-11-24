@@ -265,8 +265,6 @@ test("help names packages update and no longer skills.copied, and office.yaml re
   expect(() => loadOffice(join(dir, "office"))).toThrow("track needs repo, path and ref");
   write(join(dir, "office/office.yaml"), "name: t\nskills:\n  enabled: [a]\n");
   expect(() => loadOffice(join(dir, "office"))).toThrow("skills");
-  write(join(dir, "office/office.yaml"), "name: t\ndesks:\n  work:\n    skills: [a]\n");
-  expect(() => loadOffice(join(dir, "office"))).toThrow("desks.work.skills");
 });
 
 test.each([true, false])("packages update holds back a package that declares a dependency on a rejected one (declared: %p)", async (declared) => {

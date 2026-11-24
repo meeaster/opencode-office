@@ -5,7 +5,7 @@ description: Search past OpenCode sessions for a discussion, decision, or recurr
 
 # OpenCode sessions
 
-Run `opencode debug paths` **where the server that held the conversation runs**. Use its `db` path: the host and the office container can have different histories. `opencode session list` is scoped to the current project; a conversation about a repo may have started at a desk or under its old checkout path.
+Run `opencode debug paths` **where the server that held the conversation runs**. Use its `db` path: the host and the office container can have different histories. `opencode session list` is scoped to the current project; a conversation about a repo may have started at the office root or under its old checkout path.
 
 Open the database read-only. This example uses Python's standard library (no `opencode db` command or `sqlite3` executable needed). Pass a repo name or distinctive phrase and the reported database path:
 

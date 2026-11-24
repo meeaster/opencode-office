@@ -7,7 +7,7 @@ description: Create or extend an office package in packages/ and verify what it 
 
 Build in the office that needs the capability. Local sources live under `packages/<name>/` beside `office.yaml`; `.office/packages/` holds installed copies that sync restores. Choose a name distinct from a built-in and from the reserved names `machine`, `mise`, `config` and `sdk`.
 
-## A package that teaches a desk skill
+## A package that teaches a skill
 
 For example, an office that wants agents to prepare release notes could select a package called `releases`:
 
@@ -20,9 +20,9 @@ packages/releases/
 ```
 
 1. Write `package.json` with `{ "name": "@office/releases", "description": "Draft release notes from merged changes", "private": true, "exports": {}, "office": { "definition": "./office.ts", "dependencies": ["@office/opencode"] } }`, then `office.ts` with `import { opencode } from "@office/opencode"; import { Package } from "@office/sdk"; export default Package.define({ setup(ctx) { opencode.plugins.add(ctx, { directory: "plugin" }); } });`: OpenCode loads only a plugin folder the package registers, never one found by its name. The name and description live only in `package.json`. Office loads the file `office.definition` names (a module made with `Package.define`, or a `package.yaml`), including during `check`; use relative imports for private modules. `@office/sdk` is always available: never list it in `office.dependencies`. To share a module, list it in `exports` (`"./contract": "./contract.ts"`); consumers import `@office/releases/contract` at module scope and list `"@office/releases"` in their own `office.dependencies`, type-only imports included. A definition imports only `@office/…` packages, Node's built-ins and its own files. The package name is what the office selects; `draft-release-notes` is what the agent invokes.
-2. Write the skill with `name: draft-release-notes`, a one-line `description` saying when to use it, and the instructions. Use the `opencode-plugin` skill to implement its registration: from `setup(ctx)`, register a `ctx.skill.transform` that reads the skill and adds its ID, name, description, absolute `SKILL.md` path and body. Resolve the package directory from the **real** plugin directory because OpenCode loads it through a symlink. This makes references beside `SKILL.md` work from any desk.
-3. Append `- name: releases` to `packages:` in `office.yaml` and run `office sync` from the office. Sync links the registered plugin for all desks; no skill setting or OpenCode config entry is needed. (To offer a skill folder the office enables by ID instead, without a plugin, register it with `skills.add(ctx, { directory })` from `@office/skills`.)
-4. Run `office check`, then use the capability from a fresh desk session: load `draft-release-notes` and try it on a merged change. A file on disk proves neither registration nor usable instructions. If the runtime is unavailable, report which part you actually verified.
+2. Write the skill with `name: draft-release-notes`, a one-line `description` saying when to use it, and the instructions. Use the `opencode-plugin` skill to implement its registration: from `setup(ctx)`, register a `ctx.skill.transform` that reads the skill and adds its ID, name, description, absolute `SKILL.md` path and body. Resolve the package directory from the **real** plugin directory because OpenCode loads it through a symlink. This makes references beside `SKILL.md` work from any folder of the office.
+3. Append `- name: releases` to `packages:` in `office.yaml` and run `office sync` from the office. Sync links the registered plugin for every session in the office; no skill setting or OpenCode config entry is needed. (To offer a skill folder the office enables by ID instead, without a plugin, register it with `skills.add(ctx, { directory })` from `@office/skills`.)
+4. Run `office check`, then use the capability from a fresh session in the office: load `draft-release-notes` and try it on a merged change. A file on disk proves neither registration nor usable instructions. If the runtime is unavailable, report which part you actually verified.
 
 ## Choose files by who owns them
 

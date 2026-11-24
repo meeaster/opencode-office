@@ -17,6 +17,8 @@ export type PackageJson = {
   dependencies: string[];
   /** Each optional provider it integrates with, by name without the scope, and the module, inside the package, that office loads only while the integration is active. */
   integrations: ReadonlyMap<string, string>;
+  /** The module, inside the package, declaring the repositories it reads and pushes to (`office.access`), which setup runs before any package set exists. */
+  access?: string;
   exports: unknown;
 };
 
@@ -32,6 +34,7 @@ const schema = v.looseObject({
     definition: v.string(definitionMessage),
     dependencies: v.optional(v.array(dependency, "must be a list of @office/<name> strings")),
     integrations: v.optional(v.pipe(ownEntries("must map @office/<name> strings to module paths"), v.map(dependency, v.pipe(v.string("must map @office/<name> to a module path"), v.nonEmpty("must map @office/<name> to a module path"))))),
+    access: v.optional(v.pipe(v.string("must give the access declaration's path inside the package"), v.nonEmpty("must give the access declaration's path inside the package"))),
   }, definitionMessage),
 });
 
@@ -149,6 +152,17 @@ function readChecked(dir: string, name: string, kind: "local" | "built-in" | "re
   const value: PackageJson = { definition: definition.path, dependencies, integrations, exports };
 
   if (description !== undefined) value.description = description;
+
+  // Run on its own before the package set exists, so it can't be the definition or an integration module.
+  if (office.access !== undefined) {
+    const access = packageFile(dir, office.access);
+
+    if (!access.ok) return fail(`office.access ${access.problem}`);
+    const owner = claimed.get(access.real);
+
+    if (owner !== undefined) return fail(`office.access: ${office.access} is the same file as ${owner}; give the access declaration a module of its own`);
+    value.access = access.path;
+  }
 
   return { ok: true, value };
 }

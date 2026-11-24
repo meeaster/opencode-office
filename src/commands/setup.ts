@@ -23,6 +23,7 @@ import { installingMise, ports, startExecutor, up } from "./compose.ts";
 import { bootstrapExecutor } from "./executor.ts";
 import { summarize, sync } from "./sync.ts";
 import { runReader } from "../package-operation.ts";
+import { declaredAccess } from "../package-access.ts";
 
 type SetupOptions = {
   ownerEmail?: string;
@@ -114,7 +115,9 @@ export async function setup(initial: Office, options: SetupOptions, reporter: Re
   // Anonymous reads of the sources, before any login: the GitHub step below asks for one only when needed.
   stage.detail("checking which sources read without a login");
 
-  const github = await planGithub(office, applied(office));
+  // Read once, from office.yaml's settings now: the access packages declare is known before any clone.
+  const declared = await packageAccess(office);
+  const github = await planGithub(office, applied(office), declared);
 
   office = await commitIdentity(office, ask);
   stage.detail("checking the GitHub login");
@@ -138,7 +141,7 @@ export async function setup(initial: Office, options: SetupOptions, reporter: Re
   // A login alone proves nothing: read every source as sync will, before cloning starts.
   stage.detail("reading every source with this machine's git credentials");
 
-  const unreachable = await unreachableSources(office, applied(office));
+  const unreachable = await unreachableSources(office, applied(office), declared);
 
   if (unreachable.length > 0) {
     throw new OfficeError(`these sources don't read on this host, so nothing was cloned:\n${unreachable.map((line) => `  - ${line}`).join("\n")}\nFix them or office.yaml, then rerun office setup`);
@@ -163,6 +166,15 @@ export async function setup(initial: Office, options: SetupOptions, reporter: Re
   const status = await runReader(office.dir, ["--finish-setup", office.dir, shell ? "shell" : "", options.ownerEmail ?? "", options.verbose ? "verbose" : ""]);
 
   if (status !== 0) throw new OfficeError("setup did not complete with the published package generation");
+}
+
+/** The repositories selected packages declare; a declaration that fails stops setup before anything is cloned. */
+async function packageAccess(office: Office) {
+  const { sources, problems } = await declaredAccess(office);
+
+  if (problems.length) throw new OfficeError(`these packages' access declarations failed, so nothing was cloned:\n${problems.map((line) => `  - ${line}`).join("\n")}\nFix them or office.yaml, then rerun office setup`);
+
+  return sources;
 }
 
 /** The references the last sync applied, or office.yaml's own before the first: what setup plans GitHub access and reads for. */

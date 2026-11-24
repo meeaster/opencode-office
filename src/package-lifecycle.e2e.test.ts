@@ -68,11 +68,11 @@ test("a sync function that throws stops the sync there: earlier lines print, lat
   // exclude block) must not run.
   writePackage(join(dir, "packages/linked/office.ts"), pluginDefinition(), { dependencies: ["opencode"] });
   write(join(dir, "packages/linked/plugin/index.js"), "export default {}\n");
-  const upstream = join(root, "throws-desk-repo");
+  const upstream = join(root, "throws-reference");
   git(["init", "-qb", "main", upstream]);
   write(join(upstream, "README.md"), "work\n");
   commit(upstream);
-  write(join(dir, "office.yaml"), read(join(dir, "office.yaml")).replace("  - name: after\n", "  - name: after\n  - name: linked\n").replace("    repos: []", `    repos: [{ name: work, url: ${upstream} }]`));
+  write(join(dir, "office.yaml"), read(join(dir, "office.yaml")).replace("  - name: after\n", "  - name: after\n  - name: linked\n").replace("references: []", `references: [{ name: work, url: ${upstream}, ref: main }]`));
 
   for (const args of [["sync", "--packages"], ["sync"]]) {
     rmSync(path);
@@ -85,7 +85,7 @@ test("a sync function that throws stops the sync there: earlier lines print, lat
     expect(probe(path)).toEqual(["first"]);
     expect(readlinkSync(join(dir, ".office/current"))).not.toBe(current);
     expect(existsSync(join(dir, ".opencode/plugins/linked"))).toBe(false);
-    expect(existsSync(join(dir, "example/repos/work"))).toBe(false);
+    expect(existsSync(join(dir, "references/work"))).toBe(false);
     expect(read(join(dir, ".git/info/exclude"))).toBe(exclude);
   }
 
@@ -95,7 +95,7 @@ test("a sync function that throws stops the sync there: earlier lines print, lat
   cli(0, "sync");
   expect(probe(path)).toEqual(["first", "thrower", "after"]);
   expect(readlinkSync(join(dir, ".opencode/plugins/linked"))).toBe("../../packages/linked/plugin");
-  expect(existsSync(join(dir, "example/repos/work/.git"))).toBe(true);
+  expect(existsSync(join(dir, "references/work/.git"))).toBe(true);
 }, 60_000);
 
 test("no sync function runs on a rejected candidate or with a package unfetched, and check runs no check function while a package is broken", () => {

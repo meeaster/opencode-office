@@ -35,7 +35,7 @@ test("catalog provisioning is install-only; a matching name alone cannot adopt a
 
     expect(posts).toEqual([`${base}/apps/install`]);
     await expect(catalogPlan(call, base, ["github"], [{ ...app, copiedFrom: null }], [])).rejects.toThrow("is not from");
-    await expect(catalogPlan(call, base, ["github"], apps, [{ slug: "github", dir: "/desk", adopted: false }])).rejects.toThrow("local app folder");
+    await expect(catalogPlan(call, base, ["github"], apps, [{ slug: "github", dir: "/office/executor-apps/github", adopted: false }])).rejects.toThrow("local app folder");
     await expect(catalogPlan(call, base, ["git"], apps, [])).rejects.toThrow("no exact entry");
   } finally {
     await server.stop(true);

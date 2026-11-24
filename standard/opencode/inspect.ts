@@ -3,7 +3,8 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { configFile, installedPanelNames, isRegistered, locate, panelDir, readPanelRecord } from "../../src/desktop.ts";
 import { findOffice, loadOffice, OfficeError, readOfficeFields, type Office } from "../../src/office.ts";
 import { requiredPackages, resolvePackages } from "../../src/packages.ts";
-import { officeSchema } from "../../src/schema.ts";
+import { separateFolders } from "../../src/layout.ts";
+import { officeSchema, removedDesks } from "../../src/schema.ts";
 import { cloneTarget, declarationBinding, pluginClones } from "./delivery.ts";
 import { configSources, conventionSources, projectDirectories, type Source } from "./native.ts";
 import { readDeclarations } from "./declarations.ts";
@@ -49,14 +50,15 @@ function desktopSources(office: Office, selected: Set<string>, panels: ReadonlyM
   return found.length ? found : ["desktop: no panel installation recorded here for this office"];
 }
 
+const layoutFolders = ["references", ...separateFolders];
+
 // Echo structural Office names only. An arbitrary directory, even one with ordinary filename
 // syntax, may carry a credential. Ordinals refer to the single ancestor chain being inspected.
 function scopePath(office: Office, dir: string) {
   if (dir === office.dir) return "";
   const parts = relative(office.dir, dir).split(sep);
-  const desk = office.desks.find(item => item.name === parts[0]);
-  const repo = desk && parts[1] === "repos" && desk.repos.some(item => item.name === parts[2]);
-  const known = repo ? 3 : desk ? 1 : 0;
+  // The office's own layout folders; what is inside them is named only by position.
+  const known = layoutFolders.includes(parts[0]) ? 1 : 0;
 
   return parts.map((part, i) => i < known ? part : `<folder-${i + 1}>`).join("/");
 }
@@ -82,7 +84,7 @@ function inventory(office: Office, folder: string) {
 
   function describe(dir: string, source: Source) {
     const part = scopePath(office, dir);
-    const scope = !part ? "office" : office.desks.some(desk => desk.name === part) ? `desk ${part}` : `folder ${part}`;
+    const scope = !part ? "office" : `folder ${part}`;
     const line = `[${scope}] ${source.description}: ${source.origin}`;
 
     lines.push(line);
@@ -184,8 +186,11 @@ export function inspect(folder: string, officeDir: string | undefined) {
     // YAML warnings can quote an entire source line to stderr even when parsing succeeds.
     if (!statSync(join(root, "office.yaml")).isFile()) throw new Error();
     office = loadOffice(root, readOfficeFields(root, officeSchema, "error"));
-  } catch {
-    throw new OfficeError("cannot inspect: office.yaml is unreadable or invalid");
+  } catch (error) {
+    // The removed desks key's diagnostic is fixed text, safe to echo; any other problem may quote office.yaml.
+    const desks = error instanceof Error && error.message.includes(`desks: ${removedDesks}`);
+
+    throw new OfficeError(desks ? `cannot inspect: office.yaml's desks: ${removedDesks}` : "cannot inspect: office.yaml is unreadable or invalid");
   }
 
   try {

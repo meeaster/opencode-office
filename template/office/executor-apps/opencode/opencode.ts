@@ -1,5 +1,5 @@
-// The office's OpenCode server, as Executor app code reaches it. Desk apps carry identical copies
-// of this file and office.ts: the provider's ID comes from its definition, so one OpenCode account
+// The office's OpenCode server, as Executor app code reaches it. Other apps that start sessions
+// carry identical copies of this file and office.ts: the provider's ID comes from its definition, so one OpenCode account
 // links to every app that declares it. Its address follows the office's mode through office.ts.
 import {
   array,

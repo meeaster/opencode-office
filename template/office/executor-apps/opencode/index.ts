@@ -89,7 +89,7 @@ export default defineApp(
       {
         title: "OpenCode",
         description: "Start and follow sessions on the office's OpenCode server.",
-        instructions: `Sessions run with full access to the office. Pass an absolute folder under ${officeDirectory} (the office root as the server sees it), such as a desk's. Prefer the run workflow when the reply is needed; use start and status for long sessions you check on later.`,
+        instructions: `Sessions run with full access to the office. Pass an absolute folder under ${officeDirectory} (the office root as the server sees it), such as a working repository's under repos/. Prefer the run workflow when the reply is needed; use start and status for long sessions you check on later.`,
       },
     ),
     workflows: { run },

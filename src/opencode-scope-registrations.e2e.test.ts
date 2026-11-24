@@ -72,7 +72,7 @@ test("explicit registrations: one owned link and an isolated panel; nothing by f
   expect(readFileSync(appConfig, "utf8")).toBe(registration);
   expect(readFileSync(panel, "utf8")).toBe("// a later office's copy");
   expect(await f.run(["gui", "dev", "common"], 1)).toContain("common has no desktop panel registered with opencode.panels.add at the last sync");
-  expect(existsSync(join(f.dir, "builder/.opencode/plugins/independent.js"))).toBe(true);
+  expect(existsSync(join(f.builder, ".opencode/plugins/independent.js"))).toBe(true);
   change("both");
   await f.run(sync);
   const settled = setups();
@@ -138,9 +138,9 @@ test("explicit registrations: one owned link and an isolated panel; nothing by f
   expect(await f.run(sync)).not.toContain("linked .opencode/plugins/common");
   change("none");
   expect(await f.run(sync)).toContain("unlinked .opencode/plugins/common");
-  symlinkSync("../../builder/extensions/local", link);
+  symlinkSync("../../repos/builder/extensions/local", link);
   await f.run(sync);
-  expect(readlinkSync(link)).toBe("../../builder/extensions/local");
+  expect(readlinkSync(link)).toBe("../../repos/builder/extensions/local");
 }, 60_000);
 
 test("a package registering nothing gets no link and no panel, whatever its folders; a registration through a symlinked folder is refused", async () => {

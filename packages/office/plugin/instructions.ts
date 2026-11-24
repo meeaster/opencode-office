@@ -1,21 +1,18 @@
 // The office's guidance for a session, built from office.yaml and the folders. The office
 // package's plugin adds it to each session; `office instructions [folder]` runs this same code to print it, so the
-// text is never hidden. It looks downward from the session's folder: the root sees the whole
-// office, a desk (or any folder inside it) sees that desk in detail and only a note of what is
-// shared above it.
+// text is never hidden. Every folder of the office gets the same text: a session started inside a
+// working repository also loads that repository's own instructions, natively.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, join } from "node:path";
 
 import * as v from "valibot";
 
-import { check, type OfficeConfig, officeSchema, type Parsed, resolveTools } from "../../../src/schema.ts";
+import { check, officeSchema, type Parsed, resolveTools } from "../../../src/schema.ts";
 import { type AppliedReference, appliedReferences } from "../../../src/applied-references.ts";
 import sessionScope from "../claude/session-scope.txt" with { type: "text" };
 
 // What the text uses from office.yaml, read through the schema the CLI uses.
-type DeskInfo = { name: string } & OfficeConfig["desks"][string];
-
-type OfficeInfo = { name: string; desks: DeskInfo[]; references: AppliedReference[]; referenceNotes: string[]; catalogApps: string[]; socketFirewall: boolean; minimumReleaseAge: string };
+type OfficeInfo = { name: string; references: AppliedReference[]; referenceNotes: string[]; catalogApps: string[]; socketFirewall: boolean; minimumReleaseAge: string };
 
 function readOffice(office: string): Parsed<OfficeInfo> {
   // The plugin and the compiled `office` both run on Bun, which parses YAML itself.
@@ -31,7 +28,6 @@ function readOffice(office: string): Parsed<OfficeInfo> {
     ok: true,
     value: {
       name: config.name,
-      desks: Object.entries(config.desks).map(([name, desk]) => ({ name, ...desk })),
       references: references.ok ? references.value : [],
       referenceNotes: references.ok ? [] : references.errors,
       catalogApps: config.executor?.catalog_apps ?? [],
@@ -81,8 +77,8 @@ function appDescription(path: string): string | undefined {
 }
 
 /** Local source supplies the description; a catalog-only Executor app has just its slug. */
-function executorAppLines(root: string, scope: string, catalog: string[] = []): string[] {
-  const folder = join(scope, "executor-apps");
+function executorAppLines(root: string, catalog: string[]): string[] {
+  const folder = "executor-apps";
   const dir = join(root, folder);
   const lines = new Map(catalog.map(slug => [slug, `- \`${slug}\` (catalog)`]));
 
@@ -100,7 +96,7 @@ function executorAppLines(root: string, scope: string, catalog: string[] = []): 
   return [...lines.values()];
 }
 
-// What every scope shares from the root, listed in full so a desk session can use it directly.
+// What the office shares, listed in full so a session anywhere in it can use it directly.
 function sharedSections(office: OfficeInfo, apps: string[]): string[] {
   return [
     "## References (desired read-only checkouts; `office sync` updates them, `office check` verifies origins)",
@@ -112,7 +108,7 @@ function sharedSections(office: OfficeInfo, apps: string[]): string[] {
       return reference.owner === "office.yaml" ? line : `${line} (package ${reference.owner})`;
     })),
     "",
-    "## Shared Executor apps",
+    "## Executor apps",
     "",
     "Use Executor apps through `office-executor` by name (the last folder in each path). To change an Executor app, edit its source there and run `office apps deploy`.",
     "",
@@ -135,59 +131,21 @@ function firewallLines(office: OfficeInfo): string[] {
   ];
 }
 
-function repoLines(desk: DeskInfo, indent = ""): string[] {
-  return desk.repos.map((repo) => `${indent}${entry(`${desk.name}/repos/${repo.name}/`, repo.description)}`);
-}
-
-function rootText(root: string, office: OfficeInfo, apps: string[]): string {
+function officeText(office: OfficeInfo, apps: string[]): string {
   return [
     `# The ${office.name} office`,
     "",
-    "This session is at the root of an office: a source-controlled folder of desks. Paths below are relative to the office root.",
+    "This session is in an office: a source-controlled folder of work. Paths below are relative to the office root.",
     "",
-    "- Each desk is a top-level folder. A session in a desk loads the root's instructions, config and skills plus the desk's own; desks never load each other's.",
+    "- Working repositories, when the office has them, are checkouts under `repos/`; read-only references are under `references/`; throwaway work and Git worktrees go in `scratch/`. The office's own repository keeps all three out of its commits.",
     sessionScope.trimEnd(),
-    "- `office.yaml` declares the desks, their repositories, the references, cloned plugins and packages: the office's own in `packages/<name>/`, and built-in and remote ones in `.office/packages/`, which are read-only. With the `skills` package, its settings choose the standalone skills linked into the root's `.agents/skills/`. After changing it, run `office sync`. A package's desktop app panel gets installed on the app's machine only when `office sync` runs on the host, not in the container.",
+    "- `office.yaml` declares the references, cloned plugins and packages: the office's own in `packages/<name>/`, and built-in and remote ones in `.office/packages/`, which are read-only. With the `repos` package, its settings declare the working repositories; with the `skills` package, its settings choose the standalone skills linked into the root's `.agents/skills/`. After changing it, run `office sync`. A package's desktop app panel gets installed on the app's machine only when `office sync` runs on the host, not in the container.",
     "- For onboarding use `office setup`. Owner credentials are human-only: let the human run `office executor credentials` in their terminal, never capture its output in an agent transcript. Keep private age identities and decrypted runtime state outside the office repository.",
     "- Scheduled jobs are the `cron` package's: the office's own go under its entry's `settings.jobs` in `office.yaml`, changes to packages' jobs under `settings.overrides`; `office cron list` shows which jobs apply in this mode, and `office up` applies a schedule change.",
     "- `git` in `office.yaml` sets the commit identity of the container and the office's jobs; with `credentials: gh`, HTTPS remotes use the user's GitHub login, which the user manages on the host. Never run `gh auth login`, `logout` or `switch` for them.",
     ...firewallLines(office),
     "",
-    "## Desks",
-    "",
-    ...(office.desks.length === 0 ? ["No desks yet."] : office.desks.flatMap((desk) => [entry(`${desk.name}/`, desk.description), ...repoLines(desk, "  "), ...executorAppLines(root, desk.name).map(line => `  ${line}`)])),
-    "",
     ...sharedSections(office, apps),
-  ].join("\n");
-}
-
-function deskText(root: string, office: OfficeInfo, desk: DeskInfo, apps: string[]): string {
-  const repos = repoLines(desk);
-  const deskApps = executorAppLines(root, desk.name);
-  const others = office.desks.flatMap((other) => (other.name === desk.name ? [] : [other.name]));
-
-  return [
-    `# The ${desk.name} desk of the ${office.name} office`,
-    "",
-    `This session is at the ${desk.name} desk (\`${desk.name}/\`)${desk.description === undefined ? "." : `: ${desk.description}`} Paths below are relative to the office root.`,
-    "",
-    `- Keep this desk's work inside \`${desk.name}/\`: repositories under \`${desk.name}/repos/\` (declare new ones under \`desks.${desk.name}.repos\` in \`office.yaml\`, then run \`office sync\`), throwaway work in \`${desk.name}/scratch/\`.`,
-    sessionScope.trimEnd(),
-    ...firewallLines(office),
-    "",
-    "## Repositories",
-    "",
-    ...(repos.length === 0 ? ["None yet."] : repos),
-    "",
-    "## Desk Executor apps",
-    "",
-    ...(deskApps.length ? deskApps : ["None."]),
-    ...(desk.app ? ["", `Use \`${desk.name}\` tools \`reports.save\` to save results and \`notifications.send\` to reach the user.`] : []),
-    "",
-    "Shared from the office root, for this desk to use directly:",
-    "",
-    ...sharedSections(office, apps),
-    ...(others.length === 0 ? [] : ["", `Other desks (${others.join(", ")}) have their own folders; move the session there for their work.`]),
   ].join("\n");
 }
 
@@ -202,9 +160,6 @@ export function officeInstructions(folder: string): string {
   if (!read.ok) return invalidText(read.errors);
 
   const office = read.value;
-  const apps = executorAppLines(dir, "", office.catalogApps);
-  const [first] = relative(dir, folder).split(sep);
-  const desk = office.desks.find((candidate) => candidate.name === first);
 
-  return desk === undefined ? rootText(dir, office, apps) : deskText(dir, office, desk, apps);
+  return officeText(office, executorAppLines(dir, office.catalogApps));
 }

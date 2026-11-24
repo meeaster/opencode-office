@@ -1,4 +1,4 @@
-// The optional-integrations author example under strict TypeScript: it passes with the providers'
+// The package authoring examples under strict TypeScript. The optional-integrations one: it passes with the providers'
 // sources as development types, its negative twin fails exactly where a setting or an entry is
 // wrong, and without a provider's types only the adapter's import of it fails.
 import { expect, test } from "bun:test";
@@ -22,4 +22,10 @@ test("the author example typechecks; a misspelled setting, a policy reading one,
     "examples/optional-integrations/negative/executor.ts(17,78) TS2551",
   ] });
   expect(typecheck("no-provider-types")).toEqual({ status: 1, diagnostics: ["examples/optional-integrations/packages/chatgpt-routing/executor.ts(1,22) TS2307"] });
+});
+
+test("the package-work author example typechecks under strict TypeScript", () => {
+  const result = Bun.spawnSync([join(checkout, "node_modules/.bin/tsc"), "--pretty", "false", "-p", join(checkout, "examples/package-work")], { cwd: checkout });
+
+  expect({ status: result.exitCode, output: result.stdout.toString().trim() }).toEqual({ status: 0, output: "" });
 });

@@ -1,4 +1,4 @@
-Investigate from the office root or desk. Once a change belongs to one repository, move the current conversation to the root of the checkout or worktree you will edit. This includes a dedicated prototype worktree under the desk's scratch folder. For a standalone experiment or work across several repositories in one desk, keep the session at the desk.
+Investigate from the office root. Once a change belongs to one repository, move the current conversation to the root of the checkout or worktree you will edit, such as one under `repos/` or a dedicated prototype worktree under `scratch/`. For a standalone experiment or work across several repositories, keep the session at the office root.
 
 Run commands in build directories, test fixtures, and temporary offices as needed without moving the session there.
 

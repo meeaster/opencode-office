@@ -27,8 +27,8 @@ export const rootConfig = `{
   "commands": { "scope-setting": { "description": "office-default", "template": "Office" } },
 }`;
 
-export const deskConfig = `{
-  // The desk owner's comment.
+export const repoConfig = `{
+  // The working repository owner's comment.
   "commands": { "scope-setting": { "description": "builder-override", "template": "Builder" } },
   "plugins": [{ "package": "../extensions/local", "options": {"token": "hidden-option"} }],
 }`;
@@ -88,7 +88,8 @@ export function scopeFixture() {
   function fixture(name: string, endpoint: string) {
     const home = join(sandbox, name, "home");
     const dir = join(sandbox, name, "office");
-    const repo = join(dir, "builder/repos/sample");
+    const builder = join(dir, "repos/builder");
+    const repo = join(builder, "sample");
     const imports = join(home, "imports");
 
     const env = {
@@ -102,18 +103,20 @@ export function scopeFixture() {
 
     mkdirSync(home, { recursive: true });
     mkdirSync(repo, { recursive: true });
-    mkdirSync(join(dir, "sibling"), { recursive: true });
-    expect(Bun.spawnSync(["git", "init", "-q", repo], { env }).exitCode).toBe(0);
+    mkdirSync(join(dir, "repos/sibling"), { recursive: true });
 
-    const yaml = `name: sample\nstate: ${home}/office-state\nopencode: {mode: host, url: ${endpoint}}\ndesks: {builder: {app: false}, sibling: {app: false}}\n`;
+    // Two working repositories at the office's root, and a repository nested in one of them.
+    for (const checkout of [builder, repo, join(dir, "repos/sibling")]) expect(Bun.spawnSync(["git", "init", "-q", checkout], { env }).exitCode).toBe(0);
+
+    const yaml = `name: sample\nstate: ${home}/office-state\nopencode: {mode: host, url: ${endpoint}}\n`;
     const select = (selection: string) => write(join(dir, "office.yaml"), yaml + selection);
     select("packages: [{name: common}]\n");
     writePackage(join(dir, "packages/common/office.ts"), pluginDefinition(), { dependencies: ["opencode"] });
     write(join(dir, "packages/common/plugin/index.js"), command("shared-command"));
     write(join(dir, ".opencode/opencode.jsonc"), rootConfig);
-    write(join(dir, "builder/.opencode/opencode.jsonc"), deskConfig);
-    write(join(dir, "builder/extensions/local/index.js"), command("builder-command"));
-    write(join(dir, "builder/.opencode/plugins/independent.js"), command("native-command"));
+    write(join(builder, ".opencode/opencode.jsonc"), repoConfig);
+    write(join(builder, "extensions/local/index.js"), command("builder-command"));
+    write(join(builder, ".opencode/plugins/independent.js"), command("native-command"));
     write(join(repo, "opencode.json"), '{"commands":{"scope-setting":{"description":"direct-repo","template":"Repo"}}}');
 
     const run = async (args: string[], status = 0, executable = office) => {
@@ -125,7 +128,7 @@ export function scopeFixture() {
       return stdout + stderr;
     };
 
-    return { home, dir, repo, imports, env, select, run };
+    return { home, dir, builder, repo, imports, env, select, run };
   }
 
   return { sandbox, office, fixture };

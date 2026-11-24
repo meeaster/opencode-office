@@ -29,8 +29,6 @@ test("the maintenance script commits only successful pin/lock pairs and leaves t
   try {
     mkdirSync(cwd);
     mkdirSync(bin);
-    mkdirSync(join(cwd, "draft"));
-    mkdirSync(join(cwd, "good"));
     const gitPath = Bun.which("git");
 
     if (!gitPath) throw new Error("git required");
@@ -53,38 +51,42 @@ case "$1:$2" in
   *) exit 2 ;;
 esac
 `, { mode: 0o755 });
-    write("office.yaml", "name: fixture\ndesks: {draft: {app: false}, good: {app: false}}\n");
-
-    for (const dir of ["", "draft/", "good/"]) {
-      write(`${dir}mise.toml`, pin);
-      write(`${dir}mise.lock`, "original lock\n");
-    }
-
+    write("office.yaml", "name: fixture\n");
+    write("mise.toml", pin);
+    write("mise.lock", "original lock\n");
+    write("machine.toml", pin);
     write("notes", "baseline\n");
     git("init", "-q");
     git("add", ".");
     git("-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qm", "baseline");
-    write("draft/mise.lock", "owner's staged lock\n");
     write("notes", "staged notes\n");
-    git("add", "draft/mise.lock", "notes");
+    git("add", "notes");
     write("notes", "working notes\n");
-    write("fail-lock", "");
     const staged = git("diff", "--cached");
 
+    // A failed lock restores mise.toml and its lock; machine.toml, which no lock covers, is committed alone.
+    write("fail-lock", "");
     expect(job(1)).toContain("mise lock failed");
-    expect(git("diff", "--name-only", "HEAD^", "HEAD")).toBe("good/mise.lock\ngood/mise.toml");
-    expect(git("show", "HEAD:good/mise.toml")).toBe(pin.trim().replace("1.7.1", "1.8.0"));
-    expect(git("show", "HEAD:good/mise.lock")).toBe("lock 1.8.0");
+    expect(git("diff", "--name-only", "HEAD^", "HEAD")).toBe("machine.toml");
+    expect(git("show", "HEAD:machine.toml")).toBe(pin.trim().replace("1.7.1", "1.8.0"));
     expect(read("mise.toml")).toBe(pin);
     expect(read("mise.lock")).toBe("original lock\n");
-    expect(read("draft/mise.toml")).toBe(pin);
-    expect(read("draft/mise.lock")).toBe("owner's staged lock\n");
     rmSync(join(cwd, "fail-lock"));
-    write("fail-install", "");
-    const partial = git("rev-parse", "HEAD");
 
+    // The owner's staged lock keeps its pair out of the job's commit.
+    write("mise.lock", "owner's staged lock\n");
+    git("add", "mise.lock");
+    const skipped = git("rev-parse", "HEAD");
+
+    expect(job()).toContain("Skipped mise.toml and mise.lock: uncommitted changes");
+    expect(git("rev-parse", "HEAD")).toBe(skipped);
+    expect(read("mise.lock")).toBe("owner's staged lock\n");
+    git("reset", "-q", "--", "mise.lock");
+    git("checkout", "-q", "--", "mise.lock");
+
+    write("fail-install", "");
     expect(job(1)).toContain("install failed");
-    expect(git("rev-parse", "HEAD")).toBe(partial);
+    expect(git("rev-parse", "HEAD")).toBe(skipped);
     expect(read("mise.toml")).toBe(pin);
     expect(read("mise.lock")).toBe("original lock\n");
     rmSync(join(cwd, "fail-install"));
@@ -94,9 +96,9 @@ esac
 
     job();
     expect(git("rev-parse", "HEAD")).toBe(head);
-    write("draft/mise.toml", `# local edit\n${pin}`);
+    write("mise.toml", `# local edit\n${pin}`);
     run([cli, "--office", cwd, "upgrade-tools"]);
-    expect(read("draft/mise.toml")).toBe(`# local edit\n${pin.replace("1.7.1", "1.8.0")}`);
+    expect(read("mise.toml")).toBe(`# local edit\n${pin.replace("1.7.1", "1.8.0")}`);
     expect(git("rev-parse", "HEAD")).toBe(head);
     expect(git("diff", "--cached")).toBe(staged);
     expect(read("notes")).toBe("working notes\n");

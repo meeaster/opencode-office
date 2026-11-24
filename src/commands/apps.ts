@@ -51,7 +51,7 @@ function packageAppFolders(installed: InstalledPackage[]): AppFolder[] {
 }
 
 /**
- * The Executor app sources shared by the office, local to each desk, and shipped by packages:
+ * The Executor app sources of the office (`executor-apps/<slug>/`) and shipped by packages:
  * `installed`, or the packages' definitions read here.
  */
 export function appFolders(office: Office, installed: InstalledPackage[] = installedPackages(office).installed): AppFolder[] {
@@ -71,25 +71,23 @@ export function appFolders(office: Office, installed: InstalledPackage[] = insta
 }
 
 function officeAppFolders(office: Office): AppFolder[] {
-  return ["", ...office.desks.map((desk) => desk.name)].flatMap((level) => {
-    const dir = join(office.dir, level, "executor-apps");
+  const dir = join(office.dir, "executor-apps");
 
-    if (!existsSync(dir)) return [];
+  if (!existsSync(dir)) return [];
 
-    return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && existsSync(join(dir, entry.name, "package.json")))
-      .map((entry) => {
-        const path = join(dir, entry.name);
-        const marker = join(path, adoptionMarker);
-        const adopted = existsSync(marker);
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(join(dir, entry.name, "package.json")))
+    .map((entry) => {
+      const path = join(dir, entry.name);
+      const marker = join(path, adoptionMarker);
+      const adopted = existsSync(marker);
 
-        if (adopted && (level !== "" || !office.catalogApps.includes(entry.name) || readFileSync(marker, "utf8").trim() !== entry.name)) {
-          throw new OfficeError(`${marker}: an adopted Executor app must be in executor-apps/<catalog-id> and declared in executor.catalog_apps`);
-        }
+      if (adopted && (!office.catalogApps.includes(entry.name) || readFileSync(marker, "utf8").trim() !== entry.name)) {
+        throw new OfficeError(`${marker}: an adopted Executor app must be in executor-apps/<catalog-id> and declared in executor.catalog_apps`);
+      }
 
-        return { slug: entry.name, dir: path, adopted };
-      });
-  });
+      return { slug: entry.name, dir: path, adopted };
+    });
 }
 
 function readManifest(dir: string): AppManifest {

@@ -1,5 +1,5 @@
-// Package plugin links and Git-cloned plugins at the office root, where every desk inherits them.
-// Desk and repo plugin folders belong to their owners. Office's entries are recognized by their
+// Package plugin links and Git-cloned plugins at the office root, where every folder of the office
+// inherits them. A working repository's own plugin folders belong to its owners. Office's entries are recognized by their
 // target (ownership.ts); nothing records which links Office made.
 import { randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
@@ -23,7 +23,7 @@ export function requirePluginDestination(office: Office) {
 
 /** Each `plugins:` entry: its checkout in `.office/plugins/<name>`, linked as `.opencode/plugins/<name>`. */
 export function pluginClones(office: Office) {
-  return office.plugins.map(plugin => ({ ...plugin, kind: "plugin", dir: join(office.dir, cloneFolder, plugin.name), link: join(office.dir, pluginFolder, plugin.name) }));
+  return office.plugins.map(plugin => ({ ...plugin, kind: "plugin" as const, dir: join(office.dir, cloneFolder, plugin.name), link: join(office.dir, pluginFolder, plugin.name) }));
 }
 
 /** The link text for a clone, from the root's `.opencode/plugins/`. */

@@ -16,7 +16,7 @@ test("reads only the requested session's stored entries, preserving custom keys 
 
       switch (new URL(request.url).pathname) {
         case "/api/experimental/session/ses_full/instructions/entries":
-          return Response.json({ data: [{ key: "desk-custom", value: "First line\n\n  indented\n" }, { key: "extra", value: "Last" }] });
+          return Response.json({ data: [{ key: "custom", value: "First line\n\n  indented\n" }, { key: "extra", value: "Last" }] });
         case "/api/experimental/session/ses_empty/instructions/entries":
           return Response.json({ data: [] });
         case "/api/experimental/session/ses_invalid/instructions/entries":
@@ -32,7 +32,7 @@ test("reads only the requested session's stored entries, preserving custom keys 
     writeFileSync(join(dir, "secrets.env"), "OPENCODE_PASSWORD=fixture\n");
     const office = loadOffice(dir);
 
-    expect(await sessionInstructions(office, "ses_full")).toBe("## desk-custom\n\nFirst line\n\n  indented\n\n\n## extra\n\nLast");
+    expect(await sessionInstructions(office, "ses_full")).toBe("## custom\n\nFirst line\n\n  indented\n\n\n## extra\n\nLast");
     expect(await sessionInstructions(office, "ses_empty")).toBe("No stored instruction entries for ses_empty.");
     await expect(sessionInstructions(office, "ses_missing")).rejects.toThrow("ses_missing");
     await expect(sessionInstructions(office, "ses_invalid")).rejects.toThrow("did not return session instruction entries");

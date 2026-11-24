@@ -42,7 +42,7 @@ Doop's browser sign-in for MCP clients (OAuth) isn't used here: OpenCode would h
 
 ## Connecting through Executor instead (prototype)
 
-With `executor_app: true`, sessions reach Doop through the package's `doop` Executor app rather than the `doop` MCP server: the plugin stops registering the server (even if a key file is there), so the tools aren't offered twice, and the skill tells agents to find the tools with `office-executor`. The app proxies Doop's own MCP tools, with Doop's server instructions, and asks for approval before the tools Doop marks destructive, such as `delete_frame`. It has one Doop account linked for everyone (an app-scope account), so every desk designs as the person who connected it, and no key lands in the office folder.
+With `executor_app: true`, sessions reach Doop through the package's `doop` Executor app rather than the `doop` MCP server: the plugin stops registering the server (even if a key file is there), so the tools aren't offered twice, and the skill tells agents to find the tools with `office-executor`. The app proxies Doop's own MCP tools, with Doop's server instructions, and asks for approval before the tools Doop marks destructive, such as `delete_frame`. It has one Doop account linked for everyone (an app-scope account), so every session designs as the person who connected it, and no key lands in the office folder.
 
 ```yaml
 packages:
@@ -58,7 +58,7 @@ Out of the box this offers two ways to connect, **Sign in with Doop** (OAuth) an
 3. They open the link, signed in to Executor, and choose:
    - **Sign in with Doop**: Doop authorizes at once and Executor saves the account, with no key to copy.
    - **Agent key**: they create one in Doop under **Settings → Agent keys** and enter it in Executor's form. The app's account check connects to Doop's MCP server with it and without it, so a refused key shows in Executor.
-4. Sessions in every desk find the tools with `office-executor`'s `search` (namespace `doop`). An agent can also request a new connect link itself, as Executor's `code-mode` skill describes.
+4. Sessions anywhere in the office find the tools with `office-executor`'s `search` (namespace `doop`). An agent can also request a new connect link itself, as Executor's `code-mode` skill describes.
 
 Executor runs in the office's compose project in either mode. The app sends agent keys to Doop at `http://doop:<port>/mcp` and OAuth tokens to Doop's advertised address; those are the hosts an account's credential may go to. Changing `port` means connecting the account again: an account keeps the hosts it was connected with.
 

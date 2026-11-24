@@ -102,7 +102,7 @@ test("a sync that couldn't fetch a selected package switches the set but doesn't
 test("office settings get reads one package's applied settings from --office alone, whatever the folder, definitions and office.yaml", () => {
   const { dir, env, probe, cli, select } = fixture("reader");
   const other = fixture("reader-other");
-  const nested = join(dir, "work/repos/nested");
+  const nested = join(dir, "repos/work/nested");
 
   writePackage(join(dir, "packages/notes/office.ts"), notes);
   select("  - name: notes\n    settings: {count: 1}\n");

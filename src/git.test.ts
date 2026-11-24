@@ -178,7 +178,7 @@ test("packages-only sync applies changed settings and plugin links without visit
   // From source, a local package resolves its @office imports through the published set.
   writeFileSync(join(dir, "office.yaml"), "name: demo\n");
   await sync(loadOffice(dir), { scope: "packages" });
-  writeFileSync(join(dir, "office.yaml"), `name: demo\npackages: [{ name: demo, settings: { title: After } }]\nreferences: [{ name: docs, url: ${upstream} }]\ndesks: { work: { repos: [{ name: example, url: ${upstream} }] } }\nplugins: [{ name: other, repo: ${upstream} }]\n`);
+  writeFileSync(join(dir, "office.yaml"), `name: demo\npackages: [{ name: demo, settings: { title: After } }]\nreferences: [{ name: docs, url: ${upstream} }]\nplugins: [{ name: other, repo: ${upstream} }]\n`);
 
   const changes = await sync(loadOffice(dir), { scope: "packages" });
 
@@ -188,7 +188,7 @@ test("packages-only sync applies changed settings and plugin links without visit
   expect(existsSync(join(pkg, ".settings.json"))).toBe(false);
   expect(existsSync(join(dir, ".opencode/plugins/demo"))).toBe(true);
 
-  for (const path of ["references/docs", "work/repos/example", ".opencode/plugins/other"]) expect(existsSync(join(dir, path))).toBe(false);
+  for (const path of ["references/docs", ".opencode/plugins/other"]) expect(existsSync(join(dir, path))).toBe(false);
 });
 
 test("a fresh clone of a commit holds the receipts and every seed they name, byte for byte, under core.autocrlf, and Git offers nothing else of .office/", async () => {
@@ -281,7 +281,7 @@ function linkedOffice(office: string) {
     writeFileSync(join(office, path), text);
   };
 
-  file("office.yaml", `name: t\ndesks: { builder: { app: false } }\nplugins: [{ name: imported, repo: ${join(dir, "remote")} }]\n`);
+  file("office.yaml", `name: t\nplugins: [{ name: imported, repo: ${join(dir, "remote")} }]\n`);
   file(".office/packages/office/plugin/index.js", "export default {}\n");
   file("skills/alpha/SKILL.md", "---\nname: alpha\ndescription: fixture\n---\n");
   file(".opencode/plugins/owner-plugin/index.js", "export default {}\n");
@@ -350,7 +350,7 @@ test("info/exclude holds Office's plumbing in one block after the owner's lines,
   expect(existsSync(join(office, ".git"))).toBe(false);
 
   git(["init", "--quiet", office]);
-  writeFileSync(join(office, ".gitignore"), "/builder/repos/\n");
+  writeFileSync(join(office, ".gitignore"), "/repos/\n");
   // The owner's lines around a block that holds other lines than office sync wants.
   writeFileSync(exclude, `# the owner's\n*.log\n${excludeStart}\n/.office/\n${excludeEnd}\n/after\n`);
   const block = (lines: string[]) => [excludeStart, "/.office/*", "/.office/runtime/", "/packages/node_modules/", ...lines, excludeEnd].join("\n");

@@ -4,7 +4,7 @@
   "license": "MIT",
   "private": true,
   "type": "module",
-  "description": "Initialize, sync and run an office: a source-controlled folder of desks for OpenCode",
+  "description": "Initialize, sync and run an office: a source-controlled folder of work for OpenCode and Claude Code",
   "scripts": {
     "build": "bun src/build.ts",
     "install-office": "bun src/build.ts --install",

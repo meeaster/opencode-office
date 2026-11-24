@@ -15,7 +15,7 @@ services:
     environment:
       # Must match the address the browser opens exactly, or sign-in is rejected.
       BETTER_AUTH_URL: http://localhost:${EXECUTOR_PORT:-41440}
-      # App code may reach private addresses, so desk apps can start sessions on the opencode
+      # App code may reach private addresses, so apps can start sessions on the opencode
       # container or the host's server. Every app in this Executor shares that network position.
       EXECUTOR_APPS_ALLOW_PRIVATE_FETCH: "true"
     volumes:

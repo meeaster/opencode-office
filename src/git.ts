@@ -211,20 +211,6 @@ function copyFolder(checkout: string, path: string, to: string): void {
   if (license !== undefined && !licenseNames.some((name) => existsSync(join(to, name)))) cpSync(join(checkout, license), join(to, license));
 }
 
-/** A working clone that agents commit in: cloned in full when missing, otherwise only fetched. */
-export function cloneOrFetch(url: string, ref: string | undefined, dir: string): "cloned" | "fetched" {
-  if (!isClone(dir)) {
-    mkdirSync(dirname(dir), { recursive: true });
-    git(["clone", "--quiet", ...(ref === undefined ? [] : ["--branch", ref]), url, dir]);
-
-    return "cloned";
-  }
-
-  git(["fetch", "--quiet", "origin"], dir);
-
-  return "fetched";
-}
-
 // The same operations without blocking, for sync, which runs several at once while a spinner
 // shows them. Each line git prints goes to `line`; on failure the error carries git's stderr, as
 // execFileSync's does. `verbose` asks git for its progress meter, which it prints only on request
@@ -500,18 +486,4 @@ export function referenceGit({ dir, url, ref = "HEAD" }: { dir: string; url: str
   };
 
   return { targetProblem, stageClone, fetchExisting };
-}
-
-/** `cloneOrFetch`, without blocking. */
-export async function cloneOrFetchStreamed(url: string, ref: string | undefined, dir: string, options: GitOptions = {}): Promise<"cloned" | "fetched"> {
-  if (!isClone(dir)) {
-    mkdirSync(dirname(dir), { recursive: true });
-    await gitStreamed(["clone", ...(ref === undefined ? [] : ["--branch", ref]), url, dir], undefined, options);
-
-    return "cloned";
-  }
-
-  await gitStreamed(["fetch", "origin"], dir, options);
-
-  return "fetched";
 }

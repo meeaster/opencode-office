@@ -65,13 +65,6 @@ references: []
 #    ref: dev
 #    description: OpenCode's source and docs
 
-desks:
-  example:
-    description: An example desk. Rename it, or add desks beside it.
-    repos: []
-    # Set to false for a desk without its own Executor app (reports, notifications, agent.ask).
-    app: true
-
 # OpenCode plugins developed in another repository, cloned into .opencode/plugins/<name>/.
 plugins: []
 
@@ -79,7 +72,7 @@ plugins: []
 # and gives it the package's skills, tools and MCP servers, and each file it declares as a seed is
 # laid down once in the office (a file you delete stays deleted). A package is one of three kinds:
 # - official, listed by name alone: shipped inside the office executable (knowledge, browser,
-#   artifact-share, design, aws-emulator, skills), installed in .office/packages/<name>/ and
+#   artifact-share, design, aws-emulator, repos, skills), installed in .office/packages/<name>/ and
 #   updated along with office. The core packages (office, opencode, references, seeds, cron and the
 #   rest) are always installed: a core package need not be listed; list it once to configure it,
 #   as cron below.
@@ -102,7 +95,17 @@ packages:
 #  - name: artifact-share
 #    settings:
 #      url: https://<owner>.github.io/<repository>
-# Standalone skills, linked into .agents/skills/<id> for every desk. Nothing is enabled until
+# Working repositories: checkouts under repos/ that sessions are told about. One with a url is
+# cloned by office sync and afterwards only fetched; one without is listed, the checkout yours.
+#  - name: repos
+#    settings:
+#      entries:
+#        - name: website
+#          description: The public website.
+#          url: https://github.com/<owner>/website.git
+#        - name: journal
+#          description: Personal notes and planning.
+# Standalone skills, linked into .agents/skills/<id> for every session. Nothing is enabled until
 # listed; office skills list shows what the sources offer. A folder source offers each skill
 # folder in it; a Git source offers named folders at the full commit ref, which office skills
 # update moves along track (a branch, or the highest stable tag matching a pattern such as v2.*).

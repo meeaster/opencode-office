@@ -97,7 +97,7 @@ function officeAt(server: { url: URL }, extra = "") {
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   writeFileSync(join(dir, "office.yaml"), `name: proof\nstate: .\nopencode: { mode: host, url: "${server.url.origin}" }\n${extra}`);
   writeFileSync(join(dir, "secrets.env"), "OPENCODE_PASSWORD=fixture\n");
-  mkdirSync(join(dir, "desk"));
+  mkdirSync(join(dir, "repos/notes"), { recursive: true });
 
   return loadOffice(dir);
 }
@@ -130,7 +130,7 @@ test("counts input and cache tokens, reports the folder's entries and deletes ev
   cleanups.push(() => server.stop(true));
 
   const office = officeAt(server);
-  const report = await contextReport(office, join(office.dir, "desk"), ["openai/gpt-6-luna#low", "claude-agent/haiku#low"]);
+  const report = await contextReport(office, join(office.dir, "repos/notes"), ["openai/gpt-6-luna#low", "claude-agent/haiku#low"]);
 
   expect(report.failed).toBe(false);
   expect(report.text).toContain("openai/gpt-6-luna#low   baseline   7,175  folder  10,158  office adds  +2,983");
@@ -198,7 +198,7 @@ test("context requires --model, rejects a folder argument and measures the worki
   cleanups.push(() => server.stop(true));
 
   const office = officeAt(server);
-  const cwd = join(office.dir, "desk");
+  const cwd = join(office.dir, "repos/notes");
   const command = [process.execPath, join(import.meta.dir, "../cli.ts"), "--office", office.dir, "context"];
 
   for (const args of [[], [office.dir, "--model", "provider/one"]]) {

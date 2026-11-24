@@ -2,7 +2,7 @@
 
 This runbook is for an AI agent installing `office` for a person, and readable by that person. It gets you from nothing to a running office that is committed and checked. Read all of it before you run anything. For background, see [README.md](README.md). This file is the procedure.
 
-An **office** is a git repository of **desks**, which are folders for different kinds of work. OpenCode serves the desks, and Executor holds service accounts and schedules. Both run in Docker on this machine.
+An **office** is a git repository for a person's work: instructions, skills, packages and the working repositories they edit. OpenCode serves the office, and Executor holds service accounts and schedules. Both run in Docker on this machine.
 
 ## 1. Ask first, in one message
 
@@ -11,7 +11,7 @@ Ask the user every question below, together, before you run any command other th
 1. **Office name**: lowercase letters, digits and dashes, such as `home` or `acme`. It names the containers and the state folder.
 2. **Folder**: where the office repository goes. It must not exist yet, or must be empty. Default: `~/office`.
 3. **Container or host mode**: in container mode (the default), the office runs its own OpenCode in a Docker container, so agents work inside it and can't touch the rest of this machine. In host mode, the office uses an OpenCode server that already runs on this machine, so agents work directly on it. Recommend container mode unless the user already runs an OpenCode server here and wants that.
-4. **Desks**: one per area of work, each with a name in the same form as the office name and one line on what it is for, such as `research`: "reading and research notes". The template's `example` desk is replaced by these desks.
+4. **Working repositories**: the Git repositories the user works in from this office, each with a folder name, one line on what it holds and, when it has one, its clone URL, such as `notes`: "reading and research notes". None is fine. A repository without a URL is listed for sessions; the user creates or moves its checkout into `repos/<name>/` themselves.
 5. **Executor owner email**: a real address in the form `user@domain.tld`. It becomes the login of the office's Executor account. `office setup` generates the password and stores it encrypted. You never see it.
 6. **Commit identity**: the name and email the office commits as. Offer the output of `git config --global user.name` and `git config --global user.email` if they are set.
 7. **May `office` install its tools on this machine?** That means mise, SOPS, age, gh and pre-commit, installed into the user's home folder (`~/.local/share/office/host-tools` and mise's own folder), with no sudo and no shell profile changes. It also covers creating an age key at `~/.config/sops/age/keys.txt` (or reusing the one already there), which encrypts the office's secrets. If the user says no, they must install SOPS and age themselves. In host mode, also ask whether the office may link its tools into mise's global configuration (`--manage-machine`).
@@ -61,16 +61,16 @@ cd <folder>
 ```
 
 **Edit `office.yaml` before setup:**
-- Under `desks:`, replace the `example:` entry with one entry per desk, keeping the same shape:
+- If the user named working repositories, add the `repos` package under `packages:` with one entry per repository:
   ```yaml
-  desks:
-    research:
-      description: Reading and research notes.
-      repos: []
-      skills: []
-      app: true
+  packages:
+    - name: repos
+      settings:
+        entries:
+          - name: notes
+            description: Reading and research notes.
+            url: https://github.com/<owner>/notes.git
   ```
-- Delete the example desk's folder, which `init` created: `rm -rf example`. Doing this before setup means the example desk is never deployed.
 - Add the commit identity, and `credentials: gh` if the user uses private GitHub repositories:
   ```yaml
   git:
@@ -109,7 +109,7 @@ office check          # every line ok or warn; exit status 0
 git status --short
 ```
 
-Setup never commits. Commit everything it wrote, which includes `office.yaml`, `office.lock`, `.sops.yaml`, `secrets/*.enc.json` and the desks. All of it is safe to commit: the secrets are encrypted, and the private age key lives outside the repository. `.office/` is the tool's and stays out of Git, except `.office/seeds/`, the seed store, which is committed with `office.lock`: sync keeps the rest out through the repository's `info/exclude`, so `git add -A` leaves it alone.
+Setup never commits. Commit everything it wrote, which includes `office.yaml`, `office.lock`, `.sops.yaml`, `secrets/*.enc.json` and the office's own files. Working repositories under `repos/` are checkouts of their own, which the office's `.gitignore` keeps out. All of it is safe to commit: the secrets are encrypted, and the private age key lives outside the repository. `.office/` is the tool's and stays out of Git, except `.office/seeds/`, the seed store, which is committed with `office.lock`: sync keeps the rest out through the repository's `info/exclude`, so `git add -A` leaves it alone.
 
 ```sh
 git add -A && git commit -m "Set up the office"
@@ -124,7 +124,7 @@ git config user.name "<commit name>" && git config user.email "<commit email>"
 If they'd rather set it globally, they can run `git config --global ...` themselves.
 
 **Finish by telling the user:**
-- Where the office is, its desks, and that `office check` passed.
+- Where the office is, its working repositories, and that `office check` passed.
 - **Back up the age key** `~/.config/sops/age/keys.txt` somewhere safe and private. Without it, the office's encrypted secrets can't be recovered. Never commit it.
 - **Connect the app:** run `office pair` in the office folder, which prints a one-time link for the OpenCode app or a browser. The link grants access, so the user runs it.
 - **Model sign-in is theirs.** A new office can already use OpenCode's free hosted models with no login. Prompts then go to OpenCode's service. For another provider, they use `/connect` in OpenCode. For Claude Code in container mode, they run `docker exec -it office-<name>-opencode-1 claude auth login`, then connect Claude Agent in OpenCode.

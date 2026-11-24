@@ -101,7 +101,7 @@ test("a clone's first sync keeps the committed receipts and store, an edited fil
   expect({ store: tree(store), notes: tree(join(dir, "notes")), lock: read(join(dir, "office.lock")) }).toEqual(before);
 }, 60_000);
 
-test("an office.lock that still has a seeds: section stops sync before anything is written, scaffolded or repaired, and office pin, naming the key", () => {
+test("an office.lock that still has a seeds: section stops sync before anything is written or repaired, and office pin, naming the key", () => {
   const { dir, cli } = fixture("old-lock");
   const lock = join(dir, "office.lock");
   const yaml = join(dir, "office.yaml");
@@ -113,7 +113,6 @@ test("an office.lock that still has a seeds: section stops sync before anything 
   rmSync(join(dir, ".office/seeds"), { recursive: true });
   rmSync(join(dir, "knowledge"), { recursive: true });
   write(lock, `${read(lock)}\nseeds:\n  knowledge/AGENTS.md: { package: knowledge, sha256: ${"0".repeat(64)} }\n`);
-  write(yaml, read(yaml).replace("desks:\n", "desks:\n  later:\n    description: Declared, not yet scaffolded.\n"));
   const text = read(lock);
   const bridge = join(dir, ".office/packages");
 
@@ -127,7 +126,6 @@ test("an office.lock that still has a seeds: section stops sync before anything 
     expect(readlinkSync(join(dir, ".office/current"))).toBe(current);
     expect(existsSync(join(dir, ".office/seeds/receipts.json"))).toBe(false);
     expect(existsSync(join(dir, "knowledge"))).toBe(false);
-    expect(existsSync(join(dir, "later"))).toBe(false);
 
     if (args[0] === "sync") expect(lstatSync(bridge, { throwIfNoEntry: false })).toBeUndefined();
   }

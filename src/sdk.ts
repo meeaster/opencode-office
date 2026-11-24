@@ -4,7 +4,7 @@
 import { Package, Registry } from "../sdk/index.ts";
 
 /** Whether a value was made by this process's `Package.define`, and by its `Package.integration`. */
-export { marked as madeWithSdk, markedIntegration as integrationWithSdk } from "../sdk/mark.ts";
+export { marked as madeWithSdk, markedAccess as accessWithSdk, markedIntegration as integrationWithSdk } from "../sdk/mark.ts";
 
 let registered = false;
 

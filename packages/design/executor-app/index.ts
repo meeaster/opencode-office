@@ -1,5 +1,5 @@
 // Doop's MCP tools through Executor, with one Doop account linked to the app for everyone: every
-// desk's sessions design as the person who connected it.
+// session designs as the person who connected it.
 import { defineApp, toolAnnotations, withApprovals } from "apps";
 import { mcpRouter } from "apps/mcp";
 import { always } from "apps/operations/approval";

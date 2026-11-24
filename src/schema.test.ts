@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import * as v from "valibot";
 import { parse } from "yaml";
 
-import { check, officeSchema, parseManifest, pinnedTools, type ResolvedTools, resolveTools, type SettingValue } from "./schema.ts";
+import { check, officeSchema, parseManifest, pinnedTools, removedDesks, type ResolvedTools, resolveTools, type SettingValue } from "./schema.ts";
 
 /** The schema's errors for an office.yaml named t with `rest` after its name. */
 function errors(rest: string): string[] {
@@ -56,10 +56,12 @@ test("tools takes a version or a mapping per runtime, and refuses unknown keys a
   expect(errors("tools:\n  claude: { version: latest }\n")).toEqual(["tools.claude.version: must be a version such as 2.3.0"]);
 });
 
-test("a top-level key office.yaml doesn't have, such as versions, is refused like any unknown key", () => {
-  expect(errors("versions:\n  opencode: 2.3.2\n")).toEqual(["versions: must be a mapping of name, state, opencode, executor, git, secrets, tools, references, desks, plugins and packages"]);
+test("a top-level key office.yaml doesn't have, such as versions, is refused like any unknown key; desks, even empty, names the migration", () => {
+  expect(errors("versions:\n  opencode: 2.3.2\n")).toEqual(["versions: must be a mapping of name, state, opencode, executor, git, secrets, tools, references, plugins and packages"]);
   // Cron's configuration is the cron package's settings: the keys before it are unknown like any other.
-  expect(errors("cron:\n  heartbeat: { schedule: '@hourly', script: heartbeat.sh }\n")).toEqual(["cron: must be a mapping of name, state, opencode, executor, git, secrets, tools, references, desks, plugins and packages"]);
+  expect(errors("cron:\n  heartbeat: { schedule: '@hourly', script: heartbeat.sh }\n")).toEqual(["cron: must be a mapping of name, state, opencode, executor, git, secrets, tools, references, plugins and packages"]);
+
+  for (const desks of ["desks: {}\n", "desks:\n", "desks:\n  work:\n    repos: []\n"]) expect(errors(desks)).toEqual([`desks: ${removedDesks}`]);
   expect(errors("packages:\n  - name: office\n    cron: { upgrade-tools: { enabled: false } }\n")).toEqual(["packages[0].cron: must be a mapping of the fields this schema knows"]);
 });
 

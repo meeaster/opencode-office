@@ -3,7 +3,8 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "cat \"${CLAUDE_PLUGIN_ROOT}/session-scope.txt\"" }
+          { "type": "command", "command": "cat \"${CLAUDE_PLUGIN_ROOT}/session-scope.txt\"" },
+          { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/package-text.sh\"" }
         ]
       }
     ]

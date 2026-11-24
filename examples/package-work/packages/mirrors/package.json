@@ -1,0 +1,10 @@
+{
+  "name": "@office/mirrors",
+  "description": "Repositories the office reads or pushes to, checked at each full sync and listed in every session",
+  "private": true,
+  "exports": {},
+  "office": {
+    "definition": "./office.ts",
+    "access": "./access.ts"
+  }
+}

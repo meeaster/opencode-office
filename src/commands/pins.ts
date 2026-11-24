@@ -1,6 +1,6 @@
 // `office packages update`: move the pins of packages from other repositories along their `track`
 // (a branch, or the highest stable SemVer tag matching a pattern), record each as a full commit SHA
-// in office.yaml and apply it. It touches only packages: no clones, references or desks, and no
+// in office.yaml and apply it. It touches only packages: no clones, references or working repositories, and no
 // sync. A package whose track can't be resolved, or whose copy can't be applied, keeps its pin.
 // It also moves the office.lock commit of each untracked package whose ref is a tag or branch to
 // where that ref points now, leaving office.yaml as it is.

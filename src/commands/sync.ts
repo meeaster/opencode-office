@@ -1,6 +1,7 @@
-// `office sync`: makes the office's folders match office.yaml and the tool. It clones and updates,
-// scaffolds desks that are declared but missing, installs, updates, restores and removes packages,
-// runs their `sync` functions, writes the mise tools packages declare into machine.packages.toml
+// `office sync`: makes the office's folders match office.yaml and the tool. It clones and updates
+// references and plugin clones, installs, updates, restores and removes packages,
+// runs their `sync` functions (and, in a full sync that applied the set whole, their `fullSync`
+// items, src/package-full-sync.ts), writes the mise tools packages declare into machine.packages.toml
 // and their setup into .office/mise/ (src/package-tools.ts) and, in a host-mode office the user
 // agreed may manage its machine, links them and machine.toml into mise's global conf.d
 // (src/machine.ts), links the server plugins packages register and installs their panels on the
@@ -8,31 +9,25 @@
 // (standard/opencode/ownership.ts) and kept out of commits through the repository's info/exclude,
 // with the paths packages' sync functions exclude. It never rewrites AGENTS.md, other hand-written
 // content or an existing app; what packages write in the office is their own `sync` functions' work.
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { join, relative } from "node:path";
 import { prepareReferenceRefresh } from "../../packages/references/tasks/refresh.ts";
 import { claudeFiles } from "../claude.ts";
 import { appliedReferences } from "../applied-references.ts";
 import { publishPackages } from "../package-operation.ts";
+import { fullSyncStep } from "../package-full-sync.ts";
 import { openCheckoutLease } from "../checkout-lease.ts";
-import { cloneOrFetchStreamed, clonePluginStreamed, existingPluginDestination, git, isClone, PluginCheckoutProblem, referenceGit, referenceOriginProblem, refreshCloneStreamed, verifiedHead } from "../git.ts";
+import { clonePluginStreamed, existingPluginDestination, git, isClone, PluginCheckoutProblem, referenceGit, referenceOriginProblem, refreshCloneStreamed, verifiedHead } from "../git.ts";
 import { type Clone, clones } from "../layout.ts";
 import { cloneTarget, placeLink, requirePluginDestination, stagingFolder } from "../../standard/opencode/delivery.ts";
 import { cloneFolder, entry as entryAt, pluginFolder } from "../../standard/opencode/ownership.ts";
-import { type Desk, type Office } from "../office.ts";
+import { type Office } from "../office.ts";
 import { silentStage, type Stage } from "../report/index.ts";
 import { requirePackageOwnership } from "../packages.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
 import { requireKnownLockKeys } from "../versions.ts";
 import { changeText, failure, isFailure, type Change } from "../change.ts";
 import { excludePlumbing } from "../exclude-plumbing.ts";
-
-/** "release-notes" → "Release notes", for titles in scaffolded files. */
-function title(name: string): string {
-  const words = name.replaceAll("-", " ");
-
-  return words.charAt(0).toUpperCase() + words.slice(1);
-}
 
 function fill(text: string, values: Record<string, string>): string {
   let result = text;
@@ -43,7 +38,7 @@ function fill(text: string, values: Record<string, string>): string {
 }
 
 /**
- * Copies a tool template folder (such as "template/desk"), filling placeholders in file names and
+ * Copies a tool template folder (such as "template/office"), filling placeholders in file names and
  * contents. Existing files are kept, and so are template paths (after filling) that `include`
  * rejects.
  */
@@ -58,39 +53,6 @@ export function copyTemplate(from: string, to: string, values: Record<string, st
 
     writeToolFile(target, fill(readFileSync(toolPath(`${from}/${file}`), "utf8"), values));
     written.push(target);
-  }
-
-  return written;
-}
-
-/**
- * Scaffolds a desk whose folder is missing, or only the starter Executor app of a desk that has
- * none. A desk that has both is left alone; `office check` reports anything else missing. A desk
- * with `app: false` never gets the app; an existing one is left for the human to delete.
- */
-function scaffoldDesk(office: Office, desk: Desk): string[] {
-  const dir = join(office.dir, desk.name);
-  const appPath = join("executor-apps", desk.name);
-  const deskExists = existsSync(dir);
-  const appExists = !desk.app || existsSync(join(dir, appPath));
-
-  for (const folder of ["repos", "scratch"]) mkdirSync(join(dir, folder), { recursive: true });
-
-  if (deskExists && appExists) return [];
-
-  const written = copyTemplate("template/desk", dir, { DESK: desk.name, DESK_TITLE: title(desk.name) }, (path) =>
-    path.startsWith(`${appPath}/`) ? !appExists : !deskExists,
-  );
-
-  // Desk apps carry a copy of the office's OpenCode client, so they declare the same provider
-  // and one OpenCode account links to all of them.
-  if (!appExists) {
-    for (const file of ["opencode.ts", "office.ts"]) {
-      const copy = join(dir, appPath, file);
-
-      cpSync(join(office.dir, "executor-apps/opencode", file), copy);
-      written.push(copy);
-    }
   }
 
   return written;
@@ -227,11 +189,11 @@ async function syncPlugin(office: Office, clone: Clone, present: boolean, linked
 }
 
 /**
- * Clones and updates the office's repositories, references and plugin clones, each reported
+ * Clones and updates the office's references and plugin clones, each reported
  * as a part of `stage` as it runs. Returns one line per change, in office.yaml's
  * order, with a FAILED line for each that failed.
  */
-async function syncClones(office: Office, scope: "references" | "others" | "all", stage: Stage, verbose: boolean): Promise<Change[]> {
+async function syncClones(office: Office, scope: "references" | "others" | "all", stage: Stage, verbose: boolean): Promise<{ changes: Change[]; parts: number }> {
   const references = scope === "others" ? undefined : appliedReferences(office.dir, office);
 
   if (references && !references.ok) {
@@ -239,7 +201,7 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
 
     for (const error of errors) stage.error(changeText(error));
 
-    return errors;
+    return { changes: errors, parts: 0 };
   }
 
   const work = clones(office, references?.value ?? []).filter((clone) => scope !== "references" || clone.kind === "reference");
@@ -251,7 +213,7 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
     lines[index].push(...notes);
   };
 
-  if (work.length === 0) return [];
+  if (work.length === 0) return { changes: [], parts: 0 };
 
   stage.detail(`cloning and updating ${work.length} ${work.length === 1 ? "source" : "sources"}, up to ${fetchSlots} at a time (${cloneSlots} new clones)`);
   stage.expect(work.length);
@@ -294,11 +256,10 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
             using lease = openCheckoutLease(office.dir, clone.name);
             lease.acquire();
             result = await prepareReferenceRefresh(present, referenceGit(clone, lease.fd))(options);
-          } else if (clone.kind === "plugin") ({ result, notes } = await syncPlugin(office, clone, present, claim.linked));
-          else result = await cloneOrFetchStreamed(clone.url, clone.ref, clone.dir, options);
+          } else ({ result, notes } = await syncPlugin(office, clone, present, claim.linked));
           part.done(result);
 
-          if (result !== "current" && result !== "fetched") lines[index].push(`${result} ${clone.kind} ${where}`);
+          if (result !== "current") lines[index].push(`${result} ${clone.kind} ${where}`);
           noted(index, notes);
         } catch (error) {
           part.fail(failed(error instanceof Error ? error.message.trim() : String(error)));
@@ -319,16 +280,16 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
     }
   }));
 
-  return lines.flat();
+  return { changes: lines.flat(), parts: work.length };
 }
 
 /** One line for a stage's result from sync's lines: what it cloned and updated, and how many other changes. */
 export function summarize(changes: Change[]): string {
   const count = (pattern: RegExp) => changes.filter((line) => !isFailure(line) && pattern.test(line)).length;
   const failed = changes.filter(isFailure).length;
-  // Clone lines name a kind: reference, plugin or "<desk> repo".
-  const cloned = count(/^cloned (reference|plugin|\S+ repo) /);
-  const updated = count(/^updated (reference|plugin|\S+ repo) /);
+  // Clone lines name a kind: reference or plugin.
+  const cloned = count(/^cloned (reference|plugin) /);
+  const updated = count(/^updated (reference|plugin) /);
   const other = changes.length - failed - cloned - updated;
 
   const parts = [
@@ -380,14 +341,10 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
     return reported;
   }
 
-  if (scope === "references") return syncClones(office, "references", stage, verbose);
+  if (scope === "references") return (await syncClones(office, "references", stage, verbose)).changes;
 
   requirePluginDestination(office);
-  stage.detail("scaffolding desks and installing packages");
-
-  for (const desk of office.desks) {
-    for (const path of scaffoldDesk(office, desk)) changes.push(`created ${relative(office.dir, path)}`);
-  }
+  stage.detail("installing packages");
 
   // info/exclude is written once, after the clones, and only from a package set that was applied
   // whole. References are cloned only once this sync recorded the ones it resolved. A package's
@@ -395,7 +352,13 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
   const applied = await syncPackages(office, changes, stage, false);
 
   if (applied.stopped) return reported;
-  reported.push(...await syncClones(office, applied.recorded ? "all" : "others", stage, verbose));
+  const cloned = await syncClones(office, applied.recorded ? "all" : "others", stage, verbose);
+
+  reported.push(...cloned.changes);
+
+  // Only after this sync's own admission and application succeeded, every package loaded and no step failed.
+  if (applied.generation !== undefined) reported.push(...await fullSyncStep(office, applied.generation, stage, cloned.parts, verbose));
+  else stage.note("no package's full-sync work ran: this sync didn't apply the package set whole without a failure");
   changes.push(...claudeFiles(office.dir, true));
 
   if (applied.committed) changes.push(...excludePlumbing(office, applied.committed, applied.excluded));
@@ -418,5 +381,10 @@ export async function syncPackages(office: Office, changes: { push: (...lines: C
   if (result.generation) stage.detail(`active package generation: ${result.generation}`);
   changes.push(...result.lines);
 
-  return { recorded: result.recorded === true, stopped: result.stopped === true, committed: result.committed, excluded: result.excluded ?? [] };
+  // The generation this sync published and applied whole (so with committed folders) without a
+  // failed step, for full-sync work; undefined otherwise. The references and exclusions keep
+  // their own conditions, `recorded` and `committed`.
+  const generation = result.committed === undefined || result.lines.some(isFailure) ? undefined : result.generation;
+
+  return { recorded: result.recorded === true, stopped: result.stopped === true, committed: result.committed, excluded: result.excluded ?? [], generation };
 }

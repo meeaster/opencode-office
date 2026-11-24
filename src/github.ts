@@ -14,33 +14,24 @@ import { parse } from "yaml";
 import { git } from "./git.ts";
 import { ghLink, type InstalledTool, officeTool } from "./host-tools.ts";
 import { clones } from "./layout.ts";
+import type { DeclaredAccess } from "./package-access.ts";
 import { type Office, OfficeError, type Repository, updateConfig } from "./office.ts";
 import { check } from "./schema.ts";
 import { compareVersions } from "./versions.ts";
 import { inherit, progress, say, stream, warn } from "./report/index.ts";
 
-/** A declared clone source: a reference, desk repository, plugin, package or Git skill source. */
+/** A declared clone source: a reference, plugin, package or a repository a package declares, such as a working repository. */
 export type Source = { what: string; url: string; pushes: boolean };
 
-const skillSources = v.object({ sources: v.fallback(v.array(v.fallback(v.looseObject({ repo: v.optional(v.string()) }), {})), []) });
-
 /**
- * The Git sources the skills package's settings name, as written in office.yaml: setup reads each
- * with this host's credentials before the package's sync fetches it. Its own schema checks them.
+ * The office's sources, with `references` the ones to clone (the applied ones in setup, the
+ * gathered ones in check) and `declared` the repositories packages' access declarations name
+ * (src/package-access.ts), each read before the package's own work fetches it.
  */
-function skillRepositories(office: Office): Source[] {
-  const settings = office.packages.find(entry => entry.name === "skills")?.settings;
-  const read = v.safeParse(skillSources, settings ?? {});
-
-  return read.success ? read.output.sources.flatMap((source, index) => source.repo === undefined ? [] : [{ what: `skills source ${index + 1}`, url: source.repo, pushes: false }]) : [];
-}
-
-/** The office's sources, with `references` the ones to clone: the applied ones in setup, the gathered ones in check. */
-export function sources(office: Office, references: readonly Repository[]): Source[] {
+export function sources(office: Office, references: readonly Repository[], declared: readonly DeclaredAccess[] = []): Source[] {
   return [
-    // Desk repositories are working clones that agents commit in and push from.
-    ...clones(office, references).map((clone) => ({ what: `${clone.kind} ${clone.name}`, url: clone.url, pushes: clone.kind !== "reference" && clone.kind !== "plugin" })),
-    ...skillRepositories(office),
+    ...clones(office, references).map((clone) => ({ what: `${clone.kind} ${clone.name}`, url: clone.url, pushes: false })),
+    ...declared.map((source) => ({ what: `${source.owner} ${source.name}`, url: source.url, pushes: source.access === "read-write" })),
     ...office.packages.flatMap((entry) => (entry.source === undefined ? [] : [{ what: `package ${entry.name}`, url: entry.source.repo, pushes: false }])),
   ];
 }
@@ -118,17 +109,17 @@ export type GithubPlan = {
   hosts: string[];
   /** Sources on a GitHub host that don't read without a login. */
   private: Source[];
-  /** Desk repositories on a GitHub host, which agents push to. */
+  /** Sources on a GitHub host that agents push to, as packages declare them (read-write). */
   pushes: Source[];
   /** A login is required: a private source, or office.yaml shares the host's login. */
   needed: boolean;
 };
 
 /** The sources on a GitHub host: github.com, or a host the host's gh has an account for. */
-function githubSources(office: Office, references: readonly Repository[]): Source[] {
+function githubSources(office: Office, references: readonly Repository[], declared: readonly DeclaredAccess[]): Source[] {
   const known = ghHosts();
 
-  return sources(office, references).filter((source) => {
+  return sources(office, references, declared).filter((source) => {
     const host = httpsHost(source.url);
 
     return host !== undefined && (host === "github.com" || known.includes(host));
@@ -139,8 +130,8 @@ function githubSources(office: Office, references: readonly Repository[]): Sourc
  * The GitHub hosts the office uses: its sources' hosts. An office that shares the login without
  * such a source uses the hosts gh has accounts for, else github.com.
  */
-export function githubHosts(office: Office, references: readonly Repository[]): string[] {
-  const hosts = [...new Set(githubSources(office, references).map((source) => httpsHost(source.url) ?? ""))];
+export function githubHosts(office: Office, references: readonly Repository[], declared: readonly DeclaredAccess[]): string[] {
+  const hosts = [...new Set(githubSources(office, references, declared).map((source) => httpsHost(source.url) ?? ""))];
 
   if (office.git?.credentials !== "gh" || hosts.length > 0) return hosts;
 
@@ -149,12 +140,12 @@ export function githubHosts(office: Office, references: readonly Repository[]): 
   return known.length > 0 ? known : ["github.com"];
 }
 
-export async function planGithub(office: Office, references: readonly Repository[]): Promise<GithubPlan> {
-  const onGithub = githubSources(office, references);
+export async function planGithub(office: Office, references: readonly Repository[], declared: readonly DeclaredAccess[] = []): Promise<GithubPlan> {
+  const onGithub = githubSources(office, references, declared);
   const reads = await reachAll(onGithub.map((source) => source.url), { anonymous: true });
   const unreadable = onGithub.filter((_, index) => !reads[index].ok);
 
-  return { hosts: githubHosts(office, references), private: unreadable, pushes: onGithub.filter((source) => source.pushes), needed: office.git?.credentials === "gh" || unreadable.length > 0 };
+  return { hosts: githubHosts(office, references, declared), private: unreadable, pushes: onGithub.filter((source) => source.pushes), needed: office.git?.credentials === "gh" || unreadable.length > 0 };
 }
 
 const statusSchema = v.object({
@@ -352,9 +343,9 @@ function cause(error: string, loggedIn: boolean | undefined): string {
  * Reads every declared source with this host's git credentials, as sync will; returns one line
  * per source that doesn't read, with the likely cause.
  */
-export async function unreachableSources(office: Office, references: readonly Repository[]): Promise<string[]> {
+export async function unreachableSources(office: Office, references: readonly Repository[], declared: readonly DeclaredAccess[]): Promise<string[]> {
   const gh = officeTool(office, "gh");
-  const all = sources(office, references);
+  const all = sources(office, references, declared);
   const reads = await reachAll(all.map((source) => source.url));
 
   return all.flatMap((source, index) => {

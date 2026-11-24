@@ -1,6 +1,6 @@
 # __OFFICE__ office
 
-An office is a source-controlled folder of desks for OpenCode. The folder a session starts in decides what the agent knows and can do. It is run with the `office` command; `office --help` lists its commands.
+An office is a source-controlled folder of work for OpenCode and Claude Code: its instructions, skills, packages and working repositories. It is run with the `office` command; `office --help` lists its commands.
 
 After init or clone, run `office setup` to resume onboarding. It guides host prerequisites, SOPS/age enrollment and owner email, offers to install the system packages and files the office declares (a package's system setup, `machine.toml`'s `[bootstrap.packages]`) through mise when something is missing, creates Executor's owner/token without browser copying, starts OpenCode (offering a restart when a running managed server has older settings), deploys apps and checks. Rerun it after turning on a package's system setup. Review the jobs `office cron list` shows first (the cron package's settings in `office.yaml` add and change them): missed jobs run at container startup. Provider sign-in remains human-controlled; use `office pair` for the app.
 
@@ -18,7 +18,7 @@ Portable owner credentials are SOPS-encrypted in `secrets/executor-owner.enc.jso
 
 | Path | Holds |
 |---|---|
-| `office.yaml` | Under `tools`: the versions the containers run (and Socket Firewall's, and whether package downloads go through it), and how old a release must be before package managers, mise or the daily job take it. Also the desks, references, desk repositories, cloned plugins and packages, such as the `skills` package's sources and enabled skills |
+| `office.yaml` | Under `tools`: the versions the containers run (and Socket Firewall's, and whether package downloads go through it), and how old a release must be before package managers, mise or the daily job take it. Also the references, cloned plugins and packages, such as the `repos` package's working repositories and the `skills` package's sources and enabled skills |
 | `office.lock` | The checksum of each version in `office.yaml`, written by `office pin`, and the commit of each package from a Git repository, written by `office sync`; don't edit it |
 | `.office/seeds/` | The `seeds` package's: `receipts.json`, a receipt for each file a package laid down in the office or found already there (a seed), and the bytes of each seed a receipt names, by its SHA-256. Written by `office sync` and `office seeds settle`; a stored seed is never deleted. Committed |
 | `AGENTS.md`, `.opencode/opencode.jsonc` | Your instructions and config for every session. No tool writes to `AGENTS.md` |
@@ -28,13 +28,14 @@ Portable owner credentials are SOPS-encrypted in `secrets/executor-owner.enc.jso
 | `.office/mise/` | Packages' mise setup (a host install, a system setup), one file per package, written by `office sync`; don't edit them. `.office/` is the tool's and, but for the folders packages commit such as `.office/seeds/`, stays out of Git (sync excludes it, and its links, in `.git/info/exclude`): what you edit is at the root |
 | `packages/` | Packages written in this office |
 | `knowledge/` | Articles every session sees listed, through the `knowledge` package |
-| `mise.toml` | Tools every desk gets; a desk's own `mise.toml` adds more |
+| `mise.toml` | Tools every folder of the office gets; a working repository's own `mise.toml` adds more |
 | `machine.packages.toml` | The mise tools the office's packages need, one line per tool naming the packages, written by `office sync` and committed. Sync owns which tools are listed and raises a version below what a package needs; the versions are otherwise yours, and `office upgrade-tools` bumps them. To hold one back, pin it in `machine.toml` |
 | `machine.toml` | Machine-wide tools and mise settings, and system packages under `[bootstrap.packages]` that `office setup` offers to install, the office's own. mise loads it only through a link in its global conf.d, after `machine.packages.toml` and `.office/mise/`, so it wins over them: in host mode sync makes the links once you agree in `office setup`, and the container makes them inside itself. Inside a folder with a `mise.toml`, that file wins |
-| `executor-apps/` | Source for shared Executor apps, such as `opencode` (start a session and wait for it). The office plugin lists each Executor app with its `package.json` description |
+| `executor-apps/` | Source for the office's Executor apps, one folder per app named by its slug, such as `opencode` (start a session and wait for it). The office plugin lists each Executor app with its `package.json` description |
 | `office cron list` | Lists the ids of the jobs packages and the office declare that apply in this mode. The required `office` package updates references and tool pins daily. Add the office's own jobs, or reschedule or disable a package's, in the `cron` package's settings: `- { name: cron, settings: { jobs: {...}, overrides: { package.office.upgrade-tools: { enabled: false } } } }` under `packages:`. A core package need not be listed; list it once to configure it. |
 | `references/` | Read-only clones, gitignored |
-| `<desk>/` | A desk: `AGENTS.md`, `.opencode/`, `mise.toml`, its Executor app in `executor-apps/<desk>/` (none with `app: false` in `office.yaml`), and gitignored `repos/` and `scratch/` |
+| `repos/` | Working repositories, gitignored: with the `repos` package, the checkouts its settings declare, which every session is told about. A checkout's own `AGENTS.md` applies in sessions started inside it |
+| `scratch/` | Throwaway work and Git worktrees, gitignored |
 | `Dockerfile`, `compose.yaml` | Optional: system packages on top of the base image, and extra services `office up` starts. A service reaches Executor with the office's key: `env_file: [{ path: "${OFFICE_STATE}/office-executor.env", required: false }]` gives it `EXECUTOR_TOKEN` and `EXECUTOR_ORGANIZATION`, and Executor is at `http://executor:4400` |
 | `.pre-commit-config.yaml` | The gitleaks hook, which blocks commits that contain secrets |
 
@@ -44,8 +45,8 @@ Portable owner credentials are SOPS-encrypted in `secrets/executor-owner.enc.jso
 - OpenCode, Claude Code, Codex, Executor and mise run at the versions under `tools` in `office.yaml`. The daily `upgrade-tools` job bumps them once a release is `tools.minimum_release_age` old (or the runtime's own age) and commits as the office's git identity (else `office cron`); nothing restarts until you run `office up --upgrade`, which backs up and applies them (`office up` alone keeps the applied versions and says what is pending). After changing a version by hand, run `office pin`. An office never goes back to an older OpenCode or Executor.
 - `office pair` prints a one-time link that connects the OpenCode app or a browser to this office.
 
-- Change `office.yaml`, then run `office sync`. It clones, scaffolds missing desks, installs, updates, restores and removes packages and applies them, such as the `skills` package's links and the package plugins; it never overwrites hand-written content.
-- A desk's jobs are code in its Executor app: a schedule or webhook starts a workflow, which can run an OpenCode session in the desk's folder (`agent.ask`).
-- Skills at the root (`.agents/skills/`) reach every desk and its repositories.
+- Change `office.yaml`, then run `office sync`. It clones and fetches, installs, updates, restores and removes packages and applies them, such as the `skills` package's links and the package plugins; it never overwrites hand-written content.
+- An Executor app's jobs are its code: a schedule or webhook starts a workflow, which can run an OpenCode session in the office (the `opencode` app). `executor.notifications` in `office.yaml` names the app whose `notifications.send` gets the office's own job notifications.
+- Skills at the root (`.agents/skills/`) reach every session in the office, inside working repositories too.
 - `office check` reports drift between `office.yaml` and the folders, and the running containers' state.
 - OpenCode runs in the office's container or, with `opencode: { mode: host, url: ... }` in `office.yaml`, on a server already running on the host. Executor always runs in a container. After switching, run `office up` and `office apps deploy`.

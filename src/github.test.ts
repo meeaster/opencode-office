@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { sources, unshareable } from "./github.ts";
 import { loadOffice, updateConfig } from "./office.ts";
+import { declaredAccess } from "./package-access.ts";
 
 let dir: string;
 
@@ -45,10 +46,12 @@ test("only a non-expiring login stored in gh's hosts.yml is shared with the cont
   expect(unshareable({ ...file, refreshable: true })).toContain("rotates");
 });
 
-test("setup reads the skills package's Git sources with the others; a folder source or no skills package adds none", () => {
+test("setup reads the skills package's Git sources, from its access declaration, with the others; a folder source or no skills package adds none", async () => {
   writeFileSync(join(dir, "office.yaml"), "name: demo\npackages:\n  - name: skills\n    settings:\n      sources:\n        - folder: skills\n        - { repo: https://example.com/handbook.git, ref: abc, skills: [{ name: review, path: review }] }\n");
+  const declared = await declaredAccess(loadOffice(dir));
 
-  expect(sources(loadOffice(dir), [])).toEqual([{ what: "skills source 2", url: "https://example.com/handbook.git", pushes: false }]);
+  expect(declared).toEqual({ sources: [{ owner: "skills", name: "source 2", url: "https://example.com/handbook.git", access: "read" }], problems: [] });
+  expect(sources(loadOffice(dir), [], declared.sources)).toEqual([{ what: "skills source 2", url: "https://example.com/handbook.git", pushes: false }]);
   writeFileSync(join(dir, "office.yaml"), "name: demo\n");
-  expect(sources(loadOffice(dir), [])).toEqual([]);
+  expect(await declaredAccess(loadOffice(dir))).toEqual({ sources: [], problems: [] });
 });

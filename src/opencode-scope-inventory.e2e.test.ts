@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as v from "valibot";
-import { command, deskConfig, gitAt, launcher, rootConfig, scopeFixture, write } from "./opencode-scope.fixture.ts";
+import { command, gitAt, launcher, repoConfig, rootConfig, scopeFixture, write } from "./opencode-scope.fixture.ts";
 import { pluginDefinition, writePackage } from "./test-package.ts";
 
 const { sandbox, fixture } = scopeFixture();
@@ -21,7 +21,7 @@ test("compiled offline inventory distinguishes scoped declarations, links, clone
     const path = (file: string) => join(f.dir, file);
     const link = path(".opencode/plugins/common");
     const sync = ["sync", "--packages"];
-    const inspect = ["opencode", "inspect", "builder/repos/sample"];
+    const inspect = ["opencode", "inspect", "repos/builder/sample"];
 
     write(path("packages/common/gui/dist/gui-experimental.cjs"), "module.exports = {}");
     writePackage(path("packages/common/office.ts"), pluginDefinition("plugin", { panel: "gui/dist/gui-experimental.cjs" }), { dependencies: ["opencode"] });
@@ -43,8 +43,9 @@ test("compiled offline inventory distinguishes scoped declarations, links, clone
     write(join(f.home, "config/opencode/opencode.json"), '{"plugins":["hidden-global-plugin"]}');
     const report = await f.run(inspect);
 
-    expect(report).toContain("[desk builder] configured local directory: builder/.opencode/opencode.jsonc#plugins[0]");
-    expect(report).toContain("[folder builder/<folder-2>/<folder-3>] native config: builder/<folder-2>/<folder-3>/opencode.json");
+    expect(report).toContain("[folder repos/<folder-2>] configured local directory: repos/<folder-2>/.opencode/opencode.jsonc#plugins[0]");
+    expect(report).toContain("[folder repos/<folder-2>/<folder-3>] native config: repos/<folder-2>/<folder-3>/opencode.json");
+    expect(report).not.toMatch(/\bdesk\b|builder/);
     expect(report).toContain("declared Git clone (no checkout observed; not linked as .opencode/plugins/imported): office.yaml plugins: imported -> .office/plugins/imported");
     expect(report).toContain("Office package link (selected built-in package): .opencode/plugins/office");
     expect(report).toContain("convention plugin candidate (dangling)");
@@ -58,7 +59,7 @@ test("compiled offline inventory distinguishes scoped declarations, links, clone
     expect(report).toContain("runtime not checked");
     expect(existsSync(f.imports)).toBe(false);
     expect(requests).toBe(0);
-    expect(await f.run(["opencode", "inspect", "sibling"])).not.toContain("builder/");
+    expect(await f.run(["opencode", "inspect", "repos/sibling"])).not.toContain("configured local directory: repos/");
     expect((await f.run(["opencode", "inspect", ".opencode"])).match(/native config: \.opencode\/opencode\.jsonc/g)).toHaveLength(1);
     const failed = await f.run(["opencode", "inspect", join(f.home, "hidden-lookup\nINJECTED")], 1);
     expect(failed).not.toMatch(/hidden-lookup|INJECTED/);
@@ -74,8 +75,8 @@ test("compiled offline inventory distinguishes scoped declarations, links, clone
     expect(existsSync(link)).toBe(false);
     expect(readlinkSync(path(".opencode/plugins/owner-alias"))).toBe("../../packages/common/plugin");
     expect(readlinkSync(path(".opencode/plugins/owner-dangling"))).toBe("../../packages/missing/elsewhere");
-    expect(readFileSync(path("builder/.opencode/plugins/independent.js"), "utf8")).toBe(command("native-command"));
-    expect(readFileSync(path("builder/.opencode/opencode.jsonc"), "utf8")).toBe(deskConfig);
+    expect(readFileSync(path("repos/builder/.opencode/plugins/independent.js"), "utf8")).toBe(command("native-command"));
+    expect(readFileSync(path("repos/builder/.opencode/opencode.jsonc"), "utf8")).toBe(repoConfig);
     expect(readFileSync(path(".opencode/opencode.jsonc"), "utf8")).toBe(edited);
     // An owner directory with a package's name is the office's own, never replaced.
     rmSync(path(".opencode/plugins/office"));
@@ -99,28 +100,28 @@ test("ownership by target: Office's plugin links are recognized and withdrawn by
   const path = (file: string) => join(f.dir, file);
   const plugins = path(".opencode/plugins");
   const skills = path(".opencode/skills");
-  const deskSkills = path("builder/.opencode/skills");
+  const repoSkills = path("repos/builder/.opencode/skills");
   write(path("skills/alpha/SKILL.md"), "---\nname: alpha\ndescription: fixture\n---\n");
 
   const select = (packages: string) => write(path("office.yaml"), [
     "name: sample", `state: ${f.home}/office-state`, "opencode: {mode: host, url: http://127.0.0.1:1}",
-    "desks: {builder: {app: false}, sibling: {app: false}}", `packages: [${packages}]`, "",
+    `packages: [${packages}]`, "",
   ].join("\n"));
 
   // The owner's entries: a real plugin folder, a link elsewhere, a file, a real skill folder, and
   // links to skills: none is Office's, the ones earlier releases wrote included.
   write(path(".opencode/plugins/owner-plugin/index.js"), command("owner-plugin"));
-  symlinkSync("../../builder/extensions/local", join(plugins, "owner-link"));
+  symlinkSync("../../repos/builder/extensions/local", join(plugins, "owner-link"));
   write(join(plugins, "notes.txt"), "owner\n");
   write(join(skills, "owner-skill/SKILL.md"), "---\nname: owner-skill\ndescription: fixture\n---\n");
   symlinkSync("../../skills/alpha", join(skills, "alpha"));
-  mkdirSync(deskSkills, { recursive: true });
-  symlinkSync("../../../skills/alpha", join(deskSkills, "alpha"));
+  mkdirSync(repoSkills, { recursive: true });
+  symlinkSync("../../../../skills/alpha", join(repoSkills, "alpha"));
   // Office's by their text alone, though nothing recorded making them: dangling and hand-made.
   symlinkSync("../../.office/packages/gone/plugin", join(plugins, "gone"));
   symlinkSync("../../.office/plugins/old-clone", join(plugins, "old-clone"));
   symlinkSync("../../packages/common/plugin", join(plugins, "common"));
-  const owner = () => [readlinkSync(join(plugins, "owner-link")), readFileSync(join(plugins, "notes.txt"), "utf8"), readlinkSync(join(skills, "alpha")), readlinkSync(join(deskSkills, "alpha")), existsSync(path(".opencode/plugins/owner-plugin/index.js")), existsSync(join(skills, "owner-skill/SKILL.md"))];
+  const owner = () => [readlinkSync(join(plugins, "owner-link")), readFileSync(join(plugins, "notes.txt"), "utf8"), readlinkSync(join(skills, "alpha")), readlinkSync(join(repoSkills, "alpha")), existsSync(path(".opencode/plugins/owner-plugin/index.js")), existsSync(join(skills, "owner-skill/SKILL.md"))];
   const kept = owner();
 
   select("{name: common}");
@@ -143,9 +144,9 @@ test("ownership by target: Office's plugin links are recognized and withdrawn by
   expect(await f.run(["sync"], 1)).toContain("which holds a plugin of this office's own (not a link office sync made), so it isn't linked; rename one of them");
   expect(readFileSync(join(plugins, "common/index.js"), "utf8")).toBe("// the owner's own common\n");
   rmSync(join(plugins, "common"), { recursive: true });
-  symlinkSync("../../builder/extensions/local", join(plugins, "common"));
+  symlinkSync("../../repos/builder/extensions/local", join(plugins, "common"));
   expect(await f.run(["sync"], 1)).toContain("not a link office sync made");
-  expect(readlinkSync(join(plugins, "common"))).toBe("../../builder/extensions/local");
+  expect(readlinkSync(join(plugins, "common"))).toBe("../../repos/builder/extensions/local");
   await f.run(["cron", "list"]); // A plugin destination collision is not a broken cron provider.
 
   // Deselecting withdraws Office's links, the identical hand-made ones too; nothing of the owner's.
@@ -155,9 +156,9 @@ test("ownership by target: Office's plugin links are recognized and withdrawn by
   expect(await f.run(["sync"])).toContain("unlinked .opencode/plugins/common");
   expect(readdirSync(plugins).sort()).toEqual(["notes.txt", "office", "owner-link", "owner-plugin"]);
   expect(readdirSync(skills).sort()).toEqual(["alpha", "owner-skill"]);
-  expect(readdirSync(deskSkills)).toEqual(["alpha"]);
+  expect(readdirSync(repoSkills)).toEqual(["alpha"]);
   expect(owner()).toEqual(kept);
-  expect(readFileSync(path("builder/.opencode/plugins/independent.js"), "utf8")).toBe(command("native-command"));
+  expect(readFileSync(path("repos/builder/.opencode/plugins/independent.js"), "utf8")).toBe(command("native-command"));
 }, 60_000);
 
 test("a package plugin that changes location is relinked with a restart notice; before sync, check says to sync", async () => {
@@ -185,7 +186,7 @@ test("a package plugin that changes location is relinked with a restart notice; 
 }, 60_000);
 
 // Opt-in: a real v2 launcher, isolated HOME and server on a kernel-assigned loopback port.
-test.skipIf(!launcher)("OpenCode sees the shared command in both desks, the builder commands and override only in builder and its repo", async () => {
+test.skipIf(!launcher)("OpenCode sees the shared command in every working repository, the builder commands and override only in builder and its nested repo", async () => {
   if (!launcher) throw new Error("set OFFICE_TEST_OPENCODE to an absolute OpenCode V2 launcher");
 
   // V2 also searches above a project and loads system config. Only run on a clean Linux hierarchy.
@@ -263,9 +264,9 @@ test.skipIf(!launcher)("OpenCode sees the shared command in both desks, the buil
     }
 
     await verify(f.dir, false, true);
-    await verify(join(f.dir, "builder"), true, true);
+    await verify(f.builder, true, true);
     await verify(f.repo, true, true);
-    await verify(join(f.dir, "sibling"), false, true);
+    await verify(join(f.dir, "repos/sibling"), false, true);
 
     const loads = async (folder: string, names: string[]) => {
       const headers = { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`, "x-opencode-directory": encodeURIComponent(folder) };
@@ -285,10 +286,10 @@ test.skipIf(!launcher)("OpenCode sees the shared command in both desks, the buil
     renameSync(remote, `${remote}.away`);
     await f.run(["sync"], 1);
     expect(readlinkSync(join(f.dir, ".opencode/plugins/cloned"))).toBe("../../.office/plugins/cloned");
-    const fresh = join(f.dir, "sibling/after-offline-sync");
+    const fresh = join(f.dir, "repos/sibling/after-offline-sync");
     mkdirSync(fresh);
 
-    for (const folder of [f.dir, join(f.dir, "builder"), fresh]) expect(await loads(folder, ["cloned-command"])).toEqual(["cloned-command"]);
+    for (const folder of [f.dir, f.builder, fresh]) expect(await loads(folder, ["cloned-command"])).toEqual(["cloned-command"]);
     renameSync(`${remote}.away`, remote);
     f.select("");
     await f.run(["sync", "--packages"]);

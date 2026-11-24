@@ -8,5 +8,5 @@
 # where it is. In a host-mode office, office sync links both into mise's global conf.d (once office
 # setup has your yes), this one last; the container links them inside itself. mise.toml beside it
 # is folder-scoped instead: what the office repository itself needs, in the office's folders only,
-# where it wins over this file, as a desk's or a project's mise.toml does in its own.
+# where it wins over this file, as a working repository's mise.toml does in its own.
 [tools]

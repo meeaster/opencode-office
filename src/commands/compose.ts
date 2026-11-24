@@ -77,7 +77,6 @@ function environment(office: Office, profiles: string, pins: Lock, cronRevision 
     OFFICE_NAME: office.name,
     OFFICE_DIR: office.dir,
     OFFICE_STATE: office.state,
-    OFFICE_DESKS: office.desks.map((desk) => desk.name).join(","),
     OFFICE_CRON_REVISION: cronRevision,
     OFFICE_OPENCODE_IMAGE: officeImage(office, pins),
     OFFICE_EXECUTOR_IMAGE: executorImage(pins.executor),
@@ -225,18 +224,16 @@ async function miseInstall(office: Office, dir: string, trust: string[] = []): P
 }
 
 /**
- * Trusts and installs every office mise.toml with the host's mise, then the office's machine-wide
+ * Trusts and installs the office's mise.toml with the host's mise, then the office's machine-wide
  * tools (machine.packages.toml, the packages' fragments in .office/mise/ and machine.toml), as the container does at
  * start. Those load only through their links in mise's global conf.d, which need no trust, and a
  * mise.toml in the office may pin the same tool at another version, so they install from the
  * filesystem root, where only global config applies; their postinstall hooks run there.
  */
 async function installTools(office: Office): Promise<void> {
-  for (const dir of [office.dir, ...office.desks.map((desk) => join(office.dir, desk.name))]) {
-    const config = join(dir, "mise.toml");
+  const config = join(office.dir, "mise.toml");
 
-    if (existsSync(config)) await miseInstall(office, dir, [config]);
-  }
+  if (existsSync(config)) await miseInstall(office, office.dir, [config]);
 
   if (machineFiles(office).length === 0) return;
 

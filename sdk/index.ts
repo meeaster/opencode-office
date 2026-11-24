@@ -5,7 +5,7 @@
 // it loads a definition, so a package always gets that copy, whatever is on disk. The copy sync
 // writes beside an office's packages gives editors and tsc these types; loading it throws.
 // Named exports only: there is no default export.
-import { mark, markIntegration } from "./mark.ts";
+import { mark, markAccess, markIntegration } from "./mark.ts";
 
 /** A value an office.yaml setting can hold: what YAML and JSON share. */
 export type SettingValue = null | boolean | number | string | SettingValue[] | { [key: string]: SettingValue };
@@ -117,6 +117,49 @@ export type SyncInputs<Settings = Readonly<Record<string, SettingValue>>> = Life
    */
   exclude(paths: readonly string[]): void;
 } & ExclusionUpdate;
+
+/** How one item of a package's full-sync work ended: done, with an optional summary, or failed with the reason sync names. */
+export type ItemResult = { ok: true; summary?: string } | { ok: false; reason: string };
+
+/**
+ * One item of a package's full-sync work, such as one checkout, which sync shows as a part of its
+ * progress while `run` works. `output` shows a line of progress under the item. A failed result,
+ * or a throw, names the package, the item and the reason, makes sync exit 1 and stops nothing else.
+ */
+export type SyncItem = {
+  /** What the item is, unique within the package's list, such as `repos/notes`. */
+  readonly item: string;
+  run(output: (line: string) => void): ItemResult | Promise<ItemResult>;
+};
+
+/** What a package's `fullSync` and `session` get: the office and its settings. */
+export type PackageInputs<Settings = Readonly<Record<string, SettingValue>>> = {
+  readonly office: OfficeInfo;
+  readonly settings: Settings;
+};
+
+/** What a package's `fullSync` gets: its inputs, and whether the sync shows full progress (`--verbose`), such as Git's progress meter, in its items' output. */
+export type FullSyncInputs<Settings = Readonly<Record<string, SettingValue>>> = PackageInputs<Settings> & {
+  readonly verbose: boolean;
+};
+
+/** A repository a package will read or push to, which `office setup` reads before cloning anything. */
+export type AccessSource = {
+  /** What it is within the package, for setup's messages, such as `source 2` or `notes`. */
+  readonly name: string;
+  /** Its URL, as Git clones it. */
+  readonly url: string;
+  /** `read-write` when the office pushes to it, so setup plans a login that can. */
+  readonly access: "read" | "read-write";
+};
+
+/**
+ * A package's access declaration: the module its package.json names in `office.access`, whose
+ * default export is `Package.access(settings => [...])`. It runs before the package set exists,
+ * on a fresh office included, so it imports only `@office/sdk` and the package's own files, and
+ * parses the settings itself: they are office.yaml's, not yet checked against the schema.
+ */
+export type Access = (settings: Readonly<Record<string, SettingValue>>) => readonly AccessSource[];
 
 /** What a package's `check` gets: also the host helpers, to read its timers. */
 export type CheckInputs<Settings = Readonly<Record<string, SettingValue>>> = Lifecycle<Settings> & { readonly host: Host };
@@ -280,6 +323,18 @@ export type Definition<Schema extends SettingsSchema = NoSettings> = {
    * after every `setup`, in the order packages load. Returns the lines to print. A throw stops the sync.
    */
   sync?(inputs: SyncInputs<Settings<Schema>>): readonly string[] | void | Promise<readonly string[] | void>;
+  /**
+   * Runs only at a full `office sync` (and the sync `office setup` and `office refresh` run), after
+   * that same sync admitted and applied the package set with every selected package loaded; never
+   * at `office sync --packages` or `office packages update`. Returns its items, which run
+   * alongside other packages' work: one item's failure is reported and the rest go on.
+   */
+  fullSync?(inputs: FullSyncInputs<Settings<Schema>>): readonly SyncItem[] | Promise<readonly SyncItem[]>;
+  /**
+   * Text every new OpenCode and Claude Code session in the office gets, from the settings the last
+   * sync applied. Runs as each session starts, so it can describe files as they are then. Empty text adds nothing.
+   */
+  session?(inputs: PackageInputs<Settings<Schema>>): string | Promise<string>;
   /** Runs at `office check` with every selected package loaded, and only reports: it must not write. */
   check?(inputs: CheckInputs<Settings<Schema>>): readonly Problem[] | Promise<readonly Problem[]>;
   /**
@@ -317,6 +372,10 @@ export const Package = {
    */
   integration<Parent extends { readonly settings?: SettingsSchema }>() {
     return (integration: Integration<DefinitionSettings<Parent>>): Integration<DefinitionSettings<Parent>> => markIntegration(integration);
+  },
+  /** An access declaration module's default export; see `Access`. */
+  access(access: Access): Access {
+    return markAccess(access);
   },
 };
 

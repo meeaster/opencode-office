@@ -24,7 +24,6 @@ test("a compiled office records the references it resolved, in the gathering's o
 
   const configure = (packages: string[], owner = "z-owner") => write(yaml, `name: refs
 references: [{name: ${owner}, url: ${wanted}}, {name: a-owner, url: ${wanted}}]
-desks: {work: {app: false}, sibling: {app: false, repos: [{name: other-desk, url: ${upstream}}]}}
 packages: [${packages.join(", ")}]
 `);
 
@@ -91,13 +90,10 @@ packages: [${packages.join(", ")}]
   expect(existsSync(join(moved.dir, "packages/manual"))).toBe(false);
 
   configure([aws, manual], "floci");
-  const workRepo = join(dir, "sibling/repos/other-desk");
-  rmSync(workRepo, { recursive: true });
   write(yaml, read(yaml) + `plugins: [{name: fixture, repo: ${upstream}}]\n`);
   write(join(checkout, "document"), "keep through rejection");
   expect(cli(1, "sync")).toContain("floci claimed by both office.yaml and package aws-emulator");
   // Steps outside packages still run; the applied file and the reference checkouts stay.
-  expect(head(workRepo)).toBe(first);
   expect(head(join(dir, ".opencode/plugins/fixture"))).toBe(first);
   expect(read(applied)).toBe(recorded);
   expect(read(join(checkout, "document"))).toBe("keep through rejection");
@@ -121,15 +117,19 @@ packages: [${packages.join(", ")}]
   rmSync(probe);
   cli(0, "sync", "--references");
   expect(head(checkout)).toBe(second);
-  const nested = join(dir, "work/repos/nested");
+  const nested = join(dir, "repos/work/nested");
   mkdirSync(nested, { recursive: true });
+  const texts: string[] = [];
 
+  // Every folder of the office gets the same guidance.
   for (const folder of [dir, nested]) {
     const text = await verifyPrompt(folder);
     expect(text).toContain("references/floci/");
     expect(text).toContain("references/manual/` (package manual)");
-    expect(text.includes("sibling/repos/other-desk/")).toBe(folder === dir);
+    texts.push(text);
   }
+
+  expect(texts[1]).toBe(texts[0]);
 
   expect(existsSync(probe)).toBe(false);
   git(["remote", "set-url", "origin", "../../foreign"], checkout);

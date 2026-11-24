@@ -1,5 +1,0 @@
-{
-  "$schema": "https://opencode.ai/config.json",
-  // Config for sessions in this desk, on top of the office root's .opencode/opencode.jsonc:
-  // agents, default_agent, MCP servers or plugins only this desk needs.
-}

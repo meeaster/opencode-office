@@ -1,8 +1,9 @@
 /references/
 /.office/resolved/
 /.office/runtime/
-/*/repos/
-/*/scratch/
+# Working repositories and scratch work are checkouts and files of their own, never the office's.
+/repos/
+/scratch/
 node_modules/
 # The office-executor MCP server's address and token in host mode, written by `office up`.
 /.opencode/office-executor.*

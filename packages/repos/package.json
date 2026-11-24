@@ -1,0 +1,10 @@
+{
+  "name": "@office/repos",
+  "description": "The office's working repositories: described checkouts under repos/ that full sync clones and fetches without advancing, listed in every session.",
+  "private": true,
+  "exports": {},
+  "office": {
+    "definition": "./office.ts",
+    "access": "./access.ts"
+  }
+}

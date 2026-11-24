@@ -3,7 +3,7 @@
 // each naming the field and what it expected.
 import * as v from "valibot";
 
-import type { CheckInputs, CommandInputs, DownInputs, JsonValue, Problem, SyncInputs, UpInputs, SettingValue, SetupContext } from "../sdk/index.ts";
+import type { CheckInputs, CommandInputs, DownInputs, FullSyncInputs, JsonValue, PackageInputs, Problem, SyncInputs, SyncItem, UpInputs, SettingValue, SetupContext } from "../sdk/index.ts";
 
 export type { SettingValue } from "../sdk/index.ts";
 
@@ -44,18 +44,13 @@ export const repository = v.strictObject(
 
 const repositories = v.pipe(v.nullish(v.array(repository, "must be a list"), []), v.check(uniqueNames, "lists a name twice"));
 
-const desk = v.nullish(
-  v.strictObject(
-    {
-      description: v.optional(text),
-      repos: repositories,
-      // Whether the desk has its own Executor app at <desk>/executor-apps/<desk>/.
-      app: v.optional(v.boolean("must be true or false"), true),
-    },
-    mapping,
-  ),
-  {},
-);
+/**
+ * Offices before working repositories declared desks: top-level folders with their own
+ * repositories, instructions and Executor apps. The key is refused, even empty, rather than read,
+ * so a desk office is never half-run: it moves with the one-time migration or stays on the
+ * executable it was made with.
+ */
+export const removedDesks = "desks are no longer supported, so office changed nothing here. Move this office off desks as \"Offices with desks\" in the office CLI's README describes, or keep running it with the office executable it was made with";
 
 // The office package's plugin is linked under this name, so a cloned plugin there would fight `office sync`.
 const reservedPlugins = ["office"];
@@ -259,7 +254,7 @@ const git = v.optional(
   ),
 );
 
-const packageEntries = v.pipe(v.nullish(v.array(packageEntry, "must be a list"), []), v.check(uniqueNames, "lists a name twice"));
+export const packageEntries = v.pipe(v.nullish(v.array(packageEntry, "must be a list"), []), v.check(uniqueNames, "lists a name twice"));
 
 export const referenceInputSchema = v.object({ references: repositories, packages: packageEntries });
 
@@ -277,16 +272,18 @@ export const officeSchema = v.pipe(v.strictObject(
     opencode,
     executor: v.optional(v.strictObject({
       catalog_apps: v.optional(v.pipe(v.array(name, "must be a list of Executor catalog IDs"), v.check((ids) => new Set(ids).size === ids.length, "lists a catalog ID twice")), []),
+      // The app whose `notifications.send` gets the office's own job notifications, by slug.
+      notifications: v.optional(name),
     }, mapping)),
     git,
     secrets: v.optional(v.strictObject({ executor_owner: v.optional(text), server: v.optional(text) })),
     tools,
     references: repositories,
-    desks: v.nullish(v.record(v.pipe(name, v.check(key => key !== "executor-apps", "executor-apps is reserved for shared Executor app sources")), desk, "must map desk names to desks"), {}),
+    desks: v.optional(v.custom<never>(() => false, removedDesks)),
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
     packages: packageEntries,
   },
-  "must be a mapping of name, state, opencode, executor, git, secrets, tools, references, desks, plugins and packages",
+  "must be a mapping of name, state, opencode, executor, git, secrets, tools, references, plugins and packages",
 ), v.forward(v.check(({ secrets, opencode }) => secrets?.server === undefined || (opencode !== "container" && opencode.mode === "host" && opencode.managed), "requires opencode.managed: true in host mode"), ["secrets", "server"]));
 
 export type OfficeConfig = v.InferOutput<typeof officeSchema>;
@@ -618,6 +615,8 @@ export function packageManifestSchema(packageName: string) {
         integrations: v.optional(integrationPolicies, {}),
         commands: v.optional(packageCommands, {}),
         sync: v.optional(v.custom<(inputs: SyncInputs) => readonly string[] | void | Promise<readonly string[] | void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
+        fullSync: v.optional(v.custom<(inputs: FullSyncInputs) => readonly SyncItem[] | Promise<readonly SyncItem[]>>(value => v.is(v.function(), value), "must be a function in office.ts")),
+        session: v.optional(v.custom<(inputs: PackageInputs) => string | Promise<string>>(value => v.is(v.function(), value), "must be a function in office.ts")),
         check: v.optional(v.custom<(inputs: CheckInputs) => readonly Problem[] | Promise<readonly Problem[]>>(value => v.is(v.function(), value), "must be a function in office.ts")),
         up: v.optional(v.custom<(inputs: UpInputs) => readonly string[] | void | Promise<readonly string[] | void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
         down: v.optional(v.custom<(inputs: DownInputs) => readonly string[] | void | Promise<readonly string[] | void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
@@ -633,7 +632,7 @@ export function packageManifestSchema(packageName: string) {
         // The label on Docker resources its services create themselves, which `office down` removes.
         spawns: v.optional(spawnsBlock),
       },
-      "must be a mapping of namespace, settings, integrations, commands, setup, sync, check, up, down, committed, secrets, tools, host, system, executor_app and spawns",
+      "must be a mapping of namespace, settings, integrations, commands, setup, sync, fullSync, session, check, up, down, committed, secrets, tools, host, system, executor_app and spawns",
     ),
     v.transform((manifest) => ({ ...manifest, settings: manifest.settings ?? noSettings, namespace: manifest.namespace ?? packageName })),
     v.forward(
@@ -783,7 +782,7 @@ export function parsePackageLock(value: unknown): Parsed<PackageLock> {
   return parseKeyed("packages", value, packageLockEntry);
 }
 
-/** Where an issue is, such as `desks.assistant.repos[0].url`. */
+/** Where an issue is, such as `references[0].url`. */
 function location(issue: v.BaseIssue<unknown>): string {
   let where = "";
 

@@ -117,6 +117,43 @@ export function definitionFixture({ second = true } = {}) {
     }
   }
 
+  /** Runs the office's installed OpenCode plugin bundle's prompt hooks for one session in `folder`, returning every entry it attaches. */
+  async function promptEntries(dir: string, folder: string) {
+    const plugin: typeof officePlugin = (await import(join(dir, ".opencode/plugins/office/index.js"))).default;
+    const hooks: ((event: { sessionID: string }) => Promise<void>)[] = [];
+    const registration = { dispose: async () => {} };
+    const entries: Record<string, string> = {};
+    const path = process.env.PATH;
+
+    // The plugin asks the `office` on the server's PATH: here, the compiled one.
+    process.env.PATH = `${bin}:${path}`;
+
+    const close = await plugin.setup({
+      location: { directory: folder },
+      session: {
+        async hook(_, handler) {
+          hooks.push(handler);
+
+          return registration;
+        },
+        instructions: { entry: { async put(entry) { entries[entry.key] = entry.value; } } },
+        compact: async () => ({}),
+      },
+      skill: { transform: async () => registration, list: async () => ({ data: [] }), reload: async () => {} },
+      mcp: { transform: async () => registration },
+      tool: { transform: async () => registration },
+    });
+
+    try {
+      for (const hook of hooks) await hook({ sessionID: "fixture" });
+
+      return entries;
+    } finally {
+      process.env.PATH = path;
+      close?.();
+    }
+  }
+
   function fixture(name: string) {
     const dir = join(root, name);
     const home = join(root, `${name}-home`);
@@ -217,7 +254,7 @@ export function definitionFixture({ second = true } = {}) {
   }
 
 
-  return { root, bin, exe, variant, marker, write, read, commit, prompt, fixture, collector, pausedRefresh, published };
+  return { root, bin, exe, variant, marker, write, read, commit, prompt, promptEntries, fixture, collector, pausedRefresh, published };
 }
 
 export type DefinitionFixture = ReturnType<ReturnType<typeof definitionFixture>["fixture"]>;

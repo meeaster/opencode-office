@@ -1,6 +1,6 @@
-// `office upgrade-tools`: bumps each exact pin in the office's own mise.toml files (the root's and
-// each desk's), its machine-wide mise files (machine.toml, and machine.packages.toml, whose package
-// comments stay as they are), and the runtimes' versions in office.yaml, to the newest release at
+// `office upgrade-tools`: bumps each exact pin in the office's own mise.toml, its machine-wide
+// mise files (machine.toml, and machine.packages.toml, whose package comments stay as they are),
+// and the runtimes' versions in office.yaml, to the newest release at
 // least the office's minimum release age old (`tools.minimum_release_age`, or a runtime's own), and
 // with --commit commits the changed files alone under the office's git identity (office.yaml's `git`), else
 // "office cron". mise.toml pins are looked up and installed through mise, at the age the office's
@@ -304,15 +304,10 @@ async function upgradeVersions(office: Office, stage: Stage): Promise<{ moves: M
 }
 
 export async function upgradeTools(office: Office, stage: Stage, { commit }: { commit: boolean }): Promise<void> {
-  // The office's own files only: never one inside a desk's repos or under references/. The
+  // The office's own files only: never one inside a working repository or under references/. The
   // versions of the packages' tools are the office's too, with the same ages.
-  const projects = ["mise.toml", ...office.desks.map((desk) => join(desk.name, "mise.toml"))]
-    .values()
-    .map((name) => join(office.dir, name))
-    .filter((path) => existsSync(path))
-    .toArray();
-
-  const files = [...projects, ...pinnedMachineFiles(office)];
+  const officeToml = join(office.dir, "mise.toml");
+  const files = [...(existsSync(officeToml) ? [officeToml] : []), ...pinnedMachineFiles(office)];
   const executable = installedTool("mise")?.path ?? "mise";
 
   const changed: string[] = [];
@@ -334,11 +329,11 @@ export async function upgradeTools(office: Office, stage: Stage, { commit }: { c
 
     const project = dirname(path);
     const lock = join(project, "mise.lock");
-    const paths = projects.includes(path) ? [name, relative(office.dir, lock)] : [name];
+    const paths = path === officeToml ? [name, relative(office.dir, lock)] : [name];
 
     if (skipDirty(paths)) continue;
 
-    const before = projects.includes(path) && existsSync(lock) ? { pins: readFileSync(path), lock: readFileSync(lock) } : undefined;
+    const before = path === officeToml && existsSync(lock) ? { pins: readFileSync(path), lock: readFileSync(lock) } : undefined;
     const result = await upgradeFile(office, path, stage, executable);
 
     for (const failure of result.failures) failures.push(`${name}: ${failure}`);

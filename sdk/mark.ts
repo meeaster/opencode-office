@@ -1,6 +1,6 @@
 // Which objects `Package.define` returned. Not exported to packages: only the office executable
 // asks, through its own copy of this module.
-import type { Integration } from "./index.ts";
+import type { Access, Integration } from "./index.ts";
 
 const defined = new WeakSet<object>();
 
@@ -28,4 +28,18 @@ export function markIntegration<Integration extends object>(integration: Integra
 /** Whether `value` is an object this module's `Package.integration` returned. */
 export function markedIntegration(value: unknown): value is Integration {
   return value instanceof Object && integrations.has(value);
+}
+
+const accesses = new WeakSet<object>();
+
+/** Records `access` as made by `Package.access` and returns it. */
+export function markAccess<Access extends object>(access: Access): Access {
+  accesses.add(access);
+
+  return access;
+}
+
+/** Whether `value` is a function this module's `Package.access` returned. */
+export function markedAccess(value: unknown): value is Access {
+  return value instanceof Function && accesses.has(value);
 }

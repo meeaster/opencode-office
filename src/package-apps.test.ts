@@ -32,10 +32,10 @@ const manifest = "namespace: widget\nsettings: {type: object, additionalProperti
 function demo(entry = "", packageYaml = manifest): void {
   writePackage(join(office, "packages/demo/package.yaml"), packageYaml);
   write(join(office, "packages/demo/executor-app/package.json"), '{ "dependencies": { "apps": "0.0.1" } }\n');
-  write(join(office, "office.yaml"), `name: t\ndesks: { work: { app: false } }\npackages:\n  - name: demo\n${entry}`);
+  write(join(office, "office.yaml"), `name: t\npackages:\n  - name: demo\n${entry}`);
 }
 
-test("a package's Executor app is deployed under its namespace only while its setting is on", async () => {
+test("a package's Executor app is deployed under its namespace only while its setting is on, beside the office's root apps", async () => {
   demo();
   await sync(loadOffice(office));
 
@@ -49,6 +49,14 @@ test("a package's Executor app is deployed under its namespace only while its se
   expect(folder?.slug).toBe("widget");
   expect(folder?.dir).toBe(join(office, "packages/demo/executor-app"));
   expect(folder?.adopted).toBe(false);
+
+  // The office's own apps are root executor-apps/<slug>/, each once beside the package's, by its folder's name;
+  // an app left in a top-level folder's executor-apps/, as desks had them, is not the office's.
+  for (const slug of ["assistant", "builder"]) write(join(office, `executor-apps/${slug}/package.json`), "{}\n");
+  write(join(office, "work/executor-apps/stale/package.json"), "{}\n");
+  expect(appFolders(loadOffice(office)).map(({ slug, dir }) => [slug, dir]).toSorted()).toEqual([
+    ["assistant", join(office, "executor-apps/assistant")], ["builder", join(office, "executor-apps/builder")], ["widget", join(office, "packages/demo/executor-app")],
+  ]);
 });
 
 test("a package's app can't share a slug with one of the office's own", async () => {

@@ -29,12 +29,16 @@ import { summarize, sync } from "./commands/sync.ts";
 import { update } from "./commands/update.ts";
 import { upgradeTools } from "./commands/upgrade.ts";
 import { releaseMachine, serviceEnvironment } from "./machine.ts";
-import { currentOffice, findOffice, type Office, OfficeError } from "./office.ts";
+import { currentOffice, declaresDesks, findOffice, type Office, OfficeError, refuseDesks } from "./office.ts";
 import { type Gathered, gatherPackages } from "./gather.ts";
 import { checkDirectories, ensureDiscovery, hasPublishedSet } from "./package-generation.ts";
 import { bindReader, evaluateAdmission, restoreCallerEnv, runReader } from "./package-operation.ts";
 import { packageSecret } from "./package-services.ts";
 import { shutdownPackages } from "./package-shutdown.ts";
+import { emitEvent, runFullSync } from "./package-full-sync.ts";
+import { evaluateAccess } from "./package-access.ts";
+import { packageSessionText } from "./package-session.ts";
+import { divertStdout, writeResult } from "./command-stdout.ts";
 import { decrypt } from "./secrets.ts";
 import { onTerminal, reported, type Reporter, type Stage } from "./report/index.ts";
 import { age } from "./schema.ts";
@@ -45,7 +49,7 @@ import { AppliedSettingsError, canonicalJson, readAppliedSettings } from "../sdk
 
 const usage = `usage: office <command> [--office <dir>]
 
-  init <dir> [--name <name>]   create an office from the template, with one example desk
+  init <dir> [--name <name>]   create an office from the template
   setup [--owner-email <email>] [--generate-age-key] [--install-deps] [--manage-machine]
                                guide resumable onboarding (explicit consent to create a host identity)
                                --install-deps authorizes host mise/SOPS/age (and gh) installs and
@@ -64,14 +68,15 @@ const usage = `usage: office <command> [--office <dir>]
                                JSON, read from its applied settings snapshot alone: no package is
                                loaded and office.yaml isn't read, so --office is required
   sync [--packages | --references | --release-machine]
-                               clone and update, scaffold missing desks, install, restore and
-                               apply packages (their sync functions, such as the skills package's
-                               links), link a host-mode office's tools into mise's global conf.d,
+                               clone and update references, install, restore and apply packages
+                               (their sync functions, such as the skills package's links, and
+                               full-sync work, such as the repos package's checkouts), link a host-mode office's tools into mise's global conf.d,
                                link package plugins and install panels on the desktop app's
                                machine. --release-machine only removes every file the office
                                wrote on this machine, and its consent.
                                --packages applies packages at their declared pins without refreshing
-                                desk repos, references or separately declared plugin clones.
+                                references or separately declared plugin clones, or running
+                                packages' full-sync work.
                                 Each package's package.json names its definition (office.definition)
   packages update              move each package from another repository with a track to the
                                newest commit of its branch, or of its highest stable SemVer tag
@@ -88,6 +93,8 @@ const usage = `usage: office <command> [--office <dir>]
                                ordinary up, then check office health
   instructions [folder]        print the office guidance a session started in <folder> gets
   instructions --session <id>  print each stored instruction entry from a running OpenCode server
+  instructions --packages      print the text packages add to every new OpenCode and Claude Code
+                               session, from the settings the last sync applied
   opencode inspect [folder]    list office-local native config and plugin sources on disk (offline)
   context --model <provider/model#variant>
                                measure the tokens the office adds to the first request of a
@@ -256,18 +263,24 @@ async function main(): Promise<void> {
 
   const reader = args[0] === "--package-reader";
   const admission = args[0] === "--package-admission";
+  const access = args[0] === "--package-access";
 
   // An evaluator gives the processes it starts the caller's BUN_OPTIONS, not its own.
-  if (reader || admission) restoreCallerEnv();
+  if (reader || admission || access) restoreCallerEnv();
 
   if (admission) return evaluateAdmission(args[1]);
+
+  if (access) return evaluateAccess(args[1]);
   // Only a reader, bound to a published package set, loads packages for commands and help.
   let bound: Reader | undefined;
+  // The package generation a reader is bound to.
+  let generation: string | undefined;
 
   if (reader) {
     const [, dir, name] = args.splice(0, 3);
     bindReader(dir, name);
     bound = { dir };
+    generation = name;
 
     if (args[0] === "--finish-setup" && args[1] === dir) {
       const office = currentOffice({ office: dir });
@@ -277,6 +290,13 @@ async function main(): Promise<void> {
 
     if (args[0] === "--shutdown" && args[1] === dir) {
       if (!(await shutdownPackages(currentOffice({ office: dir })))) process.exitCode = 1;
+
+      return;
+    }
+
+    // Full sync's packages' work, only in a reader bound to the generation that sync applied.
+    if (args[0] === "--full-sync" && args[1] === dir && args[2] === name) {
+      await runFullSync(currentOffice({ office: dir }), name, args[3] === "verbose", emitEvent);
 
       return;
     }
@@ -323,6 +343,8 @@ async function main(): Promise<void> {
     try { found = findOffice(route.office ?? process.cwd()); } catch { /* not in an office: no package command can run */ }
 
     if (found) {
+      // A desk office is refused before anything repairs its discovery links.
+      refuseDesks(found);
       ensureDiscovery(found);
       const status = await runReader(found, args);
 
@@ -362,7 +384,13 @@ async function main(): Promise<void> {
     // Down's own shutdown can't depend on the package set: its reader is started on its own.
     const shutdown = command === "down" && !flags.help;
 
-    if (dir && !shutdown) ensureDiscovery(dir);
+    // A desk office is refused, naming the migration, before anything repairs its discovery links;
+    // the session guidance and help still say so, without the repair.
+    const legacy = dir !== undefined && declaresDesks(dir);
+
+    if (legacy && !(flags.help || command === undefined || (command === "instructions" && !flags.packages && flags.session === undefined))) refuseDesks(dir!);
+
+    if (dir && !shutdown && !legacy) ensureDiscovery(dir);
 
     // Help and bare `office` list package commands, so they load packages in the reader too.
     if (dir && !shutdown && (flags.help || command === undefined || !["sync", "refresh", "packages", "sfw-wrappers", "env"].includes(command))) {
@@ -406,7 +434,7 @@ async function main(): Promise<void> {
 
   if (flags.session !== undefined && command !== "instructions") throw new OfficeError("--session is an option for office instructions");
 
-  if (flags.packages && command !== "sync") throw new OfficeError("--packages is an option for office sync");
+  if (flags.packages && command !== "sync" && command !== "instructions") throw new OfficeError("--packages is an option for office sync and office instructions");
 
   if (flags.apply && command !== "upgrade-tools") throw new OfficeError("--apply is an option for office upgrade-tools");
 
@@ -423,6 +451,15 @@ async function main(): Promise<void> {
 
     console.log(`created the office in ${dir}`);
     console.log(nextSteps(dir));
+  } else if (command === "instructions" && flags.packages) {
+    if (rest.length > 0 || flags.session !== undefined) throw new OfficeError("usage: office instructions --packages");
+
+    // Without a published package set (and so outside a reader) no package adds text.
+    if (generation) {
+      // Whatever the packages print while they load goes to standard error; only the text is output.
+      divertStdout();
+      writeResult(await packageSessionText(currentOffice(flags), generation));
+    }
   } else if (command === "instructions") {
     if (rest.length > (flags.session === undefined ? 1 : 0)) throw new OfficeError("usage: office instructions [folder] | office instructions --session <id>");
 
