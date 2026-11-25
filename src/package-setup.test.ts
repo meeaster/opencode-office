@@ -6,7 +6,7 @@ import { type PackageManifest, packageManifestSchema } from "./schema.ts";
 
 const manifest = (setup: PackageManifest["setup"]) => v.parse(packageManifestSchema("catalog"), { setup });
 const items = { id: "catalog.items", parse: (input: RegistryEntry) => input };
-const input = { name: "catalog", settings: {} };
+const input = { name: "catalog", settings: {}, selected: new Set<string>() };
 
 test("one package's setup returns its registries and its unparsed additions", async () => {
   const registered = await registerPackage({ ...input, manifest: manifest(ctx => {

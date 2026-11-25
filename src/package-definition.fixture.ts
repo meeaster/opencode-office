@@ -179,7 +179,10 @@ export function definitionFixture({ second = true } = {}) {
 
     run(exe, 0, "init", dir);
     const config = join(dir, "office.yaml");
-    const initial = read(config);
+    // The template selects executor, whose `up` needs the office's Executor: a test selects it itself.
+    const initial = read(config).replace(/^ {2}- name: executor\n/m, "");
+
+    writeFileSync(config, initial);
     const cli = (status: number, ...args: string[]) => run(exe, status, "--office", dir, ...args);
     const newer = (status: number, ...args: string[]) => run(variant, status, "--office", dir, ...args);
 

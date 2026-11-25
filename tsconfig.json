@@ -11,6 +11,7 @@
       "@office/cron": ["./packages/cron/handles.ts"],
       "@office/opencode": ["./packages/opencode/handles.ts"],
       "@office/skills": ["./packages/skills/handles.ts"],
+      "@office/executor/apps": ["./packages/executor/apps.ts"],
       "@office/tooling/requirements": ["./packages/tooling/requirements.ts"],
       "@office/mise-integration/claims": ["./packages/mise-integration/claims.ts"]
     },

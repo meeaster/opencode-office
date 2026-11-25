@@ -252,10 +252,10 @@ test("a name is the CLI's own or has one owner, on every run: such a command nev
   const saved = join(dir, ".office/resolved/references.json");
 
   // Edited after the last sync to take a built-in's first word, which the CLI would otherwise pass on.
-  pkg("beta", "apps extra");
-  expect(cli(1, "apps", "extra")).toContain("package beta: command apps extra is reserved");
+  pkg("beta", "gui extra");
+  expect(cli(1, "gui", "extra")).toContain("package beta: command gui extra is reserved");
   // Help lists the command as the package provides it, then its problem.
-  expect(cli(0, "--help")).toMatch(/ {2}apps extra {4}Run\n[\s\S]* {2}package beta: command apps extra is reserved/);
+  expect(cli(0, "--help")).toMatch(/ {2}gui extra +Run\n[\s\S]* {2}package beta: command gui extra is reserved/);
   pkg("beta", "demo run");
   expect(cli(1, "demo", "run")).toContain("command demo run claimed by both package alpha and package beta");
   expect(existsSync(probe)).toBe(false);

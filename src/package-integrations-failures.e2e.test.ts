@@ -1,7 +1,7 @@
 // Optional integrations that can't run, in the compiled office with the example packages: a
 // selected provider whose public export breaks is its own failure, never taken for an unselected
-// one, and settings are checked against the consumer's one schema before any integration module
-// is evaluated, the settings of an integration that is off included.
+// one, even when the consumer's settings would add nothing, and settings are checked against the
+// consumer's one schema before any integration module is evaluated, its provider selected or not.
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { definitionFixture } from "./package-definition.fixture.ts";
@@ -14,7 +14,7 @@ const routing = (settings = "") => `  - name: chatgpt-routing\n${settings}`;
 
 const provider = "  - name: mock-executor\n";
 
-test("a selected provider whose public export breaks fails the command and admission, naming consumer, provider, module and cause; nothing is published; with the integration off the provider still loads", () => {
+test("a selected provider whose public export breaks fails the command and admission, naming consumer, provider, module and cause, whatever the consumer's settings; nothing is published; deselected, the consumer runs without it", () => {
   const f = fixture("broken-export");
   const manifest = join(f.dir, "packages/mock-executor/package.json");
 
@@ -34,9 +34,14 @@ test("a selected provider whose public export breaks fails the command and admis
   expect(sync).not.toContain("doesn't select");
   expect(activeGeneration(f.dir)).toBe(published);
 
-  // Off, the consumer doesn't import it, and the provider's own definition still loads.
+  // Settings that add nothing don't skip the adapter: it still runs, and still fails.
   f.select(routing() + provider);
-  expect(json(exe, f, "mock-executor", "apps")).toEqual([]);
+  expect(f.cli(1, "chatgpt-routing", "direct")).toContain(failure);
+
+  // Deselected, the consumer runs without importing it.
+  f.select(routing());
+  evaluated(f);
+  expect(json(exe, f, "chatgpt-routing", "direct")).toEqual(["gmail", "calendar"]);
   f.cli(0, "sync", "--packages");
   expect(evaluated(f)).toEqual([]);
 });

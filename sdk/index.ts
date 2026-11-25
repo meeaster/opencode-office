@@ -35,11 +35,18 @@ export type Registry<Value extends RegistryEntry> = {
   parse(input: RegistryEntry): Value;
 };
 
-/** An entry a command reads: the provider's parsed value, who added it, and where that package is. */
+/**
+ * An entry a command reads: the provider's parsed value, who added it, and where that package is.
+ * Office supplies every field but `value` from the adding package, never from what it added.
+ */
 export type Entry<Value> = {
   value: Value;
   /** The adding package's name, or `office.yaml` for the office's own entries. */
   owner: string;
+  /** The adding package's namespace, its name unless its definition sets one; `office.yaml` for the office's own entries. */
+  namespace: string;
+  /** The adding package's settings in this run, defaults applied; empty for the office's own entries. */
+  settings: Readonly<Record<string, SettingValue>>;
   /** The folder the adding package was loaded from in this run: read its files here. It can belong to one package generation. */
   folder: string;
   /**
@@ -85,6 +92,45 @@ export type Host = {
     /** What is installed for it, wanted or not, including a service left without its timer. Throws when systemd loaded one of its units from another file. */
     status(): readonly TimerState[];
   };
+};
+
+/** How `linkOpenCode` left an app: it declares no OpenCode account, was already linked, was linked to an existing account, or got a new one. */
+export type OpenCodeLink = { outcome: "not-required" } | { outcome: "unchanged" | "linked" | "connected"; account: string };
+
+/**
+ * The office's Executor, reached through the runtime, which keeps its token and the OpenCode
+ * password: a package never reads either, or the office's state folder.
+ */
+export type ExecutorAccess = {
+  /**
+   * An authenticated request to the office's Executor: `path` starts with `/`, such as
+   * `/api/context`, and never names another address; a redirect is refused, not followed. Resolves
+   * to the parsed JSON response, or null for an empty one. When Executor answers with an error
+   * status, rejects with an Error naming the method, path and status, whose numeric `status`
+   * property holds it; an Error without one means Executor wasn't reached or didn't answer within
+   * `options.timeout` milliseconds (default five minutes).
+   */
+  request<Result = unknown>(method: string, path: string, body?: JsonValue, options?: { timeout?: number }): Promise<Result>;
+  /** Where the office's OpenCode server is as Executor reaches it, for an app's generated modules. */
+  readonly opencode: {
+    /** Its origin from Executor's side, such as `http://opencode:4096`. */
+    readonly url: string;
+    /** The folder its sessions are under. */
+    readonly directory: string;
+    readonly mode: "host" | "container";
+  };
+  /**
+   * Links the deployed app `slug` to the OpenCode account for the server's current host, when the app
+   * declares one: reuses the account another app already links for that host, or connects one with
+   * the office's server password. A check's access rejects it.
+   */
+  linkOpenCode(slug: string): Promise<OpenCodeLink>;
+};
+
+/** What a package's command, `up` and `check` get besides their lifecycle inputs: its Executor, absent when the runtime has none. */
+export type ExecutorInputs = {
+  /** Absent when the runtime has no Executor token: fail naming Executor if the package needs it. */
+  readonly executor?: ExecutorAccess;
 };
 
 /** Returns a registry's entries, each with its owner and folder; every call returns its own copy. */
@@ -162,10 +208,10 @@ export type AccessSource = {
 export type Access = (settings: Readonly<Record<string, SettingValue>>) => readonly AccessSource[];
 
 /** What a package's `check` gets: also the host helpers, to read its timers. */
-export type CheckInputs<Settings = Readonly<Record<string, SettingValue>>> = Lifecycle<Settings> & { readonly host: Host };
+export type CheckInputs<Settings = Readonly<Record<string, SettingValue>>> = Lifecycle<Settings> & ExecutorInputs & { readonly host: Host };
 
-/** What a package's `up` gets: the office, the registries to read, its settings and the host helpers. */
-export type UpInputs<Settings = Readonly<Record<string, SettingValue>>> = Lifecycle<Settings> & { readonly host: Host };
+/** What a package's `up` gets: the office, the registries to read, its settings, the host helpers and its Executor. */
+export type UpInputs<Settings = Readonly<Record<string, SettingValue>>> = Lifecycle<Settings> & ExecutorInputs & { readonly host: Host };
 
 /** What a package's `down` gets: no registries, since `office down` runs no `setup`. */
 export type DownInputs<Settings = Readonly<Record<string, SettingValue>>> = {
@@ -181,7 +227,7 @@ export type Problem = { level: "warning" | "failed"; message: string };
  * What a command's handler gets: the office, the registries to read, its package's settings as
  * office.yaml has them now, and the words after the command's name, exactly as typed.
  */
-export type CommandInputs<Settings = Readonly<Record<string, SettingValue>>> = Lifecycle<Settings> & {
+export type CommandInputs<Settings = Readonly<Record<string, SettingValue>>> = Lifecycle<Settings> & ExecutorInputs & {
   readonly args: readonly string[];
   /**
    * Replaces one scalar that already exists in this package's own settings in office.yaml, such as
@@ -214,6 +260,15 @@ export type SetupContext<Settings = Readonly<Record<string, SettingValue>>> = {
   registry<Value extends RegistryEntry>(registry: Registry<Value>): void;
   /** Adds an entry to a registry, this package's or another's. */
   add<Value extends RegistryEntry>(registry: Registry<Value>, value: NoInfer<Value>): void;
+  /** Which packages the office selects, without loading any of them. */
+  readonly providers: {
+    /**
+     * Whether office.yaml selects the package `name`, as office.yaml names it (`executor`, not
+     * `@office/executor`); a required built-in always is. A selected package that didn't load
+     * still is: that is its own failure, never absence.
+     */
+    selected(name: string): boolean;
+  };
 };
 
 // `ctx.settings` from the schema. The keywords below are left to the validator: a property using
@@ -265,21 +320,12 @@ export type Settings<Schema> =
     : Readonly<Loose>;
 
 /**
- * When a package's integration with an optional provider is active, decided from its validated
- * settings before any integration module loads. `requested` returning true makes it active, and a
- * provider office.yaml doesn't select fails the run, naming both; false keeps it off; undefined
- * leaves it to `enabledByDefault`, which activates it only while the provider is selected. With
- * neither, selecting the provider activates nothing.
+ * What an integration's `setup` gets: its package's validated settings, and a way to add to the
+ * provider's registries as its package. It decides from the settings whether to add anything.
  */
-export type IntegrationPolicy<Settings = Readonly<Record<string, SettingValue>>> = {
-  enabledByDefault?: boolean;
-  requested?(settings: Settings): boolean | undefined;
-};
-
-/** What an integration's `setup` gets: its package's validated settings, and a way to add to the provider's registries as its package. */
 export type IntegrationContext<Settings = Readonly<Record<string, SettingValue>>> = Pick<SetupContext<Settings>, "settings" | "add">;
 
-/** An integration module's default export: the setup office runs, as its package, while the integration is active. */
+/** An integration module's default export: the setup office runs, as its package, once per gathering while its provider is selected. */
 export type Integration<Settings = Readonly<Record<string, SettingValue>>> = {
   setup(ctx: IntegrationContext<Settings>): void | Promise<void>;
 };
@@ -313,8 +359,6 @@ type SystemBlock = {
 export type Definition<Schema extends SettingsSchema = NoSettings> = {
   /** The settings it accepts, as one JSON Schema. Without it, it accepts none. */
   settings?: Schema;
-  /** When each optional provider its package.json maps in office.integrations is used, keyed `@office/<name>`. */
-  integrations?: { readonly [provider: `@office/${string}`]: IntegrationPolicy<Settings<Schema>> };
   /** Its commands, by name. */
   commands?: { readonly [name: string]: Command<Settings<Schema>> };
   setup?(ctx: SetupContext<Settings<Schema>>): void | Promise<void>;
@@ -356,7 +400,6 @@ export type Definition<Schema extends SettingsSchema = NoSettings> = {
   tools?: { readonly [tool: string]: string };
   host?: HostBlock;
   system?: SystemBlock;
-  executor_app?: { setting?: string };
   spawns?: { label: string };
 };
 

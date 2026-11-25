@@ -11,7 +11,6 @@ import * as v from "valibot";
 import { officeInstructions } from "../packages/office/plugin/instructions.ts";
 import { inspect } from "../standard/opencode/inspect.ts";
 import { agentUpdateJob, updateAgentClis } from "./commands/agent-cli-update.ts";
-import { adopt, deploy } from "./commands/apps.ts";
 import { check } from "./commands/check.ts";
 import { down, up } from "./commands/compose.ts";
 import { contextReport } from "./commands/context.ts";
@@ -112,8 +111,6 @@ const usage = `usage: office <command> [--office <dir>]
   exec -- <command...>         run one command there the same way, with its stdin and exit status
   pin                          write office.lock's runtime pins for the versions office.yaml pins
   pair [--origin <url>]        print a one-time link that connects the OpenCode app or a browser
-  apps deploy [--verbose]      install missing catalog apps and deploy changed local Executor apps
-  apps adopt <catalog-id>      copy an installed Executor app's source into executor-apps/<catalog-id>
   gui dev <package>            install a local package's panel on the desktop app's machine each
                                time its build writes the bundle
   upgrade-tools [--commit] [--apply]
@@ -599,17 +596,6 @@ async function main(): Promise<void> {
     process.stdout.write(serviceEnvironment({ name, dir: flags.office }));
   } else if (command === "sfw-wrappers") {
     for (const path of writeContainerWrappers()) console.log(`office: wrote ${path}`);
-  } else if (command === "apps" && rest[0] === "adopt" && rest.length === 2) {
-    await adopt(currentOffice(flags), rest[1]);
-  } else if (command === "apps" && rest[0] === "deploy" && rest.length === 1) {
-    const office = currentOffice(flags);
-
-    await reported("apps deploy", officeContext(office), async reporter => {
-      const stage = reporter.stage("Apps", { key: "apps" });
-
-      stage.done(await deploy(office));
-      reporter.finish([]);
-    }, { verbose: flags.verbose === true });
   } else if (command === "gui" && rest[0] === "dev") {
     if (rest[1] === undefined) throw new OfficeError("usage: office gui dev <package>");
 

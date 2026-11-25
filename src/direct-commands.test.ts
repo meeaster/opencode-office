@@ -282,6 +282,22 @@ test("every setup finishes before an entry is parsed, whatever the order; handle
   expect(await printed(["provider", "show"])).toEqual([JSON.stringify([{ name: "entry", seen: 2 }, "consumer"])]);
 });
 
+test("setup asks which packages office.yaml selects, as it names them, without loading them: a required built-in and a selected package that didn't load are selected", async () => {
+  office({
+    asker: { body: '{setup(c){process.env.OFFICE_TEST_SELECTED = JSON.stringify(["references", "broken", "absent"].map(name => c.providers.selected(name))); c.providers.selected("@office/broken")}}' },
+    broken: { body: "{}", prelude: 'throw Error("broken on import");' },
+  });
+
+  const { problems } = await gatherPackages(loadOffice(dir));
+
+  expect(process.env.OFFICE_TEST_SELECTED).toBe("[true,true,false]");
+  delete process.env.OFFICE_TEST_SELECTED;
+  expect(problems.map(({ packages, message }) => [packages, message])).toEqual([
+    [["broken"], expect.stringContaining("broken on import")],
+    [["asker"], 'providers.selected: name a package as office.yaml does, such as executor, not "@office/broken"'],
+  ]);
+});
+
 test("adding to a registry no selected package registered fails, naming the adder and the id; a handle is matched by its id alone", async () => {
   office({
     adder: { body: '{setup(c){c.add({id: "nobody.items"}, {name: "x"})},commands:{"adder show":{summary:"Show",run(){}}}}' },
@@ -348,12 +364,12 @@ test("in a bound reader, a package the set has no link for, or a wrong link, is 
 const registered = (part: Partial<Registered>): Registered => ({ registries: new Map(), additions: [], ...part });
 const provider = (handle: Registry<RegistryEntry>) => registered({ registries: new Map([[handle.id, handle]]) });
 const references = registered({ registries: new Map([[repositories.id, repositories]]) });
-const setUp = (name: string, part: Registered): SetUp => ({ name, folder: `/set/${name}`, root: `/packages/${name}`, registered: part });
+const setUp = (name: string, part: Registered, contributor: Pick<SetUp, "namespace" | "settings"> = { namespace: name, settings: {} }): SetUp => ({ name, ...contributor, folder: `/set/${name}`, root: `/packages/${name}`, registered: part });
 const own = (references: { name: string; url: string }[]) => ({ dir: "/office", references });
 const add = (id: string, ...values: RegistryEntry[]) => registered({ additions: values.map(value => ({ id, value })) });
 const messages = (load: ReturnType<typeof parseEntries>) => load.problems.map(problem => [problem.packages, problem.message]);
 
-test("reads list office.yaml's references first, then each package's, parsed once and copied per read", () => {
+test("reads list office.yaml's references first, then each package's, parsed once and copied per read, each with its contributor's namespace and settings", () => {
   let parsed = 0;
 
   const items = {
@@ -368,18 +384,21 @@ test("reads list office.yaml's references first, then each package's, parsed onc
   const load = parseEntries(own([{ name: "own", url: "o" }]), [
     setUp("references", references),
     setUp("catalog", provider(items)),
-    setUp("alpha", registered({ additions: [{ id: "catalog.items", value: { name: "first", count: 1 } }, { id: repositories.id, value: { name: "docs", url: "d" } }] })),
+    setUp("alpha", registered({ additions: [{ id: "catalog.items", value: { name: "first", count: 1 } }, { id: repositories.id, value: { name: "docs", url: "d" } }] }), { namespace: "a", settings: { title: "T" } }),
   ]);
+
+  const alpha = { owner: "alpha", namespace: "a", settings: { title: "T" }, folder: "/set/alpha", root: "/packages/alpha" };
 
   expect(load.problems).toEqual([]);
   expect(readEntries(load.entries, repositories)).toEqual([
-    { value: { name: "own", url: "o" }, owner: "office.yaml", folder: "/office", root: "/office" },
-    { value: { name: "docs", url: "d" }, owner: "alpha", folder: "/set/alpha", root: "/packages/alpha" },
+    { value: { name: "own", url: "o" }, owner: "office.yaml", namespace: "office.yaml", settings: {}, folder: "/office", root: "/office" },
+    { value: { name: "docs", url: "d" }, ...alpha },
   ]);
   const first = readEntries(load.entries, items);
   first[0].value.count = 99;
+  Object.assign(first[0].settings, { title: "changed" });
   // A reader's own handle has another parser; reads never run it.
-  expect(readEntries(load.entries, { id: "catalog.items", parse(): RegistryEntry { throw new Error("reader parser ran"); } })).toEqual([{ value: { name: "first", count: 2 }, owner: "alpha", folder: "/set/alpha", root: "/packages/alpha" }]);
+  expect(readEntries(load.entries, { id: "catalog.items", parse(): RegistryEntry { throw new Error("reader parser ran"); } })).toEqual([{ value: { name: "first", count: 2 }, ...alpha }]);
   expect(parsed).toBe(1);
 });
 

@@ -31,7 +31,7 @@ const newer = "- Keep slices under a day.\n- Run `office tracks check` after edi
 const owned = "- Run `office tracks validate` after editing a record.\n- Always link the PR in the slice.\n";
 
 /** Package demo's declarations: one file seed per path, from its `seed/` folder. */
-const declared = (paths = ["mine.md", "notes/AGENTS.md", "notes/README.md"]): Entry<Seed>[] => paths.map(path => ({ owner: "demo", folder: join(dir, "packages/demo"), root: join(dir, "packages/demo"), value: { destination: path, source: `seed/${path}` } }));
+const declared = (paths = ["mine.md", "notes/AGENTS.md", "notes/README.md"]): Entry<Seed>[] => paths.map(path => ({ owner: "demo", namespace: "demo", settings: {}, folder: join(dir, "packages/demo"), root: join(dir, "packages/demo"), value: { destination: path, source: `seed/${path}` } }));
 
 /**
  * An office whose package demo's seeds were laid down: `notes/AGENTS.md` and `notes/README.md`
@@ -109,7 +109,7 @@ test("seeds diff shows what the package changed and what the owner changed, the 
 });
 
 test("a pending text seed's diff shows the package's new text and the owner's edit, through a temporary file outside the office that is removed", () => {
-  const text = (value: string): Entry<Seed>[] => [{ owner: "preview", folder: join(dir, "packages/preview"), root: join(dir, "packages/preview"), value: { destination: "previews/.gitignore", text: value } }];
+  const text = (value: string): Entry<Seed>[] => [{ owner: "preview", namespace: "preview", settings: {}, folder: join(dir, "packages/preview"), root: join(dir, "packages/preview"), value: { destination: "previews/.gitignore", text: value } }];
 
   mkdirSync(join(dir, "packages/preview"), { recursive: true });
   applySeeds(dir, text("*\n"));
@@ -215,7 +215,7 @@ test("seeds settle fails, changing nothing, for a path without a receipt, a seed
   expect(existsSync(join(dir, ".office/seeds", sha256(newer)))).toBe(false);
 
   // A path another package now declares is not demo's to settle.
-  const other: Entry<Seed>[] = [{ owner: "other", folder: join(dir, "packages/demo"), root: join(dir, "packages/demo"), value: { destination: "notes/README.md", source: "seed/notes/README.md" } }];
+  const other: Entry<Seed>[] = [{ owner: "other", namespace: "other", settings: {}, folder: join(dir, "packages/demo"), root: join(dir, "packages/demo"), value: { destination: "notes/README.md", source: "seed/notes/README.md" } }];
 
   expect(() => settleSeed(dir, other, "notes/README.md")).toThrow("notes/README.md: package demo no longer has a seed for it");
 });

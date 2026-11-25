@@ -6,6 +6,7 @@ export default Package.integration<typeof definition>()({
   setup(ctx) {
     const { routes, executor } = ctx.settings;
 
-    ctx.add(apps, { app: executor.name, tools: routes.gmail === "executor" ? [{ name: "gmail.search", readOnly: true }] : [] });
+    if (!executor.app) return;
+    ctx.add(apps, { app: executor.name, tools: routes.gmail === "executor" || routes.gmail === "both" ? [{ name: "gmail.search", readOnly: true }] : [] });
   },
 });

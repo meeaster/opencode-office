@@ -154,22 +154,17 @@ test("an integration module is a file of its own: not the definition or another 
   }
 });
 
-test("a definition's integration policies are keyed by providers package.json maps, and loading the definition imports no integration module", () => {
+test("loading a definition lists the providers package.json maps without importing their modules; a definition still declaring an activation policy or an Executor app fails on the unknown key", () => {
   const thrower = 'throw new Error("integration module imported")';
-  const files = (policy: string) => ({ "package.json": json("policy", "./office.ts", { office: { definition: "./office.ts", integrations: { "@office/skills": "./skills.ts" } } }), "office.ts": definitionText(`{ integrations: ${policy} }`), "skills.ts": thrower });
-  const read = readDefinition(folder("policy", files('{ "@office/skills": { enabledByDefault: true } }')), "policy", "packages/policy");
+  const files = (name: string, definition: string) => ({ "package.json": json(name, "./office.ts", { office: { definition: "./office.ts", integrations: { "@office/skills": "./skills.ts" } } }), "office.ts": definitionText(definition), "skills.ts": thrower });
 
-  expect(read).toMatchObject({ ok: true, value: { integrations: [{ provider: "skills", module: "skills.ts", policy: { enabledByDefault: true } }] } });
-  expect(readDefinition(folder("unmapped", { ...files('{ "@office/executor": { enabledByDefault: true } }'), "package.json": json("unmapped", "./office.ts", { office: { definition: "./office.ts", integrations: { "@office/skills": "./skills.ts" } } }) }), "unmapped", "packages/unmapped")).toEqual({
-    ok: false, errors: ["packages/unmapped/office.ts: integrations: @office/executor isn't in package.json's office.integrations; map it to its module there, or remove its policy"],
-  });
+  expect(readDefinition(folder("plain", files("plain", "{}")), "plain", "packages/plain")).toMatchObject({ ok: true, value: { integrations: [{ provider: "skills", module: "skills.ts" }] } });
 
-  // Valibot's record would drop these own keys, and take an array for a mapping.
-  for (const [name, policy, reason] of [
-    ["policy-proto", '{ ["__proto__"]: { requested: () => true } }', "integrations.__proto__: must be keyed @office/<name>"],
-    ["policy-constructor", "{ constructor: {} }", "integrations.constructor: must be keyed @office/<name>"],
-    ["policy-list", "[]", "integrations: must map @office/<name> to when that integration is used"],
+  for (const [name, definition, key] of [
+    ["requested", '{ integrations: { "@office/skills": { requested: () => true } } }', "integrations"],
+    ["by-default", '{ integrations: { "@office/skills": { enabledByDefault: true } } }', "integrations"],
+    ["executor-app", "{ executor_app: {} }", "executor_app"],
   ] as const) {
-    expect(readDefinition(folder(name, { ...files(policy), "package.json": json(name, "./office.ts", { office: { definition: "./office.ts", integrations: { "@office/skills": "./skills.ts" } } }) }), name, `packages/${name}`)).toEqual({ ok: false, errors: [`packages/${name}/office.ts: ${reason}`] });
+    expect(readDefinition(folder(name, files(name, definition)), name, `packages/${name}`)).toEqual({ ok: false, errors: [`packages/${name}/office.ts: ${key}: must be a mapping of namespace, settings, commands, setup, sync, fullSync, session, check, up, down, committed, secrets, tools, host, system and spawns`] });
   }
 });

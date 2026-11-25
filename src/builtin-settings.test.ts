@@ -30,7 +30,7 @@ test("aws-emulator: ports, a storage mode and no source reference", async () => 
   expect(item.settings).toEqual({ port: 4600, ui_port: 4501, storage: "persistent", source_reference: false });
   expect(read("aws-emulator", {}).settings).toEqual({ port: 4566, ui_port: 4500, storage: "memory", source_reference: true });
   // Turned off, it adds no reference; on by default, it adds Floci's.
-  const ids = async (pkg: InstalledPackage) => (await registerPackage({ name: pkg.entry.name, manifest: pkg.manifest, settings: pkg.settings })).additions.flatMap(row => row.id === "opencode.plugins" ? [] : [row.value.name]);
+  const ids = async (pkg: InstalledPackage) => (await registerPackage({ name: pkg.entry.name, manifest: pkg.manifest, settings: pkg.settings, selected: new Set() })).additions.flatMap(row => row.id === "opencode.plugins" ? [] : [row.value.name]);
 
   expect(await ids(item)).toEqual(["aws-cli"]);
   expect(await ids(read("aws-emulator", {}))).toEqual(["aws-cli", "floci"]);
@@ -42,7 +42,7 @@ test("browser: tool profiles, Browse off and system Chrome on; its recipe's sett
   expect(item.settings).toEqual({ agent_browser_tools: "core,network,debug", browse: false, system_chrome: true });
   expect(read("browser", {}).settings).toEqual({ agent_browser_tools: "core", browse: true, system_chrome: false });
   expect(defaultOffSetting(item.manifest.settings, "system_chrome")).toBe(true);
-  const { additions } = await registerPackage({ name: "browser", manifest: item.manifest, settings: item.settings });
+  const { additions } = await registerPackage({ name: "browser", manifest: item.manifest, settings: item.settings, selected: new Set() });
 
   // The contributed recipe passes the default-off rule as sync projects it.
   expect(project(item, additions).system?.setting).toBe("system_chrome");

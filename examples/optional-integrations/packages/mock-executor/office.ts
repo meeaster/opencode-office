@@ -6,6 +6,6 @@ export default Package.define({
     ctx.registry(apps);
   },
   commands: {
-    "mock-executor apps": { summary: "List the apps packages add, as JSON", result: ({ entries }) => JSON.stringify(entries(apps).map(entry => ({ owner: entry.owner, ...entry.value }))) },
+    "mock-executor apps": { summary: "List the apps packages add, as JSON", result: ({ entries }) => JSON.stringify(entries(apps).map(entry => ({ owner: entry.owner, namespace: entry.namespace, ...entry.value }))) },
   },
 });

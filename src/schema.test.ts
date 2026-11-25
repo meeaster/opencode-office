@@ -80,14 +80,13 @@ test("tools defaults to a three-day age for everything, and a runtime without it
   expect(resolved.socketFirewall).toBe(false);
 });
 
-test("a setting that gates a host block, a host service or an Executor app is a boolean; one that gates a system setup also defaults to off", () => {
+test("a setting that gates a host block or a host service is a boolean; one that gates a system setup also defaults to off", () => {
   const settings = { type: "object", properties: { on: { type: "boolean", default: true }, off: { type: "boolean", default: false }, text: { type: "string", default: "x" } } };
   const system = (setting: string) => ({ setting, description: "D", platforms: ["ubuntu-24.04-amd64-wsl"], bootstrap: "system/b.toml", ready: ["/usr/bin/d"] });
 
   const gates = {
     "host.setting": (setting: string) => ({ host: { setting } }),
     "host.services": (setting: string) => ({ host: { services: { watch: { description: "Watch", script: "watch.sh", setting } } } }),
-    "executor_app.setting": (setting: string) => ({ executor_app: { setting } }),
   };
 
   const problems = (definition: Record<string, SettingValue>) => {

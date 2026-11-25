@@ -17,7 +17,6 @@ import { last, type NextStep, type Reporter, say, terminalAsk } from "../report/
 import { decrypt, encrypt, initializeIdentity, prepareSecrets, requireTool } from "../secrets.ts";
 import { configureStartup, interactiveShell } from "../shell-startup.ts";
 import { offerRestart, systemStep, verifySystems } from "../system-setup.ts";
-import { deploy } from "./apps.ts";
 import { check } from "./check.ts";
 import { installingMise, ports, startExecutor, up } from "./compose.ts";
 import { bootstrapExecutor } from "./executor.ts";
@@ -216,11 +215,6 @@ export async function finishSetup(office: Office, shell: boolean, ownerEmail: st
   await startExecutor(office);
   await bootstrapExecutor(office, email);
   stage.done(await up(office, { gathered }));
-
-  // Apps: the Executor apps the office deploys.
-  stage = reporter.stage("Apps", { key: "apps" });
-
-  stage.done(await deploy(office, gathered.inventory.installed));
 
   // Checks: package system checks, the OpenCode restart offer, then office check.
   stage = reporter.stage("Checks", { key: "checks" });

@@ -62,7 +62,7 @@ type Offered = { owner: string; root: string; directory: string };
 
 /** Entries holding the skill offers `offered`, whatever else is asked for. */
 function entriesOf(offered: Offered[] = []): Entries {
-  return <Value extends RegistryEntry>(registry: Registry<Value>) => offered.flatMap(({ owner, root: at, directory }) => registry.id === skills.id ? [{ value: registry.parse({ directory }), owner, folder: at, root: at }] : []);
+  return <Value extends RegistryEntry>(registry: Registry<Value>) => offered.flatMap(({ owner, root: at, directory }) => registry.id === skills.id ? [{ value: registry.parse({ directory }), owner, namespace: owner, settings: {}, folder: at, root: at }] : []);
 }
 
 const office_ = () => ({ dir: office, name: "test", mode: "container" as const, launcher: "office" });

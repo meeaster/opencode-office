@@ -9,10 +9,13 @@ export default Package.integration<typeof definition>()({
     ctx.add(apps, { app: ctx.settings.executor.name, tools: [{ name: "gmail.search", readOnly: "yes" }] });
     ctx.add(apps, { app: ctx.settings.rotues.gmail, tools: [] });
     skills.add(ctx, { folder: "skills/review" });
+    ctx.add(apps, { app: "doop", tools: [], namespace: "doop" });
   },
 });
 
-export const policy = Package.define({
+export const exclusive = Package.define({
   settings: { type: "object", additionalProperties: false, properties: { executor: { type: "object", default: {}, properties: { app: { type: "boolean", default: false } } } } },
-  integrations: { "@office/mock-executor": { requested: settings => settings.executer.app } },
+  setup(ctx) {
+    if (ctx.settings.executer.app && !ctx.providers.selected("mock-executor")) throw new Error("executor.app needs mock-executor");
+  },
 });

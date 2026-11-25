@@ -1,6 +1,6 @@
 {
   "name": "@office/chatgpt-routing",
-  "description": "Routes mock connectors directly to the agent, or Gmail through an app on the optional mock-executor",
+  "description": "Routes mock connectors directly to the agent, and Gmail through an app on the optional mock-executor instead or as well",
   "private": true,
   "exports": {},
   "office": {

@@ -1,6 +1,6 @@
 {
   "name": "@office/design",
-  "description": "A self-hosted Doop design canvas (https://github.com/kgoedecke/doop) in the office's compose project, connected to every session as the doop MCP server.",
+  "description": "A self-hosted Doop design canvas (https://github.com/kgoedecke/doop) in the office's compose project, connected to every session as the doop MCP server, or through the doop Executor app with the executor package.",
   "private": true,
   "exports": {},
   "office": {
@@ -8,6 +8,9 @@
     "dependencies": [
       "@office/opencode",
       "@office/seeds"
-    ]
+    ],
+    "integrations": {
+      "@office/executor": "./executor.ts"
+    }
   }
 }

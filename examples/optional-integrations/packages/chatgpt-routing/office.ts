@@ -11,7 +11,7 @@ export default Package.define({
         default: {},
         additionalProperties: false,
         properties: {
-          gmail: { enum: ["off", "direct", "executor"], default: "direct" },
+          gmail: { enum: ["off", "direct", "executor", "both"], default: "direct" },
           calendar: { enum: ["off", "direct"], default: "direct" },
         },
       },
@@ -26,11 +26,12 @@ export default Package.define({
       },
     },
     // Gmail through Executor needs the app: there is no fallback to the direct route.
-    if: { properties: { routes: { properties: { gmail: { const: "executor" } }, required: ["gmail"] } }, required: ["routes"] },
+    if: { properties: { routes: { properties: { gmail: { enum: ["executor", "both"] } }, required: ["gmail"] } }, required: ["routes"] },
     then: { properties: { executor: { properties: { app: { const: true } }, required: ["app"] } }, required: ["executor"] },
   },
-  integrations: {
-    "@office/mock-executor": { requested: settings => settings.executor.app },
+  // The app is an explicit request: without its provider, fail rather than fall back to the direct route.
+  setup(ctx) {
+    if (ctx.settings.executor.app && !ctx.providers.selected("mock-executor")) throw new Error("executor.app needs package mock-executor, which office.yaml doesn't select; add mock-executor to office.yaml, or set executor.app to false");
   },
   commands: {
     "chatgpt-routing direct": { summary: "List the connectors routed directly to the agent, as JSON", result: ({ settings }) => JSON.stringify(directConnectors(settings.routes)) },

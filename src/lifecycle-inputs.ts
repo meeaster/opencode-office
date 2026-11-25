@@ -4,6 +4,7 @@
 import * as v from "valibot";
 
 import type { Host, OfficeInfo, SyncInputs } from "../sdk/index.ts";
+import { executorAccess } from "./executor.ts";
 import type { Gathered } from "./gather.ts";
 import { type Office, OfficeError } from "./office.ts";
 import { hostTimers } from "./timers.ts";
@@ -64,7 +65,7 @@ export async function* runPackageHooks(office: Office, gathered: Pick<Gathered, 
     yield await packageLines(name, run.phase, () => {
       const inputs = { office: officeInfo(office), entries: gathered.entries, settings: structuredClone(settings) };
 
-      return run.phase === "sync" ? manifest.sync?.({ ...inputs, exclude: run.exclude, updateExcluded: run.updateExcluded }) : manifest.up?.({ ...inputs, host: packageHost(office, name) });
+      return run.phase === "sync" ? manifest.sync?.({ ...inputs, exclude: run.exclude, updateExcluded: run.updateExcluded }) : manifest.up?.({ ...inputs, host: packageHost(office, name), executor: executorAccess(office) });
     });
   }
 }

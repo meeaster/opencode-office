@@ -37,7 +37,7 @@ import type { Lock } from "../schema.ts";
 import { prepareSecrets } from "../secrets.ts";
 import { placeExecutable, toolPath, unpackedImage } from "../tool.ts";
 import { baseImage, changes, compareVersions, defaultPins, describeMove, executorImage, readApplied, wantedPins, writeApplied } from "../versions.ts";
-import { connection, deploy } from "./apps.ts";
+import { connection } from "../executor.ts";
 
 export function ports() {
   return {
@@ -561,24 +561,6 @@ export async function up(office: Office, { upgrade = false, refresh = false, gat
 
   reconcileHostServices(office, upgrade ? "upgrade" : "up", inventory);
   writeApplied(office, pins, office.opencode.mode === "container" ? refreshed : applied?.refreshed);
-
-  // A new Executor serves a new apps framework; every app must match it.
-  if (moved.some((move) => move.tool === "executor")) {
-    progress("waiting for the upgraded Executor, to deploy the apps");
-
-    if (!(await waitForExecutor())) throw new OfficeError("Executor didn't become ready; run office apps deploy once it is");
-
-    let ready = false;
-
-    try {
-      connection(office);
-      ready = true;
-    } catch {
-      say("Executor was upgraded; run office apps deploy once it has a token, so the apps match its framework", "office: ");
-    }
-
-    if (ready) await deploy(office);
-  }
 
   if (managed) {
     progress("starting the managed OpenCode server");

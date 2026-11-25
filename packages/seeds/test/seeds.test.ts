@@ -46,7 +46,7 @@ function pack(name: string, files: Record<string, string> = {}): string {
   return link;
 }
 
-const entry = (owner: string, folder: string, value: Seed): Entry<Seed> => ({ owner, folder, root: folder, value });
+const entry = (owner: string, folder: string, value: Seed): Entry<Seed> => ({ owner, namespace: owner, settings: {}, folder, root: folder, value });
 
 const receipts = () => Object.fromEntries(readReceipts(office));
 
@@ -97,7 +97,7 @@ test("the definition registers the registry, commits the store and declares the 
   expect(Object.entries(definition.commands ?? {}).map(([name, { usage }]) => [name, usage])).toEqual([["seeds diff", "[<path>]"], ["seeds settle", "<path>"]]);
   const registered: string[] = [];
 
-  definition.setup?.({ settings: {}, registry: handle => void registered.push(handle.id), add: () => undefined });
+  definition.setup?.({ settings: {}, registry: handle => void registered.push(handle.id), add: () => undefined, providers: { selected: () => false } });
   expect(registered).toEqual(["seeds.seed"]);
 });
 

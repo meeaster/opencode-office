@@ -1,0 +1,11 @@
+{
+  "name": "@office/executor",
+  "description": "Executor apps: deploys the office's executor-apps/, the apps packages offer and the catalog apps it lists to the office's Executor, with office apps deploy and office up, checks them, and lists them in every session.",
+  "private": true,
+  "exports": {
+    "./apps": "./apps.ts"
+  },
+  "office": {
+    "definition": "./office.ts"
+  }
+}

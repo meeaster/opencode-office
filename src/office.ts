@@ -33,7 +33,6 @@ export type Office = {
   name: string;
   state: string;
   opencode: OpencodeMode;
-  catalogApps: string[];
   /** The Executor app, by slug, whose `notifications.send` gets the office's own job notifications (`executor.notifications`). */
   notificationsApp?: string;
   /** The commit identity and HTTPS credentials office.yaml sets; undefined leaves git's own config. */
@@ -136,7 +135,6 @@ export function loadOffice(dir: string, config = readConfig(dir)): Office {
     name: config.name,
     state: config.state === undefined ? join(homedir(), ".local/share/office", config.name) : resolve(dir, expandHome(config.state)),
     opencode: opencodeMode(config.opencode, dir),
-    catalogApps: config.executor?.catalog_apps ?? [],
     notificationsApp: config.executor?.notifications,
     git: config.git,
     secrets: config.secrets,

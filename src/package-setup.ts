@@ -19,15 +19,17 @@ type SetupInput = {
   manifest: PackageManifest;
   /** The validated settings with defaults applied, as `ctx.settings`. */
   settings: Record<string, SettingValue>;
-  /** Its active integrations, whose setups run after its own, adding as this package. */
+  /** Its integrations whose provider is selected, whose setups run after its own, adding as this package. */
   integrations?: readonly Integration[];
+  /** The packages the office selects, the required built-ins included, for `ctx.providers.selected`. */
+  selected: ReadonlySet<string>;
 };
 
 /**
- * Runs `setup`, then each active integration's, and gathers their registrations. Throws when a setup
+ * Runs `setup`, then each given integration's, and gathers their registrations. Throws when a setup
  * or a registration call throws.
  */
-export async function registerPackage({ name, manifest, settings, integrations = [] }: SetupInput): Promise<Registered> {
+export async function registerPackage({ name, manifest, settings, integrations = [], selected }: SetupInput): Promise<Registered> {
   const registries = new Map<string, Registry<RegistryEntry>>();
   const additions: Registered["additions"] = [];
 
@@ -40,6 +42,13 @@ export async function registerPackage({ name, manifest, settings, integrations =
     add(handle, value) {
       if (!v.is(jsonObject, value)) throw new Error(`${handle.id}: an entry must be a JSON object`);
       additions.push({ id: handle.id, value: structuredClone(value) });
+    },
+    providers: {
+      selected(provider) {
+        if (!v.is(v.string(), provider) || provider.startsWith("@")) throw new Error(`providers.selected: name a package as office.yaml does, such as executor, not ${JSON.stringify(provider)}`);
+
+        return selected.has(provider);
+      },
     },
   };
 

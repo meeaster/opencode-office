@@ -17,7 +17,7 @@ Then run `office sync` and commit what it wrote: the package in `.office/package
 |---|---|
 | `port` | The loopback port Doop is published on; `41441` by default. Doop listens on the same port inside its container. This setting is authoritative: shell `DOOP_PORT` does not override it |
 | `url` | The exact address the browser opens, when a reverse proxy such as a Tailscale Service fronts Doop, such as `https://doop.<tailnet>.ts.net`, without a trailing slash. Empty by default, for `http://localhost:<port>`, or `http://doop.localhost:<port>` with the Executor app's sign-in (see "One address for the browser and Executor"). Doop builds sign-in and every link it hands out on this address, so use exactly it |
-| `executor_app` | Whether sessions reach Doop through the `doop` Executor app instead of the `doop` MCP server and the agent key file; `false` by default. See "Connecting through Executor instead" |
+| `executor_app` | Whether sessions reach Doop through the `doop` Executor app instead of the `doop` MCP server and the agent key file; `false` by default. `true` needs the `executor` package, and `office sync` stops naming it when `office.yaml` doesn't select it. See "Connecting through Executor instead" |
 | `oauth` | Whether the Executor app offers signing in to Doop beside the agent key; `true` by default, and only read with `executor_app`. `false` offers the agent key alone |
 
 A change to any of them reaches sessions (their connection, and the address the skill gives them) when `office sync` writes the resolved settings, without restarting OpenCode. Run `office up` afterward to apply it to Doop too. If MCP tried the new address before Doop started listening there, reconnect `doop` in OpenCode's `/mcps` menu.
@@ -42,10 +42,11 @@ Doop's browser sign-in for MCP clients (OAuth) isn't used here: OpenCode would h
 
 ## Connecting through Executor instead (prototype)
 
-With `executor_app: true`, sessions reach Doop through the package's `doop` Executor app rather than the `doop` MCP server: the plugin stops registering the server (even if a key file is there), so the tools aren't offered twice, and the skill tells agents to find the tools with `office-executor`. The app proxies Doop's own MCP tools, with Doop's server instructions, and asks for approval before the tools Doop marks destructive, such as `delete_frame`. It has one Doop account linked for everyone (an app-scope account), so every session designs as the person who connected it, and no key lands in the office folder.
+With `executor_app: true` and the `executor` package selected, sessions reach Doop through the package's `doop` Executor app rather than the `doop` MCP server: the package's adapter for `@office/executor` (`executor.ts`) offers `executor-app/`, which deploys as `doop`, and the plugin stops registering the server (even if a key file is there), so the tools aren't offered twice, and the skill tells agents to find the tools with `office-executor`. The app proxies Doop's own MCP tools, with Doop's server instructions, and asks for approval before the tools Doop marks destructive, such as `delete_frame`. It has one Doop account linked for everyone (an app-scope account), so every session designs as the person who connected it, and no key lands in the office folder.
 
 ```yaml
 packages:
+  - name: executor
   - name: design
     settings:
       executor_app: true
@@ -53,7 +54,7 @@ packages:
 
 Out of the box this offers two ways to connect, **Sign in with Doop** (OAuth) and **Agent key**, and Doop opens at `http://doop.localhost:<port>` (below). With `oauth: false` the app offers only the agent key and Doop stays at `http://localhost:<port>`.
 
-1. `office sync`, `office up` (which restarts Doop at its new address), then `office apps deploy`. An office that ran Doop before the package's compose file gained the alias and address rule keeps running its applied copy: `office up` says the file changed, and `office up --upgrade` applies it, after backing up Doop's volumes. Until then Doop isn't at `http://doop.localhost:<port>`. Deploy prints a link to Executor's connect page while the app has no Doop account.
+1. `office sync`, then `office up`, which restarts Doop at its new address and deploys the app. An office that ran Doop before the package's compose file gained the alias and address rule keeps running its applied copy: `office up` says the file changed, and `office up --upgrade` applies it, after backing up Doop's volumes. Until then Doop isn't at `http://doop.localhost:<port>`. Deploy prints a link to Executor's connect page while the app has no Doop account.
 2. The person whose Doop account it is opens Doop and signs in (or signs up), in the browser they'll open the link in. Do this first; see "Signing in" below.
 3. They open the link, signed in to Executor, and choose:
    - **Sign in with Doop**: Doop authorizes at once and Executor saves the account, with no key to copy.
@@ -85,7 +86,7 @@ Doop v0.15.0's sign-in page doesn't return to an OAuth sign-in that started whil
 
 ### Changing settings
 
-Turning `oauth` on or off, or changing `url` while it's on, changes the app's provider, so the account must be connected again; the next `office apps deploy` prints a new link. Those changes, and turning `executor_app` on or off with `oauth` on, move Doop's address: run `office up`, and sign in to Doop at the new address.
+Turning `oauth` on or off, or changing `url` while it's on, changes the app's provider, so the account must be connected again; the next `office up` or `office apps deploy` prints a new link. Those changes, and turning `executor_app` on or off with `oauth` on, move Doop's address: run `office up`, and sign in to Doop at the new address.
 
 Turning `executor_app` off brings the key file and the `doop` MCP server back. It doesn't remove the app or its account from Executor; delete them in Executor's dashboard if they're no longer wanted.
 
@@ -95,7 +96,8 @@ Turning `executor_app` off brings the key file and the `doop` MCP server back. I
 |---|---|
 | `compose.yaml` | The `doop` and `doop-db` services, the `doop-pg` database volume and the `doop-assets` volume for uploaded images, fonts and previews, added to the office's compose project (see "Services" in the `office` README). Doop publishes no image, so `doop` builds upstream's Dockerfile from the commit of the release it pins, v0.15.0; `doop-db` is Postgres 16, the version upstream runs, pinned by digest. Doop runs with ChatGPT subscription sign-in off (`CHATGPT_CONNECT_DISABLED`); people connect model API keys in its settings instead. `doop` answers to the alias `doop.localhost` on the compose network, and its command sets `BETTER_AUTH_URL` by the address rule above before running upstream's own |
 | `office.ts` | The settings above and the secrets `office up` generates once into the state folder's `packages/design.env`: `DOOP_BETTER_AUTH_SECRET` (signs sessions), `DOOP_SECRETS_ENCRYPTION_KEYS` (encrypts the model keys and tokens people connect) and `DOOP_DB_PASSWORD` (Postgres; set only when the database is created, so deleting its line breaks the connection rather than rotating it) |
-| `executor-app/` | The `doop` Executor app `office apps deploy` deploys while `executor_app` is on: `address.ts` holds the address rule, `doop.ts` declares the Doop provider (agent key, and OAuth when `oauth` is on) with an MCP health check, `index.ts` proxies Doop's MCP tools with approval for destructive ones, and `package.ts` holds the settings' defaults, which deploy replaces with the office's |
+| `executor.ts` | The adapter the `executor` package runs while selected: it offers `executor-app/` while `executor_app` is on |
+| `executor-app/` | The `doop` Executor app the `executor` package deploys while `executor_app` is on: `address.ts` holds the address rule, `doop.ts` declares the Doop provider (agent key, and OAuth when `oauth` is on) with an MCP health check, `index.ts` proxies Doop's MCP tools with approval for destructive ones, and `package.ts` holds the settings' defaults, which deploy replaces with the office's |
 | `plugin/index.ts` | The OpenCode plugin, which `office sync` links as `.opencode/plugins/design`. It registers the `doop` MCP server when the key file exists and `executor_app` is off, reloads MCP when the key changes, and reloads MCP and the skill below when resolved settings change. Its directory watchers close when the plugin unloads |
 | `skills/doop/` | The skill every session gets: when to use Doop, to load Doop's own guide first, where the user opens the canvas, and what to tell the user when the office isn't connected yet |
 | `seed/.opencode/doop/.gitignore` | Declared in `office.ts` as a seed, laid down once in the office as `.opencode/doop/.gitignore`: keeps the agent key out of git |

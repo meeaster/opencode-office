@@ -82,7 +82,7 @@ export type InstalledPackage = ResolvedPackage & {
   manifest: PackageManifest;
   /** The settings with defaults applied, as runtimes read them from the office's applied settings snapshot. */
   settings: Record<string, SettingValue>;
-  /** Its optional integrations, active or not, each with its module and policy. */
+  /** Its optional integrations, each with its module, whether or not its provider is selected. */
   integrations: readonly OptionalIntegration[];
 };
 

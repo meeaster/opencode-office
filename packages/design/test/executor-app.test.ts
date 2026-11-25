@@ -13,8 +13,7 @@ test("the app's package.ts holds every declared setting at its default", () => {
   expect(defaults).toEqual(settings);
 });
 
-test("the app is gated on the executor_app setting, a boolean that is off by default", () => {
-  expect(manifest.executor_app?.setting).toBe("executor_app");
+test("the executor_app setting, which chooses the Executor route, is a boolean that is off by default", () => {
   expect(Object.keys(settingProperties(manifest.settings ?? {}))).toContain("executor_app");
   expect(defaultOffSetting(manifest.settings ?? {}, "executor_app")).toBe(true);
 });

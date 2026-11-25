@@ -4,6 +4,6 @@ import type definition from "./office.ts";
 
 export default Package.integration<typeof definition>()({
   setup(ctx) {
-    skills.add(ctx, { directory: "skills/review-checklist" });
+    if (ctx.settings.skills !== false) skills.add(ctx, { directory: "skills/review-checklist" });
   },
 });

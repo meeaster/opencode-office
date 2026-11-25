@@ -1,6 +1,6 @@
 // The one gathering of what packages register: every selected package's definition is read and its
 // settings checked; when every package's settings are valid, every setup runs, each followed by its
-// active integrations' (decided from those settings and this selection, never from links); then every entry is
+// integrations whose provider this selection selects (never decided from links); then every entry is
 // parsed by its registry's parser and checked against the registry's key, and each package's machine
 // entries become its claims. Commands, help, sync's admission and `office check` all gather this way,
 // once per evaluated package set, and each decides what a problem means. Nothing is read from an
@@ -16,7 +16,7 @@ import { declaredCommands, nameProblems, type NameProblem, type RegisteredComman
 import { installedPackages, type InstalledPackages } from "./layout.ts";
 import type { Office } from "./office.ts";
 import { type InstalledPackage, type PackageProblem, problemLine } from "./packages.ts";
-import { activeIntegrations, loadIntegrations } from "./package-integrations.ts";
+import { loadIntegrations, selectedIntegrations } from "./package-integrations.ts";
 import { jsonObject, type Registered, registerPackage } from "./package-setup.ts";
 import type { PackageManifest } from "./schema.ts";
 
@@ -29,11 +29,14 @@ export type DeclaredCommand = { owner: string; command: RegisteredCommand; setti
 /** A problem of the gathering: the packages it belongs to, and what it is. `named` messages already name their owners. */
 export type GatherProblem = PackageProblem & { named?: true };
 
-/** A parsed entry: its registry, the provider's parser output, who added it, the folder that package loaded from and its delivery folder. */
-export type Entry = { id: string; value: RegistryEntry; owner: string; folder: string; root: string };
+/** Who added an entry, as the loader knows it, never from the entry: the package, its namespace and settings in this run, the folder it loaded from and its delivery folder. */
+export type Contributor = { owner: string; namespace: string; settings: Record<string, SettingValue>; folder: string; root: string };
 
-/** A package whose setup ran: its name, the folder its definition loaded from, its delivery folder, and what it registered. */
-export type SetUp = { name: string; folder: string; root: string; registered: Registered };
+/** A parsed entry: its registry, the provider's parser output, and who added it. */
+export type Entry = Contributor & { id: string; value: RegistryEntry };
+
+/** A package whose setup ran: its name, namespace and settings, the folder its definition loaded from, its delivery folder, and what it registered. */
+export type SetUp = { name: string; namespace: string; settings: Record<string, SettingValue>; folder: string; root: string; registered: Registered };
 
 export type Gathered = {
   /** Every package office.yaml selects, the required built-ins included, loaded or not. */
@@ -115,9 +118,10 @@ export async function gatherPackages(office: Office, { skip = new Set<string>(),
       const folder = definitionRoot(office.dir, item);
 
       try {
-        const integrations = loadIntegrations(folder, activeIntegrations(name, item.integrations, item.settings, inventory));
+        const integrations = loadIntegrations(folder, selectedIntegrations(item.integrations, inventory));
+        const registered = await registerPackage({ name, manifest: item.manifest, settings: item.settings, integrations, selected: inventory.selected });
 
-        setUp.push({ name, folder, root: packageDeliveryDir(office.dir, item), registered: await registerPackage({ name, manifest: item.manifest, settings: item.settings, integrations }) });
+        setUp.push({ name, namespace: item.manifest.namespace, settings: item.settings, folder, root: packageDeliveryDir(office.dir, item), registered });
       } catch (error) {
         problems.push({ packages: [item.entry.name], message: message(error) });
       }
@@ -186,12 +190,13 @@ export function committedFolders(definitions: ReadonlyMap<string, Pick<PackageMa
 /** A registry's entries, each a copy of its provider's parser output. */
 export function readEntries<T extends RegistryEntry>(entries: readonly Entry[], registry: Registry<T>) {
   // SAFETY: the caller's handle has the id its provider registered; the entry is that provider's parser output.
-  return entries.flatMap(({ id, value, owner, folder, root }) => id === registry.id ? [{ value: structuredClone(value) as T, owner, folder, root }] : []);
+  return entries.flatMap(({ id, value, owner, namespace, settings, folder, root }) => id === registry.id ? [{ value: structuredClone(value) as T, owner, namespace, settings: structuredClone(settings), folder, root }] : []);
 }
 
 /**
  * Parses each package's additions with their provider, once every setup has run, then checks each
- * registry's key. The office's own references come first, owned by office.yaml. A problem names the
+ * registry's key. The office's own references come first, owned by office.yaml, whose namespace is
+ * `office.yaml` and whose settings are empty. A problem names the
  * package it belongs to; `rows` holds the entries of each package whose additions all parsed.
  */
 export function parseEntries(office: Pick<Office, "dir" | "references">, setUp: SetUp[]) {
@@ -200,9 +205,9 @@ export function parseEntries(office: Pick<Office, "dir" | "references">, setUp: 
   const rows = new Map<string, Entry[]>();
 
   for (const { registered } of setUp) for (const [id, handle] of registered.registries) providers.set(id, handle);
-  const entries: Entry[] = office.references.map(value => ({ id: repositories.id, value: structuredClone(value), owner: "office.yaml", folder: office.dir, root: office.dir }));
+  const entries: Entry[] = office.references.map(value => ({ id: repositories.id, value: structuredClone(value), owner: "office.yaml", namespace: "office.yaml", settings: {}, folder: office.dir, root: office.dir }));
 
-  for (const { name, folder, root, registered } of setUp) {
+  for (const { name, namespace, settings, folder, root, registered } of setUp) {
     try {
       const own = registered.additions.map(({ id, value }) => {
         const provider = providers.get(id);
@@ -212,7 +217,7 @@ export function parseEntries(office: Pick<Office, "dir" | "references">, setUp: 
 
         if (!v.is(jsonObject, entry)) throw new Error(`${id}: its parser returned something other than a JSON object`);
 
-        return { id, value: structuredClone(entry), owner: name, folder, root };
+        return { id, value: structuredClone(entry), owner: name, namespace, settings, folder, root };
       });
 
       entries.push(...own);

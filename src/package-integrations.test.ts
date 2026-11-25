@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as v from "valibot";
 import type { RegistryEntry, SettingValue } from "../sdk/index.ts";
-import { activeIntegrations, loadIntegrations, type OptionalIntegration } from "./package-integrations.ts";
+import { loadIntegrations, type OptionalIntegration, selectedIntegrations } from "./package-integrations.ts";
 import { registerPackage } from "./package-setup.ts";
 import { packageManifestSchema } from "./schema.ts";
 
@@ -14,20 +14,9 @@ beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "office-integrations-")); })
 
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
-type Policy = OptionalIntegration["policy"];
-
-const skills = (policy: Policy = {}): OptionalIntegration => ({ provider: "skills", module: "skills.ts", policy });
+const skills: OptionalIntegration = { provider: "skills", module: "skills.ts" };
 
 const selection = (selected: string[], unread: string[] = []) => ({ selected: new Set(selected), unread: new Set(unread) });
-
-/** Whether review-kit's skills integration is active with `settings`, or why it can't run. */
-function decide(policy: Policy, settings: Record<string, SettingValue>, selected: string[], unread: string[] = []) {
-  try {
-    return activeIntegrations("review-kit", [skills(policy)], settings, selection(selected, unread)).length === 1;
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
-}
 
 /** The Error `run` throws or rejects with. */
 async function failureOf(run: () => void | Promise<void>): Promise<Error> {
@@ -42,76 +31,19 @@ async function failureOf(run: () => void | Promise<void>): Promise<Error> {
   throw new Error("expected a failure");
 }
 
-test("an integration is active when requested, off when its policy says false, and otherwise on by default only while its provider is selected", () => {
-  const byDefault = { enabledByDefault: true, requested: (settings: Readonly<Record<string, SettingValue>>) => v.is(v.boolean(), settings.skills) ? settings.skills : undefined };
-
-  // No policy: selecting the provider activates nothing.
-  expect(decide({}, {}, ["review-kit", "skills"])).toBe(false);
-  // Author default: on with the provider selected, off without it; an owner's false turns it off, true requires it.
-  expect(decide(byDefault, {}, ["review-kit", "skills"])).toBe(true);
-  expect(decide(byDefault, {}, ["review-kit"])).toBe(false);
-  expect(decide(byDefault, { skills: false }, ["review-kit", "skills"])).toBe(false);
-  expect(decide(byDefault, { skills: true }, ["review-kit", "skills"])).toBe(true);
-  expect(decide(byDefault, { skills: true }, ["review-kit"])).toBe("integration @office/skills (skills.ts): requested by package review-kit's settings, but office.yaml doesn't select package skills; add skills to office.yaml, or change review-kit's settings so they don't request it");
-  // A selected provider that didn't load is its failure, not the owner leaving it out.
-  expect(decide(byDefault, {}, ["review-kit", "skills"], ["skills"])).toBe("integration @office/skills (skills.ts): package skills is selected but didn't load, so this integration can't run; fix package skills");
-  expect(decide({ requested: () => JSON.parse('"yes"') }, {}, ["skills"])).toBe("integration @office/skills (skills.ts): its requested policy must return true, false or undefined");
+test("an integration runs exactly while its provider is selected; a selected provider that didn't load fails it rather than counting as absent", async () => {
+  expect(selectedIntegrations([skills], selection(["review-kit", "skills"]))).toEqual([skills]);
+  expect(selectedIntegrations([skills], selection(["review-kit"]))).toEqual([]);
+  expect((await failureOf(() => { selectedIntegrations([skills], selection(["review-kit", "skills"], ["skills"])); })).message).toBe("integration @office/skills (skills.ts): package skills is selected but didn't load, so this integration can't run; fix package skills");
 });
 
-test("a policy gets a copy of the settings, and its failure keeps the original as its cause", () => {
-  const boom = new Error("routes unreadable");
-
-  const mutating: Policy = { requested(settings) {
-    Object.assign(settings, { changed: true });
-
-    return false;
-  } };
-
-  const settings = { routes: "direct" };
-
-  activeIntegrations("consumer", [skills(mutating)], settings, selection(["skills"]));
-  expect(settings).toEqual({ routes: "direct" });
-
-  const error = (() => {
-    try {
-      activeIntegrations("consumer", [skills({ requested: () => { throw boom; } })], {}, selection(["skills"]));
-    } catch (thrown) {
-      return thrown;
-    }
-  })();
-
-  expect(error).toMatchObject({ cause: boom, message: "integration @office/skills (skills.ts): its requested policy failed: routes unreadable" });
-});
-
-test("a policy returning a Promise, rejected or not, is named without being awaited, and its rejection isn't left unhandled", async () => {
-  const unhandled: string[] = [];
-  const record: NodeJS.UnhandledRejectionListener = reason => { unhandled.push(String(reason)); };
-
-  process.on("unhandledRejection", record);
-
-  try {
-    for (const requested of [async () => { throw new Error("async policy"); }, () => Promise.reject(new Error("rejected policy")), async () => true]) {
-      // As a JavaScript definition gives it: only TypeScript refuses an async policy.
-      const policy = v.parse(packageManifestSchema("review-kit"), { integrations: { "@office/skills": { requested } } }).integrations["@office/skills"] ?? {};
-
-      expect(decide(policy, {}, ["skills"])).toBe("integration @office/skills (skills.ts): its requested policy must return true, false or undefined synchronously, not a Promise; don't make it async");
-    }
-
-    await new Promise(resolve => { setImmediate(resolve); });
-  } finally {
-    process.off("unhandledRejection", record);
-  }
-
-  expect(unhandled).toEqual([]);
-});
-
-test("an active module loads from the package's folder, its setup naming it with the cause when it throws; a module that throws or isn't Package.integration's is named with its cause", async () => {
+test("a module loads from the package's folder, its setup naming it with the cause when it throws; a module that throws or isn't Package.integration's is named with its cause", async () => {
   mkdirSync(join(dir, "adapters"));
   writeFileSync(join(dir, "adapters/good.ts"), 'import { Package } from "@office/sdk";\nexport default Package.integration()({ setup(ctx) { ctx.add({ id: "skills.offers", parse: entry => entry }, { directory: "skills/review" }); } });\n');
   writeFileSync(join(dir, "adapters/failing.ts"), 'import { Package } from "@office/sdk";\nexport default Package.integration()({ setup() { throw new Error("no app name"); } });\n');
   writeFileSync(join(dir, "adapters/broken.ts"), 'import { apps } from "@office/absent-provider/apps";\nexport default apps;\n');
   writeFileSync(join(dir, "adapters/plain.ts"), "export default { setup() {} };\n");
-  const at = (module: string): OptionalIntegration => ({ provider: "skills", module, policy: {} });
+  const at = (module: string): OptionalIntegration => ({ provider: "skills", module });
   const added: RegistryEntry[] = [];
   const [good, failing] = loadIntegrations(dir, [at("adapters/good.ts"), at("adapters/failing.ts")]);
 
@@ -146,7 +78,7 @@ export default exported;
   writeFileSync(join(dir, "unreadable.ts"), `${sdk}export default Package.integration()({ get setup() { throw new Error("no setup yet"); } });\n`);
   writeFileSync(join(dir, "undefined.ts"), `${sdk}export default Package.integration()({ setup() { throw undefined; } });\n`);
   writeFileSync(join(dir, "plain.ts"), "export default { setup() {} };\n");
-  const at = (module: string): OptionalIntegration => ({ provider: "skills", module, policy: {} });
+  const at = (module: string): OptionalIntegration => ({ provider: "skills", module });
 
   const added: RegistryEntry[] = [];
   const [getter, undefinedThrower] = loadIntegrations(dir, [at("getter.ts"), at("undefined.ts")]);
@@ -169,7 +101,7 @@ test("an integration's setup runs after its package's own and adds as that packa
   const manifest = v.parse(packageManifestSchema("review-kit"), { setup(ctx: { add: (handle: typeof offers, value: RegistryEntry) => void }) { ctx.add(offers, { directory: "own" }); } });
   const seen: SettingValue[] = [];
 
-  const registered = await registerPackage({ name: "review-kit", manifest, settings: { title: "T" }, integrations: [{ setup(ctx) {
+  const registered = await registerPackage({ name: "review-kit", manifest, settings: { title: "T" }, selected: new Set(), integrations: [{ setup(ctx) {
     seen.push(ctx.settings.title ?? null);
     ctx.add(offers, { directory: "skills/review" });
   } }] });
@@ -179,5 +111,5 @@ test("an integration's setup runs after its package's own and adds as that packa
 
   const boom = new Error("no app name");
 
-  await expect(registerPackage({ name: "review-kit", manifest, settings: {}, integrations: [{ setup() { throw boom; } }] })).rejects.toBe(boom);
+  await expect(registerPackage({ name: "review-kit", manifest, settings: {}, selected: new Set(), integrations: [{ setup() { throw boom; } }] })).rejects.toBe(boom);
 });

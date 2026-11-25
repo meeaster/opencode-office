@@ -2,7 +2,7 @@
 // package's plugin adds it to each session; `office instructions [folder]` runs this same code to print it, so the
 // text is never hidden. Every folder of the office gets the same text: a session started inside a
 // working repository also loads that repository's own instructions, natively.
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import * as v from "valibot";
@@ -12,7 +12,7 @@ import { type AppliedReference, appliedReferences } from "../../../src/applied-r
 import sessionScope from "../claude/session-scope.txt" with { type: "text" };
 
 // What the text uses from office.yaml, read through the schema the CLI uses.
-type OfficeInfo = { name: string; references: AppliedReference[]; referenceNotes: string[]; catalogApps: string[]; socketFirewall: boolean; minimumReleaseAge: string };
+type OfficeInfo = { name: string; references: AppliedReference[]; referenceNotes: string[]; socketFirewall: boolean; minimumReleaseAge: string };
 
 function readOffice(office: string): Parsed<OfficeInfo> {
   // The plugin and the compiled `office` both run on Bun, which parses YAML itself.
@@ -30,7 +30,6 @@ function readOffice(office: string): Parsed<OfficeInfo> {
       name: config.name,
       references: references.ok ? references.value : [],
       referenceNotes: references.ok ? [] : references.errors,
-      catalogApps: config.executor?.catalog_apps ?? [],
       socketFirewall: tools.socketFirewall,
       minimumReleaseAge: tools.minimumReleaseAge,
     },
@@ -61,43 +60,8 @@ function entry(path: string, description: string | undefined): string {
   return description === undefined ? `- \`${path}\`` : `- \`${path}\`: ${description}`;
 }
 
-const appManifest = v.object({ description: v.optional(v.string()), executor: v.optional(v.object({ title: v.optional(v.string()) })) });
-
-function appDescription(path: string): string | undefined {
-  // An unfinished manifest should not prevent the session from receiving its instructions.
-  try {
-    const manifest = check(v.safeParse(appManifest, JSON.parse(readFileSync(path, "utf8"))));
-
-    return manifest.ok ? manifest.value.description?.trim() || manifest.value.executor?.title : undefined;
-  } catch (error) {
-    if (error instanceof SyntaxError) return undefined;
-
-    throw error;
-  }
-}
-
-/** Local source supplies the description; a catalog-only Executor app has just its slug. */
-function executorAppLines(root: string, catalog: string[]): string[] {
-  const folder = "executor-apps";
-  const dir = join(root, folder);
-  const lines = new Map(catalog.map(slug => [slug, `- \`${slug}\` (catalog)`]));
-
-  if (existsSync(dir)) {
-    for (const item of readdirSync(dir, { withFileTypes: true })) {
-      const source = join(folder, item.name);
-      const path = join(root, source, "package.json");
-
-      if (!item.isDirectory() || !existsSync(path)) continue;
-
-      lines.set(item.name, entry(`${source}/`, appDescription(path)));
-    }
-  }
-
-  return [...lines.values()];
-}
-
 // What the office shares, listed in full so a session anywhere in it can use it directly.
-function sharedSections(office: OfficeInfo, apps: string[]): string[] {
+function sharedSections(office: OfficeInfo): string[] {
   return [
     "## References (desired read-only checkouts; `office sync` updates them, `office check` verifies origins)",
     "",
@@ -107,12 +71,6 @@ function sharedSections(office: OfficeInfo, apps: string[]): string[] {
 
       return reference.owner === "office.yaml" ? line : `${line} (package ${reference.owner})`;
     })),
-    "",
-    "## Executor apps",
-    "",
-    "Use Executor apps through `office-executor` by name (the last folder in each path). To change an Executor app, edit its source there and run `office apps deploy`.",
-    "",
-    ...(apps.length === 0 ? ["None."] : apps),
   ];
 }
 
@@ -131,7 +89,7 @@ function firewallLines(office: OfficeInfo): string[] {
   ];
 }
 
-function officeText(office: OfficeInfo, apps: string[]): string {
+function officeText(office: OfficeInfo): string {
   return [
     `# The ${office.name} office`,
     "",
@@ -145,7 +103,7 @@ function officeText(office: OfficeInfo, apps: string[]): string {
     "- `git` in `office.yaml` sets the commit identity of the container and the office's jobs; with `credentials: gh`, HTTPS remotes use the user's GitHub login, which the user manages on the host. Never run `gh auth login`, `logout` or `switch` for them.",
     ...firewallLines(office),
     "",
-    ...sharedSections(office, apps),
+    ...sharedSections(office),
   ].join("\n");
 }
 
@@ -161,5 +119,5 @@ export function officeInstructions(folder: string): string {
 
   const office = read.value;
 
-  return officeText(office, executorAppLines(dir, office.catalogApps));
+  return officeText(office);
 }

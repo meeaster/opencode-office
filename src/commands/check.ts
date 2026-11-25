@@ -16,6 +16,7 @@ import { appliedReferences } from "../applied-references.ts";
 import { type Gathered, gatherPackages } from "../gather.ts";
 import { containerSchedule } from "../container-schedule.ts";
 import { hasSystemd } from "../systemd.ts";
+import { executorAccess } from "../executor.ts";
 import { officeInfo, packageHost } from "../lifecycle-inputs.ts";
 import { ownedUnits, packageUnits, refreshOwner, refreshTimer, timerStatus } from "../timers.ts";
 import { configFile, installedPanelNames, locate, panelDir, panelId, panelState, readPanelRecord, removalNote } from "../desktop.ts";
@@ -46,7 +47,6 @@ import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces
 import { pinnedTools } from "../schema.ts";
 import { builtinFiles, builtinPackages, version } from "../tool.ts";
 import { changes, defaultPins, describeMove, executorImage, isTested, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
-import { appFolders, deployedFrameworks } from "./apps.ts";
 import { compose, officeImage, ports, runningPins } from "./compose.ts";
 import { keyOrganization } from "./executor.ts";
 import type { Stage } from "../report/index.ts";
@@ -327,7 +327,7 @@ export async function packageCheckFunctions(office: Office, report: Report, gath
     let problems: unknown;
 
     try {
-      problems = await item.manifest.check({ office: officeInfo(office), entries: gathered.entries, settings: structuredClone(item.settings), host: packageHost(office, item.entry.name, { readOnly: true }) });
+      problems = await item.manifest.check({ office: officeInfo(office), entries: gathered.entries, settings: structuredClone(item.settings), host: packageHost(office, item.entry.name, { readOnly: true }), executor: executorAccess(office, { readOnly: true }) });
     } catch (error) {
       report(false, name, `its check failed: ${error instanceof Error ? error.message : String(error)}`);
 
@@ -665,8 +665,6 @@ async function runtime(office: Office, report: Report, run: Context, stage?: Sta
 
   await opencodeVersion(office, report, auth, opencode);
 
-  if (hasToken && health === 200) await appFrameworks(office, report, run.gathered.inventory.installed);
-
   stage?.detail("services and timers");
   hostServiceStatus(office, report, run.gathered.inventory);
   scheduling(office, report, running, run);
@@ -909,33 +907,6 @@ async function opencodeVersion(office: Office, report: Report, auth: Record<stri
   report(info.version === applied, "OpenCode version", info.version === applied ? `${info.version}` : `the server runs ${info.version}, not the applied ${applied}; run office up`);
 }
 
-/** Every app in the office, in its folder and as deployed, must name the apps framework Executor serves. */
-async function appFrameworks(office: Office, report: Report, installed: InstalledPackage[]): Promise<void> {
-  try {
-    const { version: served, apps, catalog } = await deployedFrameworks(office, installed);
-
-    for (const item of catalog) {
-      report(!!item.existing, `catalog app ${item.id}`, item.existing ? `installed from ${item.pkg} (${item.existing.id})` : "missing; run office apps deploy");
-    }
-
-    const folders = appFolders(office, installed).filter(folder => !folder.adopted);
-    // A package's app is read-only; deploy sends it with the served version.
-    const local = folders.filter((folder) => folder.fromPackage === undefined && JSON.parse(readFileSync(join(folder.dir, "package.json"), "utf8")).dependencies?.apps !== served);
-    const deployed = apps.filter((app) => app.apps !== served);
-    const missing = folders.filter((folder) => !apps.some((app) => app.slug === folder.slug));
-
-    const problems = [
-      ...local.map((folder) => `${relative(office.dir, folder.dir)} names another apps version`),
-      ...deployed.map((app) => `${app.slug} is deployed with apps@${app.apps ?? "?"}`),
-      ...missing.map((folder) => `${folder.slug} isn't deployed`),
-    ];
-
-    report(problems.length === 0, "app frameworks", problems.length === 0 ? `office-authored apps are deployed for apps@${served}` : `Executor serves apps@${served}: ${problems.join("; ")}; run office apps deploy`);
-  } catch (error) {
-    report(false, "app frameworks", error instanceof Error ? error.message : String(error));
-  }
-}
-
 /** The repositories packages declare, each declaration that fails a failed check. */
 async function accessChecks(office: Office, report: Report): Promise<DeclaredAccess[]> {
   try {
@@ -1150,10 +1121,6 @@ export async function check(office: Office, stage?: Stage, verbose = false, gath
   if (office.opencode.mode === "host") shellCheck(report);
 
   panelChecks(office, report, run);
-
-  const apps = appFolders(office, run.gathered.inventory.installed);
-
-  report(apps.length > 0, "Executor apps", apps.map((app) => relative(office.dir, app.dir)).join(", ") || "none");
 
   versionChecks(office, report);
   const root = await runtime(office, report, run, stage);

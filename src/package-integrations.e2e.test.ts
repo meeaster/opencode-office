@@ -1,10 +1,10 @@
 // Optional integrations in the compiled office, with the example packages: a consumer alone, with
-// its provider selected but the integration off, on, withdrawn while the provider stays selected,
-// and with the provider removed, before and after each sync. Selection decides, not the links an
-// earlier package set left; what a registry holds is read live, while a separate runtime reads the
-// settings the last sync applied.
+// its provider selected and its settings adding nothing, adding, adding both routes, withdrawn
+// while the provider stays selected, with the provider broken, and with the provider removed,
+// before and after each sync. Selection decides, not the links an earlier package set left; what a
+// registry holds is read live, while a separate runtime reads the settings the last sync applied.
 import { expect, test } from "bun:test";
-import { existsSync, lstatSync, readlinkSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { definitionFixture } from "./package-definition.fixture.ts";
 import { copyExample, evaluated, json, runtime } from "./package-integrations.fixture.ts";
@@ -19,7 +19,7 @@ const skills = (enabled: string) => `  - name: skills\n    settings:\n      enab
 
 const provider = "  - name: mock-executor\n";
 
-test("a consumer works alone, with its provider selected and the integration off, on, withdrawn and removed, before and after sync; nothing activates from a stale link", () => {
+test("a consumer works alone, with its provider selected adding nothing, adding, adding both routes, withdrawn, broken and removed, before and after sync; nothing runs from a stale link", () => {
   const f = fixture("integrations");
   const link = join(f.dir, ".agents/skills/review-checklist");
   const stale = join(f.dir, ".office/current/node_modules/@office/mock-executor");
@@ -34,30 +34,35 @@ test("a consumer works alone, with its provider selected and the integration off
   expect(runtime(f)).toEqual({ direct: ["gmail", "calendar"], app: null });
   expect(evaluated(f)).toEqual([]);
 
-  // Providers selected, listed after their consumers; the owner turns the default skill offer off and asks for no app.
+  // Providers selected, listed after their consumers: both adapters run and add nothing, as the owner turns the skill offer off and asks for no app.
   f.select(review("    settings: { skills: false }\n") + routing() + skills("[]") + provider);
   f.cli(0, "sync", "--packages");
   expect(json(exe, f, "mock-executor", "apps")).toEqual([]);
   expect(f.cli(0, "skills", "list")).not.toContain("review-checklist");
-  expect(evaluated(f)).toEqual([]);
+  expect(new Set(evaluated(f))).toEqual(new Set(["review-kit/skills.ts", "chatgpt-routing/executor.ts"]));
 
-  // On: the author's default offers the skill, which the owner enables; the app is registered with no tool while Gmail stays direct.
+  // Adding: left out, the skill setting offers the skill while skills is selected, and the owner enables it; the app is registered with no tool while Gmail stays direct.
   f.select(review() + routing("    settings: { executor: { app: true } }\n") + skills("[review-checklist]") + provider);
   f.cli(0, "sync", "--packages");
   expect(readlinkSync(link)).toBe("../../packages/review-kit/skills/review-checklist");
   expect(f.cli(0, "skills", "list")).toMatch(/review-checklist +package review-kit +enabled/);
-  expect(json(exe, f, "mock-executor", "apps")).toEqual([{ owner: "chatgpt-routing", app: "chatgpt", tools: [] }]);
+  expect(json(exe, f, "mock-executor", "apps")).toEqual([{ owner: "chatgpt-routing", namespace: "chatgpt-routing", app: "chatgpt", tools: [] }]);
   expect(json(exe, f, "chatgpt-routing", "direct")).toEqual(["gmail", "calendar"]);
   expect(runtime(f)).toEqual({ direct: ["gmail", "calendar"], app: "chatgpt" });
   expect(new Set(evaluated(f))).toEqual(new Set(["review-kit/skills.ts", "chatgpt-routing/executor.ts"]));
 
   // Gmail through the app only: commands read office.yaml at once, the runtime the applied settings until sync publishes them.
   f.select(review() + routing("    settings: { routes: { gmail: executor }, executor: { app: true } }\n") + skills("[review-checklist]") + provider);
-  expect(json(exe, f, "mock-executor", "apps")).toEqual([{ owner: "chatgpt-routing", app: "chatgpt", tools: [{ name: "gmail.search", readOnly: true }] }]);
+  expect(json(exe, f, "mock-executor", "apps")).toEqual([{ owner: "chatgpt-routing", namespace: "chatgpt-routing", app: "chatgpt", tools: [{ name: "gmail.search", readOnly: true }] }]);
   expect(json(exe, f, "chatgpt-routing", "direct")).toEqual(["calendar"]);
   expect(runtime(f)).toEqual({ direct: ["gmail", "calendar"], app: "chatgpt" });
   f.cli(0, "sync", "--packages");
   expect(runtime(f)).toEqual({ direct: ["calendar"], app: "chatgpt" });
+
+  // Both routes: Gmail is direct and in the app.
+  f.select(review() + routing("    settings: { routes: { gmail: both }, executor: { app: true } }\n") + skills("[review-checklist]") + provider);
+  expect(json(exe, f, "mock-executor", "apps")).toEqual([{ owner: "chatgpt-routing", namespace: "chatgpt-routing", app: "chatgpt", tools: [{ name: "gmail.search", readOnly: true }] }]);
+  expect(json(exe, f, "chatgpt-routing", "direct")).toEqual(["gmail", "calendar"]);
   evaluated(f);
 
   // Turning the offer off while skills still enables the ID is the skills package's error: no link changes.
@@ -72,14 +77,27 @@ test("a consumer works alone, with its provider selected and the integration off
   // Unlinked, not left dangling.
   expect(lstatSync(link, { throwIfNoEntry: false })).toBeUndefined();
   expect(json(exe, f, "mock-executor", "apps")).toEqual([]);
-  expect(evaluated(f)).toEqual([]);
+  evaluated(f);
 
-  // Providers removed from office.yaml, their links still in the published set: an explicit request fails, naming both, with no direct fallback...
+  // A selected provider that doesn't load fails the gathering naming it, though these settings add nothing: it isn't treated as absent.
+  const definition = join(f.dir, "packages/mock-executor/office.ts");
+  const healthy = readFileSync(definition, "utf8");
+  writeFileSync(definition, 'throw new Error("mock-executor on import");\n');
+  const broken = f.cli(1, "chatgpt-routing", "direct");
+  expect(broken).toContain("package chatgpt-routing: integration @office/mock-executor (executor.ts): package mock-executor is selected but didn't load, so this integration can't run; fix package mock-executor");
+  expect(broken).toContain("mock-executor on import");
+  expect(evaluated(f)).toEqual(["review-kit/skills.ts"]);
+  writeFileSync(definition, healthy);
+
+  // Providers removed from office.yaml, their links still in the published set: an explicit request fails in base setup, naming both, with no direct fallback...
   f.select(review() + routing("    settings: { executor: { app: true } }\n"));
   expect(existsSync(stale)).toBe(true);
-  expect(f.cli(1, "chatgpt-routing", "direct")).toContain("package chatgpt-routing: integration @office/mock-executor (executor.ts): requested by package chatgpt-routing's settings, but office.yaml doesn't select package mock-executor");
+  expect(f.cli(1, "chatgpt-routing", "direct")).toContain("package chatgpt-routing: executor.app needs package mock-executor, which office.yaml doesn't select");
+  f.select(review("    settings: { skills: true }\n") + routing());
+  expect(f.cli(1, "review-kit", "show")).toContain("package review-kit: skills: true needs package skills, which office.yaml doesn't select");
+  expect(evaluated(f)).toEqual([]);
 
-  // ...and without one, the base commands run and nothing is evaluated, before and after sync; the author's default offer stays off without skills.
+  // ...and without one, the base commands run and nothing is evaluated, before and after sync; left out, the skill setting offers nothing without skills.
   f.select(review() + routing());
 
   for (const synced of [false, true]) {
@@ -96,6 +114,7 @@ test("a consumer works alone, with its provider selected and the integration off
 
   // After sync, the explicit request fails the same way in the command and in sync.
   f.select(review() + routing("    settings: { executor: { app: true } }\n"));
-  expect(f.cli(1, "chatgpt-routing", "direct")).toContain("doesn't select package mock-executor");
-  expect(f.cli(1, "sync", "--packages")).toContain("FAILED package chatgpt-routing: integration @office/mock-executor (executor.ts): requested by package chatgpt-routing's settings, but office.yaml doesn't select package mock-executor");
+  expect(f.cli(1, "chatgpt-routing", "direct")).toContain("executor.app needs package mock-executor, which office.yaml doesn't select");
+  expect(f.cli(1, "sync", "--packages")).toContain("FAILED package chatgpt-routing: executor.app needs package mock-executor, which office.yaml doesn't select");
+  expect(evaluated(f)).toEqual([]);
 });

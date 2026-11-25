@@ -271,7 +271,6 @@ export const officeSchema = v.pipe(v.strictObject(
     state: v.optional(text),
     opencode,
     executor: v.optional(v.strictObject({
-      catalog_apps: v.optional(v.pipe(v.array(name, "must be a list of Executor catalog IDs"), v.check((ids) => new Set(ids).size === ids.length, "lists a catalog ID twice")), []),
       // The app whose `notifications.send` gets the office's own job notifications, by slug.
       notifications: v.optional(name),
     }, mapping)),
@@ -408,13 +407,6 @@ const hostBlock = v.strictObject(
   },
   mapping,
 );
-
-/**
- * The Executor app a package ships in its `executor-app/` folder, which `office apps deploy`
- * deploys under the package's namespace, and, with `setting`, only while that boolean setting is
- * true.
- */
-const executorAppBlock = v.strictObject({ setting: v.optional(v.string()) }, mapping);
 
 /** A file in the package, by a relative path without `..`. */
 function packageFile(extension: string, example: string) {
@@ -587,19 +579,6 @@ const settingsSchema = v.union([
   v.pipe(v.unknown(), v.transform(() => new MalformedSettings())),
 ]);
 
-// When each optional provider is used; package-definition.ts checks each key against package.json.
-const integrationPolicies = v.pipe(
-  ownEntries("must map @office/<name> to when that integration is used"),
-  v.map(
-    v.pipe(v.string(), v.regex(/^@office\/[a-z0-9][a-z0-9-]*$/, "must be keyed @office/<name>")),
-    v.strictObject({
-      enabledByDefault: v.optional(v.boolean("must be true or false")),
-      requested: v.optional(v.custom<(settings: Readonly<Record<string, SettingValue>>) => boolean | undefined>(value => v.is(v.function(), value), "must be a function in office.ts")),
-    }, "must be a mapping of enabledByDefault and requested"),
-  ),
-  v.transform(policies => Object.fromEntries(policies)),
-);
-
 /**
  * The definition of the package named `name`: what can't be discovered from its folders. Its name
  * and description are in its package.json; the namespace defaults to the name.
@@ -612,7 +591,6 @@ export function packageManifestSchema(packageName: string) {
         namespace: v.optional(name),
         setup: v.optional(v.custom<(ctx: SetupContext) => void | Promise<void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
         settings: v.optional(settingsSchema),
-        integrations: v.optional(integrationPolicies, {}),
         commands: v.optional(packageCommands, {}),
         sync: v.optional(v.custom<(inputs: SyncInputs) => readonly string[] | void | Promise<readonly string[] | void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
         fullSync: v.optional(v.custom<(inputs: FullSyncInputs) => readonly SyncItem[] | Promise<readonly SyncItem[]>>(value => v.is(v.function(), value), "must be a function in office.ts")),
@@ -628,11 +606,10 @@ export function packageManifestSchema(packageName: string) {
         tools: miseTools,
         host: v.optional(hostBlock),
         system: v.optional(systemBlock),
-        executor_app: v.optional(executorAppBlock),
         // The label on Docker resources its services create themselves, which `office down` removes.
         spawns: v.optional(spawnsBlock),
       },
-      "must be a mapping of namespace, settings, integrations, commands, setup, sync, fullSync, session, check, up, down, committed, secrets, tools, host, system, executor_app and spawns",
+      "must be a mapping of namespace, settings, commands, setup, sync, fullSync, session, check, up, down, committed, secrets, tools, host, system and spawns",
     ),
     v.transform((manifest) => ({ ...manifest, settings: manifest.settings ?? noSettings, namespace: manifest.namespace ?? packageName })),
     v.forward(
@@ -642,10 +619,6 @@ export function packageManifestSchema(packageName: string) {
     v.forward(
       v.check((manifest) => Object.values(manifest.host?.services ?? {}).every((service) => service.setting === undefined || booleanSetting(manifest.settings, service.setting)), `each service's setting ${booleanGate}`),
       ["host", "services"],
-    ),
-    v.forward(
-      v.check((manifest) => manifest.executor_app?.setting === undefined || booleanSetting(manifest.settings, manifest.executor_app.setting), booleanGate),
-      ["executor_app", "setting"],
     ),
     // A system setup runs as root on the user's machine, so a package offers it and the office opts in.
     v.forward(
