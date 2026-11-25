@@ -5,7 +5,7 @@ import { afterAll, beforeAll, expect, setDefaultTimeout } from "bun:test";
 import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { compile } from "./build.ts";
+import { fixtureExecutable } from "./compiled.fixture.ts";
 import { pinnedMise, pluginDefinition, sharedToolsLock, writePackage } from "./test-package.ts";
 
 /** Opt-in: an absolute OpenCode V2 launcher for the native check. */
@@ -80,7 +80,7 @@ export function scopeFixture() {
 
   beforeAll(async () => {
     mkdirSync(dirname(office));
-    await compile(office);
+    await fixtureExecutable(office);
   }, 60_000);
 
   afterAll(() => rmSync(sandbox, { recursive: true, force: true }));
@@ -91,12 +91,10 @@ export function scopeFixture() {
     const builder = join(dir, "repos/builder");
     const repo = join(builder, "sample");
     const imports = join(home, "imports");
-    // The runner's mise, in a folder of its own behind a stand-in for the pinned version: a host-mode office reads its registry offline for the short names its packages require.
     const registry = join(home, "registry");
-    const mise = Bun.which("mise");
 
     const env = {
-      HOME: home, TMPDIR: tmpdir(), PATH: `/usr/bin:/bin:${registry}`, NO_COLOR: "1", GIT_CONFIG_NOSYSTEM: "1", GIT_ALLOW_PROTOCOL: "file",
+      HOME: home, TMPDIR: tmpdir(), PATH: `${registry}:/usr/bin:/bin`, NO_COLOR: "1", GIT_CONFIG_NOSYSTEM: "1", GIT_ALLOW_PROTOCOL: "file",
       XDG_DATA_HOME: join(home, "data"), XDG_CONFIG_HOME: join(home, "config"), XDG_CACHE_HOME: join(home, "cache"), XDG_STATE_HOME: join(home, "state"),
       OFFICE_MACHINE_RECORD: join(home, "machine.json"), OFFICE_MACHINE_DIR: join(home, "machine"), OFFICE_MISE_CONFIG_DIR: join(home, "mise"),
       OFFICE_APP_CONFIG_DIR: join(home, "app"), OFFICE_APP_PANELS_DIR: join(home, "panels"), OFFICE_SYSTEMD_USER_DIR: join(home, "units"),
@@ -104,9 +102,7 @@ export function scopeFixture() {
       SCOPE_IMPORTS: imports,
     };
 
-    mkdirSync(registry, { recursive: true });
-
-    if (mise !== null) pinnedMise(registry, mise);
+    pinnedMise(registry);
     mkdirSync(repo, { recursive: true });
     mkdirSync(join(dir, "repos/sibling"), { recursive: true });
 

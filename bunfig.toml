@@ -1,4 +1,3 @@
 [test]
-# Every test run gets its own machine record, global mise config folder and office data folder (the
-# environment file, Socket Firewall's wrappers), so nothing a test syncs reaches the real ones.
+# The launcher isolates HOME before Bun starts; the preload isolates each worker's machine state.
 preload = ["./src/test-preload.ts"]

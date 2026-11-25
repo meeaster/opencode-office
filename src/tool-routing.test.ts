@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -26,7 +26,7 @@ let office: string;
 
 let fake: string;
 
-const saved = { PATH: process.env.PATH, FAKE_MISE: process.env.FAKE_MISE };
+const saved = { PATH: process.env.PATH, FAKE_MISE: process.env.FAKE_MISE, OFFICE_MACHINE_DIR: process.env.OFFICE_MACHINE_DIR };
 const checksum = (digit: string) => `sha256:${digit.repeat(64)}`;
 
 // The mise the office finds first on PATH, reporting the version the office pins: it logs each
@@ -55,15 +55,16 @@ beforeEach(() => {
   writeFileSync(join(fake, "calls"), "");
   process.env.PATH = `${fake}:${saved.PATH}`;
   process.env.FAKE_MISE = fake;
+  process.env.OFFICE_MACHINE_DIR = join(dir, "machine");
 });
 
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
-  rmSync(dirname(hostLayout("").sfw), { recursive: true, force: true });
-  process.env.PATH = saved.PATH;
 
-  if (saved.FAKE_MISE === undefined) delete process.env.FAKE_MISE;
-  else process.env.FAKE_MISE = saved.FAKE_MISE;
+  for (const [key, value] of Object.entries(saved)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 });
 
 function write(path: string, content: string): void {
@@ -385,22 +386,27 @@ test("upgrade-tools leaves the owner's holds of shared tools, bumps their desire
 test("one mise, by its real absolute path, runs every step of an operation, with the host toolchain's node and pnpm handed across isolation", async () => {
   await published();
   installSfw();
-  const shims = miseShims();
+  const shims = join(dir, "data/mise/shims");
+
   const runtimes = join(dir, "runtimes");
 
   // A shim would resolve through the config isolation hides; the host's own node and pnpm are real files.
+  mkdirSync(shims, { recursive: true });
+
   for (const command of ["node", "pnpm"]) {
-    write(join(shims, command), "#!/bin/sh\nexit 99\n");
-    chmodSync(join(shims, command), 0o755);
+    writeFileSync(join(shims, command), "#!/bin/sh\nexit 99\n", { flag: "wx", mode: 0o755 });
     write(join(runtimes, command), "#!/bin/sh\n");
     chmodSync(join(runtimes, command), 0o755);
   }
 
   const path = process.env.PATH;
+  const previous = process.env.XDG_DATA_HOME;
 
+  process.env.XDG_DATA_HOME = join(dir, "data");
   process.env.PATH = `${shims}:${runtimes}:${path}`;
 
   try {
+    expect(miseShims()).toBe(shims);
     const firewalled = firewalledMise(loadOffice(office));
     const tools = firewalled.ok ? firewalled.tools : undefined;
 
@@ -413,5 +419,6 @@ test("one mise, by its real absolute path, runs every step of an operation, with
     expect(env.PATH.split(":")).not.toContain(shims);
   } finally {
     process.env.PATH = path;
+    process.env.XDG_DATA_HOME = previous;
   }
 });

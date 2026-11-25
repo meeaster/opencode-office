@@ -107,7 +107,7 @@ Before your first commit, install the gitleaks hook once per clone; it blocks co
 pre-commit install
 ```
 
-`pnpm run build` only builds `target/office`. `bin/office` runs the CLI from the checkout with Bun, without building. `pnpm run typecheck` checks the CLI and the plugins; `pnpm test` runs the unit tests, `pnpm test:e2e` the end-to-end tests (`*.e2e.test.ts`, which run a compiled executable), and `pnpm test:all` both (launcher behavior tests also use host `jq`, already included in the container).
+`pnpm run build` only builds `target/office`. `bin/office` runs the CLI from the checkout with Bun, without building. `pnpm run typecheck` checks the CLI and the plugins; `pnpm test` runs the unit tests, `pnpm test:e2e` the end-to-end tests (`*.e2e.test.ts`, which run a compiled executable), and `pnpm test:all` both (launcher behavior tests also use host `jq`, already included in the container). For individual files use `./bin/test ./src/machine.test.ts` from the checkout root. The runner starts Bun with a temporary home, an offline fixture mise and isolated service addresses.
 
 ## Commands
 

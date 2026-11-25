@@ -1,34 +1,16 @@
-// Loaded before every test file (bunfig.toml): points the machine record and mise's global config
-// folder, which a host-mode office's sync writes to, at a folder of this run's own. mise itself keeps
-// its real config, so tools that tests run through its shims still resolve.
 import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { machineDirVariable } from "./host-env.ts";
-import { unitDirVariable } from "./host-server.ts";
-import { machineRecordVariable, miseConfigVariable } from "./machine.ts";
-import { systemPlatformVariable } from "./package-system.ts";
-import { pinnedMise } from "./test-package.ts";
+const root = process.env.OFFICE_TEST_ROOT;
 
-const scratch = mkdtempSync(join(tmpdir(), "office-test-machine-"));
+if (!root || tmpdir() !== root || homedir() !== join(root, "home")) throw new Error("Use ./bin/test [bun test arguments] so HOME is isolated before Bun starts");
 
-process.env[machineRecordVariable] = join(scratch, "machine.json");
+const scratch = mkdtempSync(join(root, "worker-"));
 
-process.env[miseConfigVariable] = join(scratch, "mise-config");
-
-process.env[machineDirVariable] = join(scratch, "office-data");
-
-process.env[unitDirVariable] = join(scratch, "systemd-user");
-
-// No package system setup applies to the machine running the tests unless a test names its platform.
-process.env[systemPlatformVariable] = "";
-
-// The shared tools run only the mise version an office pins, and the tests' offices pin the
-// release's default: a stand-in for it comes first on PATH (pinnedMise).
-const machineMise = Bun.which("mise");
-
-if (machineMise !== null) {
-  pinnedMise(join(scratch, "pinned-mise"), machineMise);
-  process.env.PATH = `${join(scratch, "pinned-mise")}:${process.env.PATH ?? ""}`;
-}
+Object.assign(process.env, {
+  XDG_DATA_HOME: join(scratch, "data"), XDG_CONFIG_HOME: join(scratch, "config"),
+  XDG_CACHE_HOME: join(scratch, "cache"), XDG_STATE_HOME: join(scratch, "state"),
+  OFFICE_MACHINE_RECORD: join(scratch, "machine.json"), OFFICE_MISE_CONFIG_DIR: join(scratch, "mise-config"),
+  OFFICE_MACHINE_DIR: join(scratch, "office-data"), OFFICE_SYSTEMD_USER_DIR: join(scratch, "systemd-user"), OFFICE_SYSTEM_PLATFORM: "",
+});

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd -- "$(dirname -- "$0")/.."
+root=$(mktemp -d "${TMPDIR:-/tmp}/office-test.XXXXXXXX")
+trap 'rm -rf -- "$root"' EXIT
+mkdir "$root/home" "$root/bin" "$root/native"
+
+# Expose the test prerequisites without exposing a host bin directory or running a mise shim.
+for name in bun node jq; do
+  command=$(type -P "$name") || continue
+  if [[ ${command%/*} == */shims ]]; then
+    base=${command%/shims/*}/installs/$name/global
+    command=$base/bin/$name
+    [[ -x $command ]] || command=$base/$name
+    [[ -x $command ]] || continue
+  fi
+  printf '#!/bin/bash\nexec %q "$@"\n' "$(realpath "$command")" > "$root/bin/$name"
+  chmod +x "$root/bin/$name"
+done
+# Wrapper generation distinguishes native mise from scripts. Never install through this copy.
+cp /usr/bin/false "$root/native/mise"
+export HOME=$root/home TMPDIR=$root OFFICE_TEST_ROOT=$root PATH=$root/bin:$root/native:/usr/bin:/bin
+export XDG_RUNTIME_DIR=$root DOCKER_HOST=unix://$root/absent DBUS_SESSION_BUS_ADDRESS=unix:path=$root/absent
+export GIT_CONFIG_NOSYSTEM=1 GIT_ALLOW_PROTOCOL=file SHELL=/bin/sh
+vars=(HOME TMPDIR OFFICE_TEST_ROOT PATH XDG_RUNTIME_DIR DOCKER_HOST DBUS_SESSION_BUS_ADDRESS GIT_CONFIG_NOSYSTEM GIT_ALLOW_PROTOCOL SHELL LANG TERM TZ OFFICE_TEST_OPENCODE OFFICE_TEST_EXECUTABLE OFFICE_TEST_PLUGIN_CONTROL OFFICE_TEST_PRE_ASSETS)
+environment=()
+for key in "${vars[@]}"; do
+  if [[ -v $key ]]; then environment+=("$key=${!key}"); fi
+done
+env -i "${environment[@]}" "$root/bin/bun" --no-install --no-env-file -e 'import { pinnedMise } from "./src/test-package.ts"; pinnedMise(process.env.OFFICE_TEST_ROOT + "/bin");'
+if [[ ${1:-} == --compile ]]; then
+  shift
+  env -i "${environment[@]}" "$root/bin/bun" --no-install --no-env-file -e 'import { compile } from "./src/build.ts"; await compile(process.env.OFFICE_TEST_ROOT + "/compiled-office");'
+  environment+=("OFFICE_TEST_DISTRIBUTION=$root/compiled-office")
+fi
+env -i "${environment[@]}" "$root/bin/bun" test --no-install --no-env-file "$@"

@@ -87,7 +87,7 @@ From the CLI checkout on Linux with a clean temporary-file hierarchy and no syst
 
 ```sh
 OFFICE_TEST_OPENCODE="$(command -v opencode)" \
-bun test ./src/opencode-scope-inventory.e2e.test.ts
+./bin/test ./src/opencode-scope-inventory.e2e.test.ts
 ```
 
 The tests compile the production CLI, create their own homes, offices, app and machine paths, and use a local request trap for inspect. The native case starts only the supplied V2 binary on an ephemeral loopback port, with its own password, no inherited account environment and model fetching disabled. It reads `/api/command` at the root, both working repositories under `repos/`, a Git repo nested in one of them, and a fresh location after withdrawal. It also declares a Git-cloned plugin and checks that its command, loaded through the link into `.office/plugins/`, is listed at the root, the working repositories and the nested repo. Without the variable the file's offline inventory and ownership tests still run. The checkout tests are in `src/opencode-scope-clones.e2e.test.ts`, and the info/exclude tests in `src/git.test.ts`.

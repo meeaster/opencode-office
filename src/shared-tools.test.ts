@@ -57,7 +57,7 @@ function provides(name: string, tool: string, version: string, bin: string): voi
 
 /** office.yaml selecting each entry (`name`, or `name, <more keys>`), in a host-mode office with a three-day age. */
 function select(...entries: string[]): void {
-  write(join(office, "office.yaml"), `name: t\nopencode: {mode: host, url: 'http://127.0.0.1:49999'}\nminimum_release_age: 3d\npackages: [${entries.map(entry => `{name: ${entry}}`).join(", ")}]\n`);
+  write(join(office, "office.yaml"), `name: t\nstate: ./state\nopencode: {mode: host, url: 'http://127.0.0.1:49999'}\nminimum_release_age: 3d\npackages: [${entries.map(entry => `{name: ${entry}}`).join(", ")}]\n`);
 }
 
 const run = () => sync(loadOffice(office), { scope: "packages" });

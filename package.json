@@ -8,9 +8,9 @@
   "scripts": {
     "build": "bun src/build.ts",
     "install-office": "bun src/build.ts --install",
-    "test": "bun test --parallel --path-ignore-patterns='**/*.e2e.test.ts'",
-    "test:e2e": "bun test --parallel e2e.test",
-    "test:all": "bun test --parallel",
+    "test": "./bin/test --parallel --path-ignore-patterns='**/*.e2e.test.ts'",
+    "test:e2e": "./bin/test --compile --parallel=8 e2e.test",
+    "test:all": "./bin/test --compile --parallel=8",
     "typecheck": "tsc --noEmit",
     "vendor-artifact-share": "bun src/vendor-artifact-share.ts"
   },

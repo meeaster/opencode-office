@@ -1,7 +1,7 @@
 // Writes a package for a test: its definition and the package.json that names it.
 import { createHash } from "node:crypto";
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { lstatSync, mkdirSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative, sep } from "node:path";
 
 import { floors } from "../packages/office/floors.ts";
 import { activate, type AppliedExecutable, type AppliedTool } from "../standard/tools/applied.ts";
@@ -105,7 +105,7 @@ export const officeTools = [
 export const officeRegistry = officeTools.map(({ short, tool }) => ({ short, backends: [tool] }));
 
 /** A shell line for a fake mise script: it answers `mise registry --json` with the built-ins' short names, as a host-mode office reads them. */
-export const fakeRegistry = `[ "$1" != registry ] || { echo '${JSON.stringify([...officeRegistry, { short: "bun", backends: ["core:bun"] }, { short: "aws-cli", backends: ["aqua:aws/aws-cli"] }])}'; exit 0; }\n`;
+export const fakeRegistry = `[ "$*" != "registry --json" ] || { echo '${JSON.stringify([...officeRegistry, { short: "bun", backends: ["core:bun"] }, { short: "aws-cli", aliases: ["aws", "awscli"], backends: ["aqua:aws/aws-cli"] }])}'; exit 0; }\n`;
 
 /** A dry run's lines planning the office package's tools at their floors, as `mise upgrade --bump --dry-run` prints them. */
 export const officePlan = officeTools.map(({ tool, version }) => `Would install ${tool}@${version}\n`).join("");
@@ -136,13 +136,25 @@ export function applyOfficeTools(state: string, more: readonly (typeof officeToo
   const folder = join(state, "tools/fixture");
   const tools = new Map<string, AppliedTool>();
 
-  mkdirSync(folder, { recursive: true });
+  const root = process.env.OFFICE_TEST_ROOT;
+
+  if (!root || !state.startsWith(root + sep)) throw new Error(`not a test state directory: ${state}`);
+  let parent = root;
+
+  for (const part of relative(root, folder).split(sep)) {
+    if (part === "..") throw new Error(`not a test state directory: ${state}`);
+    parent = join(parent, part);
+    const existing = lstatSync(parent, { throwIfNoEntry: false });
+
+    if (!existing) mkdirSync(parent);
+    else if (!existing.isDirectory()) throw new Error(`not a test directory: ${parent}`);
+  }
 
   for (const { short, tool, version, bin } of [...officeTools, ...more]) {
     const executables = bin.map((name): [string, AppliedExecutable] => {
       const text = `#!/bin/sh\necho "${name} ${version}"\n`;
 
-      writeFileSync(join(folder, name), text, { mode: 0o755 });
+      writeFileSync(join(folder, name), text, { mode: 0o755, flag: "wx" });
 
       return [name, { path: join(folder, name), sha256: `sha256:${createHash("sha256").update(text).digest("hex")}` }];
     });
@@ -153,12 +165,8 @@ export function applyOfficeTools(state: string, more: readonly (typeof officeToo
   activate({ state }, { tools, highest: new Map([...officeTools, ...more].map(({ tool, version }) => [tool, version])) });
 }
 
-/**
- * A stand-in for the mise version the tests' offices pin, as `folder/mise`: the shared tools run
- * only that version (standard/tools/registry.ts). It reports the pin and hands every other call,
- * such as the offline registry, to `machineMise`, the runner's own.
- */
-export function pinnedMise(folder: string, machineMise: string): void {
+/** Offline registry for fixture offices. An unexpected mise operation fails rather than reaching the host. */
+export function pinnedMise(folder: string): void {
   mkdirSync(folder, { recursive: true });
-  writeFileSync(join(folder, "mise"), `#!/bin/sh\n[ "$*" != --version ] || { echo "${defaultPins.mise.version} (test double)"; exit 0; }\nexec '${realpathSync(machineMise)}' "$@"\n`, { mode: 0o755 });
+  writeFileSync(join(folder, "mise"), `#!/bin/sh\n[ "$*" != --version ] || { echo ${defaultPins.mise.version}; exit 0; }\n${fakeRegistry}echo "unexpected mise call: $*" >&2\nexit 1\n`, { mode: 0o755, flag: "wx" });
 }

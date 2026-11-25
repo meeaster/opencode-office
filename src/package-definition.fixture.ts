@@ -2,10 +2,10 @@
 // definitionFixture() once, at the top level: it registers that file's own beforeAll/afterAll, so
 // files run in parallel each get their own executables and scratch folder.
 import { afterAll, beforeAll, expect, setDefaultTimeout } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { compile } from "./build.ts";
+import { fixtureExecutable } from "./compiled.fixture.ts";
 import { git } from "./git.ts";
 import { definitionText, pinnedMise, sharedToolsLock, writePackage } from "./test-package.ts";
 import type officePlugin from "../packages/office/plugin/index.ts";
@@ -41,7 +41,7 @@ export function definitionFixture({ second = true } = {}) {
 
   beforeAll(async () => {
     mkdirSync(bin);
-    await compile(exe);
+    await fixtureExecutable(exe);
     const gitPath = Bun.which("git");
 
     if (!gitPath) throw new Error("git required for the pinned package fixture");
@@ -157,16 +157,11 @@ export function definitionFixture({ second = true } = {}) {
   function fixture(name: string) {
     const dir = join(root, name);
     const home = join(root, `${name}-home`);
-    const mise = Bun.which("mise");
-    // A host-mode office reads mise's registry, offline, for the short names its packages require:
-    // the runner's mise behind a stand-in for the pinned version (pinnedMise), last on PATH and in a
-    // folder of its own, so a test's own mise in home/bin wins and nothing written there reaches the real one.
     const registry = join(home, "registry");
 
     mkdirSync(home);
-    mkdirSync(registry);
 
-    if (mise !== null) pinnedMise(registry, mise);
+    pinnedMise(registry);
 
     const probe = join(home, "imports");
 

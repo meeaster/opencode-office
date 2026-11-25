@@ -36,7 +36,7 @@ function gitValue(args: string[], cwd: string): string | undefined {
 }
 
 /** What is at a checkout's folder: nothing, a checkout of its own, or something else, said. */
-export type Found = { kind: "missing" } | { kind: "checkout" } | { kind: "other"; problem: string };
+export type Found = { kind: "missing" } | { kind: "checkout"; common?: string } | { kind: "other"; problem: string };
 
 /** Whether `path` is `folder` or inside it, both resolved through links. */
 function within(path: string, folder: string): boolean {
@@ -78,7 +78,7 @@ export function inspect(office: string, name: string, managed: boolean): Found {
     return { kind: "other", problem: `keeps its Git metadata outside ${checkoutRoot}/; sync writes only to folders of the office's own` };
   }
 
-  return { kind: "checkout" };
+  return { kind: "checkout", common: realpathSync(metadata[1]) };
 }
 
 /** Whether Git reads `url` as a local path: no `scheme://` and no `host:` before its first slash. */
@@ -174,6 +174,22 @@ function behind(dir: string): string {
   return count === undefined || count === "0" ? "" : `; ${count} new upstream ${count === "1" ? "commit" : "commits"} not merged`;
 }
 
+// Linked worktrees update the same remote-tracking refs, even when their working folders differ.
+const fetching = new Map<string, Promise<string | undefined>>();
+
+async function fetchCheckout(common: string, dir: string, progress: string, output: (line: string) => void) {
+  const fetch = () => streamed(["fetch", progress, "--no-tags", "--no-prune", "--recurse-submodules=no", "--refmap=", "origin", "+refs/heads/*:refs/remotes/origin/*"], dir, output);
+  const next = (fetching.get(common) ?? Promise.resolve()).then(fetch, fetch);
+
+  fetching.set(common, next);
+
+  try {
+    return await next;
+  } finally {
+    if (fetching.get(common) === next) fetching.delete(common);
+  }
+}
+
 /**
  * Clones a missing remote checkout or fetches the declared one; any other folder is named and left
  * as it is. `verbose` shows Git's progress meter, otherwise Git prints only what went wrong.
@@ -190,11 +206,14 @@ export async function syncCheckout(office: string, entry: Entry & { url: string 
     return failed === undefined ? { ok: true, summary: entry.ref === undefined ? "cloned" : `cloned at ${entry.ref}` } : { ok: false, reason: failed };
   }
 
-  const problem = found.kind === "other" ? found.problem : originProblem(office, dir, entry.url);
+  const refused = (reason: string) => ({ ok: false, reason: `${checkoutPath(entry.name)} ${reason}; not fetched, and left as it is` });
 
-  if (problem !== undefined) return { ok: false, reason: `${checkoutPath(entry.name)} ${problem}; not fetched, and left as it is` };
+  if (found.kind === "other") return refused(found.problem);
+  const problem = originProblem(office, dir, entry.url);
+
+  if (problem !== undefined) return refused(problem);
   // Only into remote-tracking branches, whatever the checkout's own fetch configuration maps.
-  const failed = await streamed(["fetch", progress, "--no-tags", "--no-prune", "--recurse-submodules=no", "--refmap=", "origin", "+refs/heads/*:refs/remotes/origin/*"], dir, output);
+  const failed = await fetchCheckout(found.common ?? dir, dir, progress, output);
 
   return failed === undefined ? { ok: true, summary: `fetched${behind(dir)}` } : { ok: false, reason: failed };
 }
