@@ -1,0 +1,12 @@
+{
+  // An authoring office without the tools package's sources: a package that only offers skill
+  // folders still typechecks; only the generating package's own import of tools fails.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@office/sdk": ["../../../sdk/index.ts"],
+      "@office/skills": ["../../../packages/skills/handles.ts"]
+    }
+  },
+  "include": ["../packages"]
+}

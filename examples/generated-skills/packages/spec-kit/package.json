@@ -1,0 +1,10 @@
+{
+  "name": "@office/spec-kit",
+  "description": "Requires a spec CLI and delivers the skills it generates for the machine's profile",
+  "private": true,
+  "exports": {},
+  "office": {
+    "definition": "./office.ts",
+    "dependencies": ["@office/skills", "@office/tools"]
+  }
+}

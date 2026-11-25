@@ -1,10 +1,12 @@
 // The catalog: every skill the sources offer, enabled or not, read without fetching anything.
-// Packages offer folders with skills.add; a { folder } source offers each child folder holding a
-// SKILL.md; a Git source offers the folders it names, at its pinned commit's checkout. Nothing is
-// found by scanning a folder the settings don't name.
+// Packages offer folders with skills.add, and generated sources the skills of the generation office
+// up last published; a { folder } source offers each child folder holding a SKILL.md; a Git source
+// offers the folders it names, at its pinned commit's checkout. Nothing is found by scanning a
+// folder the settings or a publication record don't name.
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, posix, relative, sep } from "node:path";
 import type { Entries } from "@office/sdk";
+import { currentLink, declaredSources, generationFolder, type Published, pendingReason, readPublished, type Runner } from "./generation.ts";
 import { checkoutFolder, short } from "./git.ts";
 import { skills } from "./handles.ts";
 import { isGit, type SkillSettings, skillId } from "./settings.ts";
@@ -14,21 +16,47 @@ export const linkFolder = ".agents/skills";
 
 /**
  * One skill a source offers: its ID, the source for messages, its folder and the folder it must
- * stay inside (both office-relative), and whether that is a Git checkout.
+ * stay inside (both office-relative), whether that is a Git checkout, and for a generated skill the
+ * path its link goes through (the source's `current` link) instead of its generation's folder.
  */
-export type Offer = { id: string; source: string; bundle: string; within: string; git: boolean };
+export type Offer = { id: string; source: string; bundle: string; within: string; git: boolean; link?: string };
+
+/** A generated source that hasn't published yet, so offers nothing so far: its label and why it waits. */
+export type Pending = { label: string; reason: string };
 
 const portable = (path: string) => path.split(sep).join("/");
 
-/** The offers of every source, in the settings' order after the packages', and notes on what offers nothing. */
-export function catalog(office: string, settings: SkillSettings, entries: Entries) {
+/**
+ * The offers of every source, in the settings' order after the packages' and the generated
+ * sources', notes on what offers nothing, the generated sources still waiting for their first
+ * publication, and problems with a generated source's declaration. A generated source in
+ * `candidates` offers that generation instead of its published one, for checking it before up
+ * publishes it.
+ */
+export function catalog(office: string, settings: SkillSettings, entries: Entries, runner: Runner, candidates: ReadonlyMap<string, Published> = new Map()) {
   const offers: Offer[] = [];
   const notes: string[] = [];
+  const pending: Pending[] = [];
 
   for (const { owner, root, value } of entries(skills)) {
     const within = portable(relative(office, root));
 
     offers.push({ id: posix.basename(value.directory), source: `package ${owner}`, bundle: posix.join(within, value.directory), within, git: false });
+  }
+
+  const { sources, problems } = declaredSources(entries);
+
+  for (const { source, label } of sources) {
+    const published = candidates.get(source.id) ?? readPublished(office, source.id);
+
+    if (published === undefined) {
+      pending.push({ label, reason: pendingReason(office, source, runner) });
+      continue;
+    }
+
+    const within = generationFolder(source.id, published.generation);
+
+    for (const id of published.skills) offers.push({ id, source: label, bundle: posix.join(within, id), within, git: false, link: posix.join(currentLink(source.id), id) });
   }
 
   for (const source of settings.sources) {
@@ -55,12 +83,12 @@ export function catalog(office: string, settings: SkillSettings, entries: Entrie
     }
   }
 
-  return { offers, notes };
+  return { offers, notes, pending, problems };
 }
 
 /** The link text for an offer, from `.agents/skills/`: relative, so it resolves on the host and in the container. */
-export function linkTarget(offer: Pick<Offer, "bundle">): string {
-  return posix.relative(linkFolder, offer.bundle);
+export function linkTarget(offer: Pick<Offer, "bundle" | "link">): string {
+  return posix.relative(linkFolder, offer.link ?? offer.bundle);
 }
 
 function realPath(path: string): string | undefined {
@@ -99,9 +127,10 @@ export function bundleProblem(office: string, offer: Offer): string | undefined 
 
 /**
  * The enabled offers by ID, and every problem that stops delivery: an ID two sources offer, and an
- * enabled ID no source offers.
+ * enabled ID no source offers. While some generated source hasn't published yet (`deferring`), an
+ * enabled ID no source offers may be one it will, so it is deferred rather than a problem.
  */
-export function selection(settings: SkillSettings, offers: readonly Offer[]) {
+export function selection(settings: SkillSettings, offers: readonly Offer[], deferring: boolean) {
   const byId = Map.groupBy(offers, offer => offer.id);
   const problems: string[] = [];
 
@@ -110,13 +139,15 @@ export function selection(settings: SkillSettings, offers: readonly Offer[]) {
   }
 
   const enabled = new Map<string, Offer>();
+  const deferred: string[] = [];
 
   for (const id of settings.enabled) {
     const offer = byId.get(id)?.[0];
 
-    if (offer === undefined) problems.push(`skill ${id} is enabled, but no source offers it`);
-    else enabled.set(id, offer);
+    if (offer !== undefined) enabled.set(id, offer);
+    else if (deferring) deferred.push(id);
+    else problems.push(`skill ${id} is enabled, but no source offers it`);
   }
 
-  return { enabled, problems };
+  return { enabled, problems, deferred };
 }

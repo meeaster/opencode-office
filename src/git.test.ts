@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { excludeAppliedSettings, excludedPath, updateExcluded, excludeEnd, excludeStart, excludePlumbing } from "./exclude-plumbing.ts";
+import { excludeAppliedSettings, excludedPath, updateExcluded, updateExcludedOrThrow, excludeEnd, excludeStart, excludePlumbing } from "./exclude-plumbing.ts";
 import { summarize, sync as syncChanges } from "./commands/sync.ts";
 import { syncLines as sync } from "./sync.fixture.ts";
 import { cloneShallow, git } from "./git.ts";
@@ -445,6 +445,18 @@ test("an immediate exclusion update changes only its paths' lines, literally, so
   expect(ignored(".agents/skills/alpha/SKILL.md")).toBe(false);
   expect(ignored(".agents/skills/gamma")).toBe(true);
   expect(ignored(".opencode/plugins/common")).toBe(true);
+});
+
+test("an up's exclusion update throws, changing nothing, when the block can't be edited; an office outside Git needs none", () => {
+  const office = join(dir, "office");
+  const exclude = join(office, ".git/info/exclude");
+
+  linkedOffice(office);
+  expect(updateExcludedOrThrow(loadOffice(office), { add: [".agents/skills/alpha"] })).toEqual([]);
+  git(["init", "--quiet", office]);
+  writeFileSync(exclude, `${excludeStart}\n${excludeStart}\n${excludeEnd}\n`);
+  expect(() => updateExcludedOrThrow(loadOffice(office), { add: [".agents/skills/alpha"] })).toThrow(`has 2 "${excludeStart}" and 1 "${excludeEnd}" lines, not one block`);
+  expect(readFileSync(exclude, "utf8")).toBe(`${excludeStart}\n${excludeStart}\n${excludeEnd}\n`);
 });
 
 test("a path a package's sync excludes must be a normalized office path outside .office/, on one line", () => {

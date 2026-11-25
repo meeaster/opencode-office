@@ -92,7 +92,7 @@ test("a cron job's timer and service, its Git identity and its systemctl calls a
   const entries: Entries = () => [];
 
   // The cron package's up, for one of the office's own jobs, through the kernel's host helpers.
-  await cron.up?.({ office: officeInfo(office), entries, settings: { jobs: { digest: { schedule: "15 6 * * 1", script: "run.sh" } } }, host: packageHost(office, "cron") });
+  await cron.up?.({ office: officeInfo(office), entries, settings: { jobs: { digest: { schedule: "15 6 * * 1", script: "run.sh" } } }, host: packageHost(office, "cron"), runtimes: () => [], updateExcluded: () => [] });
 
   const unit = "office-bytes-cron-office.digest";
 

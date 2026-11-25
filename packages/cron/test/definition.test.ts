@@ -58,7 +58,7 @@ function inputs(mode: Mode, list: Job[], settings: GivenSettings = {}, args: str
   const entries: Entries = <Value extends RegistryEntry>(registry: Registry<Value>) => list.flatMap(job => (registry.id === jobs.id ? [{ value: registry.parse(job), owner: "demo", namespace: "demo", settings: {}, folder: join(root, "packages/demo"), root: join(root, "packages/demo") }] : []));
   const refuse = () => { throw new Error("not in these tests"); };
 
-  return { office: { dir: root, name: "test", mode, launcher: "/bin/false" }, entries, settings, args, replaceSetting: refuse, exclude: refuse, updateExcluded: refuse, ...fakeHost() };
+  return { office: { dir: root, name: "test", mode, launcher: "/bin/false" }, entries, settings, args, replaceSetting: refuse, exclude: refuse, updateExcluded: refuse, runtimes: refuse, ...fakeHost() };
 }
 
 const digest: Job = { name: "digest", schedule: "15 6 * * *", script: "digest.sh" };

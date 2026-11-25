@@ -1,0 +1,10 @@
+{
+  "name": "@office/notes-kit",
+  "description": "Offers a meeting-notes skill folder; it needs no tools",
+  "private": true,
+  "exports": {},
+  "office": {
+    "definition": "./office.ts",
+    "dependencies": ["@office/skills"]
+  }
+}

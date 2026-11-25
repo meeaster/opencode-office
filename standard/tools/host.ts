@@ -22,6 +22,7 @@ import type { Gathered, GatheredPackage } from "../../src/gather.ts";
 import { hostLayout, hostWrappers, miseShims } from "../../src/host-env.ts";
 import { claim, fileState } from "../../src/machine.ts";
 import type { Office } from "../../src/office.ts";
+import { containerLayout } from "../../src/sfw.ts";
 import { lockFile } from "../../src/versions.ts";
 import { type Application, applyTools, checkTools, liveReleases, stagingNeeded } from "./apply.ts";
 import { type AttestedMise, miseRegistry, officeMise } from "./registry.ts";
@@ -39,6 +40,26 @@ export function spawnRun(): Run {
 /** The runtimes an isolated mise run needs from the host, such as npm tools' node and pnpm. */
 const runtimeCommands = ["node", "pnpm"];
 
+function miseWhich(office: Pick<Office, "dir">, mise: string, env: Readonly<Record<string, string | undefined>>, command: string): string | undefined {
+  try {
+    const resolved = execFileSync(mise, ["which", command], { cwd: office.dir, encoding: "utf8", timeout: 60_000, stdio: ["ignore", "pipe", "ignore"], env: { ...env, MISE_AUTO_INSTALL: "0" } }).trim();
+
+    if (resolved.startsWith("/")) return resolved;
+  } catch {
+    // mise doesn't resolve it here.
+  }
+}
+
+function onPath(env: Readonly<Record<string, string | undefined>>, skip: readonly string[], command: string): string | undefined {
+  const path = (env.PATH ?? "").split(":").filter(dir => dir !== "" && !skip.includes(dir)).join(":");
+
+  return Bun.which(command, { PATH: path }) ?? undefined;
+}
+
+function folders(find: (command: string) => string | undefined): string[] {
+  return [...new Set(runtimeCommands.flatMap(command => find(command) ?? []).map(file => dirname(file)))];
+}
+
 /**
  * The folder of each runtime as the host's own toolchain resolves it for the office: mise's choice
  * in the office's folder under the caller's config, else the first on PATH outside mise's shims and
@@ -46,23 +67,17 @@ const runtimeCommands = ["node", "pnpm"];
  * A runtime the host has neither way is left out; an install that needs it then fails, naming it.
  */
 export function runtimeFolders(office: Pick<Office, "dir">, mise: string, env: Readonly<Record<string, string | undefined>>): string[] {
-  const path = (env.PATH ?? "").split(":").filter(dir => dir !== "" && dir !== miseShims() && dir !== hostWrappers()).join(":");
+  return folders(command => miseWhich(office, mise, env, command) ?? onPath(env, [miseShims(), hostWrappers()], command));
+}
 
-  const found = runtimeCommands.flatMap(command => {
-    try {
-      const resolved = execFileSync(mise, ["which", command], { cwd: office.dir, encoding: "utf8", timeout: 60_000, stdio: ["ignore", "pipe", "ignore"], env: { ...env, MISE_AUTO_INSTALL: "0" } }).trim();
+/** The folder of each runtime the office's pinned `mise` resolves in the office's folder, and nothing from PATH. */
+export function pinnedRuntimeFolders(office: Pick<Office, "dir">, mise: string, env: Readonly<Record<string, string | undefined>>): string[] {
+  return folders(command => miseWhich(office, mise, env, command));
+}
 
-      if (resolved.startsWith("/")) return [resolved];
-    } catch {
-      // mise doesn't resolve it here; PATH may.
-    }
-
-    const onPath = Bun.which(command, { PATH: path });
-
-    return onPath === null ? [] : [onPath];
-  });
-
-  return [...new Set(found.map(file => dirname(file)))];
+/** The folder of each runtime first on a container's PATH outside mise's shims and the image's Socket Firewall wrappers. */
+export function containerRuntimeFolders(env: Readonly<Record<string, string | undefined>>): string[] {
+  return folders(command => onPath(env, [miseShims(), containerLayout.bin], command));
 }
 
 /** What an operation on the shared tools runs: its one mise, attested, and the command and inputs it gives selection and staging. */

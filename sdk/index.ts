@@ -143,13 +143,13 @@ export type Lifecycle<Settings = Readonly<Record<string, SettingValue>>> = {
   readonly settings: Settings;
 };
 
-/** What a package's `sync` and its commands get: a way to change their own exclusions at once. */
+/** What a package's `sync`, `up` and its commands get: a way to change their own exclusions at once. */
 export type ExclusionUpdate = {
   /**
    * Changes the office's Git exclude block now, not at the end of a whole sync: each office-relative
    * path in `remove` stops being excluded and each in `add` is excluded, literally; every other line
-   * stays. For paths a command placed or gave up, or that a sync gave up before it throws, since a
-   * sync that throws rewrites no exclusions. Returns one line per change.
+   * stays. For paths a command or an up placed or gave up, or that a sync gave up before it throws,
+   * since a sync that throws rewrites no exclusions. Returns one line per change.
    */
   updateExcluded(change: { add?: readonly string[]; remove?: readonly string[] }): readonly string[];
 };
@@ -210,8 +210,21 @@ export type Access = (settings: Readonly<Record<string, SettingValue>>) => reado
 /** What a package's `check` gets: also the host helpers, to read its timers. */
 export type CheckInputs<Settings = Readonly<Record<string, SettingValue>>> = Lifecycle<Settings> & ExecutorInputs & { readonly host: Host };
 
-/** What a package's `up` gets: the office, the registries to read, its settings, the host helpers and its Executor. */
-export type UpInputs<Settings = Readonly<Record<string, SettingValue>>> = Lifecycle<Settings> & ExecutorInputs & { readonly host: Host };
+/**
+ * What a package's `up` gets: the office, the registries to read, its settings, the host helpers,
+ * its Executor, and a way to change its own exclusions at once, which throws when the exclude block
+ * can't be changed, so an up stops before placing what it would exclude.
+ */
+export type UpInputs<Settings = Readonly<Record<string, SettingValue>>> = Lifecycle<Settings> & ExecutorInputs & {
+  readonly host: Host;
+  /**
+   * The folders of the runtimes (node, pnpm) for a tool the package runs: in a host-mode office those
+   * the office's pinned mise resolves for the office, never PATH's; in a container-mode office the
+   * first on PATH outside mise's shims and the image's Socket Firewall wrappers, read when called,
+   * so call it only once the package knows it runs inside the office's container.
+   */
+  runtimes(): readonly string[];
+} & ExclusionUpdate;
 
 /** What a package's `down` gets: no registries, since `office down` runs no `setup`. */
 export type DownInputs<Settings = Readonly<Record<string, SettingValue>>> = {

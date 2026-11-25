@@ -5,9 +5,12 @@ import * as v from "valibot";
 
 import type { Host, OfficeInfo, SyncInputs } from "../sdk/index.ts";
 import { executorAccess } from "./executor.ts";
+import { updateExcludedOrThrow } from "./exclude-plumbing.ts";
 import type { Gathered } from "./gather.ts";
 import { type Office, OfficeError } from "./office.ts";
 import { hostTimers } from "./timers.ts";
+import { containerRuntimeFolders, pinnedRuntimeFolders } from "../standard/tools/host.ts";
+import { officeMise } from "../standard/tools/registry.ts";
 import { officeCommand } from "./tool.ts";
 
 /** The office's mode as packages see it: managed host is host mode with office managing the server. */
@@ -55,6 +58,15 @@ export async function packageLines(name: string, phase: "sync" | "up" | "down", 
   return { ok: true, lines: (lines.output ?? []).map(line => `package ${name}: ${line}`) };
 }
 
+/**
+ * The runtimes a package's up gets: in a host-mode office only those the office's pinned mise
+ * resolves, never PATH's; in a container-mode office those on PATH, which only the container's own
+ * process may use, so a caller decides first that it runs there (the skills package's runner does).
+ */
+export function upRuntimes(office: Pick<Office, "dir" | "opencode" | "tools">, env: Readonly<Record<string, string | undefined>> = process.env, mise = () => officeMise(office).path): readonly string[] {
+  return office.opencode.mode === "container" ? containerRuntimeFolders(env) : pinnedRuntimeFolders(office, mise(), env);
+}
+
 type HookRun = ({ phase: "sync" } & Pick<SyncInputs, "exclude" | "updateExcluded">) | { phase: "up"; starting: (name: string) => void };
 
 export async function* runPackageHooks(office: Office, gathered: Pick<Gathered, "entries" | "packages">, run: HookRun) {
@@ -65,7 +77,7 @@ export async function* runPackageHooks(office: Office, gathered: Pick<Gathered, 
     yield await packageLines(name, run.phase, () => {
       const inputs = { office: officeInfo(office), entries: gathered.entries, settings: structuredClone(settings) };
 
-      return run.phase === "sync" ? manifest.sync?.({ ...inputs, exclude: run.exclude, updateExcluded: run.updateExcluded }) : manifest.up?.({ ...inputs, host: packageHost(office, name), executor: executorAccess(office) });
+      return run.phase === "sync" ? manifest.sync?.({ ...inputs, exclude: run.exclude, updateExcluded: run.updateExcluded }) : manifest.up?.({ ...inputs, host: packageHost(office, name), executor: executorAccess(office), runtimes: () => upRuntimes(office), updateExcluded: change => updateExcludedOrThrow(office, change) });
     });
   }
 }

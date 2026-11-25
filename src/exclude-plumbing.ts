@@ -148,7 +148,21 @@ function gitMarkerAbove(dir: string): string | undefined {
  * package that placed or gave up paths outside a whole sync, which rewrites the block from every
  * package's paths: its command, or its sync that is about to stop the rest.
  */
-export function updateExcluded(office: Office, { add = [], remove = [] }: { add?: readonly string[]; remove?: readonly string[] }): string[] {
+export function updateExcluded(office: Office, change: { add?: readonly string[]; remove?: readonly string[] }): string[] {
+  return exclusionChanges(office, change).map(changeText);
+}
+
+/** `updateExcluded` for an up, which places what it excludes next: throws, naming why, when the block can't be changed. */
+export function updateExcludedOrThrow(office: Office, change: { add?: readonly string[]; remove?: readonly string[] }): string[] {
+  const changes = exclusionChanges(office, change);
+  const failed = changes.flatMap(each => (isFailure(each) ? [each.failure.replace(/^FAILED /, "")] : each === unlocated ? [unlocated] : []));
+
+  if (failed.length) throw new OfficeError(failed.join("; "));
+
+  return changes.map(changeText);
+}
+
+function exclusionChanges(office: Office, { add = [], remove = [] }: { add?: readonly string[]; remove?: readonly string[] }): Change[] {
   const adding = add.map(path => literal(excludedPath(path)));
   const removing = new Set(remove.map(path => literal(excludedPath(path))));
 
@@ -156,7 +170,7 @@ export function updateExcluded(office: Office, { add = [], remove = [] }: { add?
     const kept = block.filter(line => !removing.has(line) || adding.includes(line));
 
     return [...kept, ...adding.filter(line => !kept.includes(line))];
-  }).map(changeText);
+  });
 }
 
 /**

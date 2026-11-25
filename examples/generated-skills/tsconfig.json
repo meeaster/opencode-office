@@ -1,0 +1,14 @@
+{
+  // Development types: the providers' sources stand in for the packages an authoring office
+  // selects. Office reads none of this.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@office/sdk": ["../../sdk/index.ts"],
+      "@office/skills": ["../../packages/skills/handles.ts"],
+      "@office/tools": ["../../packages/tools/handles.ts"]
+    }
+  },
+  "include": ["packages"],
+  "exclude": []
+}

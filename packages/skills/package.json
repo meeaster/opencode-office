@@ -1,12 +1,15 @@
 {
   "name": "@office/skills",
-  "description": "Standalone skills: a catalog of the skill folders packages offer with skills.add, the office's own skill folders and named folders of Git repositories at pinned commits; the enabled ones are linked into the office root's .agents/skills/, where any agent runtime that reads it finds them.",
+  "description": "Standalone skills: a catalog of the skill folders packages offer with skills.add, the skills a package's generator writes with the tool it requires (skills.sources.generated), the office's own skill folders and named folders of Git repositories at pinned commits; the enabled ones are linked into the office root's .agents/skills/, where any agent runtime that reads it finds them.",
   "private": true,
   "exports": {
     ".": "./handles.ts"
   },
   "office": {
     "definition": "./office.ts",
-    "access": "./access.ts"
+    "access": "./access.ts",
+    "dependencies": [
+      "@office/tools"
+    ]
   }
 }
