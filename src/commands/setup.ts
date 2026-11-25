@@ -11,7 +11,7 @@ import { planServer, queueStaleRestart, restartStaleServer, staleServer } from "
 import { hostTool, onboardHostTools, requireOfficeTool } from "../host-tools.ts";
 import { appliedReferences } from "../applied-references.ts";
 import { gatherPackages, problemText } from "../gather.ts";
-import { claim, consentCommand, consentQuestion, grantConsent, ownedElsewhere } from "../machine.ts";
+import { claim, consentCommand, consentQuestion, grantConsent, ownedElsewhere, writeServerUnit } from "../machine.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile, updateConfig } from "../office.ts";
 import { last, type NextStep, type Reporter, say, terminalAsk } from "../report/index.ts";
 import { decrypt, encrypt, initializeIdentity, prepareSecrets, requireTool } from "../secrets.ts";
@@ -226,12 +226,14 @@ export async function finishSetup(office: Office, shell: boolean, ownerEmail: st
 
   const managed = office.opencode.mode === "host" && office.opencode.managed !== undefined;
   const plan = managed ? planServer(office) : undefined;
-  const restart = plan === undefined ? undefined : await offerRestart(ask, { stale: () => staleServer(office, plan), restart: (stale) => restartStaleServer(office, plan, stale) });
+  // An accepted restart applies the unit definition plain up held first, as office up --upgrade would.
+  const restart = plan === undefined ? undefined : await offerRestart(ask, { stale: () => staleServer(office, plan), restart: (stale) => (writeServerUnit(office, plan, { upgrade: true }), restartStaleServer(office, plan, stale)) });
 
   // Last, even when setup stops: from a terminal inside the server, the restart closes this terminal.
   if (restart === "queue" && plan !== undefined) {
     last(() => {
       console.log("OpenCode: restarting now in a job of its own; this terminal closes with the server. Reconnect, then run office check");
+      writeServerUnit(office, plan, { upgrade: true });
       queueStaleRestart(office, plan);
     });
   }

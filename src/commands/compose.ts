@@ -33,6 +33,7 @@ import { machineFiles } from "../package-tools.ts";
 import { appliedSpawns, packageComposeFile, preparePackageServices, serviceFiles, serviceSettings, type UpgradedServices } from "../package-services.ts";
 import { sweepSpawned } from "../package-spawns.ts";
 import { reconcileHostServices } from "../package-host-services.ts";
+import { precheckUnits, reconcileUnits, removeUnits } from "../../standard/systemd/units.ts";
 import type { Lock } from "../schema.ts";
 import { prepareSecrets } from "../secrets.ts";
 import { placeExecutable, toolPath, unpackedImage } from "../tool.ts";
@@ -499,6 +500,8 @@ export async function up(office: Office, { upgrade = false, refresh = false, gat
   prepareState(office);
   // What the shared tools would refuse from this machine's files alone stops up before any service starts.
   sharedToolsOutcome(await precheckTools(office, packages, { upgrade }));
+  // A destination office doesn't own, or a unit declaration it can't use, stops up the same way.
+  precheckUnits(office, packages);
 
   if (managed) {
     planServer(office);
@@ -583,7 +586,15 @@ export async function up(office: Office, { upgrade = false, refresh = false, gat
   }
 
   reconcileHostServices(office, upgrade ? "upgrade" : "up", inventory);
+  // The containers run these pins now, whatever the packages' units do next.
   writeApplied(office, pins, office.opencode.mode === "container" ? refreshed : applied?.refreshed);
+  const units = await reconcileUnits(office, packages, { upgrade });
+
+  for (const line of units.lines) say(line, "office: ");
+
+  for (const line of units.pending) say(`pending: ${line}`, "office: ");
+
+  if (units.failed.length > 0) throw new OfficeError(`packages' user units: ${units.failed.join("; ")}; office up stopped there, before ${managed ? "the managed OpenCode server and " : ""}the packages' up functions`);
 
   if (managed) {
     progress("starting the managed OpenCode server");
@@ -591,9 +602,7 @@ export async function up(office: Office, { upgrade = false, refresh = false, gat
     // Tools installed above can change the resolved path of the office's gh or SOPS.
     const plan = planServer(office);
 
-    const changed = writeServerUnit(office, plan);
-
-    await startServer(office, plan, upgrade, changed);
+    await startServer(office, plan, upgrade, writeServerUnit(office, plan, { upgrade }));
   }
 
   for await (const result of runPackageHooks(office, packages, { phase: "up", starting: name => progress(`running package ${name}'s up`) })) {
@@ -633,7 +642,21 @@ export async function startExecutor(office: Office): Promise<void> {
  */
 export function down(office: Office): void {
   reconcileHostServices(office, "down");
+  let refused: unknown;
+
+  try {
+    for (const line of removeUnits(office)) say(line, "office: ");
+  } catch (error) {
+    refused = error;
+  }
+
   markServerStopped(office);
+
+  // A unit office refuses to remove fails down, after the managed server it was asked to stop stops.
+  if (refused !== undefined) {
+    stopRecordedServer(office);
+    throw refused;
+  }
 
   for (const line of removeTimers(office, refreshOwner)) say(line);
   stopRecordedServer(office);

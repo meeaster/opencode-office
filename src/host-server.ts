@@ -407,12 +407,18 @@ function queueRestart(office: Office, plan: ServerPlan, { stray, legacy }: Incum
   if (result.status !== 0) throw new OfficeError(`could not queue the OpenCode restart; check the systemd user manager (${job})`);
 }
 
-export async function startServer(office: Office, plan: ServerPlan, upgrade: boolean, changed: boolean): Promise<void> {
+/**
+ * Starts, keeps or restarts the managed server after `written` brought its unit file to the plan
+ * (`writeServerUnit`, which already reloaded a written file). A stopped unit starts; a running one
+ * restarts only on `upgrade`, and only for a takeover or when it runs another revision than the
+ * plan, in a job independent of this terminal: it is pending until an outside check verifies it.
+ */
+export async function startServer(office: Office, plan: ServerPlan, upgrade: boolean, written: "unchanged" | "written" | "held"): Promise<void> {
   const incumbent = await serverIncumbent(office, upgrade);
   const { unit, path, program } = plan;
   const active = activeUnit(unit);
 
-  if (changed || property(unit, "NeedDaemonReload") === "yes") userSystemd(["daemon-reload"]);
+  if (property(unit, "NeedDaemonReload") === "yes") userSystemd(["daemon-reload"]);
 
   if (property(unit, "FragmentPath") !== path || property(unit, "DropInPaths") !== "") {
     throw new OfficeError(`${unit} has a different unit file or a drop-in; remove the override before running office up`);
@@ -429,7 +435,10 @@ export async function startServer(office: Office, plan: ServerPlan, upgrade: boo
 
   say(`${unit} runs ${program}`, "office: ");
 
-  if (upgrade && (active || incumbent.legacy || incumbent.stray !== undefined)) {
+  const own = active ? mainPid(unit) : 0;
+  const stale = written === "written" || (own !== 0 && runningRevision(own) !== plan.revision);
+
+  if (upgrade && (incumbent.legacy || incumbent.stray !== undefined || (active && stale))) {
     if (incumbent.legacy) say(`taking over ${legacyUnit}; disable it and any restart timer for it yourself`, "office: ");
 
     say(`queueing OpenCode restart independently of this terminal; verify with office check or journalctl --user -u ${unit.replace(/\.service$/, "-restart.service")} -u ${unit}`, "office: ");
@@ -444,7 +453,20 @@ export async function startServer(office: Office, plan: ServerPlan, upgrade: boo
     const pid = await serverPid(office);
 
     if (pid !== undefined && pid === mainPid(unit)) {
-      if (runningRevision(pid) !== plan.revision) say("OpenCode restart pending, to apply changed settings: office setup offers it (office up --upgrade also restarts it)", "office: ");
+      if (runningRevision(pid) !== plan.revision) {
+        say(`pending: ${unit} runs PID ${pid} under its previous settings${written === "held" ? " and unit definition" : ""}; office setup offers the restart (office up --upgrade also applies it)`, "office: ");
+
+        return;
+      }
+
+      // The process runs the current revision, but the installed file is another one, which the next start would run.
+      if (written === "held") {
+        say(`pending: ${unit} runs PID ${pid} with the current settings, but its installed unit definition differs; office up --upgrade installs it`, "office: ");
+
+        return;
+      }
+
+      say(`${unit}: verified OpenCode at systemd PID ${pid} with the current settings`, "office: ");
 
       return;
     }
@@ -681,19 +703,20 @@ function processIdentityIs(pid: number, identity: string): boolean {
   }
 }
 
-export async function serverReport(office: Office, plan: ServerPlan, matches: boolean): Promise<{ ok: boolean | "warn"; detail: string }> {
+/** What `office check` says of the managed server; `matches` is how the recorded unit compares with the plan (`matchesServerUnit`). */
+export async function serverReport(office: Office, plan: ServerPlan, matches: "current" | "pending" | "different"): Promise<{ ok: boolean | "warn"; detail: string }> {
   const { unit, program } = plan;
   const loaded = property(unit, "FragmentPath") === plan.path && property(unit, "DropInPaths") === "";
-  const matching = matches && loaded;
+  const matching = matches !== "different" && loaded;
   const enabled = property(unit, "UnitFileState") === "enabled";
   const active = activeUnit(unit);
   const own = mainPid(unit);
   const pid = await serverPid(office);
   const outside = pid !== undefined && pid !== own;
-  const pending = own !== 0 && runningRevision(own) !== plan.revision;
+  const pending = matches === "pending" || (own !== 0 && runningRevision(own) !== plan.revision);
 
   const detail = [
-    unit, matching ? "unit matches" : "unit missing or different", enabled ? "enabled" : "not enabled",
+    unit, !matching ? "unit missing or different" : matches === "pending" ? "unit definition pending" : "unit matches", enabled ? "enabled" : "not enabled",
     active ? "active" : "not active", program,
     outside ? "the server is running outside the office's unit; run office up --upgrade" : pid === undefined ? "server not responding (check the unit journal and service password)" : `server and unit PID ${pid}`,
     ...(pending ? ["restart pending: office setup offers it (or office up --upgrade)"] : []),

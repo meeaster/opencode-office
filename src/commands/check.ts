@@ -34,6 +34,7 @@ import { executorEnvFile, type Office, OfficeError, readEnvFile, type Repository
 import { appliedServices, appliedSpawns, packageComposeFile, parseCompose, serviceStatus, sharedNamespaces } from "../package-services.ts";
 import { listSpawned, planSweep, sweepIsEmpty } from "../package-spawns.ts";
 import { hostServiceStatus } from "../package-host-services.ts";
+import { unitStatus } from "../../standard/systemd/units.ts";
 import { envFilePath, hostWrappers, sourceLine, sourcedBy } from "../host-env.ts";
 import { claim, machineReport, matchesServerUnit, requireServerConsent } from "../machine.ts";
 import { wrappedCommands } from "../sfw.ts";
@@ -1137,6 +1138,9 @@ export async function check(office: Office, stage?: Stage, verbose = false, gath
       report(false, "managed OpenCode", error instanceof Error ? error.message : String(error));
     }
   }
+
+  // Packages' native units run on the host whether or not any container does.
+  if (run.gathered.complete) await unitStatus(office, run.gathered, report);
 
   if (office.opencode.mode === "host") shellCheck(report);
 

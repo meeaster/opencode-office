@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { restartStaleServer, type ServerPlan, staleServer } from "./host-server.ts";
+import { restartStaleServer, type ServerPlan, serverReport, staleServer, startServer } from "./host-server.ts";
 import { loadOffice } from "./office.ts";
 import { shellQuote } from "./sfw.ts";
 
@@ -12,6 +12,8 @@ let root: string;
 let server: ReturnType<typeof Bun.serve>;
 
 const savedPath = process.env.PATH;
+
+const savedUnits = process.env.OFFICE_SYSTEMD_USER_DIR;
 
 const unit = "office-stale-opencode.service";
 
@@ -30,6 +32,7 @@ beforeEach(() => {
 
 afterEach(() => {
   process.env.PATH = savedPath;
+  process.env.OFFICE_SYSTEMD_USER_DIR = savedUnits;
 
   for (const name of ["pid", "new-pid"]) {
     try {
@@ -58,7 +61,7 @@ function serve(revision: string): number {
 }
 
 function status(pid: number, active = true): void {
-  write("unit-status", `FragmentPath=${join(root, "units", unit)}\nDropInPaths=\nActiveState=${active ? "active" : "inactive"}\nMainPID=${active ? pid : 0}\n`);
+  write("unit-status", `FragmentPath=${join(root, "units", unit)}\nDropInPaths=\nUnitFileState=enabled\nActiveState=${active ? "active" : "inactive"}\nMainPID=${active ? pid : 0}\n`);
   write("info.json", JSON.stringify({ pid, version: "2.3.0" }));
 }
 
@@ -75,7 +78,8 @@ set -eu
 r=${place}
 test "$1" = --user
 case "$2" in
-  is-active) grep -qx 'ActiveState=active' "$r/unit-status" ;;
+  is-active) test "$4" = ${unit} && grep -qx 'ActiveState=active' "$r/unit-status" ;;
+  show-environment) ;;
   show) sed -n "s/^\${3#--property=}=//p" "$r/unit-status" ;;
   restart)
     test "$3" = ${unit}
@@ -91,6 +95,7 @@ esac
 `,
     0o755,
   );
+  write("bin/systemd-run", `#!/bin/sh\nprintf 'systemd-run %s\\n' "$*" >> ${place}/calls\n`, 0o755);
   process.env.PATH = `${join(root, "bin")}:${savedPath}`;
 
   const pid = serve(revision);
@@ -152,4 +157,67 @@ test.skipIf(process.platform !== "linux")("a restart that comes back with other 
   if (stale === undefined) throw new Error("the fixture's server isn't stale");
 
   await expect(restartStaleServer(office, plan, stale)).rejects.toThrow("but not with the current settings");
+});
+
+/** What `startServer` said and asked systemd to do, for a server running under `revision`. */
+async function started(revision: string, upgrade: boolean, written: "unchanged" | "written" | "held") {
+  const { office, plan } = fixture(revision);
+  const said = spyOn(console, "log").mockImplementation(() => undefined);
+
+  process.env.OFFICE_SYSTEMD_USER_DIR = join(root, "units");
+
+  let lines: string[] = [];
+
+  try {
+    await startServer(office, plan, upgrade, written);
+  } finally {
+    lines = said.mock.calls.map(([line]) => String(line));
+    said.mockRestore();
+  }
+
+  const calls = join(root, "calls");
+
+  return { said: lines, calls: existsSync(calls) ? readFileSync(calls, "utf8") : "" };
+}
+
+test.skipIf(process.platform !== "linux")("an unchanged running server is verified by its authenticated PID and revision, and --upgrade doesn't restart it", async () => {
+  const { said, calls } = await started("current", true, "unchanged");
+
+  expect(calls).toBe("");
+  expect(said.at(-1)).toContain("verified OpenCode at systemd PID");
+});
+
+test.skipIf(process.platform !== "linux")("a held definition or older revision is pending on plain up, never verified, and nothing restarts", async () => {
+  const { said, calls } = await started("older", false, "held");
+
+  expect(calls).toBe("");
+  expect(said.at(-1)).toContain("under its previous settings and unit definition; office setup offers the restart");
+  expect(said.join("\n")).not.toContain("verified");
+});
+
+test.skipIf(process.platform !== "linux")("a held definition is pending even when the running process has the current revision", async () => {
+  const { said, calls } = await started("current", false, "held");
+
+  expect(calls).toBe("");
+  expect(said.at(-1)).toContain("with the current settings, but its installed unit definition differs; office up --upgrade installs it");
+  expect(said.join("\n")).not.toContain("verified");
+});
+
+test.skipIf(process.platform !== "linux")("--upgrade queues a restart of a stale server in a job of its own, which an explicit stop still prevents, and doesn't claim it healthy", async () => {
+  const { said, calls } = await started("older", true, "written");
+
+  expect(calls).toStartWith(`systemd-run --user --collect --no-block --quiet --unit office-stale-opencode-restart.service /bin/sh -c set -eu\ntest -f '${join(root, "runtime/managed-opencode.wanted")}' || exit 0\n`);
+  expect(calls).toContain(`exec systemctl --user restart ${unit}`);
+  expect(calls).not.toContain("\nrestart\n");
+  expect(said.join("\n")).not.toContain("verified");
+  expect(said.at(-1)).toContain("queueing OpenCode restart independently of this terminal");
+});
+
+test.skipIf(process.platform !== "linux")("check reports a held unit definition as pending, never as matching and current", async () => {
+  const { office, plan, pid } = fixture("current");
+
+  expect(await serverReport(office, plan, "current")).toEqual({ ok: true, detail: expect.stringContaining(`unit matches; enabled; active; opencode; server and unit PID ${pid}; no server secrets`) });
+  expect(await serverReport(office, plan, "pending")).toEqual({ ok: "warn", detail: expect.stringContaining("unit definition pending; enabled; active; opencode; server and unit PID") });
+  expect((await serverReport(office, plan, "pending")).detail).toContain("restart pending");
+  expect((await serverReport(office, plan, "different")).ok).toBe(false);
 });

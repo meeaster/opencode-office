@@ -399,6 +399,7 @@ const hostValue = v.pipe(
 const hostBlock = v.strictObject(
   {
     setting: v.optional(v.string()),
+    // Units office generates around a script; a package that supplies its own unit uses systemd.userUnits from @office/systemd.
     services: v.optional(v.record(unitPart, v.strictObject({
       description: v.pipe(text, v.regex(/^[^\r\n\0]+$/, "must be one line")),
       script: packageScript,

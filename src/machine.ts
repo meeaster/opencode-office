@@ -47,6 +47,7 @@ import { atomicWrite } from "./secrets.ts";
 import { envScript, wrapperFiles } from "./sfw.ts";
 import { defaultPins, hostPlatform, readApplied, wantedPins } from "./versions.ts";
 import { say } from "./report/index.ts";
+import { ownershipProblem, removeUnit, running, type UnitManager, userManager, writeUnit } from "./user-units.ts";
 
 /** Replace the machine record's path and the global mise config folder, for tests and scratch offices. */
 export const machineRecordVariable = "OFFICE_MACHINE_RECORD";
@@ -388,10 +389,7 @@ function removeFile(file: MachineFile, why: string): Removal {
 
   if (file.kind === "file" && file.service === "opencode") {
     try {
-      stopServerFile(file, true);
-
-      if (state !== "missing") unlinkSync(file.path);
-      userSystemd(["daemon-reload"]);
+      removeServerFile(file, state === "missing");
 
       return { removed: true, line: `removed ${file.path}, ${why}` };
     } catch (error) {
@@ -533,7 +531,8 @@ function managedFile(file: MachineFile): file is RealFile & { service: "opencode
   return file.kind === "file" && file.service === "opencode";
 }
 
-function stopServerFile(file: RealFile, remove: boolean): void {
+/** `down`'s stop of the recorded server unit, which keeps its file and enablement. */
+function stopServerFile(file: RealFile): void {
   const unit = basename(file.path);
   const fragment = userSystemd(["show", "--property=FragmentPath", "--value", unit]);
 
@@ -542,8 +541,6 @@ function stopServerFile(file: RealFile, remove: boolean): void {
   if (fragment !== "" && fragment !== file.path) throw new OfficeError(`${unit} is loaded from ${fragment}, not the office's file`);
 
   if (fragment === file.path) userSystemd(["stop", unit]);
-
-  if (remove && (fragment === file.path || existsSync(file.path))) userSystemd(["disable", unit]);
 }
 
 export function requireServerConsent(office: Office): MachineRecord {
@@ -556,11 +553,16 @@ export function requireServerConsent(office: Office): MachineRecord {
   return current.record;
 }
 
-export function matchesServerUnit(office: Office, plan: ServerPlan): boolean {
+/** How the recorded unit compares with `plan`: the same, still the recorded bytes but different (held while it runs), or missing or changed on disk. */
+export type ServerUnitMatch = "current" | "pending" | "different";
+
+export function matchesServerUnit(office: Office, plan: ServerPlan): ServerUnitMatch {
   const current = claim(office);
   const file = current.kind === "ours" ? current.record.files.find((entry) => managedFile(entry) && entry.path === plan.path) : undefined;
 
-  return file?.kind === "file" && file.sha256 === sha256(plan.text) && fileState(file) === "present";
+  if (file?.kind !== "file" || fileState(file) !== "present") return "different";
+
+  return file.sha256 === sha256(plan.text) ? "current" : "pending";
 }
 
 /** The recorded launch paths, unchanged on disk. The updater does not plan or rewrite the unit. */
@@ -585,32 +587,58 @@ export function recordedAgentUpdate(office: Office) {
   return { program: server.program, env: env.path, sfw: screened };
 }
 
-export function writeServerUnit(office: Office, plan: ServerPlan): boolean {
+/** What `writeServerUnit` did: nothing to write, wrote and reloaded, or held a changed definition while the unit runs. */
+export type ServerUnitWrite = "unchanged" | "written" | "held";
+
+/**
+ * Brings the managed server's unit file to `plan` through the one unit writer, its hash recorded in
+ * the machine record. A running unit keeps its definition until `upgrade`; a written one is reloaded.
+ */
+export function writeServerUnit(office: Office, plan: ServerPlan, { upgrade, manager = userManager }: { upgrade: boolean; manager?: UnitManager }): ServerUnitWrite {
   const record = requireServerConsent(office);
   const env = record.files.find((file) => file.path === envFilePath());
 
   if (env === undefined || fileState(env) !== "present") throw new OfficeError(`managed OpenCode needs the recorded environment file at ${envFilePath()}; run office sync`);
+  const previous = record.files.find((entry) => entry.path === plan.path);
 
+  if (previous !== undefined && !managedFile(previous)) throw new OfficeError(`${plan.path} isn't recorded as the managed OpenCode service`);
+  const state = manager.state(plan.unit);
+  const problem = ownershipProblem(dirname(plan.path), basename(plan.path), previous?.sha256, state);
+
+  if (problem !== undefined) throw new OfficeError(problem);
+  const present = previous !== undefined && fileState(previous) === "present";
   const file: RealFile = { kind: "file", path: plan.path, package: null, service: "opencode", program: plan.program, sha256: sha256(plan.text) };
-  const previous = record.files.find((entry) => entry.path === file.path);
+  const recordFile = () => writeMachine({ ...record, files: [...record.files.filter((entry) => entry !== previous), file] });
 
-  if (previous === undefined) {
-    if (occupied(file.path)) throw new OfficeError(`${file.path} exists but is not in the machine record; office leaves it alone`);
-  } else {
-    if (!managedFile(previous)) throw new OfficeError(`${file.path} isn't recorded as the managed OpenCode service`);
+  if (present && previous.sha256 === file.sha256) {
+    if (previous.program !== file.program) recordFile();
 
-    const state = fileState(previous);
-
-    if (state === "changed") throw new OfficeError(`${file.path} changed since office wrote it; office leaves it alone`);
-
-    if (state === "present" && same(previous, file) && previous.program === file.program) return false;
+    return "unchanged";
   }
 
-  atomicWrite(file.path, plan.text, 0o644);
-  writeMachine({ ...record, files: [...record.files.filter((entry) => entry !== previous), file] });
+  if (present && running(state) && !upgrade) return "held";
+  writeUnit(manager, dirname(plan.path), basename(plan.path), plan.text, { record: recordFile });
   say(`${previous === undefined ? "wrote" : "updated"} ${file.path}`, "office: ");
 
-  return true;
+  return "written";
+}
+
+/** Removes the recorded server unit through the writer: stopped, disabled and deleted while it is the recorded bytes. */
+function removeServerFile(file: RealFile, missing: boolean): void {
+  const name = basename(file.path);
+  const state = userManager.state(name);
+  const problem = ownershipProblem(dirname(file.path), name, file.sha256, state);
+
+  if (problem !== undefined) throw new OfficeError(problem);
+
+  if (!missing) {
+    removeUnit(userManager, dirname(file.path), name);
+
+    return;
+  }
+
+  if (state.fragment === file.path) userManager.run(["stop", name]);
+  userManager.run(["daemon-reload"]);
 }
 
 export function stopRecordedServer(office: Office): void {
@@ -619,7 +647,7 @@ export function stopRecordedServer(office: Office): void {
   if (current.kind !== "ours") return;
 
   for (const file of current.record.files) {
-    if (managedFile(file)) stopServerFile(file, false);
+    if (managedFile(file)) stopServerFile(file);
   }
 }
 

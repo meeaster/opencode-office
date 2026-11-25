@@ -16,7 +16,8 @@ const marker = (office: Office) => `# office package services: ${office.dir}\n`;
 
 // Capture profile directories, not the caller's shell environment. Leave the user manager's
 // PATH as the fallback for system utilities; a caller's cwd, aliases and login shell aren't needed.
-function launch(office: Office, dir: string, script: string) {
+/** The `Environment=` and `ExecStart=` lines that run `script` from the package folder `dir`; native units render the same. */
+export function packageLaunch(office: Office, dir: string, script: string): string {
   const command = officeCommand();
   const home = homedir();
   const path = [...new Set([dirname(command), join(home, ".local/bin"), resolve(miseShims()), resolve(process.env.BUN_INSTALL || join(home, ".bun"), "bin")])].join(":");
@@ -52,7 +53,7 @@ function units(office: Office, packages: ReturnType<typeof installedPackages>) {
     for (const [id, service] of Object.entries(item.manifest.host?.services ?? {})) {
       if (service.setting !== undefined && !item.settings[service.setting]) continue;
       const name = `office-${office.name}-pkg-${item.entry.name}.${id}.service`;
-      wanted.set(name, `${marker(office)}[Unit]\nDescription=${service.description.replaceAll("%", "%%")}\n\n[Service]\nType=exec\n${launch(office, item.dir, service.script)}\nUMask=0077\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n`);
+      wanted.set(name, `${marker(office)}[Unit]\nDescription=${service.description.replaceAll("%", "%%")}\n\n[Service]\nType=exec\n${packageLaunch(office, item.dir, service.script)}\nUMask=0077\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n`);
     }
   }
 

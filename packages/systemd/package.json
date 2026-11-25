@@ -1,0 +1,11 @@
+{
+  "name": "@office/systemd",
+  "description": "Native systemd user units: in a host-mode office, packages ship or render their own unit text with systemd.userUnits.add, naming the tools and files whose change restarts the process; office up installs, holds, upgrades and removes them as the units' one hash-backed owner.",
+  "private": true,
+  "exports": {
+    ".": "./handles.ts"
+  },
+  "office": {
+    "definition": "./office.ts"
+  }
+}
