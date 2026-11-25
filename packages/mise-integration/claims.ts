@@ -4,6 +4,17 @@ export type Task = { name: string; script: string; description: string };
 
 export type Install = Task & { destination: string; ready: string; executable: boolean };
 
+/** A native task in a package's own mise file, such as `[tasks.stage-cli]`, which runs in that package's folder. */
+export type MiseTask = { task: string };
+
+/** References to a package's own native mise configuration. */
+export const mise = {
+  /** The package's own mise task `name`, from its mise.toml beside its definition. */
+  task(name: string): MiseTask {
+    return { task: name };
+  },
+};
+
 export type Recipe = { name: string; setting: string; description: string; platforms: string[]; prepare?: string; verify?: string; bootstrap: string; ready: string[]; env: Record<string, string> };
 
 function packagePath(path: string) {

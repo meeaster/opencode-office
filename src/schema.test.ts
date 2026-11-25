@@ -46,20 +46,23 @@ function tools(rest: string) {
 }
 
 test("tools takes a version or a mapping per runtime, and refuses unknown keys and enabled outside sfw", () => {
-  expect(errors("tools:\n  minimum_release_age: 3d\n  opencode: { version: 2.3.2, minimum_release_age: 0d }\n  claude: 2.1.327\n  executor:\n    version: 2.0.0-beta.49\n    minimum_release_age: 7d\n  sfw: { version: 1.16.0, enabled: false }\n")).toEqual([]);
-  expect(errors("tools:\n  node: 26.0.0\n")).toEqual(["tools: has an unknown key node: tools maps minimum_release_age, opencode, claude, codex, executor, mise and sfw"]);
+  expect(errors("minimum_release_age: 3d\ntools:\n  opencode: { version: 2.3.2, minimum_release_age: 0d }\n  claude: 2.1.327\n  executor:\n    version: 2.0.0-beta.49\n    minimum_release_age: 7d\n  sfw: { version: 1.16.0, enabled: false }\n")).toEqual([]);
+  expect(errors("tools:\n  node: 26.0.0\n")).toEqual(["tools: has an unknown key node: tools maps opencode, claude, codex, executor, mise and sfw"]);
   expect(errors("tools:\n  opencode: { version: 2.3.2, age: 1d }\n")).toEqual(["tools.opencode: has an unknown key age: an entry maps version and minimum_release_age"]);
   expect(errors("tools:\n  executor: { version: 2.0.0-beta.49, enabled: false }\n")).toEqual(["tools.executor: has enabled, which only sfw (Socket Firewall) has"]);
   expect(errors("tools:\n  sfw: { version: 1.16.0, pinned: true }\n")).toEqual(["tools.sfw: has an unknown key pinned: an entry maps version, minimum_release_age and enabled"]);
-  expect(errors("tools:\n  minimum_release_age: 3 days\n")).toEqual(["tools.minimum_release_age: must be an age such as 36h, 1d or 2w"]);
+  expect(errors("minimum_release_age: 3 days\n")).toEqual(["minimum_release_age: must be an age such as 36h, 1d or 2w"]);
+  // The office's age is top-level; under tools it is an unknown key like any other.
+  expect(errors("tools:\n  minimum_release_age: 3d\n")).toEqual(["tools: has an unknown key minimum_release_age: tools maps opencode, claude, codex, executor, mise and sfw"]);
+  expect(errors("packages:\n  - name: demo\n    minimum_release_age: 0d\n  - name: other\n    minimum_release_age: soon\n")).toEqual(["packages[1].minimum_release_age: must be an age such as 36h, 1d or 2w"]);
   expect(errors("tools:\n  mise: 2026.11\n")).toEqual(["tools.mise: must be a version such as 2.3.0, or a mapping of version and minimum_release_age"]);
   expect(errors("tools:\n  claude: { version: latest }\n")).toEqual(["tools.claude.version: must be a version such as 2.3.0"]);
 });
 
 test("a top-level key office.yaml doesn't have, such as versions, is refused like any unknown key; desks, even empty, names the migration", () => {
-  expect(errors("versions:\n  opencode: 2.3.2\n")).toEqual(["versions: must be a mapping of name, state, opencode, executor, git, secrets, tools, references, plugins and packages"]);
+  expect(errors("versions:\n  opencode: 2.3.2\n")).toEqual(["versions: must be a mapping of name, state, opencode, executor, git, secrets, minimum_release_age, tools, references, plugins and packages"]);
   // Cron's configuration is the cron package's settings: the keys before it are unknown like any other.
-  expect(errors("cron:\n  heartbeat: { schedule: '@hourly', script: heartbeat.sh }\n")).toEqual(["cron: must be a mapping of name, state, opencode, executor, git, secrets, tools, references, plugins and packages"]);
+  expect(errors("cron:\n  heartbeat: { schedule: '@hourly', script: heartbeat.sh }\n")).toEqual(["cron: must be a mapping of name, state, opencode, executor, git, secrets, minimum_release_age, tools, references, plugins and packages"]);
 
   for (const desks of ["desks: {}\n", "desks:\n", "desks:\n  work:\n    repos: []\n"]) expect(errors(desks)).toEqual([`desks: ${removedDesks}`]);
   expect(errors("packages:\n  - name: office\n    cron: { upgrade-tools: { enabled: false } }\n")).toEqual(["packages[0].cron: must be a mapping of the fields this schema knows"]);
@@ -70,7 +73,7 @@ test("tools defaults to a three-day age for everything, and a runtime without it
 
   expect(tools("")).toEqual({ minimumReleaseAge: "3d", runtimes: defaults, pinsVersions: false, socketFirewall: true } satisfies ResolvedTools);
 
-  const resolved = tools("tools:\n  minimum_release_age: 1d\n  opencode: { version: 2.3.2, minimum_release_age: 0d }\n  claude: 2.1.327\n  sfw:\n    enabled: false\n");
+  const resolved = tools("minimum_release_age: 1d\ntools:\n  opencode: { version: 2.3.2, minimum_release_age: 0d }\n  claude: 2.1.327\n  sfw:\n    enabled: false\n");
 
   expect(resolved.minimumReleaseAge).toBe("1d");
   expect(resolved.runtimes.opencode).toEqual({ version: "2.3.2", minimumReleaseAge: "0d" });

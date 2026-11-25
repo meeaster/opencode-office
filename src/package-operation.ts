@@ -16,6 +16,7 @@ import { writeAppliedReferences } from "./applied-references.ts";
 import { applyPackages, SyncStopped } from "./package-application.ts";
 import { claimAssetProblems, destinationProblems } from "../standard/mise-integration/projection.ts";
 import { openCheckoutLease } from "./checkout-lease.ts";
+import { recordUnmet } from "../standard/tools/host.ts";
 import { validateAssets } from "../standard/opencode/assets.ts";
 import { renameNoReplace } from "./no-replace.ts";
 import { resultDescriptor } from "./command-stdout.ts";
@@ -470,6 +471,13 @@ export async function evaluateAdmission(temporary: string) {
     const problems = [...gathered.problems, ...admissionProblems(office, gathered.packages, gathered.names)];
 
     if (problems.length) throw refuse(problems, "no package set was published; fix or deselect the packages above and sync again");
+
+    // A shared tool whose recorded release no longer serves the candidate gets one before it is published.
+    const desired = recordUnmet(office, gathered.packages);
+
+    lines.push(...desired.lines.map(line => line.startsWith("FAILED") ? failure(line) : line));
+
+    if (!desired.ok) throw new OfficeError("no package set was published, and office.lock's shared tools are as they were");
 
     // Held through the switch, the applied references and the application, apply: false included.
     using application = applicationLease(office.dir);

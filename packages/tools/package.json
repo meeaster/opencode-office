@@ -1,0 +1,12 @@
+{
+  "name": "@office/tools",
+  "description": "Shared host tools: packages require a mise tool at a tested minimum, or provide one they install themselves, and get a handle to it, which a script or plugin resolves to the applied executable through ./applied.",
+  "private": true,
+  "exports": {
+    ".": "./handles.ts",
+    "./applied": "./applied.ts"
+  },
+  "office": {
+    "definition": "./office.ts"
+  }
+}

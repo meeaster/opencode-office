@@ -1,7 +1,7 @@
 import { opencode } from "@office/opencode";
 import { Package } from "@office/sdk";
 import { repositories } from "@office/references/repositories";
-import { requirements } from "@office/tooling/requirements";
+import { tools } from "@office/tools";
 
 export default Package.define({
   namespace: "floci",
@@ -18,7 +18,7 @@ export default Package.define({
   },
   setup(ctx) {
     opencode.plugins.add(ctx, { directory: "plugin" });
-    ctx.add(requirements, { name: "aws-cli", minimumVersion: "2.40.4" });
+    tools.require(ctx, { name: "aws-cli", minimum: "2.40.4", bin: "aws" });
 
     if (!ctx.settings.source_reference) return;
 

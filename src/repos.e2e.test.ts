@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, 
 import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
+import { fakeRegistry } from "./test-package.ts";
 
 const { root, bin, write, commit, fixture, promptEntries } = definitionFixture({ second: false });
 
@@ -292,7 +293,7 @@ test("fresh setup plans each declared remote for pushing from office.yaml as it 
   write(join(f.home, "bin/git"), `#!/bin/sh\necho "$*" >> "${log}"\nexec "${bin}/git" "$@"\n`, 0o755);
   // Setup's tool checks pass; the services it would start later don't.
   write(join(f.home, "bin/docker"), "#!/bin/sh\nexit 0\n", 0o755);
-  write(join(f.home, "bin/mise"), `#!/bin/sh\nif [ "$1" = --version ]; then echo "${miseVersion} linux-x64 (2026-01-01)"; exit 0; fi\nexit 1\n`, 0o755);
+  write(join(f.home, "bin/mise"), `#!/bin/sh\n${fakeRegistry}if [ "$1" = --version ]; then echo "${miseVersion} linux-x64 (2026-01-01)"; exit 0; fi\nexit 1\n`, 0o755);
   write(join(f.home, "state/office-executor.env"), "EXECUTOR_TOKEN=test\n");
 
   const setup = (entries: string) => {

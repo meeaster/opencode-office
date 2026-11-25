@@ -39,7 +39,8 @@ import { envFilePath, hostEnvironment, hostLayout, hostWrappers, realMise } from
 import { type ServerPlan, serverUnit, serverUnitPath, userSystemd } from "./host-server.ts";
 import type { GatheredPackage } from "./gather.ts";
 import { type Office, OfficeError, readConfig } from "./office.ts";
-import { fragmentOwner, machineFile, machineFiles, packagesFile } from "./package-tools.ts";
+import { fragmentOwner, machineFile, machineFiles, ownerProjection, packagesFile } from "./package-tools.ts";
+import { heldKeys } from "../standard/tools/admission.ts";
 import { platformAsset } from "./releases.ts";
 import { check, hostVariable, type Lock } from "./schema.ts";
 import { atomicWrite } from "./secrets.ts";
@@ -267,6 +268,21 @@ function wantedLinks(office: Office): Wanted[] {
   });
 }
 
+/**
+ * machine.toml's entry: its link, or, while it holds shared tools the packages require, a file
+ * of it without them (ownerProjection), so mise's global config activates none of their desired
+ * versions; only office's applied tools run them.
+ */
+function ownerFile(office: Office, entry: Wanted, packages: readonly GatheredPackage[]): Wanted {
+  if (entry.file.kind !== "link" || entry.file.target !== join(office.dir, machineFile)) return entry;
+  const held = heldKeys(office, packages);
+
+  if (held.size === 0) return entry;
+  const text = ownerProjection(readFileSync(entry.file.target, "utf8"), held);
+
+  return { file: { kind: "file", path: entry.file.path, package: null, sha256: sha256(text) }, what: `${machineFile} without the shared tools office installs (${[...held].join(", ")})`, made: ", so its other tools apply in every folder on this machine", text };
+}
+
 /** The sfw pin `office up` runs: the one it last applied, else office.yaml's, else the tool's default. */
 function appliedSfw(office: Office): Lock["sfw"] {
   const applied = readApplied(office)?.pins.sfw;
@@ -303,7 +319,7 @@ function wantedFiles(office: Office, record: MachineRecord, packages: MachinePac
   const retained = previous?.kind === "file" ? previous.contributions?.filter(item => packages.unread.has(item.name)) : [];
   const { environment, problems, contributions } = hostEnvironment(office, packages.packages, retained);
   const envText = envScript(`the environment of office ${office.name}, which agents and your terminal share`, envFilePath(), environment);
-  const links = wantedLinks(office).filter(({ file }) => file.package === null || !packages.unread.has(file.package) || record.files.some(prior => prior.path === file.path && same(prior, file) && fileState(prior) === "present"));
+  const links = wantedLinks(office).filter(({ file }) => file.package === null || !packages.unread.has(file.package) || record.files.some(prior => prior.path === file.path && same(prior, file) && fileState(prior) === "present")).map(entry => ownerFile(office, entry, packages.packages));
   const wanted: Wanted[] = [...links, { file: { kind: "file", path: envFilePath(), package: null, sha256: sha256(envText), contributions }, what: "the office's environment file", made: "; source it from your shell's startup file (office setup prints the line)", text: envText }];
 
   if (!office.socketFirewall) return { wanted, problems };

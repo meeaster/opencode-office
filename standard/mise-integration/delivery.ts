@@ -27,9 +27,13 @@ import { homedir } from "node:os";
 import { join, relative } from "node:path";
 
 import { adoptVersion, compareToolVersions, declaredTools, hostApplies, switchedOn, wantedTools } from "../tooling/requirements.ts";
+import * as v from "valibot";
+
 import { packageDeliveryDir } from "../../src/bound-paths.ts";
 import { toolPins } from "../../src/mise-toml.ts";
 import type { Office } from "../../src/office.ts";
+import { shellQuote } from "../../src/sfw.ts";
+import { projectionPath } from "../tools/applied.ts";
 import { fragmentOfficeRoot, systemApplyCommand, systemMarker, systemNotes, systemSection, systemState } from "../../src/package-system.ts";
 import type { GatheredPackage } from "../../src/gather.ts";
 import type { Parsed } from "../../src/schema.ts";
@@ -39,6 +43,111 @@ export const fragmentsFolder = ".office/mise";
 
 /** The office's own machine-wide mise file, at its root, which mise doesn't load by itself either. */
 export const machineFile = "machine.toml";
+
+/** One TOML key path as written at the start of `text` (bare, "basic" and 'literal' keys joined by dots), and what follows it; undefined when it starts with none. */
+function keyPath(text: string): { path: string[]; rest: string } | undefined {
+  const path: string[] = [];
+  let rest = text;
+
+  for (;;) {
+    rest = rest.trimStart();
+    const match = /^"(?:[^"\\]|\\.)*"/.exec(rest) ?? /^'[^']*'/.exec(rest) ?? /^[A-Za-z0-9_-]+/.exec(rest);
+
+    if (match === null) return undefined;
+    const raw = match[0];
+    let key: string | undefined = raw;
+
+    // A quoted key is read as TOML reads it.
+    if (!/^[A-Za-z0-9_-]/.test(raw)) {
+      try {
+        key = Object.keys(Bun.TOML.parse(`${raw} = 0`))[0];
+      } catch {
+        return undefined;
+      }
+    }
+
+    if (key === undefined) return undefined;
+    path.push(key);
+    rest = rest.slice(raw.length).trimStart();
+
+    if (!rest.startsWith(".")) return { path, rest };
+    rest = rest.slice(1);
+  }
+}
+
+// A mise file as far as its [tools] go.
+const toolsDocument = v.looseObject({ tools: v.optional(v.record(v.string(), v.unknown())) });
+
+/** `text` as mise reads it, without the [tools] entries `keys` names, and without [tools] once it is empty; undefined when it isn't such a file. */
+function parsedWithout(text: string, keys: ReadonlySet<string>) {
+  const read = v.safeParse(toolsDocument, Bun.TOML.parse(text));
+
+  if (!read.success) return undefined;
+  const { tools, ...rest } = read.output;
+  const kept = Object.entries(tools ?? {}).filter(([key]) => !keys.has(key));
+
+  return kept.length ? { ...rest, tools: Object.fromEntries(kept) } : rest;
+}
+
+/**
+ * `text`, a mise TOML file, without the [tools] entries `keys` names, in any form TOML writes one
+ * (`key = …` under [tools], a dotted `tools.key`, or a `[tools.key]` table), every other line as
+ * written. The result must parse to the same document without those entries, as mise reads it;
+ * undefined when it doesn't, such as for an entry whose text office can't place.
+ */
+export function withoutTools(text: string, keys: ReadonlySet<string>): string | undefined {
+  let table: string[] = [];
+  let dropping = false;
+
+  const kept = text.split("\n").filter(line => {
+    const header = /^\s*\[(?!\[)(.*)\]\s*(?:#.*)?$/.exec(line);
+    const headerPath = header === null ? undefined : keyPath(header[1]);
+
+    if (headerPath !== undefined && headerPath.rest === "") {
+      table = headerPath.path;
+      dropping = table[0] === "tools" && table.length > 1 && keys.has(table[1]);
+
+      return !dropping;
+    }
+
+    if (/^\s*\[\[/.test(line)) {
+      table = [];
+      dropping = false;
+
+      return true;
+    }
+
+    if (dropping) return false;
+    const entry = keyPath(line);
+    const full = entry !== undefined && entry.rest.startsWith("=") ? [...table, ...entry.path] : [];
+
+    return !(full[0] === "tools" && full.length > 1 && keys.has(full[1]));
+  }).join("\n");
+
+  try {
+    // Both without an empty [tools]: taking every entry out of a [tools] table leaves its header.
+    const [after, wanted] = [parsedWithout(kept, new Set()), parsedWithout(text, keys)];
+
+    return after !== undefined && Bun.deepEquals(after, wanted) ? kept : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * What of the owner's machine.toml mise loads in a host-mode office whose packages require some of
+ * its tools: the file without the [tools] entries `held` names (withoutTools, which admission
+ * checks first). Those are the owner's holds of shared tools, which office.lock and the applied
+ * tools carry (standard/tools/), so mise's global config never selects a desired version. The
+ * owner's file stays as it is.
+ */
+export function ownerProjection(text: string, held: ReadonlySet<string>): string {
+  const kept = withoutTools(text, held);
+
+  if (kept === undefined) throw new Error(`${machineFile}'s entries for ${[...held].join(", ")} can't be taken out of what mise loads; write each as key = "version" under [tools]`);
+
+  return [`# office: ${machineFile} as mise loads it, without the shared tools the office's packages require (${[...held].join(", ")}), which office installs from office.lock. Written by office sync from ${machineFile}; edit that file instead.`, kept].join("\n");
+}
 
 /** The packages' tools, one line each, beside machine.toml; mise loads it only through its link. */
 export const packagesFile = "machine.packages.toml";
@@ -219,6 +328,15 @@ function syncPackageTools(office: Office, installed: GatheredPackage[], declared
 const officeRoot = fragmentOfficeRoot;
 
 /**
+ * In a host-mode office, what puts the applied shared tools' links (standard/tools/applied.ts)
+ * first on a task's or hook's PATH, so it runs the office's applied bun rather than whatever a
+ * global or desired pin selects; nothing in container mode.
+ */
+function appliedFirst(office: Office): string {
+  return office.opencode.mode === "host" ? `PATH=${shellQuote(projectionPath(office))}:"$PATH" ` : "";
+}
+
+/**
  * Who keeps a host install current once it exists: an executable updates itself (Browse); a
  * regular file stays as installed until its task runs again.
  */
@@ -270,12 +388,12 @@ export function hostSection(office: Office, item: GatheredPackage): string | und
   return [
     "[hooks]",
     `# ${install.description}, in ${install.creates}: installed by mise install on this host-mode office's machine when it is missing; ${afterInstall(item)}.`,
-    `postinstall = ${JSON.stringify(`${test} "${creates}" || bun "${officeRoot}/${script}"`)}`,
+    `postinstall = ${JSON.stringify(`${test} "${creates}" || ${appliedFirst(office)}bun "${officeRoot}/${script}"`)}`,
     "",
     `[tasks.${JSON.stringify(installTask(item))}]`,
     `description = ${JSON.stringify(`Install or repair ${install.description} in ${install.creates}`)}`,
     `env = { OFFICE_ROOT = ${JSON.stringify(officeRoot)} }`,
-    `run = ${JSON.stringify(`bun "$OFFICE_ROOT/${script}"`)}`,
+    `run = ${JSON.stringify(`${appliedFirst(office)}bun "$OFFICE_ROOT/${script}"`)}`,
     "",
   ].join("\n");
 }
@@ -290,7 +408,7 @@ function fragmentSection(office: Office, item: GatheredPackage): Parsed<string |
     const path = relative(office.dir, join(packageDeliveryDir(office.dir, item), task.script));
     const runner = path.endsWith(".ts") ? "bun" : "bash";
 
-    return [`[tasks.${JSON.stringify(`${item.entry.name}:${task.name}`)}]`, `description = ${JSON.stringify(task.description)}`, `env = { OFFICE_ROOT = ${JSON.stringify(officeRoot)} }`, `run = ${JSON.stringify(`${runner} "$OFFICE_ROOT/${path}"`)}`, ""].join("\n");
+    return [`[tasks.${JSON.stringify(`${item.entry.name}:${task.name}`)}]`, `description = ${JSON.stringify(task.description)}`, `env = { OFFICE_ROOT = ${JSON.stringify(officeRoot)} }`, `run = ${JSON.stringify(`${appliedFirst(office)}${runner} "$OFFICE_ROOT/${path}"`)}`, ""].join("\n");
   });
 
   const parts = [hostSection(office, item), ...tasks, system.value].filter((part) => part !== undefined);

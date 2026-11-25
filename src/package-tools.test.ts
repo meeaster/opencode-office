@@ -7,13 +7,16 @@ import { dirname, join } from "node:path";
 import { withVersion } from "./commands/upgrade.ts";
 import { syncLines as sync } from "./sync.fixture.ts";
 import { gatherPackages } from "./gather.ts";
+import { hostLayout } from "./host-env.ts";
 import { globalConfD, grantConsent, machineRecordPath } from "./machine.ts";
 import { toolPins } from "./mise-toml.ts";
 import { loadOffice } from "./office.ts";
 import { localEdits, pulledDir, readRecord } from "./packages.ts";
 import { parseManifest } from "./schema.ts";
 import { compareToolVersions, fragmentNotes, machineBelowFloors, machineFiles, orphanFragments, packageLines, packagesFileProblems, strayFragments } from "./package-tools.ts";
-import { definitionText, pluginDefinition, writePackage } from "./test-package.ts";
+import { definitionText, pluginDefinition, sharedToolsLock, writePackage } from "./test-package.ts";
+import { projectionPath } from "../standard/tools/applied.ts";
+import { admitTools } from "../standard/tools/admission.ts";
 
 let dir: string;
 
@@ -22,6 +25,9 @@ let office: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "office-package-tools-"));
   office = join(dir, "office");
+  // A host-mode office's sync then finds the office package's shared tools recorded.
+  mkdirSync(office);
+  writeFileSync(join(office, "office.lock"), sharedToolsLock());
 });
 
 afterEach(() => {
@@ -248,7 +254,7 @@ test("sync deletes the fragment of a package office.yaml no longer lists, and le
   const changes = await sync(loadOffice(office));
 
   expect(changes).toContain("deleted .office/mise/demo.toml, the mise setup of package demo, which office.yaml no longer lists");
-  expect(changes).toContain("removed jq from machine.packages.toml, as no package declares it here any more");
+  expect(changes).toContain("deleted machine.packages.toml, as no package declares a tool here");
   expect(existsSync(fragment())).toBe(false);
   expect(existsSync(join(office, ".office/mise/own.toml"))).toBe(true);
 });
@@ -282,15 +288,20 @@ function mode(which: "host" | "container", settings = ""): void {
   write(join(office, "office.yaml"), `name: t\n${opencode}packages:\n  - name: demo\n${settings}`);
 }
 
-const section = `[hooks]
+/** A host-mode office's install section: its hook and task put the applied shared tools first on PATH. */
+const section = () => {
+  const first = `PATH='${projectionPath(loadOffice(office))}':\\"$PATH\\" `;
+
+  return `[hooks]
 # Demo, in ~/.local/bin/demo: installed by mise install on this host-mode office's machine when it is missing; it updates itself.
-postinstall = "test -x \\"$HOME/.local/bin/demo\\" || bun \\"{{ config_source | canonicalize | dirname }}/../../packages/demo/scripts/install.ts\\""
+postinstall = "test -x \\"$HOME/.local/bin/demo\\" || ${first}bun \\"{{ config_source | canonicalize | dirname }}/../../packages/demo/scripts/install.ts\\""
 
 [tasks."demo:install"]
 description = "Install or repair Demo in ~/.local/bin/demo"
 env = { OFFICE_ROOT = "{{ config_source | canonicalize | dirname }}/../.." }
-run = "bun \\"$OFFICE_ROOT/packages/demo/scripts/install.ts\\""
+run = "${first}bun \\"$OFFICE_ROOT/packages/demo/scripts/install.ts\\""
 `;
+};
 
 const setupHeader = `# The mise setup of package demo. office sync writes this file and rewrites it on every sync, so
 # change nothing here; the package's tools are in machine.packages.toml at the office root. mise
@@ -311,7 +322,7 @@ test("a host-mode office with the switch on gets the host tools, and a fragment 
 
     expect(changes).toContain("wrote packages/demo/.office.json (opencode: host)");
     expect(changes).toContain("wrote package demo's install of Demo to .office/mise/demo.toml: mise install installs it once, through the link (or mise run demo:install)");
-    expect(readFileSync(fragment(), "utf8")).toBe(`${setupHeader}\n${section}`);
+    expect(readFileSync(fragment(), "utf8")).toBe(`${setupHeader}\n${section()}`);
     expect(toolPins(readFileSync(fragment(), "utf8"))).toEqual([]);
     expect(lines()).toEqual(['"jq" = "1.7.1" # demo', '"bun" = "1.4.4" # demo']);
     expect(await notes()).toEqual({ ok: false, notes: ["tools jq, bun in machine.packages.toml", "mise setup in .office/mise/demo.toml", "Demo is missing from ~/.local/bin/demo; office up installs it (or mise install, or mise run demo:install, once the office's tools are linked)"] });
@@ -344,7 +355,7 @@ test("an install with executable: false creates a regular file: the hook tests -
     const text = readFileSync(fragment(), "utf8");
 
     expect(text).toContain("# Demo, in ~/.local/share/demo/init.zsh: installed by mise install on this host-mode office's machine when it is missing; mise run demo:install repairs or updates it.\n");
-    expect(text).toContain('postinstall = "test -f \\"$HOME/.local/share/demo/init.zsh\\" || bun ');
+    expect(text).toContain('postinstall = "test -f \\"$HOME/.local/share/demo/init.zsh\\" || PATH=');
     expect((await notes()).ok).toBe(false);
 
     // A folder in its place is no regular file, as test -f says too.
@@ -398,7 +409,7 @@ test("switching to container mode or turning the setting off removes the host to
   mode("host");
   await sync(loadOffice(office));
 
-  expect(readFileSync(fragment(), "utf8")).toBe(`${setupHeader}\n${section}`);
+  expect(readFileSync(fragment(), "utf8")).toBe(`${setupHeader}\n${section()}`);
   expect(lines()).toEqual(['"jq" = "1.8.0" # demo', '"bun" = "1.4.4" # demo']);
 
   mode("host", "    settings:\n      extra: false\n");
@@ -412,7 +423,7 @@ test("check reports a fragment sync would rewrite", async () => {
   demo(hostManifest);
   mode("host");
   await sync(loadOffice(office));
-  writeFileSync(fragment(), readFileSync(fragment(), "utf8").replace("|| bun", "|| echo"));
+  writeFileSync(fragment(), readFileSync(fragment(), "utf8").replace("scripts/install.ts", "scripts/other.ts"));
 
   expect((await notes()).notes).toContain(".office/mise/demo.toml lacks or differs from the package's host install or system setup; office sync rewrites it");
   expect(await sync(loadOffice(office))).toContain("wrote package demo's install of Demo to .office/mise/demo.toml: mise install installs it once, through the link (or mise run demo:install)");
@@ -430,6 +441,35 @@ test("the required office package, which office.yaml never lists, gets its tools
 
   expect(JSON.parse(readFileSync(join(dir, ".office.json"), "utf8"))).toEqual({ opencode: "container" });
   expect(record !== undefined && localEdits(dir, record)).toEqual([]);
+});
+
+test("the built-ins' shared tools stay in a container's machine.packages.toml, host-only Bun aside; a host-mode office requires them, age with both executables, and writes none there", async () => {
+  write(join(office, "office.yaml"), "name: t\npackages: [{name: browser}, {name: aws-emulator, settings: {source_reference: false}}]\n");
+  expect((await sync(loadOffice(office), { scope: "packages" })).join("\n")).not.toContain("FAILED");
+  expect(toolPins(packages()).map(pin => pin.tool)).toEqual(["sops", "age", "gh", "pre-commit", "aws-cli", "npm:agent-browser"]);
+  expect(lines()).toEqual(['"aws-cli" = "2.40.4" # aws-emulator', '"npm:agent-browser" = "0.43.0" # browser']);
+
+  write(join(office, "office.yaml"), "name: t\nopencode: {mode: host, url: 'http://127.0.0.1:49999'}\npackages: [{name: browser}, {name: aws-emulator, settings: {source_reference: false}}]\n");
+  expect((await sync(loadOffice(office), { scope: "packages" })).join("\n")).toContain(`not selecting releases of tool aqua:aws/aws-cli, npm:agent-browser, core:bun yet: Socket Firewall at ${hostLayout("").sfw} isn't the copy office installed`);
+  expect(existsSync(join(office, "machine.packages.toml"))).toBe(false);
+
+  const config = loadOffice(office);
+  const demands = admitTools(config, (await gatherPackages(config, { machine: true })).packages).demands;
+
+  expect([...demands.values()].map(demand => [demand.name, demand.floor, demand.bin, demand.consumers.map(consumer => consumer.package)])).toEqual([
+    ["aqua:aws/aws-cli", "2.40.4", ["aws"], ["aws-emulator"]],
+    ["npm:agent-browser", "0.43.0", ["agent-browser"], ["browser"]],
+    ["core:bun", "1.4.4", ["bun"], ["browser"]],
+    ["aqua:getsops/sops", "3.13.3", ["sops"], ["office"]],
+    ["aqua:FiloSottile/age", "1.3.2", ["age", "age-keygen"], ["office"]],
+    ["aqua:cli/cli", "2.104.0", ["gh"], ["office"]],
+    ["aqua:pre-commit/pre-commit", "4.7.0", ["pre-commit"], ["office"]],
+  ]);
+
+  // Browse off: browser's Bun was its only reason, so no consumer raises a Bun floor.
+  write(join(office, "office.yaml"), "name: t\nopencode: {mode: host, url: 'http://127.0.0.1:49999'}\npackages: [{name: browser, settings: {browse: false}}]\n");
+  await sync(loadOffice(office), { scope: "packages" });
+  expect(admitTools(loadOffice(office), (await gatherPackages(loadOffice(office), { machine: true })).packages).demands.has("core:bun")).toBe(false);
 });
 
 test("setup requirements share a floor with external manifests; failed collection retains machine outputs", async () => {
@@ -517,7 +557,8 @@ test("a rejected candidate applies nothing: switching to container mode keeps th
   expect(readFileSync(machineRecordPath())).toEqual(record);
   expect(readFileSync(link, "utf8")).toContain("postinstall =");
   expect(readlinkSync(plugin)).toBe("../../packages/editor/plugin");
-  expect(packages()).not.toContain("# Projected for container mode.");
+  // The rejected container projection wrote no machine.packages.toml either; the host office has none of its own.
+  expect(existsSync(join(office, "machine.packages.toml"))).toBe(false);
   // A partial fetch publishes, but while a selected package is unread the machine stays as it is.
   writePackage(join(office, "packages/second/office.ts"), definitionText("{}"));
   write(config, `${readFileSync(config, "utf8").replace("]\n", `, {name: gone, repo: ${join(dir, "absent")}, path: pkg, ref: main}]\n`)}`);

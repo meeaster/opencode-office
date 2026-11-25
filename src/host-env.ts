@@ -5,7 +5,7 @@
 // - `sfw/package-manager.sh` and `sfw/bin/`, the wrappers (src/sfw.ts), which `office sync` writes;
 // - `env.sh`, the environment agents and the user's terminal share: PATH entries (the wrappers, mise's
 //   shims, OpenCode's bin, then what packages declare) and plain variables (the release ages for
-//   package managers and mise, from `tools.minimum_release_age`, then what packages declare). The user sources it from their shell's startup file; the OpenCode
+//   package managers and mise, from `minimum_release_age`, then what packages declare). The user sources it from their shell's startup file; the OpenCode
 //   server's unit will source it once the office owns that unit.
 //
 // Each is a file in the machine record (src/machine.ts), written only with the user's consent. The
@@ -18,6 +18,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { hostToolsRoot } from "./host-tools.ts";
+import { projectionPath } from "../standard/tools/applied.ts";
 import type { Office } from "./office.ts";
 import { systemVariables } from "./package-system.ts";
 import { hostApplies } from "./package-tools.ts";
@@ -129,7 +130,8 @@ function packageEnvironment(office: Office, item: GatheredPackage): PackageEnvir
 export type HostEnvironment = { environment: Environment; problems: string[]; contributions: PackageEnvironment[] };
 
 /**
- * The host's environment: the wrappers first while the firewall is on, mise's shims, OpenCode's bin,
+ * The host's environment: the wrappers first while the firewall is on, the applied shared tools'
+ * links (standard/tools/applied.ts), mise's shims, OpenCode's bin,
  * then the folders packages declare; the release ages, then the variables packages declare. A
  * variable two packages set is left out, named in `problems`.
  */
@@ -145,7 +147,8 @@ export function hostEnvironment(office: Office, installed: GatheredPackage[], re
 
   const problems = [...setters].flatMap(([name, names]) => (names.length > 1 ? [`packages ${names.join(" and ")} both set ${name} in their host or system block, so ${envFilePath()} sets neither; remove it from one`] : []));
   const variables: [string, string][] = releaseAgeVariables(office.tools.minimumReleaseAge);
-  const path = [...(office.socketFirewall ? [hostWrappers()] : []), miseShims(), opencodeBin()];
+  // The shared tools applied on this machine come before mise's shims, so a desired pin is never what runs.
+  const path = [...(office.socketFirewall ? [hostWrappers()] : []), projectionPath(office), miseShims(), opencodeBin()];
 
   if (office.opencode.managed !== undefined) variables.push(...Object.entries(managedAgentEnvironment));
 

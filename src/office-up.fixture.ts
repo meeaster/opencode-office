@@ -4,14 +4,15 @@ import { expect } from "bun:test";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { DefinitionFixture } from "./package-definition.fixture.ts";
-import { definitionText, writePackage } from "./test-package.ts";
+import { applyOfficeTools, builtinTools, definitionText, fakeRegistry, writePackage } from "./test-package.ts";
 
 type Write = (path: string, text: string, mode?: number) => void;
 
 /**
  * Compose's `up -d` fails while $HOME/compose-fails exists, and records OFFICE_CRON_REVISION;
  * every systemctl call fails while $HOME/no-systemd does. `systemctl show` reports a unit active
- * unless $HOME/inactive/<unit> exists. Socket Firewall is off and the state folder is ./state.
+ * unless $HOME/inactive/<unit> exists. Socket Firewall is off, the state folder is ./state, and the
+ * built-ins' shared tools are applied there.
  */
 export function rig(f: DefinitionFixture, write: Write): void {
   write(join(f.home, "bin/docker"), '#!/bin/sh\necho "docker $*" >> "$HOME/calls"\ncase "$*" in *" up -d"*) echo "revision $OFFICE_CRON_REVISION" >> "$HOME/calls"; [ -f "$HOME/compose-fails" ] && exit 1;; esac\nexit 0\n', 0o755);
@@ -24,8 +25,10 @@ case "$*" in
 esac
 exit 0
 `, 0o755);
-  write(join(f.home, "bin/mise"), '#!/bin/sh\n[ "$1" != --version ] || echo 2026.11.7\n', 0o755);
+  write(join(f.home, "bin/mise"), `#!/bin/sh\n${fakeRegistry}[ "$1" != --version ] || echo 2026.11.7\n`, 0o755);
   write(join(f.dir, "state/secrets.env"), "OPENCODE_PASSWORD=fixture-only\n");
+  // The built-ins' shared tools are applied already, at the fixture's office.lock, so a host-mode up has none to install with the stand-in mise.
+  applyOfficeTools(join(f.dir, "state"), builtinTools);
   const config = join(f.dir, "office.yaml");
 
   write(config, `${readFileSync(config, "utf8").replace(/^ {2}sfw: (\S+)$/m, "  sfw: { version: $1, enabled: false }")}state: ./state\n`);

@@ -313,7 +313,7 @@ export function publishGeneration({ dir, previous, name, original, lock }: Candi
 
     // Fails here, before anything changes, when office.lock must be rewritten and can't be read.
     if (after !== before) {
-      for (const section of [now.runtime, now.packages]) if (!section.ok) throw section.error;
+      for (const section of [now.runtime, now.packages, now.tools]) if (!section.ok) throw section.error;
     }
 
     const path = join(dir, ".office/publishing.json");

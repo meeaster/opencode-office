@@ -44,13 +44,13 @@ test("an Executor downgrade stays pending and refused, and other tools retain th
 });
 
 test("a mise minimum_release_age setting in machine.toml or mise.toml other than the office's is noted, since the environment wins", () => {
-  writeFileSync(join(dir, "office.yaml"), "name: t\ntools:\n  minimum_release_age: 1d\n");
+  writeFileSync(join(dir, "office.yaml"), "name: t\nminimum_release_age: 1d\n");
   writeFileSync(join(dir, "machine.toml"), '[settings]\nminimum_release_age = "24h"\n');
   writeFileSync(join(dir, "mise.toml"), '[tools]\nnode = "26.13.1"\n');
   expect(toolsNotes(loadOffice(dir))).toEqual([]);
 
   writeFileSync(join(dir, "mise.toml"), '[settings]\nminimum_release_age = "7d"\n');
   expect(toolsNotes(loadOffice(dir))).toEqual([
-    `mise.toml sets minimum_release_age = "7d" under [settings], but the office's environment sets MISE_MINIMUM_RELEASE_AGE=1d (tools.minimum_release_age in office.yaml), which wins wherever it is loaded; remove the setting or change the office's age`,
+    `mise.toml sets minimum_release_age = "7d" under [settings], but the office's environment sets MISE_MINIMUM_RELEASE_AGE=1d (minimum_release_age in office.yaml), which wins wherever it is loaded; remove the setting or change the office's age`,
   ]);
 });

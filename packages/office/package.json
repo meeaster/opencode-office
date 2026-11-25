@@ -6,7 +6,7 @@
   "office": {
     "definition": "./office.ts",
     "dependencies": [
-      "@office/tooling",
+      "@office/tools",
       "@office/cron",
       "@office/opencode"
     ]

@@ -1,7 +1,7 @@
 import { opencode } from "@office/opencode";
 import { Package } from "@office/sdk";
 import { installs, recipes } from "@office/mise-integration/claims";
-import { requirements } from "@office/tooling/requirements";
+import { tools } from "@office/tools";
 
 const chrome = "/usr/bin/google-chrome-stable";
 
@@ -17,10 +17,10 @@ export default Package.define({
   },
   setup(ctx) {
     opencode.plugins.add(ctx, { directory: "plugin" });
-    ctx.add(requirements, { name: "npm:agent-browser", minimumVersion: "0.43.0" });
+    tools.require(ctx, { name: "npm:agent-browser", minimum: "0.43.0", bin: "agent-browser" });
 
     if (ctx.settings.browse) {
-      ctx.add(requirements, { name: "bun", minimumVersion: "1.4.4", hostOnly: true });
+      tools.require(ctx, { name: "bun", minimum: "1.4.4", bin: "bun", hostOnly: true });
       ctx.add(installs, { name: "install", destination: "~/.local/bin/browse", ready: "~/.local/bin/browse", executable: true, script: "scripts/install-browse.ts", description: "Browse" });
     }
 

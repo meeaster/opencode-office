@@ -33,10 +33,10 @@ test("list shows sources and enablement under setup noise; sync links whole fold
   write(join(f.dir, "skills/beta/SKILL.md"), skill("beta"));
   write(join(f.dir, ".agents/skills/manual/SKILL.md"), skill("manual"));
   // A package whose setup is noisy offers a skill folder of its own.
-  writePackage(join(f.dir, "packages/tools/office.ts"), definitionText('{setup(ctx){console.log("noise on stdout"); console.error("noise on stderr"); skills.add(ctx, {directory: "bundled/zeta"})}}', 'import {skills} from "@office/skills";'), { dependencies: ["skills"] });
-  write(join(f.dir, "packages/tools/bundled/zeta/SKILL.md"), skill("zeta"));
+  writePackage(join(f.dir, "packages/noisy/office.ts"), definitionText('{setup(ctx){console.log("noise on stdout"); console.error("noise on stderr"); skills.add(ctx, {directory: "bundled/zeta"})}}', 'import {skills} from "@office/skills";'), { dependencies: ["skills"] });
+  write(join(f.dir, "packages/noisy/bundled/zeta/SKILL.md"), skill("zeta"));
   const sources = `[{folder: skills}, {repo: ${repo}, ref: ${ref}, skills: [{name: review, path: engineering/review}, {name: lint, path: other/lint}]}]`;
-  f.select(`${skillsEntry(sources, "[alpha, review, zeta]")}  - name: tools\n`);
+  f.select(`${skillsEntry(sources, "[alpha, review, zeta]")}  - name: noisy\n`);
 
   // Selected but not synced yet, the package's commands can't run.
   expect(f.cli(1, "skills", "list")).toContain("package skills: not synced yet; run office sync");
@@ -44,7 +44,7 @@ test("list shows sources and enablement under setup noise; sync links whole fold
 
   expect(synced).toContain(`package skills: fetched ${repo} at ${ref.slice(0, 12)}`);
   expect(synced).toContain("package skills: linked .agents/skills/alpha (folder skills)");
-  expect(readlinkSync(join(f.dir, ".agents/skills/zeta"))).toBe("../../packages/tools/bundled/zeta");
+  expect(readlinkSync(join(f.dir, ".agents/skills/zeta"))).toBe("../../packages/noisy/bundled/zeta");
   expect(read(join(f.dir, ".agents/skills/review/checklist.md"))).toBe("check\n");
   expect(readdirSync(join(f.dir, ".agents/skills")).sort()).toEqual(["alpha", "manual", "review", "zeta"]);
 
@@ -58,7 +58,7 @@ test("list shows sources and enablement under setup noise; sync links whole fold
     `beta    ${"folder skills".padEnd(width)}  available`,
     `lint    ${source}  available`,
     `review  ${source}  enabled`,
-    `zeta    ${"package tools".padEnd(width)}  enabled`,
+    `zeta    ${"package noisy".padEnd(width)}  enabled`,
     "",
   ].join("\n"));
   expect(result.stderr.toString()).toContain("noise on stdout");
@@ -77,7 +77,7 @@ test("list shows sources and enablement under setup noise; sync links whole fold
   expect(f.cli(0, "check")).toContain("ok   package skills: built-in");
 
   // Disabling removes only those links; their sources, the checkout and the manual skill stay.
-  f.select(`${skillsEntry(sources, "[review]")}  - name: tools\n`);
+  f.select(`${skillsEntry(sources, "[review]")}  - name: noisy\n`);
   const disabled = f.cli(0, "sync");
 
   expect(disabled).toContain("package skills: unlinked .agents/skills/alpha");
@@ -85,7 +85,7 @@ test("list shows sources and enablement under setup noise; sync links whole fold
   expect(readdirSync(join(f.dir, ".agents/skills")).sort()).toEqual(["manual", "review"]);
   expect(read(join(f.dir, ".git/info/exclude"))).not.toContain("/.agents/skills/alpha");
   expect(existsSync(join(f.dir, "skills/alpha/SKILL.md"))).toBe(true);
-  expect(existsSync(join(f.dir, "packages/tools/bundled/zeta/SKILL.md"))).toBe(true);
+  expect(existsSync(join(f.dir, "packages/noisy/bundled/zeta/SKILL.md"))).toBe(true);
 }, 60_000);
 
 test("an occupied destination, a lost receipt or an enabled ID nobody offers stops sync before later delivery, naming it, without undoing earlier steps", () => {

@@ -31,10 +31,14 @@ opencode: container
 #   email: you@example.com
 #   credentials: gh
 
-# The tools this office runs and how old a release must be before anything takes it.
-# minimum_release_age covers package managers (npm, pnpm, uv and pip, through the office's
-# environment), mise and the tools in its files, and each runtime below without an age of its own.
-# The runtimes are the versions the containers run; in host mode only Executor's applies, and sfw's,
+# How old a release must be before anything takes it: package managers (npm, pnpm, uv and pip,
+# through the office's environment), mise and the tools in its files, each runtime under tools
+# without an age of its own, and the tools packages require. A package entry below can set its own
+# minimum_release_age for the tools it requires; a tool several packages require waits the longest
+# of their ages.
+minimum_release_age: 3d
+
+# The tools this office runs. The runtimes are the versions the containers run; in host mode only Executor's applies, and sfw's,
 # which office up installs on the machine. office.lock (its runtime pins written by `office pin`;
 # don't edit it) holds their checksums: run `office pin` after changing a version by hand. The daily upgrade-tools
 # job bumps them; `office up --upgrade` applies a bump, `office up` never does. Give a runtime its
@@ -46,7 +50,6 @@ opencode: container
 # source from your shell). To turn it off, write sfw as { version: ..., enabled: false }; the
 # release age still applies.
 tools:
-  minimum_release_age: 3d
   opencode: __OPENCODE_VERSION__
   claude: __CLAUDE_VERSION__
   codex: __CODEX_VERSION__

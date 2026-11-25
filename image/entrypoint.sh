@@ -8,7 +8,7 @@ office=/home/office/workspace
 
 # The office's environment, for OpenCode, its agents' commands, the cron jobs and the installs
 # below: Socket Firewall's wrappers first on PATH unless office.yaml turns it off, and the minimum
-# release age (tools.minimum_release_age) in each package manager's variable and mise's. `office exec`, `office shell` and interactive bash
+# release age (minimum_release_age) in each package manager's variable and mise's. `office exec`, `office shell` and interactive bash
 # shells source the same file. An office.yaml that doesn't read gets the defaults.
 env_file=/etc/opencode/env.sh
 office env --container --office "$office" > "$env_file.new" && mv "$env_file.new" "$env_file"
@@ -35,9 +35,9 @@ for host in $(printf '%s' "${OFFICE_GH_HOSTS:-}" | tr ',' ' '); do
 done
 
 # The age the environment file gave mise, which is the office's.
-age_note="Package managers and mise take only releases at least ${MISE_MINIMUM_RELEASE_AGE:-3d} old (\`tools.minimum_release_age\` in \`office.yaml\`)."
+age_note="Package managers and mise take only releases at least ${MISE_MINIMUM_RELEASE_AGE:-3d} old (\`minimum_release_age\` in \`office.yaml\`)."
 case "${MISE_MINIMUM_RELEASE_AGE:-3d}" in
-  0h | 0d | 0w | 00*) age_note="Package managers and mise take new releases as soon as they're published (\`tools.minimum_release_age\` in \`office.yaml\`)." ;;
+  0h | 0d | 0w | 00*) age_note="Package managers and mise take new releases as soon as they're published (\`minimum_release_age\` in \`office.yaml\`)." ;;
 esac
 sfw_note="- ${age_note} Socket Firewall is off (\`enabled: false\` for sfw under \`tools\` in \`office.yaml\`)."
 case ":$PATH:" in

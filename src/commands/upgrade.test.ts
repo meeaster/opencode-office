@@ -22,7 +22,6 @@ test("upgrade-tools changes only the version of each form of a tools entry, keep
   const text = `name: t
 # The tools.
 tools:
-  minimum_release_age: 3d   # everything
   opencode: { version: 2.3.2, minimum_release_age: 0d }  # flow
   claude: '2.1.327'  # short, quoted
   executor:
@@ -49,7 +48,6 @@ references: []
   expect(result).toBe(`name: t
 # The tools.
 tools:
-  minimum_release_age: 3d   # everything
   opencode: { version: 2.3.5, minimum_release_age: 0d }  # flow
   claude: '2.1.330'  # short, quoted
   executor:
@@ -68,9 +66,9 @@ references: []
 });
 
 test("a runtime tools doesn't list is added after its last entry, in the short form", () => {
-  const text = "name: t\ntools:\n  minimum_release_age: 3d\n  executor:\n    version: 2.0.0-beta.49\n    minimum_release_age: 7d\n# Next.\nreferences: []\n";
+  const text = "name: t\ntools:\n  executor:\n    version: 2.0.0-beta.49\n    minimum_release_age: 7d\n# Next.\nreferences: []\n";
 
-  expect(setVersions(text, [{ tool: "claude", to: "2.1.330" }])).toBe("name: t\ntools:\n  minimum_release_age: 3d\n  executor:\n    version: 2.0.0-beta.49\n    minimum_release_age: 7d\n  claude: 2.1.330\n# Next.\nreferences: []\n");
+  expect(setVersions(text, [{ tool: "claude", to: "2.1.330" }])).toBe("name: t\ntools:\n  executor:\n    version: 2.0.0-beta.49\n    minimum_release_age: 7d\n  claude: 2.1.330\n# Next.\nreferences: []\n");
   expect(setVersions("name: t\ntools:\n    opencode: 2.3.2", [{ tool: "sfw", to: "1.17.0" }])).toBe("name: t\ntools:\n    opencode: 2.3.2\n    sfw: 1.17.0\n");
 });
 
@@ -84,7 +82,7 @@ test("batch lookup honors the age, leaves ranges and failed installs alone, and 
   const machine = '[tools]\nnode = "18.0.0"\n';
 
   try {
-    writeFileSync(join(dir, "office.yaml"), "name: test\ntools: { minimum_release_age: 5d }\n");
+    writeFileSync(join(dir, "office.yaml"), "name: test\nminimum_release_age: 5d\n");
     writeFileSync(join(dir, "mise.toml"), project);
     writeFileSync(join(dir, "machine.toml"), machine);
     writeFileSync(join(dir, "mise"), `#!/bin/sh

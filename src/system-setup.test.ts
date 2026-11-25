@@ -10,7 +10,7 @@ import { grantConsent } from "./machine.ts";
 import { loadOffice } from "./office.ts";
 import { systemPlatformVariable } from "./package-system.ts";
 import { offerRestart, type Run, type RunResult, systemStep, verifySystems } from "./system-setup.ts";
-import { writePackage } from "./test-package.ts";
+import { sharedToolsLock, writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -49,6 +49,7 @@ function makeOffice({ demo = true, machine = "", mode = "host" } = {}): void {
 
   write(join(office, "office.yaml"), `name: t\n${opencode}packages:\n${demo ? "  - name: demo\n    settings:\n      on: true\n" : "  []\n"}`);
   write(join(office, "machine.toml"), `[tools]\n${machine}`);
+  write(join(office, "office.lock"), sharedToolsLock());
   writePackage(
     join(office, "packages/demo/package.yaml"),
     `# A demo package.
@@ -240,7 +241,8 @@ test("a fresh machine: setup lists what is pending, applies it in the office's s
 
   const apply = calls.find((call) => call.command.includes("--only"));
 
-  expect(apply).toEqual({ command: ["/opt/mise", "bootstrap", "--only", "packages,files", "--yes"], cwd: "/", terminal: true, links: [join(office, "machine.packages.toml"), join(office, ".office/mise/demo.toml"), join(office, "machine.toml")] });
+  // No package declares a tool in machine.packages.toml: the office package's are shared tools.
+  expect(apply).toEqual({ command: ["/opt/mise", "bootstrap", "--only", "packages,files", "--yes"], cwd: "/", terminal: true, links: [join(office, ".office/mise/demo.toml"), join(office, "machine.toml")] });
   // mise read only the office's files when it planned, too.
   expect(calls.filter((call) => call.command.includes("plan")).every((call) => call.links.every((link) => link.startsWith(office)))).toBe(true);
   expect(printed.at(-1)).toBe("System setup: applied, and nothing is left to do");

@@ -85,7 +85,8 @@ test("a setup that throws stops package sync and changes nothing it applies; fix
   // Still selected, first stops requiring its tool and drops its task: both outputs follow.
   writePackage(join(first, "office.ts"), definitionText('{setup(c){c.add(repositories,{name:"first-guide",url:"https://example.invalid/first-guide.git"})}}', imports), { dependencies });
   cli(0, "sync", "--packages");
-  expect(outputs.tools()).not.toContain("# first");
+  // No package declares a tool there any more: the office package's are shared tools.
+  expect(existsSync(join(dir, "machine.packages.toml"))).toBe(false);
   expect(existsSync(join(dir, ".office/mise/first.toml"))).toBe(false);
 }, 60_000);
 

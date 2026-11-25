@@ -7,6 +7,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } fr
 import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
+import { fakeRegistry } from "./test-package.ts";
 
 const { root, bin, write, commit, fixture } = definitionFixture({ second: false });
 const miseVersion = "2026.11.11";
@@ -35,7 +36,7 @@ test("fresh setup reads shipped and local access declarations before any clone; 
   write(join(f.home, "bin/git"), `#!/bin/sh\necho "$*" >> "${log}"\nexec "${bin}/git" "$@"\n`, 0o755);
   // Setup's tool checks pass; the services it would start later don't.
   write(join(f.home, "bin/docker"), "#!/bin/sh\nexit 0\n", 0o755);
-  write(join(f.home, "bin/mise"), `#!/bin/sh\nif [ "$1" = --version ]; then echo "${miseVersion} linux-x64 (2026-01-01)"; exit 0; fi\nexit 1\n`, 0o755);
+  write(join(f.home, "bin/mise"), `#!/bin/sh\n${fakeRegistry}if [ "$1" = --version ]; then echo "${miseVersion} linux-x64 (2026-01-01)"; exit 0; fi\nexit 1\n`, 0o755);
   // An office with an Executor key needs no new secrets configuration.
   write(join(f.home, "state/office-executor.env"), "EXECUTOR_TOKEN=test\n");
   writeFileSync(join(f.dir, "office.yaml"), `name: fresh-access
@@ -90,7 +91,7 @@ test("a local package.json that names an access declaration that doesn't read st
   write(join(f.home, ".gitconfig"), `[url "file://${root}/github/"]\n\tinsteadOf = https://github.com/example/\n`);
   write(join(f.home, "bin/git"), `#!/bin/sh\necho "$*" >> "${log}"\nexec "${bin}/git" "$@"\n`, 0o755);
   write(join(f.home, "bin/docker"), "#!/bin/sh\nexit 0\n", 0o755);
-  write(join(f.home, "bin/mise"), `#!/bin/sh\nif [ "$1" = --version ]; then echo "${miseVersion} linux-x64 (2026-01-01)"; exit 0; fi\nexit 1\n`, 0o755);
+  write(join(f.home, "bin/mise"), `#!/bin/sh\n${fakeRegistry}if [ "$1" = --version ]; then echo "${miseVersion} linux-x64 (2026-01-01)"; exit 0; fi\nexit 1\n`, 0o755);
   write(join(f.home, "state/office-executor.env"), "EXECUTOR_TOKEN=test\n");
   writeFileSync(join(f.dir, "office.yaml"), `name: broken-access
 state: ${join(f.home, "state")}

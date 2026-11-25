@@ -2,7 +2,7 @@
 // makes goes through it. sfw runs a command behind a local proxy that refuses packages Socket knows
 // to be malicious, so the office puts a folder of wrappers first on PATH, one per package manager,
 // each running `sfw <tool>`, and a `mise` wrapper that routes mise's installs through it. Package
-// managers and mise also wait the office's minimum release age (`tools.minimum_release_age`)
+// managers and mise also wait the office's minimum release age (`minimum_release_age`)
 // before they take a new release, whether or not the firewall is on.
 //
 // This module is the one list of what is wrapped and of the variables, and writes the wrappers and
@@ -15,7 +15,7 @@ import { join } from "node:path";
 export const wrappedCommands = ["npm", "npx", "pnpm", "pip", "pip3", "uv", "uvx", "cargo"] as const;
 
 /** An age such as 36h, 3d or 2w (src/schema.ts) in hours. */
-function ageHours(age: string): number {
+export function ageHours(age: string): number {
   const amount = Number(age.slice(0, -1));
 
   return age.endsWith("h") ? amount : age.endsWith("w") ? amount * 168 : amount * 24;

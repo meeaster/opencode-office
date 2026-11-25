@@ -25,8 +25,8 @@ test("a first sync resolves local packages through the new set's links, and expo
   rmSync(join(dir, ".office"), { recursive: true });
   select("  - name: consumer\n  - name: provider\n");
   // The provider has libraries of its own (devDependencies, a node_modules folder) and imports a built-in's export.
-  write(join(provider, "office.ts"), definitionText(`{commands:{"provider show":{summary:"show",run(){console.log("requirements", typeof requirements)}}}}`, `import {requirements} from "@office/tooling/requirements";`));
-  write(join(provider, "package.json"), JSON.stringify({ name: "@office/provider", private: true, exports: { ".": "./index.ts", "./token": "./lib/token.ts" }, devDependencies: { typescript: "5.9.3" }, office: { definition: "./office.ts", dependencies: ["@office/tooling"] } }));
+  write(join(provider, "office.ts"), definitionText(`{commands:{"provider show":{summary:"show",run(){console.log("tools", typeof tools.require)}}}}`, `import {tools} from "@office/tools";`));
+  write(join(provider, "package.json"), JSON.stringify({ name: "@office/provider", private: true, exports: { ".": "./index.ts", "./token": "./lib/token.ts" }, devDependencies: { typescript: "5.9.3" }, office: { definition: "./office.ts", dependencies: ["@office/tools"] } }));
   write(join(provider, "node_modules/typescript/package.json"), '{"name":"typescript"}');
   write(join(provider, "index.ts"), 'export const value = "first";');
   write(join(provider, "lib/token.ts"), 'export const token = "token";');
@@ -36,7 +36,7 @@ test("a first sync resolves local packages through the new set's links, and expo
   cli(0, "sync", "--packages");
   expect(published(dir)).toContain("first-token\thttps://example.invalid/r.git\tpackage consumer");
   expect(cli(0, "consumer", "show")).toContain("value first-token");
-  expect(cli(0, "provider", "show")).toContain("requirements object");
+  expect(cli(0, "provider", "show")).toContain("tools function");
   // Editing the provider's exported module shows in the next command, without a sync.
   write(join(provider, "index.ts"), 'export const value = "edited";');
   expect(cli(0, "consumer", "show")).toContain("value edited-token");

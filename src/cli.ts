@@ -27,6 +27,7 @@ import { runInContainer } from "./commands/shell.ts";
 import { summarize, sync } from "./commands/sync.ts";
 import { update } from "./commands/update.ts";
 import { upgradeTools } from "./commands/upgrade.ts";
+import { bump } from "./commands/bump.ts";
 import { releaseMachine, serviceEnvironment } from "./machine.ts";
 import { currentOffice, declaresDesks, findOffice, type Office, OfficeError, refuseDesks } from "./office.ts";
 import { type Gathered, gatherPackages } from "./gather.ts";
@@ -113,10 +114,13 @@ const usage = `usage: office <command> [--office <dir>]
   pair [--origin <url>]        print a one-time link that connects the OpenCode app or a browser
   gui dev <package>            install a local package's panel on the desktop app's machine each
                                time its build writes the bundle
+  bump                         select a release of each mise tool the packages require, at least
+                               minimum_release_age old (or a package entry's own), and record it
+                               in office.lock; installs nothing. machine.toml's exact pins are held
   upgrade-tools [--commit] [--apply]
                                bump exact pins in mise.toml files, machine.toml,
                                machine.packages.toml and office.yaml's tools to releases at
-                               least tools.minimum_release_age old (or a runtime's own).
+                               least minimum_release_age old (or a runtime's own).
                                --commit commits the changes; --apply runs up --upgrade, even when the pins
                                were already current
   update [--check] [--minimum-release-age <age> | --version <release>]
@@ -568,6 +572,13 @@ async function main(): Promise<void> {
     if (action === "get" && rest.length === 3) process.stdout.write(packageSecret(currentOffice(flags), target, key));
     else if (action === "decrypt" && rest.length === 2) process.stdout.write(decrypt(currentOffice(flags), target));
     else throw new OfficeError("usage: office secrets get <package> <key> | office secrets decrypt <file>");
+  } else if (command === "bump") {
+    if (rest.length > 0) throw new OfficeError("usage: office bump");
+    const result = await bump(currentOffice(flags));
+
+    for (const line of result.lines) console.log(line);
+
+    if (!result.ok) process.exitCode = 1;
   } else if (command === "pin") {
     for (const line of await pin(currentOffice(flags))) console.log(line);
   } else if (command === "pair") {

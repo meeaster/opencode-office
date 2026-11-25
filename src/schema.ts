@@ -143,18 +143,16 @@ function runtimeEntry(tool: PinnedTool) {
   return v.lazy((input) => (v.is(v.string(), input) ? v.pipe(version, v.transform((pinned): v.InferOutput<typeof entry> => ({ version: pinned }))) : entry));
 }
 
-const toolKeys = ["minimum_release_age", ...pinnedTools] as const;
+const toolKeys = pinnedTools;
 
 /**
- * The tools an office runs and how old their releases must be. `minimum_release_age` (default
- * 3d) applies to package managers, mise and its tools, and every runtime without its own; each
- * runtime is a version or a mapping with its own age.
+ * The runtimes an office runs: each a version or a mapping with its own release age, which
+ * otherwise is the office's `minimum_release_age` (default 3d).
  */
 const tools = v.nullish(
   v.pipe(
-    mappingKeys("must be a mapping of minimum_release_age, opencode, claude, codex, executor, mise and sfw", toolKeys, (key) => `has an unknown key ${key}: tools maps minimum_release_age, opencode, claude, codex, executor, mise and sfw`),
+    mappingKeys("must be a mapping of opencode, claude, codex, executor, mise and sfw", toolKeys, (key) => `has an unknown key ${key}: tools maps opencode, claude, codex, executor, mise and sfw`),
     v.object({
-      minimum_release_age: v.optional(age),
       opencode: v.optional(runtimeEntry("opencode")),
       claude: v.optional(runtimeEntry("claude")),
       codex: v.optional(runtimeEntry("codex")),
@@ -224,6 +222,8 @@ export const packageEntry = v.pipe(
       // What `office packages update` moves ref to; without it, ref stays where it is.
       track: v.optional(track),
       settings: v.pipe(v.nullish(v.record(v.string(), settingValue, "must map setting names to values")), v.transform((settings) => settings ?? {})),
+      // The owner's release age for the tools this package requires, in place of the office's.
+      minimum_release_age: v.optional(age),
     },
     mapping,
   ),
@@ -231,10 +231,11 @@ export const packageEntry = v.pipe(
   v.check((entry) => entry.track === undefined || entry.repo !== undefined, "track needs repo, path and ref: only a package from another repository follows a branch or tags"),
   v.check((entry) => entry.name !== "office" || entry.repo === undefined, "the required office package is built in: its entry can only configure settings"),
   // The check above makes the three all present or all absent; `source` carries that as a type.
-  v.transform(({ name: packageName, settings, repo, path, ref, track: follows }) => ({
+  v.transform(({ name: packageName, settings, repo, path, ref, track: follows, minimum_release_age: releaseAge }) => ({
     name: packageName,
     settings,
     source: repo !== undefined && path !== undefined && ref !== undefined ? { repo, path, ref, track: follows } : undefined,
+    ...(releaseAge === undefined ? {} : { minimumReleaseAge: releaseAge }),
   })),
 );
 
@@ -276,13 +277,16 @@ export const officeSchema = v.pipe(v.strictObject(
     }, mapping)),
     git,
     secrets: v.optional(v.strictObject({ executor_owner: v.optional(text), server: v.optional(text) })),
+    // How old a release must be before anything takes it: package managers, mise and its tools, and
+    // each runtime under tools without an age of its own.
+    minimum_release_age: v.optional(age),
     tools,
     references: repositories,
     desks: v.optional(v.custom<never>(() => false, removedDesks)),
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
     packages: packageEntries,
   },
-  "must be a mapping of name, state, opencode, executor, git, secrets, tools, references, plugins and packages",
+  "must be a mapping of name, state, opencode, executor, git, secrets, minimum_release_age, tools, references, plugins and packages",
 ), v.forward(v.check(({ secrets, opencode }) => secrets?.server === undefined || (opencode !== "container" && opencode.mode === "host" && opencode.managed), "requires opencode.managed: true in host mode"), ["secrets", "server"]));
 
 export type OfficeConfig = v.InferOutput<typeof officeSchema>;
@@ -301,10 +305,10 @@ export type ResolvedTools = {
   socketFirewall: boolean;
 };
 
-/** Reads `tools` into one shape, with the default age where office.yaml gives none. */
-export function resolveTools(config: Pick<OfficeConfig, "tools">): ResolvedTools {
+/** Reads `minimum_release_age` and `tools` into one shape, with the default age where office.yaml gives none. */
+export function resolveTools(config: Pick<OfficeConfig, "tools" | "minimum_release_age">): ResolvedTools {
   const entries = config.tools ?? {};
-  const general = entries.minimum_release_age ?? defaultReleaseAge;
+  const general = config.minimum_release_age ?? defaultReleaseAge;
   // SAFETY: each PinnedTool appears exactly once in pinnedTools, the source of this record's keys.
   const runtimes = Object.fromEntries(pinnedTools.map((tool) => [tool, { version: entries[tool]?.version, minimumReleaseAge: entries[tool]?.minimum_release_age ?? general }])) as Record<PinnedTool, Runtime>;
 
@@ -753,6 +757,24 @@ function parseKeyed<T>(section: string, value: unknown, entry: v.GenericSchema<u
 /** office.lock's `packages:` section from a parsed document. */
 export function parsePackageLock(value: unknown): Parsed<PackageLock> {
   return parseKeyed("packages", value, packageLockEntry);
+}
+
+/**
+ * A mise-managed tool's desired release as office.lock records it, keyed by its backend-qualified
+ * name: the exact version selected. Its artifact is verified by mise itself when it installs.
+ */
+const toolLockEntry = v.strictObject({
+  version: v.pipe(v.string(), v.regex(/^[A-Za-z0-9][A-Za-z0-9._+-]*$/, "must be an exact version")),
+});
+
+export type LockedTool = v.InferOutput<typeof toolLockEntry>;
+
+/** office.lock's `tools:` section, keyed by canonical backend-qualified tool. */
+export type ToolLock = Map<string, LockedTool>;
+
+/** office.lock's `tools:` section from a parsed document. */
+export function parseToolLock(value: unknown): Parsed<ToolLock> {
+  return parseKeyed("tools", value, toolLockEntry, key => /^[A-Za-z0-9_.-]+:[^\s]+$/.test(key) ? undefined : "must be a backend-qualified tool, such as core:bun");
 }
 
 /** Where an issue is, such as `references[0].url`. */

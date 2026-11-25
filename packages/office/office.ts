@@ -1,7 +1,7 @@
 import { cron } from "@office/cron";
 import { opencode } from "@office/opencode";
 import { Package } from "@office/sdk";
-import { requirements } from "@office/tooling/requirements";
+import { tools } from "@office/tools";
 import { floors } from "./floors.ts";
 
 export default Package.define({
@@ -26,7 +26,8 @@ export default Package.define({
   setup(ctx) {
     opencode.plugins.add(ctx, { directory: "plugin" });
 
-    for (const [name, minimumVersion] of Object.entries(floors)) ctx.add(requirements, { name, minimumVersion });
+    // age's package also exposes age-keygen, which the CLI runs too.
+    for (const [name, minimum] of Object.entries(floors)) tools.require(ctx, { name, minimum, bin: name === "age" ? ["age", "age-keygen"] : name });
     cron.add(ctx, { name: "update-references", schedule: "0 6 * * *", script: "scripts/update-references.sh" });
     cron.add(ctx, { name: "upgrade-tools", schedule: "30 6 * * *", script: "scripts/upgrade-tools.sh" });
     cron.add(ctx, { name: "update-agent-clis", schedule: "30 7 * * *", script: "scripts/update-agent-clis.sh", when: "managed-host" });

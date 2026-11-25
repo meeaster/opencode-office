@@ -38,6 +38,7 @@ import { prepareSecrets } from "../secrets.ts";
 import { placeExecutable, toolPath, unpackedImage } from "../tool.ts";
 import { baseImage, changes, compareVersions, defaultPins, describeMove, executorImage, readApplied, wantedPins, writeApplied } from "../versions.ts";
 import { connection } from "../executor.ts";
+import { precheckTools, reconcileTools } from "../../standard/tools/host.ts";
 
 export function ports() {
   return {
@@ -468,6 +469,15 @@ function choosePins(office: Office, upgrade: boolean) {
   return { pins, moved: changes(office, applied.pins, pins) };
 }
 
+/** Says what the shared tools' step said; a failure stops up, naming each line that failed. */
+function sharedToolsOutcome({ ok, lines }: { ok: boolean; lines: string[] }): void {
+  for (const line of lines) {
+    if (!line.startsWith("FAILED")) say(line, "office: ");
+  }
+
+  if (!ok) throw new OfficeError(`the packages' shared tools stopped office up: ${lines.filter(line => line.startsWith("FAILED")).map(line => line.slice("FAILED ".length)).join("; ")}`);
+}
+
 /**
  * Starts the office's services; returns a one-line summary of what runs. Every selected package
  * is gathered first, and nothing starts unless all of them load: `gathered` is the gathering a
@@ -487,6 +497,8 @@ export async function up(office: Office, { upgrade = false, refresh = false, gat
   progress("checking secrets, state and versions");
   prepareSecrets(office);
   prepareState(office);
+  // What the shared tools would refuse from this machine's files alone stops up before any service starts.
+  sharedToolsOutcome(await precheckTools(office, packages, { upgrade }));
 
   if (managed) {
     planServer(office);
@@ -536,6 +548,17 @@ export async function up(office: Office, { upgrade = false, refresh = false, gat
     progress("installing Socket Firewall");
 
     for (const line of await installSfw(office, pins.sfw)) say(line);
+
+    // The packages' shared tools: plain up installs what is missing and holds the rest; --upgrade
+    // stages every change first. A refusal or failed stage switches nothing and stops up here,
+    // after recording the versions the containers now run: mise's own install, whose postinstall
+    // hooks run the packages' installers with the applied bun first on PATH, the host's timers,
+    // the managed server and the packages' up hooks would depend on the tools.
+    progress("installing the packages' shared tools");
+    const tools = await reconcileTools(office, packages, { upgrade });
+
+    if (!tools.ok) writeApplied(office, pins, applied?.refreshed);
+    sharedToolsOutcome(tools);
 
     await installTools(office);
 

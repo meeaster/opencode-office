@@ -1,6 +1,9 @@
 import type { Office } from "../../src/office.ts";
 import type { GatheredPackage } from "../../src/gather.ts";
 import type { InstalledPackage } from "../../src/packages.ts";
+import { compareToolVersions } from "../../packages/tools/versions.ts";
+
+export { compareToolVersions };
 
 /** The package whose tools are the ones the office CLI itself runs: SOPS, age, gh and pre-commit (src/host-tools.ts). */
 export const cliToolsPackage = "office";
@@ -17,56 +20,22 @@ export function hostApplies(office: Office, item: InstalledPackage): boolean {
   return item.manifest.host !== undefined && office.opencode.mode === "host" && switchedOn(item);
 }
 
-/** The tools a package declares in this office, at the versions it was tested with. */
+/**
+ * The tools a package declares in this office, at the versions it was tested with. A container
+ * keeps its tools here, so there the package's `@office/tools` requirements count as declared too;
+ * a host-mode office installs those itself (standard/tools/).
+ */
 export function wantedTools(office: Office, item: GatheredPackage): Record<string, string> {
   const tools = hostApplies(office, item) ? { ...item.manifest.tools, ...item.manifest.host?.tools } : { ...item.manifest.tools };
+  const shared = office.opencode.mode === "host" ? [] : item.claims.required.map(({ name, minimum, hostOnly }) => ({ name, minimumVersion: minimum, hostOnly }));
 
-  for (const { name, minimumVersion, hostOnly } of item.claims.tools) {
+  for (const { name, minimumVersion, hostOnly } of [...item.claims.tools, ...shared]) {
     if (hostOnly && office.opencode.mode !== "host") continue;
 
     if (!Object.hasOwn(tools, name) || (compareToolVersions(minimumVersion, tools[name]) ?? 0) > 0) tools[name] = minimumVersion;
   }
 
   return tools;
-}
-
-// A version office can order: dotted numbers, optionally a `v` before them, a prerelease after a
-// `-`, and build metadata after a `+`, which doesn't count. Every package's version is one
-// (src/schema.ts); the office's line may be anything mise takes, such as "2" or "latest".
-const orderable = /^v?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
-
-/** Compares dotted identifiers, numerically where both are numbers, a missing one first. */
-function compareParts(left: string[], right: string[]): number {
-  for (let index = 0; index < Math.max(left.length, right.length); index++) {
-    const [a, b] = [left[index], right[index]];
-
-    if (a === undefined || b === undefined) return a === b ? 0 : a === undefined ? -1 : 1;
-
-    const order = /^\d+$/.test(a) && /^\d+$/.test(b) ? Number(a) - Number(b) : a < b ? -1 : a > b ? 1 : 0;
-
-    if (order !== 0) return Math.sign(order);
-  }
-
-  return 0;
-}
-
-/**
- * Orders two versions SemVer-like: release numbers part by part (1.10 after 1.9, 1.2 before
- * 1.2.1), a prerelease before its release, build metadata ignored. Undefined when either isn't
- * such a version: office then doesn't guess, and keeps the office's line.
- */
-export function compareToolVersions(left: string, right: string): number | undefined {
-  const [a, b] = [orderable.exec(left), orderable.exec(right)];
-
-  if (a === null || b === null) return undefined;
-
-  const core = compareParts(a[1].split("."), b[1].split("."));
-
-  if (core !== 0) return core;
-
-  if (a[2] === undefined || b[2] === undefined) return a[2] === b[2] ? 0 : a[2] === undefined ? 1 : -1;
-
-  return compareParts(a[2].split("."), b[2].split("."));
 }
 
 /** The owner keeps a newer or non-comparable adopted pin; a comparable floor can only raise it. */

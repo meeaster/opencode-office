@@ -10,6 +10,7 @@ import type { Entries, Registry, RegistryEntry, SettingValue } from "../sdk/inde
 import { isRepository, repositories } from "../packages/references/repositories.ts";
 import { type AssetPaths, contributedAssets } from "../standard/opencode/assets.ts";
 import { machineCollection, project, type Projection, recipeSystem } from "../standard/mise-integration/projection.ts";
+import { toolProblems } from "../standard/tools/admission.ts";
 import type { AppliedReference } from "./applied-references.ts";
 import { definitionRoot, packageDeliveryDir } from "./bound-paths.ts";
 import { declaredCommands, nameProblems, type NameProblem, type RegisteredCommand } from "./command-table.ts";
@@ -69,6 +70,11 @@ export type Gathered = {
    * and its admission only, never handed to package code.
    */
   assets: ReadonlyMap<string, AssetPaths>;
+  /**
+   * The registry handles the packages registered in this process, by id: what the office reads a
+   * provider's own live functions through, such as a tool provider's release list.
+   */
+  registries: ReadonlyMap<string, Registry<RegistryEntry>>;
 };
 
 export function publishedView(office: Office, gathered: Gathered): Gathered {
@@ -149,6 +155,9 @@ export async function gatherPackages(office: Office, { skip = new Set<string>(),
     }
   }
 
+  // Shared tools are checked across every package whose claims parsed, before anything uses them.
+  problems.push(...toolProblems(office, packages));
+
   const added = parsed.entries;
   const failed = new Set(problems.flatMap(problem => problem.packages));
   const native = added.filter(row => parsed.rows.has(row.owner) && !failed.has(row.owner));
@@ -167,6 +176,7 @@ export async function gatherPackages(office: Office, { skip = new Set<string>(),
       return readEntries(added, registry);
     },
     assets: contributedAssets(registry => readEntries(native, registry)),
+    registries: new Map(setUp.flatMap(item => [...item.registered.registries])),
   };
 }
 

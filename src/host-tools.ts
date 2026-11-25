@@ -28,6 +28,7 @@ import { type Office, OfficeError } from "./office.ts";
 import { floors } from "../packages/office/floors.ts";
 import { packagesFile, packagesPath } from "./package-tools.ts";
 import { newestRelease, type Candidate } from "./releases.ts";
+import { appliedExecutable } from "../standard/tools/applied.ts";
 import { check } from "./schema.ts";
 import { compareVersions } from "./versions.ts";
 import { currentReporter, progress, say, stream, warn } from "./report/index.ts";
@@ -181,11 +182,15 @@ function wantedVersions(office: Office) {
 export type OfficeTool = InstalledTool & { pinned: string | undefined; managed: boolean };
 
 /**
- * A command of the office package's tools: the version `machine.packages.toml` pins, as mise
- * installed it, else the newest copy mise installed or on PATH.
+ * A command of the office package's tools: in a host-mode office, the shared tool applied on this
+ * machine that exposes it; else the version `machine.packages.toml` pins, as mise installed it,
+ * else the newest copy mise installed or on PATH.
  */
 export function officeTool(office: Office, command: OfficeCommand): OfficeTool | undefined {
   const pinned = officePins(office)[packageTool[command]];
+  const applied = appliedExecutable(office, command);
+
+  if (applied !== undefined) return { ...applied, pinned, managed: true };
   const mise = installedTool("mise")?.path;
   const exact = mise === undefined || pinned === undefined ? undefined : miseCopy(mise, command, pinned);
 
@@ -203,7 +208,7 @@ export function officeTool(office: Office, command: OfficeCommand): OfficeTool |
 export function requireOfficeTool(office: Office, command: OfficeCommand): string {
   const found = officeTool(office, command);
 
-  if (found === undefined) throw new OfficeError(`${command} isn't installed on this host: office setup --install-deps installs the version the office pins in ${packagesFile}${office.opencode.mode === "host" ? " (as does office up once office sync has linked it)" : ""}, or install it on PATH`);
+  if (found === undefined) throw new OfficeError(`${command} isn't installed on this host: office setup --install-deps installs ${office.opencode.mode === "host" ? "the office package's version (office up then applies the office's shared tool)" : `the version the office pins in ${packagesFile}`}, or install it on PATH`);
 
   return found.path;
 }
@@ -352,8 +357,13 @@ export async function onboardHostTools(
 
   const proposals: Proposal[] = [];
 
+  // A tool the office's shared tools already apply is theirs: setup neither proposes nor checks it.
+  const applied = (tool: string) => commandsOf(tool).length > 0 && commandsOf(tool).every(command => appliedExecutable(office, command) !== undefined);
+
   for (const [tool, version] of Object.entries(wanted)) {
     const commands = commandsOf(tool);
+
+    if (applied(tool)) continue;
     const present = mise !== undefined && commands.every((command) => miseCopy(mise.path, command, version) !== undefined);
 
     if (present) continue;
@@ -405,6 +415,8 @@ export async function onboardHostTools(
   const broken: string[] = [];
 
   for (const [tool, version] of Object.entries(wanted)) {
+    if (applied(tool)) continue;
+
     for (const command of commandsOf(tool)) {
       const found = miseCopy(mise.path, command, version);
 

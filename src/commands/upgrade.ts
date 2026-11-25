@@ -1,13 +1,17 @@
 // `office upgrade-tools`: bumps each exact pin in the office's own mise.toml, its machine-wide
 // mise files (machine.toml, and machine.packages.toml, whose package comments stay as they are),
 // and the runtimes' versions in office.yaml, to the newest release at
-// least the office's minimum release age old (`tools.minimum_release_age`, or a runtime's own), and
+// least the office's minimum release age old (`minimum_release_age`, or a runtime's own), and
 // with --commit commits the changed files alone under the office's git identity (office.yaml's `git`), else
 // "office cron". mise.toml pins are looked up and installed through mise, at the age the office's
 // environment gives package managers too, so an install never asks for a release they refuse; the
 // runtimes' versions on GitHub (and Executor's image on its registry), and only
 // recorded: `office up --upgrade` applies them. With --commit, dirty files are left for the
 // user. A failed install or lookup keeps the old pin. Never pushes.
+//
+// In a host-mode office the packages' shared tools (`@office/tools`) are the office's own: their
+// entries in machine.toml are the owner's holds, which this job leaves as they are, and their
+// desired releases in office.lock are bumped as `office bump` bumps them, installing nothing.
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import * as v from "valibot";
@@ -15,19 +19,23 @@ import * as v from "valibot";
 import { git } from "../git.ts";
 import { entryPattern, toolPins } from "../mise-toml.ts";
 import { installedTool } from "../host-tools.ts";
-import { pinnedMachineFiles } from "../package-tools.ts";
+import { machineFile, pinnedMachineFiles } from "../package-tools.ts";
 import { type Document, isMap, isNode, isScalar, parseDocument } from "yaml";
 
 import { type Office, OfficeError } from "../office.ts";
 import { newestRelease, pinFor } from "../releases.ts";
 import { atomicWrite } from "../secrets.ts";
 import { type Stage, stream } from "../report/index.ts";
-import { check, type PinnedTool, pinnedTools } from "../schema.ts";
-import { compareVersions as compareSemver, editLock, lockFile, wantedPins } from "../versions.ts";
+import { check, type LockedTool, type PinnedTool, pinnedTools } from "../schema.ts";
+import { compareVersions as compareSemver, editLock, lockFile, lockSections, readLockText, wantedPins } from "../versions.ts";
+import { type GatheredPackage, gatherPackages, problemLines } from "../gather.ts";
+import { admitTools, heldKeys } from "../../standard/tools/admission.ts";
+import { attestation, firewalledMise, spawnRun } from "../../standard/tools/host.ts";
+import { selectTools } from "../../standard/tools/selection.ts";
 
 /**
  * How old a release must be before the job takes it: a runtime's own age under `tools`, else the
- * office's `tools.minimum_release_age`; a mise tool (`runtime` undefined) always takes the office's,
+ * office's `minimum_release_age`; a mise tool (`runtime` undefined) always takes the office's,
  * which is also what its package manager waits in the office's environment.
  */
 export function ageFor(office: Office, runtime?: PinnedTool): string {
@@ -77,11 +85,11 @@ export function withVersion(line: string, version: string): string {
 const outdatedSchema = v.record(v.string(), v.object({ requested: v.string(), current: v.nullable(v.string()), latest: v.string() }));
 
 /** Ask about the requests in this file, including machine pins shadowed in the active config. */
-async function upgradeFile(office: Office, path: string, stage: Stage, executable: string) {
+async function upgradeFile(office: Office, path: string, stage: Stage, executable: string, held: ReadonlySet<string> = new Set()) {
   const dir = dirname(path);
   const text = readFileSync(path, "utf8");
   const lines = text.split("\n");
-  const pins = toolPins(text);
+  const pins = toolPins(text).filter(pin => !held.has(pin.tool));
   const moves: Move[] = [];
   const failures: string[] = [];
 
@@ -303,6 +311,38 @@ async function upgradeVersions(office: Office, stage: Stage): Promise<{ moves: M
   return { moves, failures, changed: ["office.yaml", lockFile] };
 }
 
+/**
+ * Bumps the desired releases of the packages' shared tools in office.lock, as office bump does;
+ * installs nothing. `notes` are what the selection said besides its failures, mise's warnings
+ * included, whether or not it succeeded.
+ */
+function bumpShared(office: Office, packages: readonly GatheredPackage[]) {
+  const read = () => {
+    const tools = lockSections(readLockText(office.dir)).tools;
+
+    return tools.ok ? tools.value : new Map<string, LockedTool>();
+  };
+
+  if (admitTools(office, packages).managed.length === 0) return { moves: [], failures: [], notes: [] };
+  const before = read();
+  const firewalled = firewalledMise(office);
+
+  if (!firewalled.ok) return { moves: [], failures: [`the packages' shared tools aren't bumped: ${firewalled.reason}`], notes: [] };
+  const { tools } = firewalled;
+  const selection = selectTools(office, packages, { ...tools.inputs, run: spawnRun(), env: process.env });
+  const notes = [attestation(tools), ...selection.lines.filter(line => !line.startsWith("FAILED"))];
+
+  if (!selection.ok) return { moves: [], failures: selection.lines.filter(line => line.startsWith("FAILED")).map(line => line.slice("FAILED ".length)), notes };
+
+  const moves = [...read()].flatMap(([tool, { version }]) => {
+    const from = before.get(tool)?.version;
+
+    return from !== version ? [{ tool, from: from ?? "none", to: version }] : [];
+  });
+
+  return { moves, failures: [], notes };
+}
+
 export async function upgradeTools(office: Office, stage: Stage, { commit }: { commit: boolean }): Promise<void> {
   // The office's own files only: never one inside a working repository or under references/. The
   // versions of the packages' tools are the office's too, with the same ages.
@@ -314,6 +354,11 @@ export async function upgradeTools(office: Office, stage: Stage, { commit }: { c
   const report: (Move & { file: string })[] = [];
   const failures: string[] = [];
   let skipped = false;
+  const shared = office.opencode.mode === "host" ? await gatherPackages(office, { machine: true }) : undefined;
+  // The owner's holds of shared tools in machine.toml, which only the owner moves.
+  const held = shared?.complete ? heldKeys(office, shared.packages) : new Set<string>();
+
+  if (shared !== undefined && !shared.complete) failures.push(`the packages didn't load (${problemLines(shared.problems).join("; ") || [...shared.unread].join(", ")}), so their shared tools aren't bumped and ${machineFile} is left as it is`);
 
   function skipDirty(paths: string[]): boolean {
     if (!commit || git(["status", "--porcelain", "--", ...paths], office.dir) === "") return false;
@@ -333,8 +378,10 @@ export async function upgradeTools(office: Office, stage: Stage, { commit }: { c
 
     if (skipDirty(paths)) continue;
 
+    if (shared !== undefined && !shared.complete && name === machineFile) continue;
+
     const before = path === officeToml && existsSync(lock) ? { pins: readFileSync(path), lock: readFileSync(lock) } : undefined;
-    const result = await upgradeFile(office, path, stage, executable);
+    const result = await upgradeFile(office, path, stage, executable, name === machineFile ? held : undefined);
 
     for (const failure of result.failures) failures.push(`${name}: ${failure}`);
 
@@ -367,6 +414,22 @@ export async function upgradeTools(office: Office, stage: Stage, { commit }: { c
 
   changed.push(...versions.changed);
   report.push(...versions.moves.map((move) => ({ ...move, file: "office.yaml" })));
+
+  // office.lock the runtime pins just changed was clean before them: this job's own change, not the user's.
+  if (shared?.complete && (changed.includes(lockFile) || !skipDirty([lockFile]))) {
+    const desired = bumpShared(office, shared.packages);
+
+    // mise's warnings, such as a release its age left out or a backend without dates, reach the job's output.
+    for (const note of desired.notes) {
+      if (/^mise\s+WARN\b/.test(note)) stage.warn(note);
+      else stage.note(note);
+    }
+
+    failures.push(...desired.failures);
+    report.push(...desired.moves.map((move) => ({ ...move, file: lockFile })));
+
+    if (desired.moves.length > 0 && !changed.includes(lockFile)) changed.push(lockFile);
+  }
 
   if (commit && report.length > 0) {
     const where = (move: { file: string }) => (move.file === "mise.toml" || move.file === "office.yaml" ? "" : ` in ${move.file.endsWith("/mise.toml") ? dirname(move.file) : move.file}`);

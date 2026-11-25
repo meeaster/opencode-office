@@ -24,13 +24,13 @@ import { declaredAccess, type DeclaredAccess } from "../package-access.ts";
 import { ghConfigDir, ghLogin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
 import { hookNote, hookState } from "../hook.ts";
 import { planServer, serverReport } from "../host-server.ts";
-import { officeCommands, officePins, officeTool, officeToolNamed, required } from "../host-tools.ts";
+import { officeCommands, officePins, officeTool, officeToolNamed, type OfficeTool, required } from "../host-tools.ts";
 import { clones, unignoredFolders } from "../layout.ts";
 import { cloneTarget, pluginClones, pluginLinks, restartNotice, withPluginPlan } from "../../standard/opencode/delivery.ts";
 import { cloneFolder, entry as entryAt } from "../../standard/opencode/ownership.ts";
 import { contributedAssets } from "../../standard/opencode/assets.ts";
 import { packageLockProblems } from "../package-operation.ts";
-import { executorEnvFile, type Office, readEnvFile, type Repository } from "../office.ts";
+import { executorEnvFile, type Office, OfficeError, readEnvFile, type Repository } from "../office.ts";
 import { appliedServices, appliedSpawns, packageComposeFile, parseCompose, serviceStatus, sharedNamespaces } from "../package-services.ts";
 import { listSpawned, planSweep, sweepIsEmpty } from "../package-spawns.ts";
 import { hostServiceStatus } from "../package-host-services.ts";
@@ -547,16 +547,27 @@ function officeVersions(office: Office, report: Report): void {
 
 /**
  * The tools the office CLI runs, the office package's: whether this host has the versions
- * machine.packages.toml pins, and which of them the office's own mise files pin too.
+ * machine.packages.toml pins (in a host-mode office, the shared tools office up applied), and
+ * which of them the office's own mise files pin too.
  */
 function officeToolChecks(office: Office, report: Report): void {
-  const install = `office setup --install-deps${office.opencode.mode === "host" ? " or office up" : ""} installs it`;
+  const host = office.opencode.mode === "host";
+  const install = host ? "office up installs it (office setup --install-deps, until then)" : "office setup --install-deps installs it";
   const found: string[] = [];
 
   const pins = officePins(office);
 
   for (const command of officeCommands) {
-    const tool = officeTool(office, command);
+    let tool: OfficeTool | undefined;
+
+    try {
+      tool = officeTool(office, command);
+    } catch (error) {
+      if (!(error instanceof OfficeError)) throw error;
+      report(false, `office tool ${command}`, error.message);
+
+      continue;
+    }
 
     if (tool?.managed === true) {
       found.push(`${command} ${tool.version}`);
@@ -565,13 +576,13 @@ function officeToolChecks(office: Office, report: Report): void {
     }
 
     const version = pins[command === "age-keygen" ? "age" : command];
-    const pin = version === undefined ? `the office package's ${command} isn't in ${packagesFile} (office sync writes it)` : `mise hasn't installed ${command} ${version}, the office's pin, on this host`;
+    const pin = host ? `office up hasn't applied the office package's ${command} on this machine` : version === undefined ? `the office package's ${command} isn't in ${packagesFile} (office sync writes it)` : `mise hasn't installed ${command} ${version}, the office's pin, on this host`;
     const detail = tool === undefined ? `${pin}, and there is no other copy; ${install}` : `${pin}, so office runs ${command} ${tool.version} from ${tool.path}; ${install}`;
 
     report(tool === undefined && required.includes(command) ? false : "warn", `office tool ${command}`, detail);
   }
 
-  if (found.length > 0) report(true, "office tools", `${found.join(", ")}: the versions ${packagesFile} pins, as mise installed them`);
+  if (found.length > 0) report(true, "office tools", `${found.join(", ")}: ${host ? "the versions office up applied" : `the versions ${packagesFile} pins, as mise installed them`}`);
 
   const files = ["mise.toml", machineFile];
 
@@ -583,7 +594,7 @@ function officeToolChecks(office: Office, report: Report): void {
   });
 
   if (duplicates.length > 0) {
-    report("warn", "office tools", `${duplicates.join("; ")}, which the office package now provides in ${packagesFile}; you can remove these pins unless one holds a tool back on purpose. Where such a pin applies it wins over the package's, so agents can run another version than the office CLI does`);
+    report("warn", "office tools", host ? `${duplicates.join("; ")}, which the office package now requires as shared tools: machine.toml's exact pin holds office bump's selection, and mise.toml's applies only in the office folder, where agents can run another version than the office CLI does; you can remove these pins unless one holds a tool back on purpose` : `${duplicates.join("; ")}, which the office package now provides in ${packagesFile}; you can remove these pins unless one holds a tool back on purpose. Where such a pin applies it wins over the package's, so agents can run another version than the office CLI does`);
   }
 }
 
@@ -789,7 +800,7 @@ export function toolsNotes(office: Office): string[] {
 
     if (same !== undefined && same === hours(tools.minimumReleaseAge)) continue;
 
-    notes.push(`${name} sets minimum_release_age = "${setting}" under [settings], but the office's environment sets MISE_MINIMUM_RELEASE_AGE=${tools.minimumReleaseAge} (tools.minimum_release_age in office.yaml), which wins wherever it is loaded; remove the setting or change the office's age`);
+    notes.push(`${name} sets minimum_release_age = "${setting}" under [settings], but the office's environment sets MISE_MINIMUM_RELEASE_AGE=${tools.minimumReleaseAge} (minimum_release_age in office.yaml), which wins wherever it is loaded; remove the setting or change the office's age`);
   }
 
   return notes;
@@ -798,7 +809,7 @@ export function toolsNotes(office: Office): string[] {
 /** Whether Socket Firewall is on, and where it applies in the office's mode. */
 function firewallChecks(office: Office, report: Report): void {
   const age = office.tools.minimumReleaseAge;
-  const ages = hours(age) === 0 ? "package managers and mise take releases as soon as they're published (tools.minimum_release_age: 0)" : `package managers and mise take only releases at least ${age} old`;
+  const ages = hours(age) === 0 ? "package managers and mise take releases as soon as they're published (minimum_release_age: 0)" : `package managers and mise take only releases at least ${age} old`;
 
   if (!office.socketFirewall) {
     report("warn", "Socket Firewall", `off (enabled: false for sfw under tools in office.yaml): package downloads aren't checked; ${ages}`);
@@ -945,7 +956,16 @@ function gitChecks(office: Office, report: Report, running: boolean, references:
     return;
   }
 
-  const gh = officeTool(office, "gh");
+  let gh: OfficeTool | undefined;
+
+  try {
+    gh = officeTool(office, "gh");
+  } catch (error) {
+    if (!(error instanceof OfficeError)) throw error;
+    report(false, "GitHub", error.message);
+
+    return;
+  }
 
   if (gh === undefined) {
     report(false, "GitHub", "office.yaml shares the host's gh login, but gh isn't installed on this host (office setup --install-deps)");

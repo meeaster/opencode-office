@@ -5,6 +5,7 @@ import * as v from "valibot";
 import { installs, recipes, tasks, type Install, type Recipe, type Task } from "../../packages/mise-integration/claims.ts";
 import type { RegistryEntry } from "../../sdk/index.ts";
 import { requirements, type Requirement } from "../../packages/tooling/requirements.ts";
+import { tools, type Provision, type Requirement as ToolRequirement } from "../../packages/tools/handles.ts";
 import type { Office } from "../../src/office.ts";
 import type { GatheredPackage } from "../../src/gather.ts";
 import type { InstalledPackage } from "../../src/packages.ts";
@@ -13,11 +14,15 @@ import { defaultOffSetting, settingValue, type SettingValue, systemBlock, type S
 
 /** Whether a registry holds machine claims: tools, tasks, host installs or system recipes. */
 export function machineCollection(id: string) {
-  return [requirements.id, installs.id, recipes.id, tasks.id].includes(id);
+  return [requirements.id, tools.requirements.id, tools.providers.id, installs.id, recipes.id, tasks.id].includes(id);
 }
 
-/** What a package claims on the machine in this run: tools, tasks, a host install and a system recipe, as their parsers returned them. */
-export type MachineClaims = { tools: Requirement[]; tasks: Task[]; install?: Install; recipe?: Recipe };
+/**
+ * What a package claims on the machine in this run, as their parsers returned them: tools by
+ * `@office/tooling` (`tools`) and by `@office/tools` (`required`, `provided`), tasks, a host install
+ * and a system recipe.
+ */
+export type MachineClaims = { tools: Requirement[]; required: ToolRequirement[]; provided: Provision[]; tasks: Task[]; install?: Install; recipe?: Recipe };
 
 /** A package's claims and its effective system block: its own, or the recipe it contributed. */
 export type Projection = { claims: MachineClaims; system: SystemBlock | undefined };
@@ -37,12 +42,14 @@ const recipeBlock = v.object(v.omit(systemBlock, ["ready"]).entries);
  * bootstrap file's. The manifest is not changed.
  */
 export function project(item: InstalledPackage, rows: readonly { id: string; value: RegistryEntry }[]): Projection {
-  const claims: MachineClaims = { tools: [], tasks: [] };
+  const claims: MachineClaims = { tools: [], required: [], provided: [], tasks: [] };
   const names = new Set<string>();
   let system = item.manifest.system;
 
   for (const { id, value } of rows) {
     if (id === requirements.id) claims.tools.push(requirements.parse(value));
+    else if (id === tools.requirements.id) claims.required.push(tools.requirements.parse(value));
+    else if (id === tools.providers.id) claims.provided.push(tools.providers.parse(value));
     else if (id === tasks.id || id === installs.id) {
       const task = tasks.parse(value);
 

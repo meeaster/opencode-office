@@ -10,7 +10,7 @@ import { serverUnit, serverUnitPath } from "./host-server.ts";
 import { claim, grantConsent, machineRecordVariable, machineReport, matchesServerUnit, miseConfigVariable, readMachine, releaseMachine, syncMachine, writeServerUnit } from "./machine.ts";
 import { gatherPackages } from "./gather.ts";
 import { loadOffice, OfficeError, readConfig } from "./office.ts";
-import { writePackage } from "./test-package.ts";
+import { sharedToolsLock, writePackage } from "./test-package.ts";
 
 let dir: string;
 
@@ -62,6 +62,7 @@ function makeOffice(at: string, { name = "t", opencode = host, packages = "packa
   write(join(at, "office.yaml"), `name: ${name}\n${opencode}${firewall ? "" : "tools:\n  sfw: { enabled: false }\n"}${packages}`);
   writePackage(join(at, "packages/demo/package.yaml"), '# A demo package.\ntools:\n  jq: "1.7.1"\nhost:\n  install:\n    description: Demo\n    creates: ~/.local/bin/demo\n    script: scripts/install.ts\n');
   write(join(at, "machine.toml"), '# The office\'s own.\n[tools]\njq = "1.8.0"\n');
+  write(join(at, "office.lock"), sharedToolsLock());
 }
 
 const links = () => (existsSync(confD) ? readdirSync(confD).sort() : []);
@@ -145,8 +146,9 @@ test("removing a package removes its link; leaving host mode removes them all an
   makeOffice(office, { packages: "" });
 
   expect(await sync(loadOffice(office))).toContain(`removed ${confD}/office-t-1-demo.toml, as package demo no longer has a fragment`);
-  expect(links()).toEqual(["office-t-0-packages.toml", "office-t-2-machine.toml"]);
-  expect(readMachine()?.files.map((file) => file.package)).toEqual([null, null, null]);
+  // The office package's tools are shared tools, so with demo gone no package has a tool in machine.packages.toml.
+  expect(links()).toEqual(["office-t-2-machine.toml"]);
+  expect(readMachine()?.files.map((file) => file.package)).toEqual([null, null]);
 
   makeOffice(office, { opencode: "opencode: container\n" });
 

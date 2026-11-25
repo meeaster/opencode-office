@@ -5,7 +5,7 @@ import { expect, test } from "bun:test";
 import { existsSync, readdirSync, readlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { definitionFixture, type DefinitionFixture } from "./package-definition.fixture.ts";
-import { definitionText, writePackage } from "./test-package.ts";
+import { applyOfficeTools, builtinTools, definitionText, fakeRegistry, writePackage } from "./test-package.ts";
 
 const { exe, write, read, fixture } = definitionFixture({ second: false });
 
@@ -16,15 +16,16 @@ function rig(f: DefinitionFixture) {
   write(join(f.home, "bin/docker"), '#!/bin/sh\necho "docker $*" >> "$HOME/calls"\ncase "$*" in *" up -d"*) [ -f "$HOME/compose-fails" ] && exit 1;; esac\nexit 0\n', 0o755);
   write(join(f.home, "bin/systemctl"), '#!/bin/sh\necho "systemctl $*" >> "$HOME/calls"\nexit 0\n', 0o755);
   // `mise outdated --json` finds nothing to move.
-  write(join(f.home, "bin/mise"), '#!/bin/sh\nif [ "$1" = --version ]; then echo 2026.11.7; else echo "{}"; fi\n', 0o755);
+  write(join(f.home, "bin/mise"), `#!/bin/sh\n${fakeRegistry}if [ "$1" = --version ]; then echo 2026.11.7; else echo "{}"; fi\n`, 0o755);
 }
 
-/** Host mode with no Socket Firewall to install, its state in the office, and the server password up needs. */
+/** Host mode with no Socket Firewall to install, its state in the office, the server password up needs, and the built-ins' shared tools applied. */
 function hostMode(f: DefinitionFixture, entries: string) {
   const initial = read(join(f.dir, "office.yaml"));
 
   write(join(f.dir, "office.yaml"), `${initial.replace("opencode: container", "opencode: { mode: host, url: 'http://127.0.0.1:1' }").replace(/^ {2}sfw: (\S+)$/m, "  sfw: { version: $1, enabled: false }")}${entries}state: ./state\n`);
   write(join(f.dir, "state/secrets.env"), "OPENCODE_PASSWORD=fixture-only\n");
+  applyOfficeTools(join(f.dir, "state"), builtinTools);
 }
 
 const calls = (f: DefinitionFixture) => existsSync(join(f.home, "calls")) ? read(join(f.home, "calls")).split("\n").filter(Boolean) : [];

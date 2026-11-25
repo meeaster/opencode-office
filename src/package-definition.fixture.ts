@@ -2,12 +2,12 @@
 // definitionFixture() once, at the top level: it registers that file's own beforeAll/afterAll, so
 // files run in parallel each get their own executables and scratch folder.
 import { afterAll, beforeAll, expect, setDefaultTimeout } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { compile } from "./build.ts";
 import { git } from "./git.ts";
-import { definitionText, writePackage } from "./test-package.ts";
+import { definitionText, pinnedMise, sharedToolsLock, writePackage } from "./test-package.ts";
 import type officePlugin from "../packages/office/plugin/index.ts";
 
 /** `second: false` skips building the second distribution, for a file that never runs `variant` or `newer`. */
@@ -157,12 +157,21 @@ export function definitionFixture({ second = true } = {}) {
   function fixture(name: string) {
     const dir = join(root, name);
     const home = join(root, `${name}-home`);
+    const mise = Bun.which("mise");
+    // A host-mode office reads mise's registry, offline, for the short names its packages require:
+    // the runner's mise behind a stand-in for the pinned version (pinnedMise), last on PATH and in a
+    // folder of its own, so a test's own mise in home/bin wins and nothing written there reaches the real one.
+    const registry = join(home, "registry");
+
     mkdirSync(home);
+    mkdirSync(registry);
+
+    if (mise !== null) pinnedMise(registry, mise);
 
     const probe = join(home, "imports");
 
     const env = {
-      HOME: home, PATH: `${home}/bin:${bin}`, NO_COLOR: "1", TMPDIR: root, GIT_ALLOW_PROTOCOL: "file",
+      HOME: home, PATH: `${home}/bin:${bin}:${registry}`, NO_COLOR: "1", TMPDIR: root, GIT_ALLOW_PROTOCOL: "file",
       DOCKER_HOST: `unix://${home}/absent.sock`, DBUS_SESSION_BUS_ADDRESS: `unix:path=${home}/absent-bus`,
       OFFICE_MACHINE_RECORD: join(home, "record.json"), OFFICE_MISE_CONFIG_DIR: join(home, "mise"), OFFICE_MACHINE_DIR: join(home, "machine"),
       OFFICE_APP_CONFIG_DIR: join(home, "app"), OFFICE_APP_PANELS_DIR: join(home, "panels"), OFFICE_SYSTEMD_USER_DIR: join(home, "units"), PROBE: probe,
@@ -179,6 +188,10 @@ export function definitionFixture({ second = true } = {}) {
 
     run(exe, 0, "init", dir);
     const config = join(dir, "office.yaml");
+    const lock = join(dir, "office.lock");
+
+    // Desired releases of the built-ins' shared tools, so a host-mode office's sync asks mise for none.
+    writeFileSync(lock, `${existsSync(lock) ? read(lock) : ""}${sharedToolsLock("  npm:agent-browser: { version: 0.43.0 }", "  core:bun: { version: 1.4.4 }", "  aqua:aws/aws-cli: { version: 2.40.4 }")}`);
     // The template selects executor, whose `up` needs the office's Executor: a test selects it itself.
     const initial = read(config).replace(/^ {2}- name: executor\n/m, "");
 

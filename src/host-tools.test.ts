@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { ghLink, hostToolsRoot, installedTool, installMise, miseAsset, needsInstall, officePins, officeTool, officeToolNamed, onboardHostTools, requireOfficeTool, startingVersions, verifyDigest } from "./host-tools.ts";
 import { loadOffice, type Office } from "./office.ts";
 import { type Candidate, type Release, selectToolRelease } from "./releases.ts";
+import { activate } from "../standard/tools/applied.ts";
 
 let dir: string;
 const previous = { PATH: process.env.PATH, XDG_DATA_HOME: process.env.XDG_DATA_HOME };
@@ -317,4 +318,30 @@ test("integrity failures fail closed, and bootstrap checks the exact executable 
 
   expect(() => verifyDigest(bytes, null, "mise")).toThrow("no authoritative");
   expect(() => miseAsset("2026.11.7", "win32", "x64")).toThrow("WSL");
+});
+
+test("in a host-mode office, setup leaves to the shared tools a tool they apply, and the CLI runs their executable", async () => {
+  fakeMise();
+  const root = join(dir, "host-office");
+  const state = join(dir, "host-state");
+  const bin: Record<string, { path: string; sha256: string }> = {};
+
+  for (const command of ["sops", "age", "age-keygen", "gh", "pre-commit"]) {
+    const path = join(state, "tools/mise/installs", command, command);
+
+    executable(path, `${command} 9.9.9`);
+    bin[command] = { path, sha256: `sha256:${createHash("sha256").update(readFileSync(path)).digest("hex")}` };
+  }
+
+  activate({ state }, { tools: new Map([["shared", { version: "9.9.9", identity: "test", names: [], bin }]]), highest: new Map([["shared", "9.9.9"]]) });
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "office.yaml"), `name: t\nstate: ${state}\nopencode: {mode: host, url: 'http://127.0.0.1:49999'}\n`);
+  writeFileSync(join(root, "machine.packages.toml"), `[tools]\n${Object.entries(pins).map(([tool, version]) => `"${tool}" = "${version}" # office`).join("\n")}\n`);
+  const host = loadOffice(root);
+
+  await onboardHostTools(host, false, async () => { throw new Error("unexpected prompt"); }, { lookupMise: async () => candidate() });
+
+  expect(requests().some((request) => request.args[0] === "install")).toBe(false);
+  expect(requireOfficeTool(host, "sops")).toBe(bin.sops.path);
+  expect(officeTool(host, "gh")).toEqual({ path: bin.gh.path, version: "9.9.9", pinned: pins.gh, managed: true });
 });

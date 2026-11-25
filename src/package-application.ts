@@ -11,6 +11,7 @@ import { syncTools } from "./package-tools.ts";
 import { type Office } from "./office.ts";
 import { removePackage, writeOfficeDeclaration } from "./packages.ts";
 import { prepareAppliedSettings, publishAppliedSettings } from "./applied-settings.ts";
+import { publishToolsLocation } from "../standard/tools/applied.ts";
 import { failure, isFailure, type Change } from "./change.ts";
 import { appliedSettingsPath } from "../sdk/applied-settings.ts";
 import { excludeAppliedSettings, excludedPath, excludePlumbing, updateExcluded } from "./exclude-plumbing.ts";
@@ -67,6 +68,7 @@ export async function applyPackages(office: Office, gathered: Gathered, changes:
 
     if (exclusion.some(isFailure)) throw new Error(`not publishing the applied settings: ${appliedSettingsPath} isn't kept out of commits (above)`);
     changes.push(...publishAppliedSettings(office, installed.installed));
+    changes.push(...publishToolsLocation(office));
 
     for await (const result of runPackageHooks(office, gathered, { phase: "sync", exclude: additions => {
       for (const path of additions) paths.add(excludedPath(path));

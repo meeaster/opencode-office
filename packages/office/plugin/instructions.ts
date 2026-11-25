@@ -82,7 +82,7 @@ function sharedSections(office: OfficeInfo): string[] {
 function firewallLines(office: OfficeInfo): string[] {
   if (!office.socketFirewall) return [];
 
-  const ages = /^0+[hdw]$/.test(office.minimumReleaseAge) ? "Package managers take new releases as soon as they're published." : `Package managers take only releases at least ${office.minimumReleaseAge} old (\`tools.minimum_release_age\` in \`office.yaml\`), so a just-published version isn't found yet.`;
+  const ages = /^0+[hdw]$/.test(office.minimumReleaseAge) ? "Package managers take new releases as soon as they're published." : `Package managers take only releases at least ${office.minimumReleaseAge} old (\`minimum_release_age\` in \`office.yaml\`), so a just-published version isn't found yet.`;
 
   return [
     "- Package downloads go through Socket Firewall (`sfw`) wherever the office's environment is loaded (the container, the managed host OpenCode service, or a shell that sources `~/.local/share/office/env.sh`): `npm`, `npx`, `pnpm`, `pip`, `pip3`, `uv`, `uvx` and `cargo` are wrappers that run `sfw <command>`, and `mise install`, `use` and `upgrade` run behind it. A refused package fails the command with `=== Socket Firewall ===` and `blocked <ecosystem> package: name: …; reason: malware`: tell the user, and never route around the wrappers (a real binary by its path, another registry). " + ages + " A script that runs a mise-managed tool many times runs faster under `mise exec -- <script>`, which keeps the wrappers first.",

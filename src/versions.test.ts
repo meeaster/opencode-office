@@ -189,7 +189,7 @@ test("upgrade-tools waits a runtime's own age, else the office's, and the office
   expect(ageFor(loadOffice(dir))).toBe("3d");
   expect(ageFor(loadOffice(dir), "sfw")).toBe("3d");
 
-  writeFileSync(join(dir, "office.yaml"), "name: ages\ntools:\n  minimum_release_age: 1d\n  opencode: { version: 2.3.2, minimum_release_age: 0d }\n  executor:\n    version: 2.0.0-beta.49\n    minimum_release_age: 7d\n  claude: 2.1.327\n");
+  writeFileSync(join(dir, "office.yaml"), "name: ages\nminimum_release_age: 1d\ntools:\n  opencode: { version: 2.3.2, minimum_release_age: 0d }\n  executor:\n    version: 2.0.0-beta.49\n    minimum_release_age: 7d\n  claude: 2.1.327\n");
 
   const office = loadOffice(dir);
 

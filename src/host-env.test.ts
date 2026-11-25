@@ -14,7 +14,8 @@ import { parseManifest } from "./schema.ts";
 import { wrappedCommands } from "./sfw.ts";
 import { configureStartup } from "./shell-startup.ts";
 import { defaultPins, hostPlatform } from "./versions.ts";
-import { definitionText, writePackage } from "./test-package.ts";
+import { definitionText, sharedToolsLock, writePackage } from "./test-package.ts";
+import { projectionPath } from "../standard/tools/applied.ts";
 
 let dir: string;
 
@@ -63,6 +64,7 @@ function write(path: string, content: string): void {
 function makeOffice({ firewall = true, host = "", tools = "" } = {}): void {
   write(join(office, "office.yaml"), `name: t\nopencode:\n  mode: host\n  url: http://127.0.0.1:49999\n${firewall ? tools : `tools:\n${tools.replace(/^tools:\n/, "")}  sfw: { enabled: false }\n`}packages:\n  - name: demo\n`);
   writePackage(join(office, "packages/demo/package.yaml"), host || "{}\n");
+  write(join(office, "office.lock"), sharedToolsLock());
 }
 
 const data = () => join(dir, "data");
@@ -178,7 +180,7 @@ test.skipIf(hostPlatform() === undefined)("while a package doesn't load, check s
 });
 
 test("the environment file carries the office's minimum release age, and sync rewrites it when the age changes", async () => {
-  makeOffice({ tools: "tools:\n  minimum_release_age: 36h\n" });
+  makeOffice({ tools: "minimum_release_age: 36h\n" });
   grantConsent(loadOffice(office));
   await sync(loadOffice(office));
 
@@ -186,7 +188,7 @@ test("the environment file carries the office's minimum release age, and sync re
 
   expect(variables()).toBe("2|2160|36 hours|P2D|36h");
 
-  makeOffice({ tools: "tools:\n  minimum_release_age: 0d\n" });
+  makeOffice({ tools: "minimum_release_age: 0d\n" });
   expect(await sync(loadOffice(office))).toContain(`rewrote ${envFilePath()}, the office's environment file`);
   expect(variables()).toBe("0|0|unset|unset|0d");
 
@@ -213,7 +215,8 @@ test("turning the firewall off removes sfw and its wrappers and rewrites the env
   expect(changes).toContain(`rewrote ${envFilePath()}, the office's environment file`);
   expect(existsSync(join(data(), "sfw"))).toBe(false);
   expect(readFileSync(envFilePath(), "utf8")).not.toContain(hostWrappers());
-  expect(readMachine()?.files.map((file) => file.path)).toEqual([join(globalConfD(), "office-t-0-packages.toml"), envFilePath()]);
+  // demo declares no tool, and the office package's are shared tools: no machine.packages.toml to link.
+  expect(readMachine()?.files.map((file) => file.path)).toEqual([envFilePath()]);
 
   makeOffice({ firewall: true });
   await sync(loadOffice(office));
@@ -238,7 +241,7 @@ test("a package's host block adds folders and variables to the environment file;
 
   const sourced = Bun.spawnSync(["sh", "-c", `. '${envFilePath()}'; printf '%s|%s' "$PATH" "$DEMO_MODE"`], { env: { PATH: "/usr/bin:/bin" } }).stdout.toString();
 
-  expect(sourced).toBe(`${hostWrappers()}:${join(process.env.MISE_DATA_DIR || join(dir, "home/.local/share/mise"), "shims")}:${join(dir, "home/.opencode/bin")}:${join(office, "packages/demo/bin")}:${join(dir, "home/.local/bin")}:/opt/demo/bin:/usr/bin:/bin|it's on`);
+  expect(sourced).toBe(`${hostWrappers()}:${projectionPath(loadOffice(office))}:${join(process.env.MISE_DATA_DIR || join(dir, "home/.local/share/mise"), "shims")}:${join(dir, "home/.opencode/bin")}:${join(office, "packages/demo/bin")}:${join(dir, "home/.local/bin")}:/opt/demo/bin:/usr/bin:/bin|it's on`);
 
   const manifest = join(office, "packages/demo/package.json");
   const json = readFileSync(manifest, "utf8");

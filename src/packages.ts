@@ -48,7 +48,7 @@ const records = [sourceFile, officeFile];
 const sdkReserved = `the name ${sdkName} is reserved for ${scope}${sdkName}; rename the package`;
 
 /** The built-in packages every office has, without an entry in office.yaml. */
-export const requiredPackages = ["tooling", "mise-integration", "opencode", "office", "references", "seeds", "cron"];
+export const requiredPackages = ["tooling", "tools", "mise-integration", "opencode", "office", "references", "seeds", "cron"];
 
 /** The names of the packages `office` selects: the required built-ins and each office.yaml entry, whether or not it resolves or loads. */
 export function selectedNames(office: Pick<Office, "packages">): Set<string> {

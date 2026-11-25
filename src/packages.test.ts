@@ -368,6 +368,7 @@ test("an entry without repo is built-in when shipped and local otherwise; the re
 
   expect(packages.map((item) => [item.entry.name, item.kind, item.dir.slice(office.length + 1)])).toEqual([
     ["tooling", "built-in", ".office/packages/tooling"],
+    ["tools", "built-in", ".office/packages/tools"],
     ["mise-integration", "built-in", ".office/packages/mise-integration"],
     ["opencode", "built-in", ".office/packages/opencode"],
     ["office", "built-in", ".office/packages/office"],

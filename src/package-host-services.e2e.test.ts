@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compile } from "./build.ts";
-import { writePackage } from "./test-package.ts";
+import { applyOfficeTools, fakeRegistry, sharedToolsLock, writePackage } from "./test-package.ts";
 
 // An end-to-end test spawns the compiled office many times; under a parallel run it gets 30s, not Bun's 5s.
 setDefaultTimeout(30_000);
@@ -50,7 +50,10 @@ test("the installed unit keeps its installer identity and no-install policy acro
     for (const path of [bin, home, state, pkg]) mkdirSync(path, { recursive: true });
     await compile(exe);
 
-    for (const tool of ["docker", "systemctl", "mise"]) writeFileSync(join(bin, tool), "#!/bin/sh\n[ \"$1\" != --version ] || echo 2026.11.7\n", { mode: 0o700 });
+    for (const tool of ["docker", "systemctl", "mise"]) writeFileSync(join(bin, tool), `#!/bin/sh\n${tool === "mise" ? fakeRegistry : ""}[ "$1" != --version ] || echo 2026.11.7\n`, { mode: 0o700 });
+    // The office package's shared tools recorded, so sync asks mise for no release, and applied, so up installs none.
+    writeFileSync(join(dir, "office.lock"), sharedToolsLock());
+    applyOfficeTools(state);
     writeFileSync(join(state, "secrets.env"), "OPENCODE_PASSWORD=fixture-only\n", { mode: 0o600 });
     writePackage(join(pkg, "package.yaml"), "# test\nhost:\n  services: {observe: {description: Observe, script: start.sh}}\n  env: { FROM_CLAIM: visible, MISE_AUTO_INSTALL: '1', MISE_NOT_FOUND_AUTO_INSTALL: '1' }\n");
     writeFileSync(join(pkg, "start.sh"), 'printf "%s\\n" "${FROM_CLAIM-none}:$MISE_AUTO_INSTALL/$MISE_NOT_FOUND_AUTO_INSTALL:$CODEX_HOME"');
@@ -103,6 +106,7 @@ test("the installed unit keeps its installer identity and no-install policy acro
     mkdirSync(join(root, "packages/parent-profile"), { recursive: true });
     writePackage(join(root, "packages/parent-profile/package.yaml"), "# parent marker\nhost: {env: {FROM_CLAIM: ancestor}}\n");
     writeFileSync(join(root, "office.yaml"), "name: ancestor\nopencode: {mode: host, url: 'http://localhost:1'}\ntools: {sfw: {enabled: false}}\npackages: [{name: parent-profile}]\n");
+    writeFileSync(join(root, "office.lock"), sharedToolsLock());
     rmSync(join(env.OFFICE_MACHINE_DIR, "env.sh"));
     writeFileSync(record, JSON.stringify({ office: { name: "ancestor", dir: root }, consented: "fixture", files: [] }));
     const ancestor = Bun.spawnSync([exe, "--office", root, "sync", "--packages"], { env, cwd: root });

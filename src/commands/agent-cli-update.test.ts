@@ -71,7 +71,7 @@ function fixture(): void {
   // packages it imports, linked as a package set links them.
   mkdirSync(join(root, ".office/node_modules/@office"), { recursive: true });
 
-  for (const name of ["tooling", "cron", "opencode"]) {
+  for (const name of ["tools", "cron", "opencode"]) {
     cpSync(join(import.meta.dir, "../../packages", name), join(dirname(pkg), name), { recursive: true, filter: source => !source.includes("/test") });
     symlinkSync(join(dirname(pkg), name), join(root, `.office/node_modules/@office/${name}`));
   }

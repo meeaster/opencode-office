@@ -9,7 +9,7 @@ import { parse, stringify } from "yaml";
 
 import { openCheckoutLease, publicationLease } from "./checkout-lease.ts";
 import { type Office, OfficeError } from "./office.ts";
-import { check, type HostPlatform, type Lock, type LockedPackage, type PackageLock, parsePackageLock, type PinnedTool, pinnedTools, lockSchema, version } from "./schema.ts";
+import { check, type HostPlatform, type Lock, type LockedPackage, type PackageLock, parsePackageLock, parseToolLock, type PinnedTool, pinnedTools, lockSchema, type ToolLock, version } from "./schema.ts";
 import { atomicWrite } from "./secrets.ts";
 
 export type Pin = Lock[PinnedTool];
@@ -96,8 +96,8 @@ function invalidLock(fix: string, errors: string[]): OfficeError {
   return new OfficeError(`${lockFile} is not valid (${fix}):\n${errors.map((line) => `  ${line}`).join("\n")}`);
 }
 
-/** office.lock's sections: runtime pins (undefined: none) and Git packages. */
-export type Sections = { runtime: Lock | undefined; packages: PackageLock };
+/** office.lock's sections: runtime pins (undefined: none), Git packages and mise-managed tools' desired releases. */
+export type Sections = { runtime: Lock | undefined; packages: PackageLock; tools: ToolLock };
 
 /**
  * Each section of office.lock as read, or why it can't be: each section is read on its own.
@@ -108,12 +108,13 @@ type SectionReads = { [Key in keyof Sections]: { ok: true; value: Sections[Key] 
 
 export type ReadSections = SectionReads & { unknown?: OfficeError };
 
-const knownKeys = new Set<string>([...pinnedTools, "packages"]);
+const knownKeys = new Set<string>([...pinnedTools, "packages", "tools"]);
 
 /** The remedy each section's error names. */
 const fixes: Record<keyof Sections, string> = {
   runtime: "run office pin to rewrite it",
   packages: "restore it from Git, or remove its packages: section for office sync to rewrite",
+  tools: "restore it from Git, or remove its tools: section and run office bump",
 };
 
 /** office.lock's text, or null when the office has none. */
@@ -129,27 +130,29 @@ export function lockSections(text: string | null): ReadSections {
   const fail = (key: keyof Sections, errors: string[]) => ({ ok: false as const, error: invalidLock(fixes[key], errors) });
 
   if (typeof document !== "object" || document === null || Array.isArray(document)) {
-    return { runtime: fail("runtime", ["the file: must be a mapping"]), packages: fail("packages", ["the file: must be a mapping"]) };
+    return { runtime: fail("runtime", ["the file: must be a mapping"]), packages: fail("packages", ["the file: must be a mapping"]), tools: fail("tools", ["the file: must be a mapping"]) };
   }
 
   // SAFETY: checked above to be a mapping; each section is validated below.
-  const { packages, ...pins } = document as Record<string, unknown>;
+  const { packages, tools, ...pins } = document as Record<string, unknown>;
   const unknownKeys = Object.keys(document).filter(key => !knownKeys.has(key));
 
   if (unknownKeys.length) {
     const unknown = new OfficeError(`${lockFile} has a top-level key office doesn't know: ${unknownKeys.join(", ")}. Nothing was read from it or written; remove the key (an earlier release's adoption step may move it), then run the command again`);
     const refused = { ok: false as const, error: unknown };
 
-    return { runtime: refused, packages: refused, unknown };
+    return { runtime: refused, packages: refused, tools: refused, unknown };
   }
 
   const runtime = Object.keys(pins).length === 0 ? { ok: true as const, value: undefined } : check(v.safeParse(lockSchema, pins));
 
   const locked = packages === undefined ? { ok: true as const, value: new Map() } : parsePackageLock(packages);
+  const desired = tools === undefined ? { ok: true as const, value: new Map() } : parseToolLock(tools);
 
   return {
     runtime: runtime.ok ? runtime : fail("runtime", runtime.errors),
     packages: locked.ok ? locked : fail("packages", locked.errors),
+    tools: desired.ok ? desired : fail("tools", desired.errors),
   };
 }
 
@@ -181,6 +184,12 @@ const packagesHeader = [
   "# package's repo, path and ref in office.yaml match.",
 ];
 
+const toolsHeader = [
+  "# Written by `office bump`; don't edit. The exact release selected for each mise tool the",
+  "# packages require, by its backend; mise verifies its artifact when office up installs it. A",
+  "# selection installs nothing; machine.toml's exact pins are held.",
+];
+
 function byKey<T>(entries: Iterable<[string, T]>): [string, T][] {
   return [...entries].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
 }
@@ -195,7 +204,7 @@ export function packageSectionKey(packages: PackageLock): string {
 }
 
 /** office.lock's text for its sections, or null when all are empty. Entries are sorted by key. */
-function renderLock({ runtime: pins, packages }: Sections): string | null {
+function renderLock({ runtime: pins, packages, tools }: Sections): string | null {
   const runtime = pins === undefined ? [] : [
     ...runtimeHeader,
     ...pinnedTools.flatMap((tool) => {
@@ -210,7 +219,8 @@ function renderLock({ runtime: pins, packages }: Sections): string | null {
 
   // Object.fromEntries defines own keys, so every package name survives.
   const section = packages.size === 0 ? [] : [...packagesHeader, stringify({ packages: Object.fromEntries(sortedPackages(packages)) }, { lineWidth: 0 }).trimEnd()];
-  const parts = [runtime, section].filter((part) => part.length > 0);
+  const desired = tools.size === 0 ? [] : [...toolsHeader, stringify({ tools: Object.fromEntries(byKey(tools)) }, { lineWidth: 0 }).trimEnd()];
+  const parts = [runtime, section, desired].filter((part) => part.length > 0);
 
   if (parts.length === 0) return null;
 
@@ -250,6 +260,7 @@ export function editLock<T>(dir: string, edit: (sections: Sections) => T, { leas
   const sections: Sections = {
     runtime: read.runtime.ok ? read.runtime.value : unreadable("runtime", undefined),
     packages: read.packages.ok ? read.packages.value : unreadable("packages", new Map()),
+    tools: read.tools.ok ? read.tools.value : unreadable("tools", new Map()),
   };
 
   const before = renderLock(sections);

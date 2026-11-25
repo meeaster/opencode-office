@@ -8,7 +8,7 @@
     "dependencies": [
       "@office/opencode",
       "@office/references",
-      "@office/tooling"
+      "@office/tools"
     ]
   }
 }
