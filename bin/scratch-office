@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+die() {
+  printf 'scratch-office: %s\n' "$*" >&2
+  exit 1
+}
+
+require_outside_office() {
+  local parent=$1
+  while :; do
+    if [[ -e $parent/office.yaml || -L $parent/office.yaml ]]; then
+      die "$dir is inside an office: $parent/office.yaml"
+    fi
+    [[ $parent != / ]] || break
+    parent=$(dirname -- "$parent")
+  done
+}
+
+identify() {
+  local id=${dir##*.}
+  [[ ${dir##*/} == "office-scratch.$id" && $id =~ ^[a-zA-Z0-9]{4}$ ]] ||
+    die "expected an office-scratch.XXXX directory: $dir"
+  name=s${id,,}
+  project=office-$name
+  unit=$project-scratch-opencode.service
+  label=com.docker.compose.project=$project
+}
+
+snapshot() (
+  set -e
+  /usr/bin/python3 - "$dir/baseline-paths" <<'PY' || exit 1
+import hashlib
+import os
+import stat
+import sys
+
+def record(path):
+    info = os.lstat(path)
+    value = ""
+    if stat.S_ISLNK(info.st_mode):
+        value = os.readlink(path)
+    elif stat.S_ISREG(info.st_mode):
+        with open(path, "rb") as file:
+            value = hashlib.file_digest(file, "sha256").hexdigest()
+    print(f"{path}\t{info.st_mode:o}:{info.st_uid}:{info.st_gid}:{value}")
+    if stat.S_ISDIR(info.st_mode):
+        with os.scandir(path) as entries:
+            for entry in entries:
+                record(entry.path)
+
+with open(sys.argv[1]) as paths:
+    for path in dict.fromkeys(paths.read().splitlines()):
+        if os.path.lexists(path):
+            record(path)
+            if os.path.islink(path) and os.path.exists(path):
+                record(os.path.realpath(path))
+PY
+  docker container ls --all --no-trunc --format $'container {{.Names}}\t{{.ID}}' || exit 1
+  docker network ls --no-trunc --format $'network {{.Name}}\t{{.ID}}' || exit 1
+  docker volume ls --format 'volume {{.Name}}' || exit 1
+  docker image ls --all --no-trunc --format $'image {{.Repository}}:{{.Tag}}\t{{.ID}}'
+)
+
+write_baseline() {
+  local config=${XDG_CONFIG_HOME:-$HOME/.config}
+  local data=${XDG_DATA_HOME:-$HOME/.local/share}
+  local state=${XDG_STATE_HOME:-$HOME/.local/state}
+
+  printf '%s\n' \
+    "${OFFICE_MACHINE_RECORD:-$data/office/machine.json}" \
+    "${OFFICE_MISE_CONFIG_DIR:-${MISE_CONFIG_DIR:-$config/mise}}/conf.d" \
+    "${MISE_STATE_DIR:-$state/mise}/trusted-configs" \
+    "$HOME/.local/share/office" "${OFFICE_MACHINE_DIR:-$data/office}" \
+    "$HOME/.local/bin/office" "$unit_dir" > "$dir/baseline-paths"
+  snapshot | LC_ALL=C sort -u > "$dir/baseline"
+}
+
+export_line() {
+  printf 'export %s=%q\n' "$1" "$2"
+}
+
+write_env() {
+  local home=$dir/home
+  {
+    printf '%s\n' \
+      'unset OFFICE_DIR OFFICE_STATE OFFICE_NAME OFFICE_ENV_FILE OFFICE_CONTAINER' \
+      'unset OFFICE_EXECUTOR_URL EXECUTOR_URL EXECUTOR_TOKEN EXECUTOR_ORGANIZATION' \
+      'unset MISE_CONFIG_FILE MISE_GLOBAL_CONFIG_FILE MISE_ENV_FILE MISE_SYSTEM_CONFIG_DIR MISE_TRUSTED_CONFIG_PATHS' \
+      'unset SOPS_AGE_KEY SOPS_AGE_KEY_FILE SOPS_AGE_KEY_CMD GH_CONFIG_DIR GIT_CONFIG_GLOBAL GIT_CONFIG_COUNT' \
+      'unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_ENV_FILES COMPOSE_PROFILES' \
+      'unset OPENCODE_CONFIG OPENCODE_CONFIG_DIR OPENCODE_CONFIG_CONTENT OPENCODE_STATE_DIR OPENCODE_PASSWORD OPENCODE_SERVER_PASSWORD'
+    export_line HOME "$home"
+    export_line XDG_CONFIG_HOME "$home/.config"
+    export_line XDG_DATA_HOME "$home/.local/share"
+    export_line XDG_STATE_HOME "$home/.local/state"
+    export_line XDG_CACHE_HOME "$home/.cache"
+    export_line MISE_CONFIG_DIR "$home/.config/mise"
+    export_line MISE_DATA_DIR "$home/.local/share/mise"
+    export_line MISE_STATE_DIR "$home/.local/state/mise"
+    export_line MISE_CACHE_DIR "$home/.cache/mise"
+    export_line OFFICE_MACHINE_RECORD "$home/.local/share/office/machine.json"
+    export_line OFFICE_MISE_CONFIG_DIR "$home/.config/mise"
+    export_line OFFICE_MACHINE_DIR "$home/.local/share/office"
+    export_line OFFICE_APP_CONFIG_DIR "$home/.config/opencode"
+    export_line OFFICE_APP_PANELS_DIR "$home/.local/share/opencode/panels"
+    export_line OFFICE_SYSTEMD_USER_DIR "$unit_dir"
+    export_line DOCKER_CONFIG "${DOCKER_CONFIG:-$HOME/.docker}"
+    export_line DOCKER_CONTEXT "${DOCKER_CONTEXT:-}"
+    export_line DOCKER_HOST "${DOCKER_HOST:-}"
+    export_line TMPDIR "$dir/tmp"
+    export_line PATH "$home/.local/bin:$PATH"
+    export_line OPENCODE_PORT "$opencode_port"
+    export_line EXECUTOR_PORT "$executor_port"
+    printf 'if [[ -d %q ]]; then cd -- %q || return; fi\n' "$dir/office" "$dir/office"
+  } > "$dir/env.sh"
+}
+
+up() {
+  local repo server unit_dir parent occupied ports opencode_port executor_port password
+  repo=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
+  server=$(command -v opencode)
+  unit_dir=${OFFICE_SYSTEMD_USER_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}
+  # Check before mktemp: a rejected parent should have no run to tear down.
+  dir=$(realpath -e -- "${TMPDIR:-/tmp}")
+  require_outside_office "$dir"
+  parent=$dir
+  while :; do
+    dir=$(mktemp -d "$parent/office-scratch.XXXX")
+    if [[ ${dir##*.} =~ ^[a-z0-9]{4}$ ]]; then
+      identify
+      if ! occupied=$(remaining); then
+        rmdir -- "$dir"
+        die "could not check for existing systemd and Docker resources"
+      fi
+      [[ -n $occupied ]] || break
+    fi
+    rmdir -- "$dir"
+  done
+  if ! (write_baseline); then
+    rm -f -- "$dir/baseline" "$dir/baseline-paths"
+    rmdir -- "$dir"
+    die "could not capture the baseline; no scratch office was started"
+  fi
+  trap 'printf "scratch-office: up failed; inspect %s (cleanup: bin/scratch-office down %q)\n" "$dir" "$dir" >&2' ERR
+
+  ports=$(/usr/bin/python3 - <<'PY'
+import socket
+
+with socket.socket() as opencode, socket.socket() as executor:
+    for listener in (opencode, executor):
+        listener.bind(("127.0.0.1", 0))
+    print(opencode.getsockname()[1], executor.getsockname()[1])
+PY
+  )
+  read -r opencode_port executor_port <<< "$ports"
+  write_env
+  mkdir -p -- "$dir/home/.local/bin" "$dir/tmp" "$repo/target"
+  ln -s /usr/bin/python3 "$dir/home/.local/bin/python3"
+  (
+    source "$dir/env.sh"
+    cd -- "$repo"
+    flock 9
+    bun src/build.ts >&2
+    install -m 755 target/office "$HOME/.local/bin/office"
+  ) 9>"$repo/target/scratch-office-build.lock"
+  (
+    source "$dir/env.sh"
+    cd -- "$repo"
+    # Host-mode tool sync requires the exact template pin even when the host runs a newer mise.
+    bun --no-env-file -e '
+      import { installMise } from "./src/host-tools.ts";
+      import { releaseByTag } from "./src/releases.ts";
+      import { defaultPins } from "./src/versions.ts";
+      const { version } = defaultPins.mise;
+      const release = await releaseByTag("jdx/mise", `v${version}`);
+      if (!release) throw new Error(`mise ${version} release not found`);
+      await installMise({ version, published: release.published_at ?? "", release });
+    ' >&2
+  )
+  cd -- "$dir"
+  source "$dir/env.sh"
+  "$dir/home/.local/bin/office" init "$dir/office" --name "$name" >&2
+  sed -i "s|^opencode: container$|opencode: { mode: host, url: http://127.0.0.1:$opencode_port }|" office/office.yaml
+  grep -q '^opencode: { mode: host,' office/office.yaml || die "could not configure host mode in $dir"
+
+  password=$(openssl rand -hex 24)
+  mkdir -p state
+  printf '\nstate: %s\n' ../state >> office/office.yaml
+  (umask 077; printf 'OPENCODE_PASSWORD=%s\n' "$password" > state/secrets.env)
+  systemd-run --user --quiet --collect --service-type=exec --unit="$unit" \
+    --working-directory="$dir/office" /usr/bin/env -i \
+    "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+    "DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}" \
+    /bin/bash -ec '
+      source "$1/env.sh"
+      set -a
+      source "$1/state/secrets.env"
+      set +a
+      export OPENCODE_DISABLE_AUTOUPDATE=1
+      exec "$2" serve --hostname 127.0.0.1 --port "$OPENCODE_PORT"
+    ' scratch-opencode "$dir" "$server"
+  printf 'user = "opencode:%s"\n' "$password" |
+    curl --config - --noproxy '*' --silent --fail --max-time 2 \
+      --retry 10 --retry-connrefused --retry-max-time 15 \
+      "http://127.0.0.1:$opencode_port/api/info" >/dev/null ||
+    die "OpenCode did not answer; see journalctl --user -u $unit, then run bin/scratch-office down $dir"
+
+  printf 'scratch office: %s/office (name: %s)\n' "$dir" "$name"
+  printf 'opencode: http://127.0.0.1:%s (unit %s)\nexecutor: %s\n' "$opencode_port" "$unit" "$executor_port"
+  printf 'source %q before every office command\n' "$dir/env.sh"
+}
+
+remaining() (
+  set -e
+  systemctl --user list-units --all --full --plain --no-legend "$project-*" | awk '{print "unit " $1}' || exit 1
+  systemctl --user list-unit-files --full --no-legend | awk -v prefix="$project-" 'index($1, prefix) == 1 {print "unit file " $1}' || exit 1
+  docker container ls --all --filter "label=$label" --format 'container {{.Names}}' || exit 1
+  docker network ls --filter "label=$label" --format 'network {{.Name}}' || exit 1
+  docker volume ls --filter "label=$label" --format 'volume {{.Name}}' || exit 1
+  docker image ls --all --format '{{.Repository}}:{{.Tag}}' |
+    awk -v prefix="$project" 'index($0, prefix) == 1 {print "image " $0}'
+)
+
+down() {
+  local failed=0 load stopped='' volumes removed=0 leftovers changes
+  dir=$(realpath -e -- "$1")
+  identify
+  require_outside_office "$(dirname -- "$dir")"
+  [[ -O $dir && -f $dir/env.sh && -s $dir/baseline ]] || die "not a scratch office: $dir"
+  cd -- "$dir"
+  source "$dir/env.sh"
+  if [[ -f $dir/office/office.yaml ]]; then
+    grep -Fxq "name: $name" "$dir/office/office.yaml" || die "office.yaml no longer names $name; refusing office down"
+    if "$dir/home/.local/bin/office" down --office "$dir/office"; then stopped='office down'; else failed=1; fi
+  fi
+  load=$(systemctl --user show --property=LoadState --value "$unit")
+  if [[ $load != not-found ]]; then
+    if systemctl --user stop "$unit"; then stopped="${stopped:+$stopped, }opencode server"; else failed=1; fi
+  fi
+  printf 'stopped: %s\n' "${stopped:-none}"
+
+  volumes=$(docker volume ls --filter "label=$label" --format '{{.Name}}')
+  if [[ -n $volumes ]]; then
+    while IFS= read -r volume; do
+      if docker volume rm "$volume" >/dev/null; then removed=$((removed + 1)); else failed=1; fi
+    done <<< "$volumes"
+  fi
+
+  leftovers=$(remaining)
+  snapshot | LC_ALL=C sort -u > "$dir/after"
+  changes=$(LC_ALL=C sort "$dir/baseline" "$dir/after" | uniq -u |
+    awk -F '\t' '/^(container|network|image) / {print; next} {print $1}' | LC_ALL=C sort -u)
+  if [[ -z $leftovers && -z $changes && $failed == 0 ]]; then
+    cd /
+    rm -rf -- "$dir"
+    printf 'removed: %s volume(s), folder\n' "$removed"
+  else
+    printf 'removed: %s volume(s); kept %s\n' "$removed" "$dir"
+  fi
+  if [[ -n $leftovers ]]; then printf 'left over:\n%s\n' "$leftovers"; else printf 'left over: none\n'; fi
+  if [[ -n $changes ]]; then printf 'personal office changed:\n%s\n' "$changes"; else printf 'personal office: unchanged\n'; fi
+  [[ -z $leftovers && -z $changes && $failed == 0 ]]
+}
+
+case "$#:${1:-}" in
+  1:up) up ;;
+  2:down) down "$2" ;;
+  *) die "usage: bin/scratch-office up | down <dir>" ;;
+esac
