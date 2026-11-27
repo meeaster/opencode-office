@@ -4,10 +4,11 @@
 // nothing changed, the session's app list, and an office that doesn't select executor.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { fakeExecutor } from "../packages/executor/test/fake-executor.ts";
 import { definitionFixture, type DefinitionFixture } from "./package-definition.fixture.ts";
 import { rig } from "./office-up.fixture.ts";
+import { toolPath } from "./tool.ts";
 
 const { exe, write, fixture } = definitionFixture({ second: false });
 
@@ -55,7 +56,7 @@ function cache(f: DefinitionFixture) {
   const path = join(f.home, "cache/office/apps-1.0.0");
 
   mkdirSync(path, { recursive: true });
-  symlinkSync(resolve(import.meta.dir, "../node_modules"), join(path, "node_modules"));
+  symlinkSync(toolPath("node_modules"), join(path, "node_modules"));
 }
 
 function select(f: DefinitionFixture, entries: string) {

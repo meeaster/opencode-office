@@ -2,10 +2,11 @@
 // links, with package.json `exports` enforced, on a first sync, across an update and in a command.
 import { expect, test } from "bun:test";
 import { existsSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
 import { definitionText, writePackage } from "./test-package.ts";
+import { toolPath } from "./tool.ts";
 
 const { root, write, read, commit, fixture, published } = definitionFixture();
 
@@ -119,7 +120,7 @@ test("the editor link stays out of Git without a node_modules rule, and check re
   // A local package's typed definition: Package from @office/sdk, a handle from another package.
   write(join(dir, "packages/consumer/typed.ts"), 'import { Package } from "@office/sdk"; import { repositories } from "@office/references/repositories"; import { value } from "@office/provider";\nexport default Package.define({ settings: { type: "object", additionalProperties: false, properties: { url: { type: "string", default: "u" } } }, setup(ctx) { ctx.add(repositories, { name: value, url: ctx.settings.url }); } });\n');
   write(join(dir, "repos/example/broken.ts"), 'const broken: number = "not a number";');
-  const checkout = dirname(import.meta.dir);
+  const checkout = toolPath(".");
   // With the template's own strict settings, nothing relaxed.
   const tsc = () => Bun.spawnSync([join(checkout, "node_modules/.bin/tsc"), "--noEmit", "-p", join(dir, "tsconfig.json")], { cwd: dir });
   // A deliberate type error in the local package is reported, so tsc checked it; fixed, tsc passes.

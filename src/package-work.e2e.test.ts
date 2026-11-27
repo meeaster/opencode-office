@@ -9,9 +9,10 @@ import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
 import { definitionText, pluginDefinition, writePackage } from "./test-package.ts";
+import { toolPath } from "./tool.ts";
 
 const { root, bin, write, commit, fixture, promptEntries } = definitionFixture({ second: false });
-const example = join(import.meta.dir, "../examples/package-work/packages/mirrors");
+const example = toolPath("examples/package-work/packages/mirrors");
 
 /** A bare repository with one commit, as a file URL. */
 function upstream(name: string) {

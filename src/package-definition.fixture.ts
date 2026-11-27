@@ -9,6 +9,7 @@ import { fixtureExecutable } from "./compiled.fixture.ts";
 import { git } from "./git.ts";
 import { definitionText, pinnedMise, sharedToolsLock, writePackage } from "./test-package.ts";
 import type officePlugin from "../packages/office/plugin/index.ts";
+import { toolPath } from "./tool.ts";
 
 /** `second: false` skips building the second distribution, for a file that never runs `variant` or `newer`. */
 export function definitionFixture({ second = true } = {}) {
@@ -56,7 +57,7 @@ export function definitionFixture({ second = true } = {}) {
 
     // Build a second distribution, without modifying the checkout's packages or template.
     const dist = join(root, "distribution");
-    const checkout = dirname(import.meta.dir);
+    const checkout = toolPath(".");
     git(["init", "-q", dist]);
 
     for (const path of ["src", "standard", "packages", "sdk", "template", "image", "compose.yaml", "LICENSE", "package.json", "tsconfig.json"]) cpSync(join(checkout, path), join(dist, path), { recursive: true });

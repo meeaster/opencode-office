@@ -5,6 +5,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { writeSdk } from "./package-imports.ts";
+import { toolPath } from "./tool.ts";
 
 let office: string;
 
@@ -148,9 +149,9 @@ test("sync writes the SDK's own source beside the package links: types for edito
   const written = join(office, "node_modules/@office/sdk");
   const files = readdirSync(written).sort();
 
-  expect(files).toEqual(readdirSync(join(import.meta.dir, "../sdk")).sort());
+  expect(files).toEqual(readdirSync(toolPath("sdk")).sort());
 
-  for (const file of files) expect(readFileSync(join(written, file), "utf8")).toBe(readFileSync(join(import.meta.dir, "../sdk", file), "utf8"));
+  for (const file of files) expect(readFileSync(join(written, file), "utf8")).toBe(readFileSync(toolPath(`sdk/${file}`), "utf8"));
 
   expect(JSON.parse(readFileSync(join(written, "package.json"), "utf8"))).toMatchObject({ name: "@office/sdk", exports: { ".": { types: "./index.ts", default: "./disk.js" } } });
   // Loaded by ordinary resolution instead of the executable's redirect, it says so.
@@ -162,12 +163,12 @@ test("sync writes the SDK's own source beside the package links: types for edito
 
 test("ctx.settings has each setting's type, with no annotation and no as const", () => {
   writeSdk(office);
-  copyFileSync(join(import.meta.dir, "../template/office/tsconfig.json"), join(office, "tsconfig.json"));
+  copyFileSync(toolPath("template/office/tsconfig.json"), join(office, "tsconfig.json"));
   const file = join(office, "packages/typed/office.ts");
 
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, definition);
-  const tsc = Bun.spawnSync([join(import.meta.dir, "../node_modules/.bin/tsc"), "--noEmit", "-p", join(office, "tsconfig.json")], { cwd: office });
+  const tsc = Bun.spawnSync([toolPath("node_modules/.bin/tsc"), "--noEmit", "-p", join(office, "tsconfig.json")], { cwd: office });
 
   expect(tsc.stdout.toString() + tsc.stderr.toString()).toBe("");
   expect(tsc.exitCode).toBe(0);

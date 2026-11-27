@@ -6,8 +6,9 @@ import { expect } from "bun:test";
 import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DefinitionFixture } from "./package-definition.fixture.ts";
+import { toolPath } from "./tool.ts";
 
-const example = join(import.meta.dir, "../examples/optional-integrations/packages");
+const example = toolPath("examples/optional-integrations/packages");
 
 /** The modules that record their evaluation, by package. */
 const probed = { "review-kit": "skills.ts", "chatgpt-routing": "executor.ts" };

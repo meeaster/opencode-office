@@ -4,8 +4,9 @@
 // one: without the tools package's types, only the generating package's import of it fails.
 import { expect, test } from "bun:test";
 import { join } from "node:path";
+import { toolPath } from "./tool.ts";
 
-const checkout = join(import.meta.dir, "..");
+const checkout = toolPath(".");
 const example = join(checkout, "examples/optional-integrations");
 
 function typecheck(project: string, folder = example) {

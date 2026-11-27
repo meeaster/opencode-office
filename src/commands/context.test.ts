@@ -7,6 +7,7 @@ import * as v from "valibot";
 
 import { loadOffice } from "../office.ts";
 import { contextReport, parseModel, probeTitle, removeStrayProbes } from "./context.ts";
+import { toolPath } from "../tool.ts";
 
 const auth = `Basic ${Buffer.from("opencode:fixture").toString("base64")}`;
 
@@ -199,7 +200,7 @@ test("context requires --model, rejects a folder argument and measures the worki
 
   const office = officeAt(server);
   const cwd = join(office.dir, "repos/notes");
-  const command = [process.execPath, join(import.meta.dir, "../cli.ts"), "--office", office.dir, "context"];
+  const command = [process.execPath, toolPath("src/cli.ts"), "--office", office.dir, "context"];
 
   for (const args of [[], [office.dir, "--model", "provider/one"]]) {
     const invalid = Bun.spawnSync([...command, ...args], { cwd });

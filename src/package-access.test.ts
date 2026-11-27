@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { loadOffice } from "./office.ts";
 import { declaredAccess } from "./package-access.ts";
 import { definitionText, writePackage } from "./test-package.ts";
+import { toolPath } from "./tool.ts";
 
 let dir: string;
 
@@ -25,7 +26,7 @@ function declaring(name: string, access: string) {
 }
 
 test("the example's declaration gives read and read-write remotes and nothing for a local-only entry; a failing or foreign declaration is named", async () => {
-  cpSync(join(import.meta.dir, "../examples/package-work/packages/mirrors"), join(dir, "packages/mirrors"), { recursive: true });
+  cpSync(toolPath("examples/package-work/packages/mirrors"), join(dir, "packages/mirrors"), { recursive: true });
   declaring("thrower", 'import { Package } from "@office/sdk";\nexport default Package.access(() => { throw new Error("no settings"); });\n');
   declaring("foreign", "export default () => [];\n");
   declaring("shapeless", 'import { Package } from "@office/sdk";\nexport default Package.access(() => [{ name: "x" }]);\n');

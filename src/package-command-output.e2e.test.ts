@@ -4,13 +4,14 @@
 // handler's streaming output, terminal and exit status; help; and one gathering per command.
 import { expect, test } from "bun:test";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { activeGeneration, managedDirectory } from "./package-generation.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
 import { definitionText, writePackage } from "./test-package.ts";
+import { toolPath } from "./tool.ts";
 
 const { root, exe, write, fixture } = definitionFixture({ second: false });
-const checkout = dirname(import.meta.dir);
+const checkout = toolPath(".");
 
 // Prints every way package code can reach descriptor 1 while it is imported and set up, counts its
 // setups, with NOISY_LATE prints again after gathering, and with NOISY_FAIL throws after gathering.

@@ -8,10 +8,11 @@ import { join } from "node:path";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
 import { fakeRegistry } from "./test-package.ts";
+import { toolPath } from "./tool.ts";
 
 const { root, bin, write, commit, fixture } = definitionFixture({ second: false });
 const miseVersion = "2026.11.11";
-const example = join(import.meta.dir, "../examples/package-work/packages/mirrors");
+const example = toolPath("examples/package-work/packages/mirrors");
 
 /** A bare repository with one commit. */
 function bare(name: string) {

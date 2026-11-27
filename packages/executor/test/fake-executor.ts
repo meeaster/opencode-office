@@ -1,10 +1,11 @@
 // A stand-in Executor for the package's tests: apps with versions and sources, a catalog, account
 // links and connections, and the log of every request, so a test can count writes.
 import { mkdirSync, symlinkSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import type { ExecutorAccess, OpenCodeLink } from "@office/sdk";
 import { client } from "../../../src/executor.ts";
+import { toolPath } from "../../../src/tool.ts";
 
 type File = { path: string; content: string; encoding?: "base64" };
 
@@ -23,7 +24,7 @@ export function typecheckCache(dir: string, version = "1.0.0"): void {
   const cache = join(dir, "cache/office", `apps-${version}`);
 
   mkdirSync(cache, { recursive: true });
-  symlinkSync(resolve(import.meta.dir, "../../../node_modules"), join(cache, "node_modules"));
+  symlinkSync(toolPath("node_modules"), join(cache, "node_modules"));
 }
 
 export function fakeExecutor() {

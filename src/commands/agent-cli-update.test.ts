@@ -13,6 +13,7 @@ import { loadOffice } from "../office.ts";
 import { shellQuote } from "../sfw.ts";
 import { recordRequiredFixtures } from "../test-builtin-record.ts";
 import { agentUpdateJob } from "./agent-cli-update.ts";
+import { toolPath } from "../tool.ts";
 
 let root: string;
 let server: ReturnType<typeof Bun.serve>;
@@ -65,14 +66,14 @@ function fixture(): void {
 
   mkdirSync(join(pkg, "scripts"), { recursive: true });
 
-  for (const file of ["office.ts", "floors.ts", "package.json"]) copyFileSync(join(import.meta.dir, "../../packages/office", file), join(pkg, file));
-  cpSync(join(import.meta.dir, "../../packages/office/scripts"), join(pkg, "scripts"), { recursive: true });
+  for (const file of ["office.ts", "floors.ts", "package.json"]) copyFileSync(toolPath(`packages/office/${file}`), join(pkg, file));
+  cpSync(toolPath("packages/office/scripts"), join(pkg, "scripts"), { recursive: true });
   // This fixture copies the real Office definition but doesn't run package sync: give it the
   // packages it imports, linked as a package set links them.
   mkdirSync(join(root, ".office/node_modules/@office"), { recursive: true });
 
   for (const name of ["tools", "cron", "opencode"]) {
-    cpSync(join(import.meta.dir, "../../packages", name), join(dirname(pkg), name), { recursive: true, filter: source => !source.includes("/test") });
+    cpSync(toolPath(`packages/${name}`), join(dirname(pkg), name), { recursive: true, filter: source => !source.includes("/test") });
     symlinkSync(join(dirname(pkg), name), join(root, `.office/node_modules/@office/${name}`));
   }
 
@@ -147,7 +148,7 @@ esac
 
 /** `office host-agent-cli-update`, as the job's script runs it, in the fixture's environment. */
 function direct() {
-  return Bun.spawn([process.execPath, join(import.meta.dir, "../cli.ts"), "--office", root, "host-agent-cli-update"], {
+  return Bun.spawn([process.execPath, toolPath("src/cli.ts"), "--office", root, "host-agent-cli-update"], {
     stdout: "pipe", stderr: "pipe",
     env: {
       HOME: join(root, "home"), PATH: `${join(root, "bin")}:${dirname(process.execPath)}:/usr/bin:/bin`,

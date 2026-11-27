@@ -8,6 +8,7 @@ import { parse } from "yaml";
 
 import { check, officeSchema, resolveTools } from "../schema.ts";
 import { setVersions } from "./upgrade.ts";
+import { toolPath } from "../tool.ts";
 
 /** The runtimes' versions an office.yaml asks for, read back through the schema. */
 function versionsOf(text: string) {
@@ -100,7 +101,7 @@ case "$1" in
 esac
 `, { mode: 0o755 });
 
-    const result = Bun.spawnSync([process.execPath, join(import.meta.dir, "../cli.ts"), "upgrade-tools"], {
+    const result = Bun.spawnSync([process.execPath, toolPath("src/cli.ts"), "upgrade-tools"], {
       cwd: dir, env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, XDG_DATA_HOME: dir },
     });
 

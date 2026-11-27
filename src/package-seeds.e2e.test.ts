@@ -3,11 +3,12 @@
 // receipts when a package goes, comes back or can't be read, and when declarations are refused.
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import { sha256 } from "../packages/seeds/store.ts";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
 import { definitionText, writePackage } from "./test-package.ts";
+import { toolPath } from "./tool.ts";
 
 const { root, write, read, commit, fixture } = definitionFixture({ second: false });
 
@@ -18,7 +19,7 @@ const uses = { dependencies: ["seeds"] };
 
 /** The receipts of the knowledge package every fixture office selects: one per file under its seed/knowledge/. */
 const knowledge = (() => {
-  const folder = join(dirname(import.meta.dir), "packages/knowledge/seed");
+  const folder = toolPath("packages/knowledge/seed");
 
   return Object.fromEntries(readdirSync(folder, { recursive: true, withFileTypes: true }).filter(entry => entry.isFile()).map(entry => [relative(folder, join(entry.parentPath, entry.name)), { package: "knowledge", sha256: sha256(readFileSync(join(entry.parentPath, entry.name))) }]));
 })();

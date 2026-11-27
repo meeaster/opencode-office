@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { dirname, join, posix } from "node:path";
+import { join, posix } from "node:path";
 import { compilerOptions } from "../tsconfig.json";
+import { toolPath } from "./tool.ts";
 
 type Feature = `features/${string}`;
 
@@ -327,7 +328,7 @@ function targetPath(from: string, specifier: string): string | undefined {
   return posix.normalize(path);
 }
 
-const root = dirname(import.meta.dir);
+const root = toolPath(".");
 const production = new Bun.Glob("{src,standard,packages}/**/*.ts");
 
 function packageFolder(path: string): Package | undefined {

@@ -14,6 +14,7 @@ import { updatePackages } from "./pins.ts";
 import { syncLines as sync } from "../sync.fixture.ts";
 import { definitionText, markingDefinition, packageJsonText, settingsSchema } from "../test-package.ts";
 import { readAppliedSettings } from "../../sdk/applied-settings.ts";
+import { toolPath } from "../tool.ts";
 
 /** office.lock's `packages:` section in the office at `dir`, as an object. */
 const readPackageLock = (dir: string) => Object.fromEntries(readLockSection(dir, "packages"));
@@ -57,7 +58,7 @@ function commit(repo: string, files: Record<string, string | null>, tag?: string
 }
 
 function office(...args: string[]) {
-  const run = Bun.spawnSync([process.execPath, join(import.meta.dir, "../cli.ts"), "--office", join(dir, "office"), ...args], { env: { ...process.env, NO_COLOR: "1" }, cwd: dir });
+  const run = Bun.spawnSync([process.execPath, toolPath("src/cli.ts"), "--office", join(dir, "office"), ...args], { env: { ...process.env, NO_COLOR: "1" }, cwd: dir });
 
   return { status: run.exitCode, out: run.stdout.toString(), err: run.stderr.toString() };
 }

@@ -8,6 +8,7 @@ import { sha256 } from "../packages/seeds/store.ts";
 import { git } from "./git.ts";
 import { definitionFixture } from "./package-definition.fixture.ts";
 import { definitionText, writePackage } from "./test-package.ts";
+import { toolPath } from "./tool.ts";
 
 const { exe, write, read, fixture } = definitionFixture({ second: false });
 
@@ -20,7 +21,7 @@ function tree(folder: string): Record<string, string> {
 
 test("the official packages lay down their declared seeds with full receipts, office.lock holds none, an undeclared seed/ file stays put, and the seeds commands are listed and run", () => {
   const { dir, cli, select } = fixture("official");
-  const shipped = join(dirname(import.meta.dir), "packages");
+  const shipped = toolPath("packages");
   const expected: Record<string, { package: string; sha256: string }> = {};
   const files: Record<string, string> = {};
 

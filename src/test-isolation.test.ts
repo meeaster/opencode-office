@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { miseShims } from "./host-env.ts";
 import { hostToolsRoot } from "./host-tools.ts";
 import { applyOfficeTools } from "./test-package.ts";
+import { toolPath } from "./tool.ts";
 
 test("fixture tools refuse a redirected state directory or executable before changing its target", () => {
   const root = mkdtempSync(join(tmpdir(), "redirect-"));
@@ -47,7 +48,7 @@ test("a launcher started from a populated host uses a fresh HOME, shim tree and 
   symlinkSync(sentinel, join(shims, "node"));
   symlinkSync(process.execPath, join(parent, "bun"));
 
-  const result = Bun.spawnSync([join(import.meta.dir, "../bin/test"), import.meta.path, "-t", "^isolated paths$"], {
+  const result = Bun.spawnSync([toolPath("bin/test"), import.meta.path, "-t", "^isolated paths$"], {
     env: { HOME: parent, TMPDIR: parent, PATH: `${parent}:/usr/bin:/bin`, MISE_DATA_DIR: parent, XDG_DATA_HOME: parent, SOPS_AGE_KEY_FILE: sentinel },
   });
 

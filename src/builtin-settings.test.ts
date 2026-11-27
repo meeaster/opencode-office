@@ -9,6 +9,7 @@ import { loadOffice } from "./office.ts";
 import { registerPackage } from "./package-setup.ts";
 import { type InstalledPackage, readPackage } from "./packages.ts";
 import { defaultOffSetting, type SettingValue } from "./schema.ts";
+import { toolPath } from "./tool.ts";
 
 const office = mkdtempSync(join(tmpdir(), "office-builtin-settings-"));
 
@@ -17,7 +18,7 @@ afterAll(() => rmSync(office, { recursive: true, force: true }));
 /** The checkout's copy of built-in `name`, read with `settings` from office.yaml. */
 function read(name: string, settings: Record<string, SettingValue>): InstalledPackage {
   writeFileSync(join(office, "office.yaml"), "name: t\n");
-  const result = readPackage(loadOffice(office), { entry: { name, settings, source: undefined }, kind: "local", dir: join(import.meta.dir, "../packages", name) });
+  const result = readPackage(loadOffice(office), { entry: { name, settings, source: undefined }, kind: "local", dir: toolPath(`packages/${name}`) });
 
   if (!result.ok) throw new Error(result.errors.join("\n"));
 

@@ -2,12 +2,13 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { toolPath } from "../tool.ts";
 
 test("the maintenance script commits only successful pin/lock pairs and leaves the owner's index alone", () => {
   const root = mkdtempSync(join(tmpdir(), "office-upgrade-commit-"));
   const cwd = join(root, "office");
   const bin = join(root, "bin");
-  const checkout = join(import.meta.dir, "../..");
+  const checkout = toolPath(".");
   const cli = process.env.OFFICE_TEST_EXECUTABLE ?? join(checkout, "bin/office");
   const env = { HOME: root, PATH: bin, XDG_DATA_HOME: root, GIT_CONFIG_NOSYSTEM: "1", OFFICE_CRON_COMMAND: cli };
   const pin = '[tools]\njq = "1.7.1" # owner comment\n';
