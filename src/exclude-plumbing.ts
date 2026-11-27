@@ -1,12 +1,12 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
-import { editorLinks } from "./package-imports.ts";
+import { editorLinks } from "./loader/package-imports.ts";
 import { git } from "./git.ts";
-import { officeEntries } from "../standard/opencode/ownership.ts";
-import { atomicWrite } from "./secrets.ts";
+import { officeEntries } from "./features/opencode/ownership.ts";
+import { atomicWrite } from "./features/secrets/secrets.ts";
 import { type Office, OfficeError } from "./office.ts";
-import { changeText, failure, isFailure, type Change } from "./change.ts";
+import { changeText, failure, isFailure, type Change } from "./lib/change.ts";
 import * as v from "valibot";
 import { appliedSettingsPath } from "../sdk/applied-settings.ts";
 

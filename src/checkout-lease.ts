@@ -1,4 +1,4 @@
-import { tryFileLock } from "./file-lock.ts";
+import { tryFileLock } from "./lib/file-lock.ts";
 import { closeSync, constants, mkdirSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { OfficeError } from "./office.ts";

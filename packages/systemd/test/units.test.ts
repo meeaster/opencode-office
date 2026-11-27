@@ -7,11 +7,11 @@ import { dirname, join } from "node:path";
 import type { Entries, Registry, RegistryEntry, SetupContext } from "@office/sdk";
 
 import { type Office, loadOffice } from "../../../src/office.ts";
-import { reconcileHostServices } from "../../../src/package-host-services.ts";
-import { unitDir } from "../../../src/systemd.ts";
-import { fakeManager } from "../../../src/user-units.fixture.ts";
-import type { UnitManager, UnitState } from "../../../src/user-units.ts";
-import { precheckUnits, readReceipts, reconcileUnits, removeUnits, type UnitInputs, type UnitPackage, unitStatus } from "../../../standard/systemd/units.ts";
+import { reconcileHostServices } from "../../../src/features/systemd/package-host-services.ts";
+import { unitDir } from "../../../src/features/systemd/systemd.ts";
+import { fakeManager } from "../../../test/support/user-units.fixture.ts";
+import type { UnitManager, UnitState } from "../../../src/features/systemd/user-units.ts";
+import { precheckUnits, readReceipts, reconcileUnits, removeUnits, type UnitInputs, type UnitPackage, unitStatus } from "../../../src/features/systemd/units.ts";
 import { systemd, type UnitFacts, type UserUnitOptions } from "../handles.ts";
 
 const quick = { attempts: 3, interval: 1 };

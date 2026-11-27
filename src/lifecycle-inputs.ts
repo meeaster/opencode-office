@@ -4,13 +4,13 @@
 import * as v from "valibot";
 
 import type { Host, OfficeInfo, SyncInputs } from "../sdk/index.ts";
-import { executorAccess } from "./executor.ts";
+import { executorAccess } from "./features/executor/executor.ts";
 import { updateExcludedOrThrow } from "./exclude-plumbing.ts";
 import type { Gathered } from "./gather.ts";
 import { type Office, OfficeError } from "./office.ts";
-import { hostTimers } from "./timers.ts";
-import { containerRuntimeFolders, pinnedRuntimeFolders } from "../standard/tools/host.ts";
-import { officeMise } from "../standard/tools/registry.ts";
+import { hostTimers } from "./features/systemd/timers.ts";
+import { containerRuntimeFolders, pinnedRuntimeFolders } from "./features/tools/host.ts";
+import { officeMise } from "./features/tools/registry.ts";
 import { officeCommand } from "./tool.ts";
 
 /** The office's mode as packages see it: managed host is host mode with office managing the server. */

@@ -9,7 +9,7 @@ import { join } from "node:path";
 import * as v from "valibot";
 
 import { type Office, OfficeError } from "../office.ts";
-import { requestOpenCode } from "../opencode-request.ts";
+import { requestOpenCode } from "../features/opencode/opencode-request.ts";
 import { check, modelReference, type Parsed } from "../schema.ts";
 
 /** Every probe session's title. A run first deletes sessions with exactly this title, left by a crashed run. */

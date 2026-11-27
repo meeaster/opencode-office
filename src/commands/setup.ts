@@ -1,28 +1,28 @@
-import { isFailure } from "../change.ts";
+import { isFailure } from "../lib/change.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { git } from "../git.ts";
 import { githubStep, planGithub, unreachableSources } from "../github.ts";
-import { installHook } from "../hook.ts";
-import { envFilePath, sourceLine } from "../host-env.ts";
-import { planServer, queueStaleRestart, restartStaleServer, staleServer } from "../host-server.ts";
-import { hostTool, onboardHostTools, requireOfficeTool } from "../host-tools.ts";
-import { appliedReferences } from "../applied-references.ts";
+import { installHook } from "../features/host/hook.ts";
+import { envFilePath, sourceLine } from "../features/host/host-env.ts";
+import { planServer, queueStaleRestart, restartStaleServer, staleServer } from "../features/opencode/host-server.ts";
+import { hostTool, onboardHostTools, requireOfficeTool } from "../features/host/host-tools.ts";
+import { appliedReferences } from "../features/references/applied-references.ts";
 import { gatherPackages, problemText } from "../gather.ts";
-import { claim, consentCommand, consentQuestion, grantConsent, ownedElsewhere, writeServerUnit } from "../machine.ts";
+import { claim, consentCommand, consentQuestion, grantConsent, ownedElsewhere, writeServerUnit } from "../features/host/machine.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile, updateConfig } from "../office.ts";
 import { last, type NextStep, type Reporter, say, terminalAsk } from "../report/index.ts";
-import { decrypt, encrypt, initializeIdentity, prepareSecrets, requireTool } from "../secrets.ts";
-import { configureStartup, interactiveShell } from "../shell-startup.ts";
-import { offerRestart, systemStep, verifySystems } from "../system-setup.ts";
+import { decrypt, encrypt, initializeIdentity, prepareSecrets, requireTool } from "../features/secrets/secrets.ts";
+import { configureStartup, interactiveShell } from "../features/host/shell-startup.ts";
+import { offerRestart, systemStep, verifySystems } from "../features/host/system-setup.ts";
 import { check } from "./check.ts";
 import { installingMise, ports, startExecutor, up } from "./compose.ts";
 import { bootstrapExecutor } from "./executor.ts";
 import { summarize, sync } from "./sync.ts";
-import { runReader } from "../package-operation.ts";
-import { declaredAccess } from "../package-access.ts";
+import { runReader } from "../loader/package-operation.ts";
+import { declaredAccess } from "../loader/package-access.ts";
 
 type SetupOptions = {
   ownerEmail?: string;

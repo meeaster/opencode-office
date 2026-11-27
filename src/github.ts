@@ -12,9 +12,9 @@ import * as v from "valibot";
 import { parse } from "yaml";
 
 import { git } from "./git.ts";
-import { ghLink, type InstalledTool, officeTool } from "./host-tools.ts";
+import { ghLink, type InstalledTool, officeTool } from "./features/host/host-tools.ts";
 import { clones } from "./layout.ts";
-import type { DeclaredAccess } from "./package-access.ts";
+import type { DeclaredAccess } from "./loader/package-access.ts";
 import { type Office, OfficeError, type Repository, updateConfig } from "./office.ts";
 import { check } from "./schema.ts";
 import { compareVersions } from "./versions.ts";
@@ -26,7 +26,7 @@ export type Source = { what: string; url: string; pushes: boolean };
 /**
  * The office's sources, with `references` the ones to clone (the applied ones in setup, the
  * gathered ones in check) and `declared` the repositories packages' access declarations name
- * (src/package-access.ts), each read before the package's own work fetches it.
+ * (src/loader/package-access.ts), each read before the package's own work fetches it.
  */
 export function sources(office: Office, references: readonly Repository[], declared: readonly DeclaredAccess[] = []): Source[] {
   return [

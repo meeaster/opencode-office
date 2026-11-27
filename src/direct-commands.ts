@@ -5,11 +5,11 @@
 import { commandNames } from "./command-table.ts";
 import { divertStdout, writeResult } from "./command-stdout.ts";
 import { type DeclaredCommand, gatherPackages, problemLines } from "./gather.ts";
-import { executorAccess } from "./executor.ts";
+import { executorAccess } from "./features/executor/executor.ts";
 import { officeInfo } from "./lifecycle-inputs.ts";
 import { updateExcluded } from "./exclude-plumbing.ts";
 import { loadOffice, OfficeError, replacePackageSetting } from "./office.ts";
-import { schemaSettings } from "./packages.ts";
+import { schemaSettings } from "./loader/packages.ts";
 import { relative } from "node:path";
 import * as v from "valibot";
 

@@ -4,7 +4,7 @@ import { mkdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import type { ExecutorAccess, OpenCodeLink } from "@office/sdk";
-import { client } from "../../../src/executor.ts";
+import { client } from "../../../src/features/executor/executor.ts";
 import { toolPath } from "../../../src/tool.ts";
 
 type File = { path: string; content: string; encoding?: "base64" };

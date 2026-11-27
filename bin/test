@@ -27,7 +27,7 @@ environment=()
 for key in "${vars[@]}"; do
   if [[ -v $key ]]; then environment+=("$key=${!key}"); fi
 done
-env -i "${environment[@]}" "$root/bin/bun" --no-install --no-env-file -e 'import { pinnedMise } from "./src/test-package.ts"; pinnedMise(process.env.OFFICE_TEST_ROOT + "/bin");'
+env -i "${environment[@]}" "$root/bin/bun" --no-install --no-env-file -e 'import { pinnedMise } from "./test/support/test-package.ts"; pinnedMise(process.env.OFFICE_TEST_ROOT + "/bin");'
 if [[ ${1:-} == --compile ]]; then
   shift
   env -i "${environment[@]}" "$root/bin/bun" --no-install --no-env-file -e 'import { compile } from "./src/build.ts"; await compile(process.env.OFFICE_TEST_ROOT + "/compiled-office");'

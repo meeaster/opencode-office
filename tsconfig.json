@@ -27,7 +27,7 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["src", "standard", "packages", "sdk", "bin/office"],
+  "include": ["src", "test", "packages", "sdk", "bin/office", "bin/vendor-artifact-share.ts"],
   // Executor app sources a package ships: `office apps deploy` type-checks them against the `apps`
   // version Executor serves.
   "exclude": ["packages/*/executor-app"]

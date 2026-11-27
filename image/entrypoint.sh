@@ -67,7 +67,7 @@ export OFFICE_EXECUTOR_TOKEN="${OFFICE_EXECUTOR_TOKEN:-${EXECUTOR_TOKEN:-}}"
 # machine; mise loads them only through links in its global conf.d in the home volume, named
 # office-<name>-…toml: machine.packages.toml first (the packages' tools), then each package's
 # fragment in .office/mise/ (its setup; a file office sync wrote, by its first line), and the
-# office's own machine.toml last, so it wins (src/machine.ts names them the same way). Links from an
+# office's own machine.toml last, so it wins (src/features/host/machine.ts names them the same way). Links from an
 # earlier start go first, so a removed file leaves none behind.
 conf_d="${MISE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/mise}/conf.d"
 mkdir -p "$conf_d"

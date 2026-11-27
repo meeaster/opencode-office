@@ -17,21 +17,21 @@ import { dirname, join, relative } from "node:path";
 import * as v from "valibot";
 
 import { git } from "../git.ts";
-import { entryPattern, toolPins } from "../mise-toml.ts";
-import { installedTool } from "../host-tools.ts";
-import { machineFile, pinnedMachineFiles } from "../../standard/mise-integration/delivery.ts";
+import { entryPattern, toolPins } from "../features/mise-integration/mise-toml.ts";
+import { installedTool } from "../features/host/host-tools.ts";
+import { machineFile, pinnedMachineFiles } from "../features/mise-integration/delivery.ts";
 import { type Document, isMap, isNode, isScalar, parseDocument } from "yaml";
 
 import { type Office, OfficeError } from "../office.ts";
-import { newestRelease, pinFor } from "../releases.ts";
-import { atomicWrite } from "../secrets.ts";
+import { newestRelease, pinFor } from "../features/tools/releases.ts";
+import { atomicWrite } from "../features/secrets/secrets.ts";
 import { type Stage, stream } from "../report/index.ts";
 import { check, type LockedTool, type PinnedTool, pinnedTools } from "../schema.ts";
 import { compareVersions as compareSemver, editLock, lockFile, lockSections, readLockText, wantedPins } from "../versions.ts";
 import { type GatheredPackage, gatherPackages, problemLines } from "../gather.ts";
-import { admitTools, heldKeys } from "../../standard/tools/admission.ts";
-import { attestation, firewalledMise, spawnRun } from "../../standard/tools/host.ts";
-import { selectTools } from "../../standard/tools/selection.ts";
+import { admitTools, heldKeys } from "../features/tools/admission.ts";
+import { attestation, firewalledMise, spawnRun } from "../features/tools/host.ts";
+import { selectTools } from "../features/tools/selection.ts";
 
 /**
  * How old a release must be before the job takes it: a runtime's own age under `tools`, else the

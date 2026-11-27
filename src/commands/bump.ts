@@ -1,8 +1,8 @@
 // `office bump`: selects the desired release of each mise tool the packages require
-// (standard/tools/selection.ts) and records it in office.lock. It installs nothing and changes no
+// (src/features/tools/selection.ts) and records it in office.lock. It installs nothing and changes no
 // active mise file; it runs the office's pinned mise only behind the office's Socket Firewall.
-import { attestation, firewalledMise, spawnRun, type ToolsRun } from "../../standard/tools/host.ts";
-import { selectTools, type Run } from "../../standard/tools/selection.ts";
+import { attestation, firewalledMise, spawnRun, type ToolsRun } from "../features/tools/host.ts";
+import { selectTools, type Run } from "../features/tools/selection.ts";
 import { gatherPackages, problemLines } from "../gather.ts";
 import { type Office, OfficeError } from "../office.ts";
 

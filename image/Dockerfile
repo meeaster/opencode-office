@@ -78,7 +78,7 @@ COPY --chmod=755 entrypoint.sh /usr/local/bin/office-entrypoint
 # The office CLI, compiled with Bun into one file that needs no runtime. Last, as it changes most.
 COPY --chmod=755 office /usr/local/bin/office
 
-# Socket Firewall's wrappers, which `office` writes from its one list (src/sfw.ts): npm, npx, pnpm,
+# Socket Firewall's wrappers, which `office` writes from its one list (src/features/host/sfw.ts): npm, npx, pnpm,
 # pip, pip3, uv, uvx and cargo, each running `sfw <command>`, and mise, whose installs go through
 # sfw. The entrypoint puts their folder first on PATH, through the environment file it writes at
 # start from office.yaml (Socket Firewall on or off, and minimum_release_age); this one, the

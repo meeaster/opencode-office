@@ -1,4 +1,4 @@
-// Each statement here must fail to typecheck: src/optional-integrations-types.test.ts names the diagnostics.
+// Each statement here must fail to typecheck: test/kernel/optional-integrations-types.test.ts names the diagnostics.
 import { apps } from "@office/mock-executor/apps";
 import { Package } from "@office/sdk";
 import { skills } from "@office/skills";

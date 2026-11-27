@@ -5,9 +5,9 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { type Office, type Repository } from "./office.ts";
-import { definitionGate, type InstalledPackage, type PackageProblem, readPackage, resolvePackages, selectedNames } from "./packages.ts";
+import { definitionGate, type InstalledPackage, type PackageProblem, readPackage, resolvePackages, selectedNames } from "./loader/packages.ts";
 import type { PackageManifest } from "./schema.ts";
-import { pluginClones } from "../standard/opencode/delivery.ts";
+import { pluginClones } from "./features/opencode/delivery.ts";
 
 export type Clone = { name: string; url: string; ref?: string; kind: "reference" | "plugin"; dir: string };
 

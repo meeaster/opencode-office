@@ -1,32 +1,32 @@
 // `office sync`: makes the office's folders match office.yaml and the tool. It clones and updates
 // references and plugin clones, installs, updates, restores and removes packages,
 // runs their `sync` functions (and, in a full sync that applied the set whole, their `fullSync`
-// items, src/package-full-sync.ts), writes the mise tools packages declare into machine.packages.toml
-// and their setup into .office/mise/ (standard/mise-integration/delivery.ts) and, in a host-mode office the user
+// items, src/loader/package-full-sync.ts), writes the mise tools packages declare into machine.packages.toml
+// and their setup into .office/mise/ (src/features/mise-integration/delivery.ts) and, in a host-mode office the user
 // agreed may manage its machine, links them and machine.toml into mise's global conf.d
-// (src/machine.ts), links the server plugins packages register and installs their panels on the
+// (src/features/host/machine.ts), links the server plugins packages register and installs their panels on the
 // desktop app's machine. Office's plugin links are recognized by their target
-// (standard/opencode/ownership.ts) and kept out of commits through the repository's info/exclude,
+// (src/features/opencode/ownership.ts) and kept out of commits through the repository's info/exclude,
 // with the paths packages' sync functions exclude. It never rewrites AGENTS.md, other hand-written
 // content or an existing app; what packages write in the office is their own `sync` functions' work.
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { join, relative } from "node:path";
 import { prepareReferenceRefresh } from "../../packages/references/tasks/refresh.ts";
-import { claudeFiles } from "../claude.ts";
-import { appliedReferences } from "../applied-references.ts";
-import { publishPackages } from "../package-operation.ts";
-import { fullSyncStep } from "../package-full-sync.ts";
+import { claudeFiles } from "../features/claude/claude.ts";
+import { appliedReferences } from "../features/references/applied-references.ts";
+import { publishPackages } from "../loader/package-operation.ts";
+import { fullSyncStep } from "../loader/package-full-sync.ts";
 import { openCheckoutLease } from "../checkout-lease.ts";
 import { clonePluginStreamed, existingPluginDestination, git, isClone, PluginCheckoutProblem, referenceGit, referenceOriginProblem, refreshCloneStreamed, verifiedHead } from "../git.ts";
 import { type Clone, clones } from "../layout.ts";
-import { cloneTarget, placeLink, requirePluginDestination, stagingFolder } from "../../standard/opencode/delivery.ts";
-import { cloneFolder, entry as entryAt, pluginFolder } from "../../standard/opencode/ownership.ts";
+import { cloneTarget, placeLink, requirePluginDestination, stagingFolder } from "../features/opencode/delivery.ts";
+import { cloneFolder, entry as entryAt, pluginFolder } from "../features/opencode/ownership.ts";
 import { type Office } from "../office.ts";
 import { silentStage, type Stage } from "../report/index.ts";
-import { requirePackageOwnership } from "../packages.ts";
+import { requirePackageOwnership } from "../loader/packages.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
 import { requireKnownLockKeys } from "../versions.ts";
-import { changeText, failure, isFailure, type Change } from "../change.ts";
+import { changeText, failure, isFailure, type Change } from "../lib/change.ts";
 import { excludePlumbing } from "../exclude-plumbing.ts";
 
 function fill(text: string, values: Record<string, string>): string {

@@ -1,16 +1,16 @@
 // `office gui dev <package>`: while a local package's panel is being built, installs its bundle on
 // the desktop app's machine each time the build writes it, so the app reloads the panel within
 // seconds. Building is the package's own script (such as a `vite build --watch` in its gui/).
-import { changeText } from "../change.ts";
+import { changeText } from "../lib/change.ts";
 import { lstatSync, mkdirSync, readFileSync, realpathSync, watch } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 
-import { installPanel, locate, sha256 } from "../desktop.ts";
-import { resolvePackages } from "../packages.ts";
+import { installPanel, locate, sha256 } from "../features/opencode/desktop.ts";
+import { resolvePackages } from "../loader/packages.ts";
 import { loadOffice, type Office, OfficeError } from "../office.ts";
-import { validateAssets } from "../../standard/opencode/assets.ts";
-import { declarationBinding } from "../../standard/opencode/delivery.ts";
-import { readDeclarations } from "../../standard/opencode/declarations.ts";
+import { validateAssets } from "../features/opencode/assets.ts";
+import { declarationBinding } from "../features/opencode/delivery.ts";
+import { readDeclarations } from "../features/opencode/declarations.ts";
 
 /** The bundle the last sync applied for the package's panel, read from that record: no package code runs. */
 function panelSource(office: Office, name: string) {

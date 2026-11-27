@@ -12,7 +12,7 @@
     "test:e2e": "./bin/test --compile --parallel=8 e2e.test",
     "test:all": "./bin/test --compile --parallel=8",
     "typecheck": "tsc --noEmit",
-    "vendor-artifact-share": "bun src/vendor-artifact-share.ts"
+    "vendor-artifact-share": "bun bin/vendor-artifact-share.ts"
   },
   "dependencies": {
     "@clack/prompts": "1.9.0",

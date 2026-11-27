@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 
 import { writeAppliedSnapshot } from "../../../src/applied-settings.ts";
-import { officePlugin, settle } from "../../../src/plugin-office.fixture.ts";
+import { officePlugin, settle } from "../../../test/support/plugin-office.fixture.ts";
 import { type AddressSettings, browserAddress } from "../executor-app/address.ts";
 import type designPlugin from "../plugin/index.ts";
 

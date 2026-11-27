@@ -1,6 +1,6 @@
 # Vendored libraries
 
-Third-party libraries the site build uses, committed here so an office needs nothing but Bun: no install step, no `node_modules`. Written by `pnpm run vendor-artifact-share` (`src/vendor-artifact-share.ts` in opencode-office) from the repository's pinned devDependencies; don't edit them by hand. Each folder's `*.d.ts` is written by hand and declares only what the build uses.
+Third-party libraries the site build uses, committed here so an office needs nothing but Bun: no install step, no `node_modules`. Written by `pnpm run vendor-artifact-share` (`bin/vendor-artifact-share.ts` in opencode-office) from the repository's pinned devDependencies; don't edit them by hand. Each folder's `*.d.ts` is written by hand and declares only what the build uses.
 
 | Folder | Package | Version | Licence | npm integrity | How |
 |---|---|---|---|---|---|

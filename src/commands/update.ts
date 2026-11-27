@@ -10,9 +10,9 @@ import { createHash } from "node:crypto";
 import { accessSync, constants, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-import { fetchBytes } from "../download.ts";
+import { fetchBytes } from "../lib/download.ts";
 import { OfficeError } from "../office.ts";
-import { ageMs, type Release, releaseByTag, releases } from "../releases.ts";
+import { ageMs, type Release, releaseByTag, releases } from "../features/tools/releases.ts";
 import { type Build, build, toolPath, toolRepository, version } from "../tool.ts";
 import { compareVersions } from "../versions.ts";
 

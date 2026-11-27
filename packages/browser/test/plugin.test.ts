@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import type { AppliedSettings } from "../../../sdk/applied-settings.ts";
 import { writeAppliedSnapshot } from "../../../src/applied-settings.ts";
-import { officePlugin, settle, switchPackageSet } from "../../../src/plugin-office.fixture.ts";
+import { officePlugin, settle, switchPackageSet } from "../../../test/support/plugin-office.fixture.ts";
 import type browserPlugin from "../plugin/index.ts";
 
 type Skill = { id: string; content: string };

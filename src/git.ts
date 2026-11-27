@@ -8,7 +8,7 @@ import { basename, dirname, isAbsolute, join } from "node:path";
 import * as v from "valibot";
 
 import type { ReferenceGit } from "../packages/references/tasks/refresh.ts";
-import { RenameError, renameNoReplace } from "./no-replace.ts";
+import { RenameError, renameNoReplace } from "./lib/no-replace.ts";
 import { streamChecked } from "./report/index.ts";
 import { check } from "./schema.ts";
 

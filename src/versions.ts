@@ -10,7 +10,7 @@ import { parse, stringify } from "yaml";
 import { openCheckoutLease, publicationLease } from "./checkout-lease.ts";
 import { type Office, OfficeError } from "./office.ts";
 import { check, type HostPlatform, type Lock, type LockedPackage, type PackageLock, parsePackageLock, parseToolLock, type PinnedTool, pinnedTools, lockSchema, type ToolLock, version } from "./schema.ts";
-import { atomicWrite } from "./secrets.ts";
+import { atomicWrite } from "./features/secrets/secrets.ts";
 
 export type Pin = Lock[PinnedTool];
 

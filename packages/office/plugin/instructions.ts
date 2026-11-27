@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import * as v from "valibot";
 
 import { check, officeSchema, type Parsed, resolveTools } from "../../../src/schema.ts";
-import { type AppliedReference, appliedReferences } from "../../../src/applied-references.ts";
+import { type AppliedReference, appliedReferences } from "../../../src/features/references/applied-references.ts";
 import sessionScope from "../claude/session-scope.txt" with { type: "text" };
 
 // What the text uses from office.yaml, read through the schema the CLI uses.

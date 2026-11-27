@@ -1,5 +1,5 @@
 // Runs an office's containers: the tool's compose.yaml (executor, opencode), the services packages
-// contribute (src/package-services.ts), and the office's own compose.yaml when it has one, as the
+// contribute (src/features/compose/package-services.ts), and the office's own compose.yaml when it has one, as the
 // compose project office-<name>. In host mode the opencode
 // container stays off (its compose profile isn't enabled), and `office up` prepares what the
 // container would otherwise do itself: the office's tools, and packages' `up` functions, such as
@@ -15,32 +15,32 @@ import { randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { containerSchedule } from "../container-schedule.ts";
-import { hasSystemd } from "../systemd.ts";
-import { refreshOwner, refreshTimer, removePackageTimers, removeTimers, writeTimers } from "../timers.ts";
+import { containerSchedule } from "../features/cron/container-schedule.ts";
+import { hasSystemd } from "../features/systemd/systemd.ts";
+import { refreshOwner, refreshTimer, removePackageTimers, removeTimers, writeTimers } from "../features/systemd/timers.ts";
 import { ghConfigDir, ghHosts } from "../github.ts";
-import { hostTool } from "../host-tools.ts";
-import { notify } from "../notify.ts";
+import { hostTool } from "../features/host/host-tools.ts";
+import { notify } from "../features/executor/notify.ts";
 import { CommandFailed, progress, say, streamChecked, warn } from "../report/index.ts";
 import { displayLines } from "../report/reporter.ts";
 import { type Gathered, gatherPackages, problemLines } from "../gather.ts";
 import { runPackageHooks } from "../lifecycle-inputs.ts";
 import { type Office, OfficeError, readEnvFile } from "../office.ts";
-import { hostLayout, hostWrappers } from "../host-env.ts";
-import { markServerStopped, planServer, serverIncumbent, startServer } from "../host-server.ts";
-import { claim, globalConfD, installSfw, removeUnwantedServer, requireServerConsent, stopRecordedServer, writeServerUnit } from "../machine.ts";
-import { machineFiles } from "../../standard/mise-integration/delivery.ts";
-import { appliedSpawns, packageComposeFile, serviceFiles, serviceSettings, type UpgradedServices } from "../../standard/compose/services.ts";
-import { preparePackageServices } from "../package-services.ts";
-import { sweepSpawned } from "../package-spawns.ts";
-import { reconcileHostServices } from "../package-host-services.ts";
-import { precheckUnits, reconcileUnits, removeUnits } from "../../standard/systemd/units.ts";
+import { hostLayout, hostWrappers } from "../features/host/host-env.ts";
+import { markServerStopped, planServer, serverIncumbent, startServer } from "../features/opencode/host-server.ts";
+import { claim, globalConfD, installSfw, removeUnwantedServer, requireServerConsent, stopRecordedServer, writeServerUnit } from "../features/host/machine.ts";
+import { machineFiles } from "../features/mise-integration/delivery.ts";
+import { appliedSpawns, packageComposeFile, serviceFiles, serviceSettings, type UpgradedServices } from "../features/compose/services.ts";
+import { preparePackageServices } from "../features/compose/package-services.ts";
+import { sweepSpawned } from "../features/compose/package-spawns.ts";
+import { reconcileHostServices } from "../features/systemd/package-host-services.ts";
+import { precheckUnits, reconcileUnits, removeUnits } from "../features/systemd/units.ts";
 import type { Lock } from "../schema.ts";
-import { prepareSecrets } from "../secrets.ts";
+import { prepareSecrets } from "../features/secrets/secrets.ts";
 import { placeExecutable, toolPath, unpackedImage } from "../tool.ts";
 import { baseImage, changes, compareVersions, defaultPins, describeMove, executorImage, readApplied, wantedPins, writeApplied } from "../versions.ts";
-import { connection } from "../executor.ts";
-import { precheckTools, reconcileTools } from "../../standard/tools/host.ts";
+import { connection } from "../features/executor/executor.ts";
+import { precheckTools, reconcileTools } from "../features/tools/host.ts";
 
 export function ports() {
   return {

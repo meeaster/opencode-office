@@ -1,5 +1,5 @@
 // @bun
-// @pierre/highlights 0.5.1, bundled by src/vendor-artifact-share.ts in opencode-office; don't edit.
+// @pierre/highlights 0.5.1, bundled by bin/vendor-artifact-share.ts in opencode-office; don't edit.
 
 // node_modules/.pnpm/@pierre+highlights@0.5.1/node_modules/@pierre/highlights/dist/token-types.js
 var tokenTypes = [

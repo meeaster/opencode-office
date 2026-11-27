@@ -8,17 +8,17 @@
 import * as v from "valibot";
 import type { Entries, Registry, RegistryEntry, SettingValue } from "../sdk/index.ts";
 import { isRepository, repositories } from "../packages/references/repositories.ts";
-import { type AssetPaths, contributedAssets } from "../standard/opencode/assets.ts";
-import { machineCollection, project, type Projection, recipeSystem } from "../standard/mise-integration/projection.ts";
-import { toolProblems } from "../standard/tools/admission.ts";
-import type { AppliedReference } from "./applied-references.ts";
+import { type AssetPaths, contributedAssets } from "./features/opencode/assets.ts";
+import { machineCollection, project, type Projection, recipeSystem } from "./features/mise-integration/projection.ts";
+import { toolProblems } from "./features/tools/admission.ts";
+import type { AppliedReference } from "./features/references/applied-references.ts";
 import { definitionRoot, packageDeliveryDir } from "./bound-paths.ts";
 import { declaredCommands, nameProblems, type NameProblem, type RegisteredCommand } from "./command-table.ts";
 import { installedPackages, type InstalledPackages } from "./layout.ts";
 import type { Office } from "./office.ts";
-import { type InstalledPackage, type PackageProblem, problemLine } from "./packages.ts";
-import { loadIntegrations, selectedIntegrations } from "./package-integrations.ts";
-import { jsonObject, type Registered, registerPackage } from "./package-setup.ts";
+import { type InstalledPackage, type PackageProblem, problemLine } from "./loader/packages.ts";
+import { loadIntegrations, selectedIntegrations } from "./loader/package-integrations.ts";
+import { jsonObject, type Registered, registerPackage } from "./loader/package-setup.ts";
 import type { PackageManifest } from "./schema.ts";
 
 /** A package whose setup ran in this run: what it read as, with the claims its entries made and its effective system block. */

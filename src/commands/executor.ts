@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import * as v from "valibot";
 
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
-import { atomicWrite, ownerRecord, parsed, saveOwner, source } from "../secrets.ts";
+import { atomicWrite, ownerRecord, parsed, saveOwner, source } from "../features/secrets/secrets.ts";
 import { ports } from "./compose.ts";
 import { currentReporter, progress, say } from "../report/index.ts";
 

@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { parse } from "yaml";
 
 import { writeAppliedSnapshot } from "../../../src/applied-settings.ts";
-import { officePlugin, settle, switchPackageSet } from "../../../src/plugin-office.fixture.ts";
-import { composeProblems, spawnsLabel } from "../../../standard/compose/services.ts";
+import { officePlugin, settle, switchPackageSet } from "../../../test/support/plugin-office.fixture.ts";
+import { composeProblems, spawnsLabel } from "../../../src/features/compose/services.ts";
 import { parseManifest, settingProperties, settingVariable } from "../../../src/schema.ts";
 import definition from "../office.ts";
 import type awsPlugin from "../plugin/index.ts";

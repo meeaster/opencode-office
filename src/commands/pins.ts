@@ -5,11 +5,11 @@
 // It also moves the office.lock commit of each untracked package whose ref is a tag or branch to
 // where that ref points now, leaving office.yaml as it is.
 import { type Office, OfficeError, withScalar } from "../office.ts";
-import { failure, isFailure, type Change } from "../change.ts";
-import { fullCommit, sourceDifferences, requirePackageOwnership, resolvePackages } from "../packages.ts";
+import { failure, isFailure, type Change } from "../lib/change.ts";
+import { fullCommit, sourceDifferences, requirePackageOwnership, resolvePackages } from "../loader/packages.ts";
 import type { Stage } from "../report/index.ts";
 import { resolveRef, resolveTrack, type Resolved, short } from "../track.ts";
-import { publishPackages } from "../package-operation.ts";
+import { publishPackages } from "../loader/package-operation.ts";
 import { readLockSection } from "../versions.ts";
 
 type Resolution = ({ ok: true } & Resolved) | { ok: false; reason: string };

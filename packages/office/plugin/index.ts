@@ -21,7 +21,7 @@ import { compactSessionTool } from "./compact-session.ts";
 import { expandFolder, ignoredFolders, inFolders } from "./ignored-skills.ts";
 import { findOffice, officeInstructions } from "./instructions.ts";
 import { packageText } from "./package-text.ts";
-import { tryFileLock } from "../../../src/file-lock.ts";
+import { tryFileLock } from "../../../src/lib/file-lock.ts";
 
 type Skill = { id: string; name: string; description: string; path: string; content: string };
 

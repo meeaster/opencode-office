@@ -1,7 +1,7 @@
 // Waiting for Executor before `up` deploys: a starting Executor is waited for, a refusal is not.
 import { afterEach, expect, test } from "bun:test";
 
-import { client } from "../../../src/executor.ts";
+import { client } from "../../../src/features/executor/executor.ts";
 import { ready } from "../ready.ts";
 import { opencode } from "./fake-executor.ts";
 

@@ -2,7 +2,7 @@
 // already holds, or the tool's own default, needs no network; any other is looked up on GitHub or
 // the registry, which also confirms it exists.
 import type { Office } from "../office.ts";
-import { pinFor } from "../releases.ts";
+import { pinFor } from "../features/tools/releases.ts";
 import { type Lock, pinnedTools } from "../schema.ts";
 import { defaultPins, lockFile, readLock, wantedVersion, writeLock } from "../versions.ts";
 

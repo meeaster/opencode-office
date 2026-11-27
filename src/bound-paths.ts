@@ -1,6 +1,6 @@
 import { lstatSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import type { ResolvedPackage } from "./packages.ts";
+import type { ResolvedPackage } from "./loader/packages.ts";
 
 export const pulledFolder = ".office/packages";
 

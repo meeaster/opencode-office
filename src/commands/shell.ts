@@ -5,7 +5,7 @@
 import { isAbsolute, relative, resolve } from "node:path";
 
 import { containerOfficeDir, type Office, OfficeError } from "../office.ts";
-import { containerEnvFile } from "../sfw.ts";
+import { containerEnvFile } from "../features/host/sfw.ts";
 import { compose, composeAttached } from "./compose.ts";
 
 /** The container folder for a host folder: the same place in the office, else the office root. */

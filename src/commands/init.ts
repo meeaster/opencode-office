@@ -1,12 +1,12 @@
 // `office init <dir>`: a new office from the template, with the built-in
 // knowledge and browser packages, as a git repository on branch main. Its office.yaml starts at the tool's
 // versions, which office.lock pins.
-import { changeText, isFailure } from "../change.ts";
+import { changeText, isFailure } from "../lib/change.ts";
 import { existsSync, readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
 import { git } from "../git.ts";
-import { installHook } from "../hook.ts";
+import { installHook } from "../features/host/hook.ts";
 import { loadOffice, OfficeError } from "../office.ts";
 import { defaultPins, writeLock } from "../versions.ts";
 import { copyTemplate, sync } from "./sync.ts";
