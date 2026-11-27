@@ -252,12 +252,14 @@ function isFeature(folder: Location): folder is Feature {
 }
 
 const loaderEntries = new Map<string, readonly string[]>([
-  ["sources", ["selection.ts", "manifest.ts", "copies.ts", "drift.ts"]],
-  ["definitions", ["inventory.ts", "settings.ts", "registration.ts", "sdk.ts"]],
+  ["sources", ["sources/selection.ts", "sources/manifest.ts", "sources/copies.ts", "sources/drift.ts"]],
+  ["definitions", ["definitions/inventory.ts", "definitions/settings.ts", "definitions/registration.ts", "definitions/sdk.ts"]],
+  ["access", ["access.ts"]],
+  ["worker", ["worker.ts"]],
 ]);
 
 function loaderModule(path: string) {
-  return /^src\/loader\/([^/]+)\//.exec(path)?.[1];
+  return /^src\/loader\/([^/]+)\//.exec(path)?.[1] ?? /^src\/loader\/(access|worker)\.ts$/.exec(path)?.[1];
 }
 
 function privateLoaderImport(from: string, to: string): boolean {
@@ -266,7 +268,13 @@ function privateLoaderImport(from: string, to: string): boolean {
   if (module === undefined || loaderModule(from) === module) return false;
   const entries = loaderEntries.get(module);
 
-  return entries?.includes(to.slice(`src/loader/${module}/`.length)) !== true;
+  return entries?.includes(to.slice("src/loader/".length)) !== true;
+}
+
+function workerImportsHandler(from: string, to: string): boolean {
+  const module = loaderModule(to);
+
+  return from === "src/loader/worker.ts" && (module === "access" || module === "generation" || module === "publication" || module === "lifecycle");
 }
 
 function violation(from: string, origin: Location, destination: Location, pkg: Package | undefined): Allowed["to"] | undefined {
@@ -317,6 +325,8 @@ test("imports follow loader entry points and production imports follow the sourc
 
     for (const to of targets) {
       if (privateLoaderImport(from, to)) problems.push(`private loader import: ${key(from, to)}`);
+
+      if (workerImportsHandler(from, to)) problems.push(`worker transport imports a handler: ${key(from, to)}`);
 
       if (!productionFile) continue;
       const destination = fileFolder(to);
@@ -377,6 +387,17 @@ test("only loader entry files can be imported from outside their module", () => 
   expect(privateLoaderImport("src/gather.ts", "src/loader/definitions/nested/registration.ts")).toBe(true);
   expect(privateLoaderImport("src/gather.ts", "src/loader/definitions/registration.ts")).toBe(false);
   expect(privateLoaderImport("src/gather.ts", "src/loader/unlisted/entry.ts")).toBe(true);
+});
+
+test("worker transport cannot import access even through its entry file", () => {
+  const from = "src/loader/worker.ts";
+  const to = "src/loader/access.ts";
+
+  expect(loaderModule(from)).toBe("worker");
+  expect(loaderModule(to)).toBe("access");
+  expect(privateLoaderImport(from, to)).toBe(false);
+  expect(workerImportsHandler(from, to)).toBe(true);
+  expect(workerImportsHandler(to, from)).toBe(false);
 });
 
 test("reads multiline, type-only, re-export, side-effect, import-equals and literal dynamic imports", () => {

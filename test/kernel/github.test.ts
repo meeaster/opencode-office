@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { sources, unshareable } from "../../src/github.ts";
 import { loadOffice, updateConfig } from "../../src/office.ts";
-import { declaredAccess } from "../../src/loader/package-access.ts";
+import { declaredAccess } from "../../src/loader/access.ts";
 
 let dir: string;
 

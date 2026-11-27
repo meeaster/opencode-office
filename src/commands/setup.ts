@@ -23,7 +23,7 @@ import { ports } from "../lib/ports.ts";
 import { bootstrapExecutor } from "./executor.ts";
 import { summarize, sync } from "./sync.ts";
 import { runReader } from "../loader/package-operation.ts";
-import { declaredAccess } from "../loader/package-access.ts";
+import { declaredAccess } from "../loader/access.ts";
 
 type SetupOptions = {
   ownerEmail?: string;

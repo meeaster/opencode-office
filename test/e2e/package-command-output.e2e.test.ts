@@ -44,6 +44,7 @@ const probe = definitionText(`{
         if (args[0] === "fail") throw Error("result failed");
         if (args[0] === "number") return 7;
         if (args[0] === "status") process.exitCode = 23;
+        if (args[0] === "bun-options") return spawnSync("/bin/sh", ["-c", 'printf "%s\\\\n" "\${BUN_OPTIONS-unset}" "\${OFFICE_CALLER_BUN_OPTIONS-unset}"']).stdout.toString();
         return { lines: "one\\ntwo", terminated: "one\\ntwo\\n", empty: "", large, status: large }[args[0]];
       },
     },
@@ -57,7 +58,7 @@ const probe = definitionText(`{
       },
     },
   },
-}`, 'import { readlinkSync, writeFileSync } from "node:fs";\nimport { join } from "node:path";\nconst large = "x".repeat(1 << 20);');
+}`, 'import { spawnSync } from "node:child_process";\nimport { readlinkSync, writeFileSync } from "node:fs";\nimport { join } from "node:path";\nconst large = "x".repeat(1 << 20);');
 
 const noise = "module log\nsetup log\nsetup write\nsetup fd\nhelper stdout\n";
 
@@ -233,6 +234,15 @@ for (const launcher of ["compiled", "source"] as const) {
     expect(f.separate(launcher, ["probe", "text", "lines"])).toEqual({ status: 0, file: `one\ntwo\n${diagnostics.slice("one\ntwo\n".length)}` });
   });
 }
+
+test("the compiled reader restores the caller's Bun options before a package starts a process", () => {
+  const f = office("bun-options");
+  const args = ["probe", "text", "bun-options"];
+
+  for (const [env, options] of [[{ BUN_OPTIONS: "--smol" }, "--smol"], [{ BUN_OPTIONS: "" }, "unset"], [{}, "unset"]] as const) {
+    expect(f.streams("compiled", args, env)).toEqual({ status: 0, stdout: `${options}\nunset\n`, stderr: `${noise}handler log\n` });
+  }
+});
 
 // Declares two cron jobs and two references, through handles with the registries' ids, when its setup runs with REPORT_FULL.
 const report = definitionText(`{

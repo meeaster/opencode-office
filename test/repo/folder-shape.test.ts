@@ -8,7 +8,7 @@ const breadthLimit = 60;
 const breadthCeilings = new Map<string, number>();
 
 const familyCeilings = new Map([
-  ["src/loader/package", 8],
+  ["src/loader/package", 7],
 ]);
 
 function checkCeilings(

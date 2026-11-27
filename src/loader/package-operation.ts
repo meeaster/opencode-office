@@ -21,8 +21,7 @@ import { openCheckoutLease } from "../checkout-lease.ts";
 import { recordUnmet } from "../features/tools/host.ts";
 import { validateAssets } from "../features/opencode/assets.ts";
 import { renameNoReplace } from "../lib/no-replace.ts";
-import { resultDescriptor } from "../command-stdout.ts";
-import { toolPath } from "../tool.ts";
+import { runEvaluator, startReader } from "./worker.ts";
 
 type Admission = {
   transaction: Candidate;
@@ -60,75 +59,9 @@ const outcomeSchema = v.object({
 
 type Outcome = v.InferOutput<typeof outcomeSchema>;
 
-function program() {
-  return Bun.isStandaloneExecutable ? [process.execPath] : [process.execPath, "--no-install", toolPath("src/cli.ts")];
-}
-
-/** What the caller's BUN_OPTIONS was, for an evaluator to give back to the processes it starts. */
-const callerOptions = "OFFICE_CALLER_BUN_OPTIONS";
-
-/**
- * The compiled evaluator preserves symlinks, so a definition loaded through its set's link
- * resolves its imports inside that set. Only there: the CLI's own pnpm-installed dependencies
- * don't resolve under the flag, so the checkout's launcher and the first process never get it.
- */
-function evaluatorEnv(): NodeJS.ProcessEnv {
-  if (!Bun.isStandaloneExecutable) return process.env;
-  const caller = process.env.BUN_OPTIONS;
-
-  return { ...process.env, BUN_OPTIONS: [caller, "--preserve-symlinks"].filter(Boolean).join(" "), [callerOptions]: caller ?? "" };
-}
-
-/** In an evaluator, gives the processes it starts (package scripts, other tools) the caller's BUN_OPTIONS back. */
-export function restoreCallerEnv() {
-  const caller = process.env[callerOptions];
-
-  if (caller === undefined) return;
-  delete process.env[callerOptions];
-
-  if (caller) process.env.BUN_OPTIONS = caller;
-  else delete process.env.BUN_OPTIONS;
-}
-
-/**
- * Runs an evaluator with `descriptors` after the standard three, and its exit status. With a pipe
- * as descriptor 4 (`resultDescriptor`), also what it wrote there, read while it runs so a large
- * result can't block it.
- */
-async function run(args: string[], descriptors: (number | "pipe")[]) {
-  const child = Bun.spawn([...program(), ...args], { env: evaluatorEnv(), stdio: ["inherit", "inherit", "inherit", ...descriptors] });
-  const pipe = child.stdio[resultDescriptor] ?? undefined;
-  const result = pipe === undefined ? undefined : new Response(Bun.file(pipe).stream()).bytes().finally(() => closeSync(pipe));
-
-  const stop = () => child.kill("SIGINT");
-  process.once("SIGINT", stop);
-
-  try { return { status: await child.exited, result: await result }; } finally { process.off("SIGINT", stop); }
-}
-
 /** The selection a generation is published with, as its selection.json holds it. */
 export function selectionText(office: Pick<Office, "packages">) {
   return JSON.stringify(office.packages.map(({ name, settings, source }) => ({ name, settings, ...source })));
-}
-
-/** Runs an evaluator that binds to no package set, such as the one running packages' access declarations; returns its exit status. */
-export async function runEvaluator(args: string[]) {
-  return (await run(args, [])).status;
-}
-
-/**
- * Starts a reader bound to the pinned generation `active` running `args`, with a pipe as its
- * result descriptor for the caller to read while it runs; Ctrl+C stops it too.
- */
-export function startReader(dir: string, active: { name: string; fd: number }, args: string[]) {
-  const child = Bun.spawn([...program(), "--package-reader", dir, active.name, ...args], { env: evaluatorEnv(), stdio: ["inherit", "inherit", "inherit", active.fd, "pipe"] });
-  const pipe = child.stdio[resultDescriptor];
-
-  if (pipe === undefined || pipe === null) throw new OfficeError("the package reader has no result pipe");
-  const stop = () => child.kill("SIGINT");
-  process.once("SIGINT", stop);
-
-  return { pipe, exited: child.exited.finally(() => process.off("SIGINT", stop)) };
 }
 
 /**
@@ -143,9 +76,19 @@ export async function runReader(dir: string, args: string[]) {
 
   // An office's first generation holds no selection until the first candidate publishes.
   if (!existsSync(join(folder, "selection.json"))) return;
-  const { status, result } = await run(["--package-reader", dir, active.name, ...args], [active.fd, "pipe"]);
+  let status: number;
+  let bytes: Uint8Array;
 
-  if (status === 0 && result?.length) await Bun.write(Bun.stdout, result);
+  {
+    // A process started by the reader can hold the pipe open past the reader's exit.
+    using child = startReader(dir, active, args);
+    const { pipe, exited } = child;
+    const result = new Response(Bun.file(pipe).stream()).bytes().finally(() => closeSync(pipe));
+    status = await exited;
+    bytes = await result;
+  }
+
+  if (status === 0 && bytes.length) await Bun.write(Bun.stdout, bytes);
 
   return status;
 }
@@ -372,7 +315,7 @@ export async function publishPackages(office: Office, exclude: boolean, update?:
     writeFileSync(join(folder, "selection.json"), selectionText(office));
     const request: Admission = { office, transaction, yaml, packages: Object.fromEntries(packages), validate, rejected, exclude, tracked: !!update, apply: update?.apply ?? true };
     writeFileSync(join(temporary, "input"), JSON.stringify(request));
-    const { status: code } = await run(["--package-admission", temporary], [reservation.fd]);
+    const code = await runEvaluator(["--package-admission", temporary], [reservation.fd]);
 
     if (code !== 0) throw new OfficeError(`package evaluator exited ${code}`);
     const result = v.parse(outcomeSchema, JSON.parse(readFileSync(join(temporary, "output"), "utf8")));

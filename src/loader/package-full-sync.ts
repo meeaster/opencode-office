@@ -15,7 +15,8 @@ import { gatherPackages, problemLines } from "../gather.ts";
 import { officeInfo } from "../lifecycle-inputs.ts";
 import type { Office } from "../office.ts";
 import { managedDirectory, pinActive } from "./package-generation.ts";
-import { selectionText, startReader } from "./package-operation.ts";
+import { selectionText } from "./package-operation.ts";
+import { startReader } from "./worker.ts";
 import type { Stage } from "../report/index.ts";
 
 /** How many items run at once, across packages. */
@@ -162,6 +163,7 @@ export async function fullSyncStep(office: Office, generation: string, stage: St
 
   if (active?.name !== generation) return [failure("FAILED packages' full-sync work: another sync replaced this sync's package set before it ran; run office sync again")];
   const child = startReader(office.dir, active, ["--full-sync", office.dir, generation, ...(verbose ? ["verbose"] : [])]);
+  const exited = child.exited.finally(child[Symbol.dispose]);
   const changes: Change[] = [];
   const parts = new Map<number, { owner: string; item: string; part: ReturnType<Stage["part"]> }>();
   let unreadable = 0;
@@ -211,7 +213,7 @@ export async function fullSyncStep(office: Office, generation: string, stage: St
     }
   }
 
-  const status = await child.exited;
+  const status = await exited;
 
   if (unreadable) failed(`packages' full-sync work: the package reader sent ${unreadable === 1 ? "a line" : `${unreadable} lines`} sync can't read; run office sync again`);
 

@@ -20,7 +20,7 @@ import { executorAccess } from "../features/executor/executor.ts";
 import { officeInfo, packageHost } from "../lifecycle-inputs.ts";
 import { ownedUnits, packageUnits, refreshOwner, refreshTimer, timerStatus } from "../features/systemd/timers.ts";
 import { configFile, installedPanelNames, locate, panelDir, panelId, panelState, readPanelRecord, removalNote } from "../features/opencode/desktop.ts";
-import { declaredAccess, type DeclaredAccess } from "../loader/package-access.ts";
+import { declaredAccess, type DeclaredAccess } from "../loader/access.ts";
 import { ghConfigDir, ghLogin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../github.ts";
 import { hookNote, hookState } from "../features/host/hook.ts";
 import { planServer, serverReport } from "../features/opencode/host-server.ts";

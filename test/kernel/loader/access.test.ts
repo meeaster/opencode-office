@@ -6,7 +6,7 @@ import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadOffice } from "../../../src/office.ts";
-import { declaredAccess } from "../../../src/loader/package-access.ts";
+import { declaredAccess } from "../../../src/loader/access.ts";
 import { definitionText, writePackage } from "../../support/test-package.ts";
 import { toolPath } from "../../../src/tool.ts";
 
