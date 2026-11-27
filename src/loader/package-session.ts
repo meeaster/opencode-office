@@ -10,12 +10,12 @@ import { join } from "node:path";
 import * as v from "valibot";
 
 import { readAppliedSnapshot } from "../../sdk/applied-settings.ts";
-import { installedPackages } from "../layout.ts";
+import { installedPackages, problemLine } from "./definitions/inventory.ts";
 import { officeInfo } from "../lifecycle-inputs.ts";
 import type { Office } from "../office.ts";
 import { managedDirectory } from "./package-generation.ts";
-import { importEdges, readPackageJson } from "./package-manifest.ts";
-import { type PackageProblem, problemLine, type ResolvedPackage, resolvePackages } from "./packages.ts";
+import { importEdges, readPackageJson } from "./sources/manifest.ts";
+import { type PackageProblem, type ResolvedPackage, resolvePackages } from "./sources/selection.ts";
 import { packageEntries } from "../schema.ts";
 
 /**

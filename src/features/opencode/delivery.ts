@@ -6,8 +6,9 @@ import { lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync, unlinkSync } f
 import { dirname, join, relative } from "node:path";
 import { RenameError, renameNoReplace } from "../../lib/no-replace.ts";
 import { OfficeError, type Office } from "../../office.ts";
-import type { InstalledPackages } from "../../layout.ts";
-import { builtinSource, gitSelection, readRecord, sourceFile, type ResolvedPackage } from "../../loader/packages.ts";
+import type { InstalledPackages } from "../../loader/definitions/inventory.ts";
+import { builtinSource, gitSelection, readRecord, sourceFile } from "../../loader/sources/copies.ts";
+import type { ResolvedPackage } from "../../loader/sources/selection.ts";
 import { validateAssets, type AssetPaths } from "./assets.ts";
 import { type Declaration, readDeclarations, writeDeclarations } from "./declarations.ts";
 import { cloneFolder, entries, entry as entryAt, pluginFolder } from "./ownership.ts";
@@ -225,4 +226,3 @@ export function linkPlugins(office: Office, installed: ReturnType<typeof withPlu
 
   return changes;
 }
-

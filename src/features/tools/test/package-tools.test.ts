@@ -11,7 +11,8 @@ import { hostLayout } from "../../host/host-env.ts";
 import { globalConfD, grantConsent, machineRecordPath } from "../../host/machine.ts";
 import { toolPins } from "../../mise-integration/mise-toml.ts";
 import { loadOffice } from "../../../office.ts";
-import { localEdits, pulledDir, readRecord } from "../../../loader/packages.ts";
+import { verifyCopy } from "../../../loader/sources/copies.ts";
+import { resolvePackages } from "../../../loader/sources/selection.ts";
 import { parseManifest } from "../../../schema.ts";
 import { fragmentNotes, machineBelowFloors, machineFiles, orphanFragments, packageLines, packagesFileProblems, strayFragments } from "../../mise-integration/delivery.ts";
 import { compareToolVersions } from "../../tooling/requirements.ts";
@@ -437,11 +438,10 @@ test("the required office package, which office.yaml never lists, gets its tools
   expect(toolPins(packages()).map((pin) => pin.tool)).toEqual(["sops", "age", "gh", "pre-commit"]);
   expect(orphanFragments(loadOffice(office), ["office"])).toEqual([]);
 
-  const dir = pulledDir(loadOffice(office), "office");
-  const record = readRecord(dir);
+  const [item] = resolvePackages(loadOffice(office), "office").packages;
 
-  expect(JSON.parse(readFileSync(join(dir, ".office.json"), "utf8"))).toEqual({ opencode: "container" });
-  expect(record !== undefined && localEdits(dir, record)).toEqual([]);
+  expect(JSON.parse(readFileSync(join(item.dir, ".office.json"), "utf8"))).toEqual({ opencode: "container" });
+  expect(() => verifyCopy(item)).not.toThrow();
 });
 
 test("the built-ins' shared tools stay in a container's machine.packages.toml, host-only Bun aside; a host-mode office requires them, age with both executables, and writes none there", async () => {

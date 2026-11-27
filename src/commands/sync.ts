@@ -23,7 +23,7 @@ import { cloneTarget, placeLink, requirePluginDestination, stagingFolder } from 
 import { cloneFolder, entry as entryAt, pluginFolder } from "../features/opencode/ownership.ts";
 import { type Office } from "../office.ts";
 import { silentStage, type Stage } from "../report/index.ts";
-import { requirePackageOwnership } from "../loader/packages.ts";
+import { requirePackageOwnership } from "../loader/sources/selection.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
 import { requireKnownLockKeys } from "../versions.ts";
 import { changeText, failure, isFailure, type Change } from "../lib/change.ts";

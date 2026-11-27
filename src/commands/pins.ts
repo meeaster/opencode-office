@@ -6,7 +6,8 @@
 // where that ref points now, leaving office.yaml as it is.
 import { type Office, OfficeError, withScalar } from "../office.ts";
 import { failure, isFailure, type Change } from "../lib/change.ts";
-import { fullCommit, sourceDifferences, requirePackageOwnership, resolvePackages } from "../loader/packages.ts";
+import { fullCommit, sourceDifferences } from "../loader/sources/copies.ts";
+import { requirePackageOwnership, resolvePackages } from "../loader/sources/selection.ts";
 import type { Stage } from "../report/index.ts";
 import { resolveRef, resolveTrack, type Resolved, short } from "../track.ts";
 import { publishPackages } from "../loader/package-operation.ts";

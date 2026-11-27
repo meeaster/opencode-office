@@ -42,12 +42,14 @@ import { wrappedCommands } from "../features/host/sfw.ts";
 import { toolPins } from "../features/mise-integration/mise-toml.ts";
 import { destinationProblems } from "../features/mise-integration/projection.ts";
 import { fragmentNotes, machineBelowFloors, machineFile, orphanFragments, packagesFile, packagesFileProblems, strayFragments } from "../features/mise-integration/delivery.ts";
-import { describeRecord, fileHashes, type InstalledPackage, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, sourceDifferences, sourceFile } from "../loader/packages.ts";
+import type { InstalledPackage } from "../loader/definitions/inventory.ts";
+import { sourceDrift } from "../loader/sources/drift.ts";
+import { localFolders, pulledFolders, resolvePackages } from "../loader/sources/selection.ts";
 import { appliedDifference, type AppliedState, appliedState, staleApplied } from "../applied-settings.ts";
 import { describeIgnoredSkills, ignoredFolders, ignoredSkills } from "../../packages/office/plugin/ignored-skills.ts";
 import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces, shadowing, withLoaded } from "../features/opencode/outside.ts";
 import { pinnedTools } from "../schema.ts";
-import { builtinFiles, builtinPackages, version } from "../tool.ts";
+import { builtinPackages, version } from "../tool.ts";
 import { changes, defaultPins, describeMove, executorImage, isTested, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
 import { compose, officeImage, runningPins } from "./compose.ts";
 import { ports } from "../lib/ports.ts";
@@ -147,44 +149,6 @@ function withdrawnClones(office: Office, report: Report): void {
 }
 
 /**
- * Whether a pulled-in package's files are the copy office sync put there, and for a built-in one,
- * this executable's copy. Each note is added to `notes`; returns whether the copy is as it should be.
- */
-async function pulledCopy(dir: string, kind: "built-in" | "remote", name: string, notes: string[]): Promise<boolean> {
-  const record = readRecord(dir);
-
-  if (record === undefined) {
-    notes.push(`no readable ${sourceFile} (office sync replaces the copy)`);
-
-    return false;
-  }
-
-  notes.push(`from ${describeRecord(record)}`);
-
-  const edits = localEdits(dir, record);
-
-  if (edits.length > 0) {
-    notes.push(`package files edited: ${edits.join(", ")}; office sync restores them, as ${readOnlyNote}`);
-
-    return false;
-  }
-
-  if (kind === "built-in") {
-    const wanted = new Map([...(await builtinFiles(name))].map(([file, content]) => [file, new Bun.CryptoHasher("sha256").update(content).digest("hex")]));
-
-    if (!Bun.deepEquals(fileHashes(dir), Object.fromEntries(wanted))) {
-      notes.push("differs from this office executable's copy (office sync updates it)");
-
-      return false;
-    }
-  }
-
-  notes.push("package files as copied");
-
-  return true;
-}
-
-/**
  * One line per package: its kind and where it came from, whether a pulled-in copy was edited,
  * whether its settings are valid and applied, its mise tools, and the plugin it links.
  */
@@ -208,7 +172,9 @@ async function packageChecks(office: Office, report: Report, { gathered, loaded,
     return running;
   };
 
-  for (const { entry, kind, dir } of packages) {
+  for (const resolved of packages) {
+    const { entry, kind, dir } = resolved;
+
     reported.add(entry.name);
 
     const item = installed.find((candidate) => candidate.entry.name === entry.name);
@@ -221,31 +187,11 @@ async function packageChecks(office: Office, report: Report, { gathered, loaded,
     }
 
     const notes: string[] = [kind === "local" ? `the office's own, in ${relative(office.dir, dir)}/` : `${kind}, in ${relative(office.dir, dir)}/`];
-    let ok = own.length === 0;
-
-    if (kind !== "local") {
-      ok = (await pulledCopy(dir, kind, entry.name, notes)) && ok;
-
-      const record = readRecord(dir);
-
-      if (kind === "remote" && entry.source !== undefined && record !== undefined && !("repo" in record && !sourceDifferences(record, entry.source).length)) {
-        notes.push(`office.yaml asks for ${entry.source.ref}; office sync updates it`);
-        ok = false;
-      }
-    }
-
+    const { ok: sourceOk, copyNotes, declarationNotes } = await sourceDrift(office, resolved);
     const difference = appliedDifference(applied, item);
 
-    notes.push(difference === undefined ? "settings valid and applied" : `settings valid, but ${difference}`);
-
-    if (difference !== undefined) ok = false;
-
-    const officePath = join(item.dir, officeFile);
-
-    if (!existsSync(officePath) || readFileSync(officePath, "utf8") !== officeText(office)) {
-      ok = false;
-      notes.push(`${relative(office.dir, officePath)} doesn't say opencode: ${office.opencode.mode}; office sync writes it`);
-    }
+    notes.push(...copyNotes, difference === undefined ? "settings valid and applied" : `settings valid, but ${difference}`, ...declarationNotes);
+    let ok = sourceOk && own.length === 0 && difference === undefined;
 
     const services = serviceStatus(office, item);
     const sharing = shared.get(entry.name);

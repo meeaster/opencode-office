@@ -10,7 +10,9 @@ import { type LockedPackage, officeSchema, type PackageLock, parsePackageLock } 
 import { activeGeneration, beginGeneration, managedDirectory, pinActive, publishGeneration, type Candidate } from "./package-generation.ts";
 import { coupledFailures, writePackageLinks, writeSdk } from "./package-imports.ts";
 import { publishedView, type GatheredPackage, type GatherProblem, gatherPackages, problemLines } from "../gather.ts";
-import { materializePackage, readRecord, type ResolvedPackage, resolvePackages, validateReplacement, sourceDifferences, verifiedCommit, writeOfficeDeclaration } from "./packages.ts";
+import { validateReplacement } from "./definitions/inventory.ts";
+import { materializePackage, readRecord, sourceDifferences, verifiedCommit, writeOfficeDeclaration } from "./sources/copies.ts";
+import { type ResolvedPackage, resolvePackages } from "./sources/selection.ts";
 import { lockFile, lockSections, packageLockChanges, readLockSection } from "../versions.ts";
 import { writeAppliedReferences } from "../features/references/applied-references.ts";
 import { applyPackages, SyncStopped } from "./package-application.ts";

@@ -6,8 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { project } from "../../src/features/mise-integration/projection.ts";
 import { loadOffice } from "../../src/office.ts";
-import { registerPackage } from "../../src/loader/package-setup.ts";
-import { type InstalledPackage, readPackage } from "../../src/loader/packages.ts";
+import { installedDefinition, type InstalledPackage, type InstalledPackages } from "../../src/loader/definitions/inventory.ts";
+import { registerPackages } from "../../src/loader/definitions/registration.ts";
+import { schemaSettings } from "../../src/loader/definitions/settings.ts";
 import { defaultOffSetting, type SettingValue } from "../../src/schema.ts";
 import { toolPath } from "../../src/tool.ts";
 
@@ -18,11 +19,23 @@ afterAll(() => rmSync(office, { recursive: true, force: true }));
 /** The checkout's copy of built-in `name`, read with `settings` from office.yaml. */
 function read(name: string, settings: Record<string, SettingValue>): InstalledPackage {
   writeFileSync(join(office, "office.yaml"), "name: t\n");
-  const result = readPackage(loadOffice(office), { entry: { name, settings, source: undefined }, kind: "local", dir: toolPath(`packages/${name}`) });
+  const item = { entry: { name, settings, source: undefined }, kind: "local" as const, dir: toolPath(`packages/${name}`) };
+  const result = installedDefinition(loadOffice(office), item);
 
   if (!result.ok) throw new Error(result.errors.join("\n"));
+  const { manifest, integrations, file } = result.value;
+  const validated = schemaSettings(item, manifest, file);
 
-  return result.value;
+  if (!validated.ok) throw new Error(validated.errors.join("\n"));
+
+  return { ...item, manifest, integrations, settings: validated.value };
+}
+
+async function additions(item: InstalledPackage) {
+  const inventory: InstalledPackages = { installed: [item], selected: new Set([item.entry.name]), unread: new Set(), problems: [], invalidSettings: [], definitions: new Map() };
+  const [setUp] = await registerPackages({ dir: office }, inventory, (_name, cause) => { throw cause; });
+
+  return setUp.registered.additions;
 }
 
 test("aws-emulator: ports, a storage mode and no source reference", async () => {
@@ -31,7 +44,7 @@ test("aws-emulator: ports, a storage mode and no source reference", async () => 
   expect(item.settings).toEqual({ port: 4600, ui_port: 4501, storage: "persistent", source_reference: false });
   expect(read("aws-emulator", {}).settings).toEqual({ port: 4566, ui_port: 4500, storage: "memory", source_reference: true });
   // Turned off, it adds no reference; on by default, it adds Floci's.
-  const ids = async (pkg: InstalledPackage) => (await registerPackage({ name: pkg.entry.name, manifest: pkg.manifest, settings: pkg.settings, selected: new Set() })).additions.flatMap(row => row.id === "opencode.plugins" ? [] : [row.value.name]);
+  const ids = async (pkg: InstalledPackage) => (await additions(pkg)).flatMap(row => row.id === "opencode.plugins" ? [] : [row.value.name]);
 
   expect(await ids(item)).toEqual(["aws-cli"]);
   expect(await ids(read("aws-emulator", {}))).toEqual(["aws-cli", "floci"]);
@@ -43,10 +56,10 @@ test("browser: tool profiles, Browse off and system Chrome on; its recipe's sett
   expect(item.settings).toEqual({ agent_browser_tools: "core,network,debug", browse: false, system_chrome: true });
   expect(read("browser", {}).settings).toEqual({ agent_browser_tools: "core", browse: true, system_chrome: false });
   expect(defaultOffSetting(item.manifest.settings, "system_chrome")).toBe(true);
-  const { additions } = await registerPackage({ name: "browser", manifest: item.manifest, settings: item.settings, selected: new Set() });
+  const added = await additions(item);
 
   // The contributed recipe passes the default-off rule as sync projects it.
-  expect(project(item, additions).system?.setting).toBe("system_chrome");
+  expect(project(item, added).system?.setting).toBe("system_chrome");
   // Projection reads claims without changing the definition.
   expect(item.manifest.system).toBeUndefined();
 });

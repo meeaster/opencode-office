@@ -12,11 +12,11 @@ import * as v from "valibot";
 
 import type { SettingValue } from "../../sdk/index.ts";
 import { OfficeError, type Office } from "../office.ts";
-import { readPackageJson } from "./package-manifest.ts";
+import { readPackageJson } from "./sources/manifest.ts";
 import { runEvaluator } from "./package-operation.ts";
-import { resolvePackages } from "./packages.ts";
+import { resolvePackages } from "./sources/selection.ts";
 import { check } from "../schema.ts";
-import { accessWithSdk, registerSdk } from "../sdk.ts";
+import { accessWithSdk, registerSdk } from "./definitions/sdk.ts";
 import { builtinFiles, toolPath } from "../tool.ts";
 
 /** A repository a package declared, under the package's name. */

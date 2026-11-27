@@ -9,10 +9,10 @@ import { contributedAssets } from "../../src/features/opencode/assets.ts";
 import { commandHelp, dispatchCommand } from "../../src/direct-commands.ts";
 import { gatherPackages, parseEntries, readEntries, type SetUp } from "../../src/gather.ts";
 import { loadOffice } from "../../src/office.ts";
-import type { Registered } from "../../src/loader/package-setup.ts";
-import { fileHashes, type ResolvedPackage, selectionProblems } from "../../src/loader/packages.ts";
-import { packageJsonHint } from "../../src/loader/package-manifest.ts";
-import { recordRequiredBuiltins } from "../support/test-builtin-record.ts";
+import { definitionGate } from "../../src/loader/definitions/inventory.ts";
+import type { Registered } from "../../src/loader/definitions/registration.ts";
+import type { ResolvedPackage } from "../../src/loader/sources/selection.ts";
+import { fixtureFileHashes, recordRequiredBuiltins } from "../support/test-builtin-record.ts";
 import { definitionText, settingsSchema, writePackage } from "../support/test-package.ts";
 
 let dir: string;
@@ -324,21 +324,21 @@ test("the selection is checked without importing: rejected, uncopied and edited 
   const marker = `import {writeFileSync} from "node:fs"; writeFileSync(${JSON.stringify(join(dir, "imported"))}, "x");`;
   writePackage(join(dir, ".office/packages/rejected/office.ts"), marker);
   writePackage(join(dir, ".office/packages/recorded/office.ts"), marker);
-  writeFileSync(join(dir, ".office/packages/recorded/.source.json"), JSON.stringify({ office: "fixture", commit: "fixture", files: fileHashes(join(dir, ".office/packages/recorded")) }));
+  writeFileSync(join(dir, ".office/packages/recorded/.source.json"), JSON.stringify({ office: "fixture", commit: "fixture", files: fixtureFileHashes(join(dir, ".office/packages/recorded")) }));
   const clean = [pulled("recorded"), local("consumer", marker), local("needs", marker)];
   // office.yaml selects, not what resolved: "broken" is selected even though it failed resolution.
-  const office = { packages: ["recorded", "consumer", "needs", "broken", "absent"].map(name => ({ name, settings: {}, source: undefined })) };
+  const office = { dir, packages: ["recorded", "consumer", "needs", "broken", "absent"].map(name => ({ name, settings: {}, source: undefined })) };
   writePackage(join(dir, "packages/needs/office.ts"), marker, { dependencies: ["references", "consumer", "broken"] });
 
-  expect(selectionProblems(office, clean)).toEqual([]);
+  expect(definitionGate(office, clean)).toEqual([]);
   writePackage(join(dir, "packages/needs/office.ts"), marker, { dependencies: ["references", "missing", "sdk"] });
   write(join(dir, ".office/packages/recorded/office.ts"), `${marker}// edited`);
   rmSync(join(dir, "packages/consumer/package.json"));
 
   // A skipped package isn't checked: the gate names a rejected one on its own.
-  expect(selectionProblems(office, [...clean, pulled("rejected"), pulled("absent")], new Set(["rejected"])).map(problem => [problem.packages, problem.message])).toEqual([
+  expect(definitionGate(office, [...clean, pulled("rejected"), pulled("absent")], new Set(["rejected"])).map(problem => [problem.packages, problem.message])).toEqual([
     [["recorded"], "package files edited: office.ts (edited); office sync restores them"],
-    [["consumer"], `no package.json; ${packageJsonHint("consumer")}`],
+    [["consumer"], 'no package.json; add a package.json with "name": "@office/consumer", an optional "description" and "office": { "definition": "./office.ts" }'],
     [["needs"], "depends on @office/missing, which isn't selected; add it to office.yaml"],
     [["needs"], "lists @office/sdk in office.dependencies; @office/sdk is always available, so remove it"],
     [["absent"], "not synced yet; run office sync"],

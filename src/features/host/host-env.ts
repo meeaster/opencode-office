@@ -23,7 +23,7 @@ import type { Office } from "../../office.ts";
 import { systemVariables } from "../mise-integration/system.ts";
 import { hostApplies } from "../tooling/requirements.ts";
 import type { GatheredPackage } from "../../gather.ts";
-import type { InstalledPackage } from "../../loader/packages.ts";
+import type { InstalledPackage } from "../../loader/definitions/inventory.ts";
 import { managedAgentEnvironment } from "../../schema.ts";
 import { type Environment, releaseAgeVariables, type SfwLayout, sfwLayout, shellQuote } from "./sfw.ts";
 

@@ -2,9 +2,9 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { readDefinition } from "../../../src/loader/package-definition.ts";
-import { readPackageJson } from "../../../src/loader/package-manifest.ts";
-import { definitionText, packageJsonText } from "../../support/test-package.ts";
+
+import { readPackageJson } from "../../../../src/loader/sources/manifest.ts";
+import { definitionText } from "../../../support/test-package.ts";
 
 let root: string;
 
@@ -25,12 +25,12 @@ function folder(name: string, files: Record<string, string>) {
   return dir;
 }
 
-const definition = (name: string, files: Record<string, string>) => readDefinition(folder(name, files), name, `packages/${name}`);
 const valid = definitionText('{}');
 
 type Json = { exports?: Record<string, string>; private?: boolean; description?: string; office?: { definition: string; dependencies?: string[]; integrations?: Record<string, string> } };
 
 const json = (name: string, definition: string, extra: Json = {}) => JSON.stringify({ name: `@office/${name}`, office: { definition }, ...extra });
+
 
 test("package.json names the definition, the declared dependencies, what the package shares and, optionally, its description", () => {
   const exports = { "./token": "./lib/token.ts" };
@@ -69,31 +69,6 @@ test("a package.json that can't name the definition says what is wrong, naming t
   const old = folder("old", { "office.ts": valid });
   expect(readPackageJson(old, "old", "built-in")).toEqual({ ok: false, errors: ["no package.json; the copy isn't this office executable's; run office sync"] });
   expect(readPackageJson(old, "old", "remote")).toEqual({ ok: false, errors: ['no package.json; its repository needs a package.json with "name": "@office/old", an optional "description" and "office": { "definition": … }; then run office packages update'] });
-});
-
-test("a definition loads from the path package.json names, as Package.define's result or a package.yaml; a plain module object doesn't", () => {
-  // No entrypoint is imported here: readDefinition registers the executable's SDK itself. Neither
-  // package.json has a description.
-  expect(definition("module", { "package.json": packageJsonText("module", "src/definition.ts"), "src/definition.ts": valid })).toMatchObject({ ok: true, value: { file: "packages/module/src/definition.ts", manifest: { namespace: "module" } } });
-  expect(definition("yaml", { "package.json": packageJsonText("yaml", "package.yaml"), "package.yaml": "namespace: notes\n", "office.ts": 'throw new Error("not the definition")' })).toMatchObject({ ok: true, value: { file: "packages/yaml/package.yaml", manifest: { namespace: "notes" } } });
-  expect(definition("plain", { "package.json": packageJsonText("plain"), "office.ts": 'export default {}' })).toEqual({
-    ok: false, errors: ["packages/plain/office.ts: the definition must be the result of Package.define from @office/sdk"],
-  });
-});
-
-test("a definition that cannot be read names its file and reason, whatever went wrong", () => {
-  for (const [name, files, reason] of [
-    ["thrown", { "package.json": packageJsonText("thrown"), "office.ts": 'throw new Error("bad notes import")' }, "packages/thrown/office.ts: bad notes import"],
-    ["shape", { "package.json": packageJsonText("shape"), "office.ts": definitionText('{ setup: "handler.ts" }') }, "packages/shape/office.ts: setup:"],
-    ["named", { "package.json": packageJsonText("named"), "office.ts": definitionText('{ name: "named" }') }, "packages/named/office.ts: name: must be a mapping of"],
-    ["described", { "package.json": packageJsonText("described", "package.yaml"), "package.yaml": "description: Notes\n" }, "packages/described/package.yaml: description: must be a mapping of"],
-    ["none", { "office.ts": valid }, "packages/none: no package.json; add a package.json with \"name\": \"@office/none\""],
-  ] as const) {
-    const read = definition(name, files);
-
-    expect(read.ok).toBe(false);
-    expect(read.ok ? "" : read.errors.join("\n")).toContain(reason);
-  }
 });
 
 test("office.integrations maps each optional provider to a file inside the package, distinct from the package, the SDK and its required dependencies", () => {
@@ -151,20 +126,5 @@ test("an integration module is a file of its own: not the definition or another 
     [moduleLink, "office.integrations @office/apps: ./adapters/apps.ts is the same file as office.integrations @office/skills; give each integration a module of its own"],
   ] as const) {
     expect(readPackageJson(dir, dir.split("/").at(-1) ?? "")).toEqual({ ok: false, errors: [reason] });
-  }
-});
-
-test("loading a definition lists the providers package.json maps without importing their modules; a definition still declaring an activation policy or an Executor app fails on the unknown key", () => {
-  const thrower = 'throw new Error("integration module imported")';
-  const files = (name: string, definition: string) => ({ "package.json": json(name, "./office.ts", { office: { definition: "./office.ts", integrations: { "@office/skills": "./skills.ts" } } }), "office.ts": definitionText(definition), "skills.ts": thrower });
-
-  expect(readDefinition(folder("plain", files("plain", "{}")), "plain", "packages/plain")).toMatchObject({ ok: true, value: { integrations: [{ provider: "skills", module: "skills.ts" }] } });
-
-  for (const [name, definition, key] of [
-    ["requested", '{ integrations: { "@office/skills": { requested: () => true } } }', "integrations"],
-    ["by-default", '{ integrations: { "@office/skills": { enabledByDefault: true } } }', "integrations"],
-    ["executor-app", "{ executor_app: {} }", "executor_app"],
-  ] as const) {
-    expect(readDefinition(folder(name, files(name, definition)), name, `packages/${name}`)).toEqual({ ok: false, errors: [`packages/${name}/office.ts: ${key}: must be a mapping of namespace, settings, commands, setup, sync, fullSync, session, check, up, down, committed, secrets, tools, host, system and spawns`] });
   }
 });

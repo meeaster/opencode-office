@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { coupledFailures, editorLinks, linkForEditors, writePackageLinks } from "../../../src/loader/package-imports.ts";
-import type { ResolvedPackage } from "../../../src/loader/packages.ts";
+import type { ResolvedPackage } from "../../../src/loader/sources/selection.ts";
 import { packageJsonText } from "../../support/test-package.ts";
 
 let dir: string;

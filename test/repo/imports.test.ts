@@ -38,8 +38,8 @@ const allowed: readonly Allowed[] = [
   { from: "src/loader/package-operation.ts", to: "features/opencode", needsApi: true },
   { from: "src/loader/package-operation.ts", to: "features/references", needsApi: true },
   { from: "src/loader/package-operation.ts", to: "features/tools", needsApi: true },
-  { from: "src/loader/packages.ts", to: "features/compose", needsApi: true },
-  { from: "src/loader/packages.ts", to: "features/mise-integration", needsApi: true },
+  { from: "src/loader/definitions/inventory.ts", to: "features/compose", needsApi: true },
+  { from: "src/loader/definitions/inventory.ts", to: "features/mise-integration", needsApi: true },
   { from: "src/features/mise-integration/projection.ts", to: "packages/tooling" },
   { from: "src/features/mise-integration/projection.ts", to: "packages/tools" },
   { from: "src/features/systemd/units.ts", to: "packages/tools" },
@@ -178,6 +178,13 @@ function importSpecifiers(source: string): string[] {
     if (keyword === "import" && /^[\p{ID_Start}$_]/u.test(code[next] ?? "")) {
       next++;
 
+      if (code[next] === "=" && code[next + 1] === "require" && code[next + 2] === "(" && code[next + 4] === ")") {
+        const imported = quoted(code[next + 3]);
+
+        if (imported !== undefined) specifiers.push(imported);
+        continue;
+      }
+
       if (code[next] === ",") next++;
     } else if (code[next] !== "{" && code[next] !== "*") continue;
 
@@ -202,20 +209,24 @@ function importSpecifiers(source: string): string[] {
 
 const aliases = new Map(Object.entries(compilerOptions.paths));
 
-function targetPath(from: string, specifier: string): string | undefined {
+function targetPath(from: string, specifier: string, requireAlias = true): string | undefined {
   if (specifier.startsWith("./") || specifier.startsWith("../")) return posix.join(posix.dirname(from), specifier);
 
   if (!specifier.startsWith("@office/")) return undefined;
 
   const path = aliases.get(specifier)?.[0];
 
-  if (path === undefined) throw new Error(`${from}: ${specifier} has no tsconfig.json path`);
+  if (path === undefined) {
+    if (requireAlias) throw new Error(`${from}: ${specifier} has no tsconfig.json path`);
+
+    return undefined;
+  }
 
   return posix.normalize(path);
 }
 
 const root = toolPath(".");
-const production = new Bun.Glob("{src,packages}/**/*.ts");
+const typescript = new Bun.Glob("{src,packages,test,sdk,bin,examples}/**/*.ts");
 const testFolders = /^(?:src\/features|packages)\/[^/]+\/test\//;
 
 function packageFolder(path: string): Package | undefined {
@@ -240,6 +251,24 @@ function isFeature(folder: Location): folder is Feature {
   return folder?.startsWith("features/") ?? false;
 }
 
+const loaderEntries = new Map<string, readonly string[]>([
+  ["sources", ["selection.ts", "manifest.ts", "copies.ts", "drift.ts"]],
+  ["definitions", ["inventory.ts", "settings.ts", "registration.ts", "sdk.ts"]],
+]);
+
+function loaderModule(path: string) {
+  return /^src\/loader\/([^/]+)\//.exec(path)?.[1];
+}
+
+function privateLoaderImport(from: string, to: string): boolean {
+  const module = loaderModule(to);
+
+  if (module === undefined || loaderModule(from) === module) return false;
+  const entries = loaderEntries.get(module);
+
+  return entries?.includes(to.slice(`src/loader/${module}/`.length)) !== true;
+}
+
 function violation(from: string, origin: Location, destination: Location, pkg: Package | undefined): Allowed["to"] | undefined {
   if (pkg && (origin === "kernel" || origin === "kernel/commands")) return pkg;
 
@@ -252,11 +281,9 @@ function violation(from: string, origin: Location, destination: Location, pkg: P
   return undefined;
 }
 
-test("production imports follow the source layout", () => {
-  const files = [...production.scanSync({ cwd: root, dot: true })].filter(path =>
-    !testFolders.test(path) && !path.split("/").includes("node_modules")
-    && !/\.(test|fixture)\.ts$/.test(path),
-  ).sort();
+test("imports follow loader entry points and production imports follow the source layout", () => {
+  const files = [...typescript.scanSync({ cwd: root, dot: true })].filter(path => !path.split("/").includes("node_modules")).sort();
+  const production = new Set(files.filter(path => /^(src|packages)\//.test(path) && !testFolders.test(path) && !/\.(test|fixture)\.ts$/.test(path)));
 
   const seen = new Set(files);
   const problems: string[] = [];
@@ -266,7 +293,7 @@ test("production imports follow the source layout", () => {
   const packageImports = new Set<string>();
   const distance = new Map<Feature, { kernel: Set<string>; commands: number }>();
 
-  for (const file of files) {
+  for (const file of production) {
     const folder = fileFolder(file);
 
     if (isFeature(folder) && !distance.has(folder)) distance.set(folder, { kernel: new Set(), commands: 0 });
@@ -274,11 +301,12 @@ test("production imports follow the source layout", () => {
 
   for (const from of files) {
     const origin = fileFolder(from);
+    const productionFile = production.has(from);
 
     const targets = new Set<string>();
 
     for (const specifier of importSpecifiers(readFileSync(join(root, from), "utf8"))) {
-      const path = targetPath(from, specifier);
+      const path = targetPath(from, specifier, productionFile);
 
       if (path !== undefined && !path.startsWith("sdk/")) {
         const typescriptPath = path.replace(/\.js$/, ".ts");
@@ -288,6 +316,9 @@ test("production imports follow the source layout", () => {
     }
 
     for (const to of targets) {
+      if (privateLoaderImport(from, to)) problems.push(`private loader import: ${key(from, to)}`);
+
+      if (!productionFile) continue;
       const destination = fileFolder(to);
 
       if (packageFolder(from) && to.startsWith("src/")) packageImports.add(key(from, to));
@@ -329,7 +360,26 @@ test("production imports follow the source layout", () => {
   if (problems.length) throw new Error(problems.sort().join("\n"));
 });
 
-test("reads multiline, type-only, re-export, side-effect and literal dynamic imports", () => {
+test("only loader entry files can be imported from outside their module", () => {
+  const from = "src/loader/definitions/inventory.ts";
+
+  const source = `
+    import type { ResolvedPackage } from "../sources/selection.ts";
+    import type { PackageRecord } from "../sources/records.ts";
+    import type Records = require("../sources/records.ts");
+    export { readDefinition } from "./definition.ts";
+  `;
+
+  const forbidden = importSpecifiers(source).map(specifier => targetPath(from, specifier))
+    .filter(path => path !== undefined && privateLoaderImport(from, path));
+
+  expect(forbidden).toEqual(["src/loader/sources/records.ts", "src/loader/sources/records.ts"]);
+  expect(privateLoaderImport("src/gather.ts", "src/loader/definitions/nested/registration.ts")).toBe(true);
+  expect(privateLoaderImport("src/gather.ts", "src/loader/definitions/registration.ts")).toBe(false);
+  expect(privateLoaderImport("src/gather.ts", "src/loader/unlisted/entry.ts")).toBe(true);
+});
+
+test("reads multiline, type-only, re-export, side-effect, import-equals and literal dynamic imports", () => {
   expect(importSpecifiers(`
     import type { A } /* comment */ from "./a.ts"
     import defaultValue, {
@@ -338,11 +388,13 @@ test("reads multiline, type-only, re-export, side-effect and literal dynamic imp
     export type { X } from "./x.ts"
     export * as y from "./y.ts"
     import "./side-effect.ts"
+    import Legacy = require("./legacy.ts")
+    import type LegacyType = require("./legacy-type.ts")
     const lazy = import("./lazy.ts", { with: { type: "text" } })
     type FromQuery = import("./query.ts").Query
     const escaped = import("./\\u0065scaped.ts")
     const template = import(\`./literal.ts\`)
-  `)).toEqual(["./a.ts", "./b.ts", "./x.ts", "./y.ts", "./side-effect.ts", "./lazy.ts", "./query.ts", "./escaped.ts", "./literal.ts"]);
+  `)).toEqual(["./a.ts", "./b.ts", "./x.ts", "./y.ts", "./side-effect.ts", "./legacy.ts", "./legacy-type.ts", "./lazy.ts", "./query.ts", "./escaped.ts", "./literal.ts"]);
 });
 
 test("ignores comments, code inside literals, computed imports, require and member calls", () => {

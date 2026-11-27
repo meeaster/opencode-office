@@ -5,15 +5,16 @@
 // package's settings whether to add anything, as its package.
 import { join } from "node:path";
 import * as v from "valibot";
-import type { Integration } from "../../sdk/index.ts";
-import { scope } from "./package-manifest.ts";
-import { integrationWithSdk, registerSdk } from "../sdk.ts";
+import type { Integration } from "../../../sdk/index.ts";
+import { scope } from "../sources/manifest.ts";
+import { markedIntegration as integrationWithSdk } from "../../../sdk/mark.ts";
+import { registerSdk } from "./sdk.ts";
 
 /** One optional provider of a package, by name without the scope, and its module inside the package. */
 export type OptionalIntegration = { provider: string; module: string };
 
 /** The packages being gathered select, and those of them that didn't load. */
-export type Selection = { selected: ReadonlySet<string>; unread: ReadonlySet<string> };
+type Selection = { selected: ReadonlySet<string>; unread: ReadonlySet<string> };
 
 /** An integration that can't run, or whose module is malformed: names the provider and module. */
 function problem({ provider, module }: OptionalIntegration, what: string) {

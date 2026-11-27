@@ -8,7 +8,7 @@ import { requirements, type Requirement } from "../../../packages/tooling/requir
 import { tools, type Provision, type Requirement as ToolRequirement } from "../../../packages/tools/handles.ts";
 import type { Office } from "../../office.ts";
 import type { GatheredPackage } from "../../gather.ts";
-import type { InstalledPackage } from "../../loader/packages.ts";
+import type { InstalledPackage } from "../../loader/definitions/inventory.ts";
 import { gateDefaultProblem, systemApplies, systemSection } from "./system.ts";
 import { defaultOffSetting, settingValue, type SettingValue, systemBlock, type SystemBlock } from "../../schema.ts";
 

@@ -559,7 +559,7 @@ function shadowedSettings(manifest: { namespace: string; settings: DeclaredSetti
 const booleanGate = "must name one of the package's settings declared type: boolean";
 
 // Its shape, its root's type and its validity are settings problems, checked when the settings are
-// read (packages.ts), so the rest of the definition, its commands included, still reads. An absent
+// read (loader/definitions/settings.ts), so the rest of the definition, its commands included, still reads. An absent
 // `settings` is the package declaring none; an explicit null is malformed.
 const settingsSchema = v.union([
   v.custom<SchemaSource>(value => jsonValue(value) && isMapping(value)),

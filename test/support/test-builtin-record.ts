@@ -1,7 +1,23 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileHashes, requiredPackages, sourceFile } from "../../src/loader/packages.ts";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { sourceFile } from "../../src/loader/sources/copies.ts";
+import { requiredPackages } from "../../src/loader/sources/selection.ts";
 import { writePackage } from "./test-package.ts";
+
+export function fixtureFileHashes(dir: string) {
+  const files: Record<string, string> = {};
+
+  for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const path = join(entry.parentPath, entry.name);
+    const name = relative(dir, path);
+
+    if (name !== ".office.json" && name !== ".source.json") files[name] = createHash("sha256").update(readFileSync(path)).digest("hex");
+  }
+
+  return files;
+}
 
 /** Finish a minimal synced office with the test's office package and the other required built-ins. */
 export function recordRequiredFixtures(officePackage: string) {
@@ -10,7 +26,7 @@ export function recordRequiredFixtures(officePackage: string) {
     mkdirSync(dir, { recursive: true });
 
     if (dir !== officePackage && !existsSync(join(dir, "package.json"))) writePackage(join(dir, "package.yaml"), `# fixture\n{}\n`);
-    writeFileSync(join(dir, sourceFile), JSON.stringify({ office: "fixture", commit: "fixture", files: fileHashes(dir) }));
+    writeFileSync(join(dir, sourceFile), JSON.stringify({ office: "fixture", commit: "fixture", files: fixtureFileHashes(dir) }));
   }
 }
 

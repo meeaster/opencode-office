@@ -216,7 +216,7 @@ test("the executable syncs mixed definitions and keeps applied state when a sele
 
   expect(applied).toContain('"jq" = "1.7.1" # notes');
 
-  // Every unreadable definition fails the same way (test/kernel/loader/package-definition.test.ts covers the kinds).
+  // Every unreadable definition fails the same way (test/kernel/loader/definitions/definition.test.ts covers the kinds).
   const reason = "packages/notes/office.ts: bad notes import";
   writePackage(join(pkg, "office.ts"), 'throw new Error("bad notes import")');
   expect(cli(1, "sync", "--packages")).toContain(reason);

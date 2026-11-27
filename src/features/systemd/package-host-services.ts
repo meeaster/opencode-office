@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { argument, quoted, requireLocalUnit, unitDir } from "./systemd.ts";
 import { machineDir, miseShims } from "../host/host-env.ts";
 import { userSystemd } from "../opencode/host-server.ts";
-import { installedPackages, type InstalledPackages } from "../../layout.ts";
+import { installedPackages, type InstalledPackages } from "../../loader/definitions/inventory.ts";
 import { machineRecordPath } from "../host/machine.ts";
 import { type Office, OfficeError } from "../../office.ts";
 import { hostApplies } from "../tooling/requirements.ts";

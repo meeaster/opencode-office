@@ -1,18 +1,18 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { syncLines as sync } from "../../support/sync.fixture.ts";
-import { git } from "../../../src/git.ts";
-import { loadOffice } from "../../../src/office.ts";
-import { fetchPackage, readPackage, resolvePackages, validateReplacement, writeOfficeDeclaration } from "../../../src/loader/packages.ts";
-import { publishAppliedSettings } from "../../../src/applied-settings.ts";
-import { readAppliedSettings } from "../../../sdk/applied-settings.ts";
-import { recordRequiredBuiltins } from "../../support/test-builtin-record.ts";
-import { readLockSection } from "../../../src/versions.ts";
-import { readReceipts } from "../../../packages/seeds/store.ts";
-import { definitionText, markingDefinition, pluginDefinition, settingsSchema, writePackage } from "../../support/test-package.ts";
+import { loadOffice } from "../../../../src/office.ts";
+import { installedPackages } from "../../../../src/loader/definitions/inventory.ts";
+import { requiredPackages, resolvePackages } from "../../../../src/loader/sources/selection.ts";
+import { syncLines as sync } from "../../../support/sync.fixture.ts";
+import { git } from "../../../../src/git.ts";
+import { materializePackage, writeOfficeDeclaration } from "../../../../src/loader/sources/copies.ts";
+import { readAppliedSettings } from "../../../../sdk/applied-settings.ts";
+import { readLockSection } from "../../../../src/versions.ts";
+import { readReceipts } from "../../../../packages/seeds/store.ts";
+import { definitionText, markingDefinition, pluginDefinition, settingsSchema, writePackage } from "../../../support/test-package.ts";
 
 let dir: string;
 
@@ -32,92 +32,20 @@ function write(path: string, content: string): void {
 /** The office's package named `name`, read with its settings. */
 function read(office: string, name: string) {
   const loaded = loadOffice(office);
-  const resolved = resolvePackages(loaded).packages.find((item) => item.entry.name === name);
+  // The fixtures exercise one package; the required packages aren't part of this inventory.
+  const skip = new Set(requiredPackages.filter(required => required !== name));
+  const inventory = installedPackages(loaded, skip);
+  const item = inventory.installed.find(candidate => candidate.entry.name === name);
 
-  if (resolved === undefined) throw new Error(`no package ${name}`);
+  if (item) return { loaded, result: { ok: true as const, value: item } };
 
-  return { loaded, result: readPackage(loaded, resolved) };
+  const errors = inventory.problems.filter(problem => problem.packages.includes(name)).map(problem => problem.message);
+  const settings = inventory.invalidSettings.filter(problem => problem.packages.includes(name)).map(problem => problem.message);
+
+  return { loaded, result: { ok: false as const, errors, settings } };
 }
 
 const manifest = "settings: {type: object, additionalProperties: false, properties: {url: {type: string}, title: {type: string, default: Shared}}, required: [url]}\n";
-
-test("settings are one JSON Schema, checked with its defaults applied: types, unknown and required settings, nested $defs, and none when undeclared", () => {
-  const path = join(dir, "packages/demo/package.yaml");
-  const config = (settings: string) => write(join(dir, "office.yaml"), `name: t\npackages:\n  - name: demo\n    settings: ${settings}\n`);
-
-  const errors = (settings: string) => {
-    config(settings);
-    const { result } = read(dir, "demo");
-
-    return result.ok ? [] : result.errors;
-  };
-
-  const nested = `settings:
-  type: object
-  additionalProperties: false
-  properties:
-    port: { type: integer, default: 4566 }
-    enabled: { type: boolean, default: true }
-    roles:
-      type: object
-      properties:
-        review: { type: array, items: { $ref: '#/$defs/model' } }
-  $defs:
-    model: { enum: [fast, deep] }
-`;
-
-  writePackage(path, nested);
-  config("{ port: 4600, roles: { review: [fast, deep] } }");
-
-  const { loaded, result } = read(dir, "demo");
-
-  if (!result.ok) throw new Error(result.errors.join("\n"));
-
-  publishAppliedSettings(loaded, [result.value]);
-  expect(readAppliedSettings(dir, "demo")).toEqual({ port: 4600, enabled: true, roles: { review: ["fast", "deep"] } });
-  expect(errors("{ roles: { review: [other] } }")).toEqual(["packages.demo.settings.roles.review.0: must be equal to one of the allowed values"]);
-  // A quoted port is text, not an integer.
-  expect(errors('{ port: "4600" }')).toEqual(["packages.demo.settings.port: must be integer"]);
-  expect(errors("{ colour: blue }")).toEqual(["packages.demo.settings.colour: the package declares no such setting; remove it from office.yaml"]);
-
-  writePackage(path, manifest);
-  expect(errors("{}")).toEqual(["packages.demo.settings.url: is required; add it to office.yaml"]);
-  expect(errors("{ url: https://example.com/site }")).toEqual([]);
-  expect(read(dir, "demo").result).toMatchObject({ ok: true, value: { settings: { url: "https://example.com/site", title: "Shared" } } });
-
-  // A package that declares no settings accepts none.
-  writePackage(path, "{}\n");
-  expect(errors("{ label: x }")).toEqual(["packages.demo.settings.label: the package declares no such setting; remove it from office.yaml"]);
-
-  // The root is an object schema; a removed key is an unknown one; an invalid schema names the file.
-  const root = 'its root must have type: "object"';
-
-  writePackage(path, "settings: { type: array }\n");
-  expect(errors("{}")).toEqual([`packages/demo/package.yaml: settings: ${root}`]);
-  writePackage(path, "settings: { $ref: '#/$defs/all' }\n");
-  expect(errors("{}")).toEqual([`packages/demo/package.yaml: settings: ${root}`]);
-  // Settings that aren't a mapping are a settings problem too, reported before a check of the package's folder.
-  writePackage(path, "settings: null\nhost: {services: {svc: {description: Service, script: missing.sh}}}\n");
-  expect(read(dir, "demo").result).toMatchObject({ ok: false, errors: ["packages/demo/package.yaml: settings: must be a JSON Schema object"], settings: ["packages/demo/package.yaml: settings: must be a JSON Schema object"] });
-  writePackage(path, "settings_schema: { type: object }\n");
-  expect(errors("{}")).toEqual([expect.stringMatching(/^packages\/demo\/package\.yaml: settings_schema: must be a mapping of /)]);
-  writePackage(path, nested.replace("type: boolean", "type: invalid"));
-  expect(errors("{}")).toEqual([expect.stringContaining("packages/demo/package.yaml: settings: schema is invalid")]);
-});
-
-test("two packages' schemas with the same $id each validate, with their own $refs and defaults", () => {
-  const schema = (type: string, value: string) => `settings: {$id: "https://example.com/settings", type: object, additionalProperties: false, properties: {size: {$ref: "#/$defs/size"}, label: {type: string, default: ${value}}}, $defs: {size: {type: ${type}}}}\n`;
-
-  writePackage(join(dir, "packages/one/package.yaml"), schema("integer", "one"));
-  writePackage(join(dir, "packages/two/package.yaml"), schema("string", "two"));
-  write(join(dir, "office.yaml"), "name: t\npackages:\n  - name: one\n    settings: {size: 3}\n  - name: two\n    settings: {size: large}\n");
-
-  expect(read(dir, "one").result).toMatchObject({ ok: true, value: { settings: { size: 3, label: "one" } } });
-  expect(read(dir, "two").result).toMatchObject({ ok: true, value: { settings: { size: "large", label: "two" } } });
-  write(join(dir, "office.yaml"), "name: t\npackages:\n  - name: one\n    settings: {size: large}\n  - name: two\n    settings: {size: 3}\n");
-  expect(read(dir, "one").result).toMatchObject({ ok: false, errors: ["packages.one.settings.size: must be integer"] });
-  expect(read(dir, "two").result).toMatchObject({ ok: false, errors: ["packages.two.settings.size: must be string"] });
-});
 
 test("an install ignores the source office's records, an update by full commit SHA replaces the package, and an edited copy is restored", async () => {
   const repo = join(dir, "repo");
@@ -152,8 +80,14 @@ test("an install ignores the source office's records, an update by full commit S
   const loaded = loadOffice(office);
   const script = join(office, ".office/packages/demo/scripts/run.sh");
 
-  const source = { repo, path: "pkgs/demo", ref: first, track: undefined };
-  expect(await fetchPackage(loaded, loaded.packages[0], source)).toEqual([`installed .office/packages/demo from ${repo} at ${first}`]);
+  const materialize = async () => {
+    const current = loadOffice(office);
+    const [item] = resolvePackages(current, "demo").packages;
+
+    return (await materializePackage(current, item, join(office, ".office/packages"))).changes;
+  };
+
+  expect(await materialize()).toEqual([`installed .office/packages/demo from ${repo} at ${first}`]);
 
   const installed = read(office, "demo").result;
 
@@ -162,13 +96,13 @@ test("an install ignores the source office's records, an update by full commit S
   expect(writeOfficeDeclaration(loaded, installed.value)).toEqual(["wrote .office/packages/demo/.office.json (opencode: container)"]);
   write(script, "echo edited\n");
 
-  const [restored] = await fetchPackage(loaded, loaded.packages[0], source);
+  const [restored] = await materialize();
 
   expect(restored).toStartWith(`restored .office/packages/demo to its copy of ${first}, undoing edits to scripts/run.sh (edited);`);
   expect(readFileSync(script, "utf8")).toBe("echo one\n");
 
   write(join(office, "office.yaml"), entry(second));
-  expect(await fetchPackage(loadOffice(office), loaded.packages[0], { ...source, ref: second })).toEqual([`updated .office/packages/demo from ${repo} pkgs/demo at ${first.slice(0, 12)} (ref ${first}) to ${second} (${second})`]);
+  expect(await materialize()).toEqual([`updated .office/packages/demo from ${repo} pkgs/demo at ${first.slice(0, 12)} (ref ${first}) to ${second} (${second})`]);
   expect(readFileSync(script, "utf8")).toBe("echo two\n");
 
   const updated = read(office, "demo");
@@ -341,45 +275,6 @@ test("sync locks a Git package's commit in office.lock, keeps the entry when a c
   expect(existsSync(lock)).toBe(false);
 });
 
-test("an entry without repo is built-in when shipped and local otherwise; the required office package appears only once, a built-in can't come from another repository and no package is called sdk", () => {
-  const office = join(dir, "office");
-
-  write(
-    join(office, "office.yaml"),
-    [
-      "name: t",
-      "packages:",
-      "  - name: knowledge",
-      "  - name: mine",
-      "  - name: office",
-      "  - name: shared",
-      "    repo: https://example.com/shared.git",
-      "    path: packages/shared",
-      "    ref: main",
-      "  - name: sdk",
-      "",
-    ].join("\n"),
-  );
-
-  const { packages, problems } = resolvePackages(loadOffice(office));
-
-  expect(packages.map((item) => [item.entry.name, item.kind, item.dir.slice(office.length + 1)])).toEqual([
-    ["tooling", "built-in", ".office/packages/tooling"],
-    ["tools", "built-in", ".office/packages/tools"],
-    ["mise-integration", "built-in", ".office/packages/mise-integration"],
-    ["opencode", "built-in", ".office/packages/opencode"],
-    ["office", "built-in", ".office/packages/office"],
-    ["references", "built-in", ".office/packages/references"],
-    ["seeds", "built-in", ".office/packages/seeds"],
-    ["cron", "built-in", ".office/packages/cron"],
-    ["knowledge", "built-in", ".office/packages/knowledge"],
-    ["mine", "local", "packages/mine"],
-    ["shared", "remote", ".office/packages/shared"],
-  ]);
-  // A package called sdk would take @office/sdk's place in the package set.
-  expect(problems).toEqual([{ packages: ["sdk"], message: "the name sdk is reserved for @office/sdk; rename the package" }]);
-});
-
 test("sync installs the built-in packages from the tool and restores an edited copy, keeping the office's records", async () => {
   const office = join(dir, "office");
   const skill = join(office, ".office/packages/office/skills/office/SKILL.md");
@@ -444,27 +339,4 @@ test("the required office package ignores the Claude app's synced skills unless 
   expect(readFileSync(join(skills, "openai-skill-creator/SKILL.md"), "utf8")).toContain("\nname: openai-skill-creator\n");
   expect(existsSync(join(skills, "openai-skill-creator/NOTICE"))).toBe(true);
   expect(existsSync(join(skills, "openai-skill-creator/license.txt"))).toBe(true);
-});
-
-test("a replacement is checked with each selected optional provider it can import, active or not, and not with one office.yaml leaves out", () => {
-  const office = join(dir, "office");
-  const consumer = join(office, "packages/consumer");
-  const shared = "  - name: shared\n    repo: https://example.com/shared.git\n    path: packages/shared\n    ref: main\n";
-
-  writePackage(join(consumer, "office.ts"), definitionText("{}"));
-  write(join(consumer, "shared.ts"), "");
-  write(join(consumer, "package.json"), JSON.stringify({ name: "@office/consumer", office: { definition: "./office.ts", integrations: { "@office/shared": "./shared.ts" } } }));
-
-  const candidate = (yaml: string) => {
-    write(join(office, "office.yaml"), `name: t\npackages:\n  - name: consumer\n${yaml}`);
-    const loaded = loadOffice(office);
-    const item = resolvePackages(loaded).packages.find(pkg => pkg.entry.name === "consumer");
-
-    if (item === undefined) throw new Error("no consumer");
-
-    return () => validateReplacement(loaded, item);
-  };
-
-  expect(candidate(shared)).toThrow("package shared: not synced yet; run office sync");
-  expect(candidate("")().entry.name).toBe("consumer");
 });

@@ -2,14 +2,14 @@ import { existsSync, lstatSync, readlinkSync, realpathSync, statSync } from "nod
 import { basename, dirname, join, relative, sep } from "node:path";
 import { configFile, installedPanelNames, isRegistered, locate, panelDir, readPanelRecord } from "./desktop.ts";
 import { findOffice, loadOffice, OfficeError, readOfficeFields, type Office } from "../../office.ts";
-import { requiredPackages, resolvePackages } from "../../loader/packages.ts";
+import { requiredPackages, resolvePackages } from "../../loader/sources/selection.ts";
 import { separateFolders } from "../../layout.ts";
 import { officeSchema } from "../../schema.ts";
 import { cloneTarget, declarationBinding, pluginClones } from "./delivery.ts";
 import { configSources, conventionSources, projectDirectories, type Source } from "./native.ts";
 import { readDeclarations } from "./declarations.ts";
 import { officeTarget, pluginFolder } from "./ownership.ts";
-import { readPackageJson } from "../../loader/package-manifest.ts";
+import { readPackageJson } from "../../loader/sources/manifest.ts";
 
 /** What the last sync recorded of a selected package's panel: declared, withheld, or not confirmed for its current inputs. */
 type PanelState = "declared" | "withheld" | "unconfirmed";

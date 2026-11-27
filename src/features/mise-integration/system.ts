@@ -15,7 +15,7 @@ import { join, relative } from "node:path";
 
 import { packageDeliveryDir } from "../../bound-paths.ts";
 import type { Office, PackageEntry } from "../../office.ts";
-import type { InstalledPackage } from "../../loader/packages.ts";
+import type { InstalledPackage } from "../../loader/definitions/inventory.ts";
 import type { Parsed, SettingValue, SystemBlock } from "../../schema.ts";
 
 /** A package with its effective system block: its own, or a recipe it contributed in this run (src/gather.ts). */

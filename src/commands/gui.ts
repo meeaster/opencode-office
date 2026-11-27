@@ -6,7 +6,7 @@ import { lstatSync, mkdirSync, readFileSync, realpathSync, watch } from "node:fs
 import { basename, dirname, join, relative } from "node:path";
 
 import { installPanel, locate, sha256 } from "../features/opencode/desktop.ts";
-import { resolvePackages } from "../loader/packages.ts";
+import { resolvePackages } from "../loader/sources/selection.ts";
 import { loadOffice, type Office, OfficeError } from "../office.ts";
 import { validateAssets } from "../features/opencode/assets.ts";
 import { declarationBinding } from "../features/opencode/delivery.ts";

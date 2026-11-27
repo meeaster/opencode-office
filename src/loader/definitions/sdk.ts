@@ -1,10 +1,9 @@
 // The executable's own @office/sdk, as every package gets it. A package's `import ... from
 // "@office/sdk"` resolves here at runtime, whatever is on disk under that name: the redirect is
 // registered in each process (and worker) before its first definition is required.
-import { Package, Registry } from "../sdk/index.ts";
+import { Package, Registry } from "../../../sdk/index.ts";
 
-/** Whether a value was made by this process's `Package.define`, and by its `Package.integration`. */
-export { marked as madeWithSdk, markedAccess as accessWithSdk, markedIntegration as integrationWithSdk } from "../sdk/mark.ts";
+export { markedAccess as accessWithSdk } from "../../../sdk/mark.ts";
 
 let registered = false;
 

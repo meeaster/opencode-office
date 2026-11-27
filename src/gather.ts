@@ -12,13 +12,12 @@ import { type AssetPaths, contributedAssets } from "./features/opencode/assets.t
 import { machineCollection, project, type Projection, recipeSystem } from "./features/mise-integration/projection.ts";
 import { toolProblems } from "./features/tools/admission.ts";
 import type { AppliedReference } from "./features/references/applied-references.ts";
-import { definitionRoot, packageDeliveryDir } from "./bound-paths.ts";
+import { packageDeliveryDir } from "./bound-paths.ts";
 import { declaredCommands, nameProblems, type NameProblem, type RegisteredCommand } from "./command-table.ts";
-import { installedPackages, type InstalledPackages } from "./layout.ts";
 import type { Office } from "./office.ts";
-import { type InstalledPackage, type PackageProblem, problemLine } from "./loader/packages.ts";
-import { loadIntegrations, selectedIntegrations } from "./loader/package-integrations.ts";
-import { jsonObject, type Registered, registerPackage } from "./loader/package-setup.ts";
+import { type InstalledPackage, installedPackages, type InstalledPackages, problemLine } from "./loader/definitions/inventory.ts";
+import { jsonObject, registerPackages } from "./loader/definitions/registration.ts";
+import type { PackageProblem } from "./loader/sources/selection.ts";
 import type { PackageManifest } from "./schema.ts";
 
 /** A package whose setup ran in this run: what it read as, with the claims its entries made and its effective system block. */
@@ -37,7 +36,7 @@ type Contributor = { owner: string; namespace: string; settings: Record<string, 
 export type Entry = Contributor & { id: string; value: RegistryEntry };
 
 /** A package whose setup ran: its name, namespace and settings, the folder its definition loaded from, its delivery folder, and what it registered. */
-export type SetUp = { name: string; namespace: string; settings: Record<string, SettingValue>; folder: string; root: string; registered: Registered };
+export type SetUp = Awaited<ReturnType<typeof registerPackages>>[number];
 
 export type Gathered = {
   /** Every package office.yaml selects, the required built-ins included, loaded or not. */
@@ -113,26 +112,12 @@ export async function gatherPackages(office: Office, { skip = new Set<string>(),
   const settings = new Map(inventory.installed.map(item => [item.entry.name, item.settings]));
   const commands = [...inventory.definitions].flatMap(([owner, manifest]) => declaredCommands(manifest).map(command => ({ owner, command, settings: settings.get(owner) })));
   const committed = committedFolders(inventory.definitions);
-  const setUp: SetUp[] = [];
 
   problems.push(...committed.problems);
 
-  // With any invalid settings, or nothing loaded, no setup runs: commands and help still see what definitions declare.
-  if (!inventory.blocked && !inventory.invalidSettings.length) {
-    for (const item of inventory.installed) {
-      const name = item.entry.name;
-      const folder = definitionRoot(office.dir, item);
-
-      try {
-        const integrations = loadIntegrations(folder, selectedIntegrations(item.integrations, inventory));
-        const registered = await registerPackage({ name, manifest: item.manifest, settings: item.settings, integrations, selected: inventory.selected });
-
-        setUp.push({ name, namespace: item.manifest.namespace, settings: item.settings, folder, root: packageDeliveryDir(office.dir, item), registered });
-      } catch (error) {
-        problems.push({ packages: [item.entry.name], message: message(error) });
-      }
-    }
-  }
+  const setUp = await registerPackages(office, inventory, (name, error) => {
+    problems.push({ packages: [name], message: message(error) });
+  });
 
   const parsed = parseEntries(office, setUp);
   const packages: GatheredPackage[] = [];

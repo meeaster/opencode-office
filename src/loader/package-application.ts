@@ -9,7 +9,7 @@ import { linkPlugins, withPluginPlan } from "../features/opencode/delivery.ts";
 import { type Declaration, readDeclarations } from "../features/opencode/declarations.ts";
 import { syncTools } from "../features/mise-integration/delivery.ts";
 import { type Office } from "../office.ts";
-import { removePackage, writeOfficeDeclaration } from "./packages.ts";
+import { removePackage, writeOfficeDeclaration } from "./sources/copies.ts";
 import { prepareAppliedSettings, publishAppliedSettings } from "../applied-settings.ts";
 import { publishToolsLocation } from "../features/tools/applied.ts";
 import { failure, isFailure, type Change } from "../lib/change.ts";

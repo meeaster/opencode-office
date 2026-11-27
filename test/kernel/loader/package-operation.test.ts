@@ -8,7 +8,9 @@ import { syncLines as sync } from "../../support/sync.fixture.ts";
 import { loadOffice, type PackageEntry } from "../../../src/office.ts";
 import { boundCommit, candidatePackageLock, packageLockProblems } from "../../../src/loader/package-operation.ts";
 import { editLock } from "../../../src/versions.ts";
-import { fetchPackage, fileHashes, type ResolvedPackage } from "../../../src/loader/packages.ts";
+import { materializePackage } from "../../../src/loader/sources/copies.ts";
+import type { ResolvedPackage } from "../../../src/loader/sources/selection.ts";
+import { fixtureFileHashes } from "../../support/test-builtin-record.ts";
 import { writePackage } from "../../support/test-package.ts";
 
 let dir: string;
@@ -53,7 +55,7 @@ function staged(name: string, record: StagedRecord | undefined): void {
   mkdirSync(folder, { recursive: true });
   writePackage(join(folder, "package.yaml"), `# Staged.\n{}\n`);
 
-  if (record) writeFileSync(join(folder, ".source.json"), JSON.stringify({ ...record, files: fileHashes(folder) }));
+  if (record) writeFileSync(join(folder, ".source.json"), JSON.stringify({ ...record, files: fixtureFileHashes(folder) }));
 }
 
 test("the candidate lock takes each staged Git copy's commit, keeps a failed one's entry, drops deselected ones and has none without Git packages", () => {
@@ -85,8 +87,10 @@ test("an installed copy whose record matches its entry is adopted into the lock 
   const offline = { ...source, repo: join(dir, "absent") };
 
   staged("notes", { ...offline, commit: published });
-  expect(await fetchPackage(loadOffice(office), { ...entry, source: offline }, offline, undefined, undefined, join(dir, "packages/notes"))).toEqual([]);
-  expect(candidatePackageLock([{ entry: { ...entry, source: offline }, kind: "remote", dir: "" }], join(dir, "packages"), [], new Map())).toEqual(new Map([
+  const item: ResolvedPackage = { entry: { ...entry, source: offline }, kind: "remote", dir: join(dir, "packages/notes") };
+
+  expect((await materializePackage(loadOffice(office), item, join(dir, "packages"))).changes).toEqual([]);
+  expect(candidatePackageLock([item], join(dir, "packages"), [], new Map())).toEqual(new Map([
     ["notes", { repo: offline.repo, path: offline.path, ref: offline.ref, commit: published }],
   ]));
 });

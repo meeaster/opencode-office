@@ -10,7 +10,8 @@ import { gatherPackages } from "../../../gather.ts";
 import { grantConsent } from "../../host/machine.ts";
 import { loadOffice } from "../../../office.ts";
 import { machinePlatform, systemApplies, systemPlatformVariable } from "../system.ts";
-import { readPackage, resolvePackages } from "../../../loader/packages.ts";
+import { installedPackages } from "../../../loader/definitions/inventory.ts";
+import { requiredPackages } from "../../../loader/sources/selection.ts";
 import { project } from "../projection.ts";
 import { recipes } from "../../../../packages/mise-integration/claims.ts";
 import { fragmentNotes } from "../delivery.ts";
@@ -302,11 +303,10 @@ test("a system setup applies only when office.yaml sets its setting to true, and
 
   const read = (name: string) => {
     const loaded = loadOffice(office);
-    const item = resolvePackages(loaded).packages.find(candidate => candidate.entry.name === name);
+    const inventory = installedPackages(loaded, new Set(requiredPackages));
+    const item = inventory.installed.find(candidate => candidate.entry.name === name);
 
-    if (item === undefined) throw new Error(`no package ${name}`);
-
-    return { loaded, result: readPackage(loaded, item) };
+    return { loaded, item, problems: inventory.problems, invalidSettings: inventory.invalidSettings };
   };
 
   demo();
@@ -316,13 +316,15 @@ test("a system setup applies only when office.yaml sets its setting to true, and
   mode("host");
   const problem = "packages.demo.settings.system: resolves to true though office.yaml doesn't set it; the setting of a system setup must default to off, so an office opts in";
 
-  expect(read("demo").result).toMatchObject({ ok: false, settings: [problem] });
+  const refused = read("demo");
+  expect(refused.item).toBeUndefined();
+  expect(refused.invalidSettings).toEqual([{ packages: ["demo"], message: problem }]);
   // Turned on by office.yaml, it reads, and applies.
   mode("host", on);
   const opted = read("demo");
 
-  if (!opted.result.ok) throw new Error(opted.result.errors.join("\n"));
-  const own = { ...opted.result.value, system: opted.result.value.manifest.system };
+  if (!opted.item) throw new Error(opted.problems.map(problem => problem.message).join("\n"));
+  const own = { ...opted.item, system: opted.item.manifest.system };
   expect(systemApplies(opted.loaded, own)).toBe(true);
   // Whatever the resolved settings say, only office.yaml's own true opts in.
   own.entry.settings = { system: "true" };
@@ -332,10 +334,10 @@ test("a system setup applies only when office.yaml sets its setting to true, and
   writePackage(join(office, "packages/giver/package.yaml"), "settings: {type: object, additionalProperties: false, properties: {system: {type: boolean, default: false}}, allOf: [{properties: {system: {default: true}}}]}\n");
   write(join(office, "packages/giver/system/bootstrap.toml"), '[bootstrap.packages]\n"apt:demo-browser" = "latest"\n');
   write(join(office, "office.yaml"), "name: t\nopencode:\n  mode: host\n  url: http://127.0.0.1:49999\npackages:\n  - name: giver\n");
-  const giver = read("giver").result;
+  const { item: giver, problems } = read("giver");
 
-  if (!giver.ok) throw new Error(giver.errors.join("\n"));
+  if (!giver) throw new Error(problems.map(problem => problem.message).join("\n"));
   const row = { id: recipes.id, value: { name: "giver", setting: "system", description: "Giver", platforms: ["ubuntu-24.04-amd64-wsl"], bootstrap: "system/bootstrap.toml", ready: [ready()], env: {} } };
 
-  expect(() => project(giver.value, [row])).toThrow(`system recipe giver: ${problem.replaceAll("demo", "giver")}`);
+  expect(() => project(giver, [row])).toThrow(`system recipe giver: ${problem.replaceAll("demo", "giver")}`);
 });

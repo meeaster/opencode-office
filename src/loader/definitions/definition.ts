@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
-import type { OptionalIntegration } from "./package-integrations.ts";
-import { readPackageJson } from "./package-manifest.ts";
-import { madeWithSdk, registerSdk } from "../sdk.ts";
-import { type PackageManifest, parseManifest, type Parsed } from "../schema.ts";
+import type { OptionalIntegration } from "./integrations.ts";
+import { readPackageJson } from "../sources/manifest.ts";
+import { marked as madeWithSdk } from "../../../sdk/mark.ts";
+import { registerSdk } from "./sdk.ts";
+import { type PackageManifest, parseManifest, type Parsed } from "../../schema.ts";
 
 /**
  * Read one definition: the file the package's package.json names in `office.definition`, loaded

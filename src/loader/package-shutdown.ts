@@ -8,8 +8,10 @@
 // own shutdown runs in the process that started this one, whatever happens here.
 import { officeInfo, packageHost, packageLines } from "../lifecycle-inputs.ts";
 import type { Office } from "../office.ts";
-import { importEdges, readPackageJson } from "./package-manifest.ts";
-import { definitionGate, installedDefinition, type ResolvedPackage, resolvePackages, schemaSettings, selectedNames } from "./packages.ts";
+import { definitionGate, installedDefinition } from "./definitions/inventory.ts";
+import { schemaSettings } from "./definitions/settings.ts";
+import { importEdges, readPackageJson } from "./sources/manifest.ts";
+import { type ResolvedPackage, resolvePackages, selectedNames } from "./sources/selection.ts";
 import type { PackageManifest } from "../schema.ts";
 import { say } from "../report/index.ts";
 

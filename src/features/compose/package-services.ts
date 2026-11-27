@@ -5,9 +5,8 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import * as compose from "./services.ts";
-import { installedPackages, type InstalledPackages } from "../../layout.ts";
+import { type InstalledPackage, installedPackages, type InstalledPackages } from "../../loader/definitions/inventory.ts";
 import { type Office, OfficeError, readEnvFile } from "../../office.ts";
-import type { InstalledPackage } from "../../loader/packages.ts";
 import { say } from "../../report/index.ts";
 import type { PackageManifest } from "../../schema.ts";
 

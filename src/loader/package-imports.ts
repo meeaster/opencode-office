@@ -5,8 +5,8 @@ import { failure, type Change } from "../lib/change.ts";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { packageLinks } from "../bound-paths.ts";
-import { importEdges, readPackageJson, sdkName } from "./package-manifest.ts";
-import type { ResolvedPackage } from "./packages.ts";
+import { importEdges, readPackageJson, sdkName } from "./sources/manifest.ts";
+import type { ResolvedPackage } from "./sources/selection.ts";
 import { toolFiles, toolPath, writeToolFile } from "../tool.ts";
 
 /**

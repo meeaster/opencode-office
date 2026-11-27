@@ -1,6 +1,6 @@
 import type { Office } from "../../office.ts";
 import type { GatheredPackage } from "../../gather.ts";
-import type { InstalledPackage } from "../../loader/packages.ts";
+import type { InstalledPackage } from "../../loader/definitions/inventory.ts";
 import { compareToolVersions } from "../../../packages/tools/versions.ts";
 
 export { compareToolVersions };

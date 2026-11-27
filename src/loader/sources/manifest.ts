@@ -4,11 +4,11 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, relative, sep } from "node:path";
 import * as v from "valibot";
-import { check, ownEntries, type Parsed } from "../schema.ts";
+import { check, ownEntries, type Parsed } from "../../schema.ts";
 
 export const scope = "@office/";
 
-export type PackageJson = {
+type PackageJson = {
   /** What the package is for, when it says. */
   description?: string;
   /** The definition's path inside the package, normalized (`office.ts`, `src/definition.ts`). */
@@ -74,7 +74,7 @@ export function importEdges(json: Pick<PackageJson, "dependencies" | "integratio
 }
 
 /** What to add, for a package with no usable package.json. */
-export function packageJsonHint(name: string) {
+function packageJsonHint(name: string) {
   return `add a package.json with "name": "${scope}${name}", an optional "description" and "office": { "definition": "./office.ts" }`;
 }
 

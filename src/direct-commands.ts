@@ -9,7 +9,7 @@ import { executorAccess } from "./features/executor/executor.ts";
 import { officeInfo } from "./lifecycle-inputs.ts";
 import { updateExcluded } from "./exclude-plumbing.ts";
 import { loadOffice, OfficeError, replacePackageSetting } from "./office.ts";
-import { schemaSettings } from "./loader/packages.ts";
+import { schemaSettings } from "./loader/definitions/settings.ts";
 import { relative } from "node:path";
 import * as v from "valibot";
 
