@@ -2,14 +2,14 @@
 // cron package's settings, its commands, where each kind of mistake is caught, a broken package
 // stopping a named run, and catch-up in fresh processes.
 import { expect, test } from "bun:test";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "../../src/git.ts";
-import { activeGeneration } from "../../src/loader/package-generation.ts";
 import { definitionFixture } from "../support/package-definition.fixture.ts";
 import { definitionText, writePackage } from "../support/test-package.ts";
 
 const { root, exe, marker, write, read, commit, fixture, collector } = definitionFixture({ second: false });
+const activeGeneration = (dir: string) => readlinkSync(join(dir, ".office/current"));
 
 /** A definition declaring `jobs` to the cron registry (handles match by id, so it needs no import). */
 const declaring = (jobs: object[], extra = "") => definitionText(`{setup(c){for (const job of ${JSON.stringify(jobs)}) c.add({id:"cron.jobs",parse:v=>v},job); ${extra}}}`);
@@ -250,7 +250,7 @@ packages:
   expect(existsSync(join(home, ".local/state/office/cron", name, `${id}.stamp`))).toBe(true);
   // The set catch-up started in is still there, and declares the job with a script it holds.
   expect(activeGeneration(dir)).not.toBe(started);
-  const old = join(dir, ".office/generations", started ?? "none", "packages/later");
+  const old = join(dir, ".office", started, "packages/later");
   expect(read(join(old, "office.ts"))).toContain('"script":"old.sh"');
   expect(existsSync(join(old, "old.sh"))).toBe(true);
   expect(existsSync(join(old, "new.sh"))).toBe(false);

@@ -3,12 +3,13 @@
 // one, even when the consumer's settings would add nothing, and settings are checked against the
 // consumer's one schema before any integration module is evaluated, its provider selected or not.
 import { expect, test } from "bun:test";
+import { readlinkSync } from "node:fs";
 import { join } from "node:path";
 import { definitionFixture } from "../support/package-definition.fixture.ts";
-import { activeGeneration } from "../../src/loader/package-generation.ts";
 import { copyExample, evaluated, json } from "../support/package-integrations.fixture.ts";
 
 const { exe, write, read, fixture } = definitionFixture({ second: false });
+const activeGeneration = (dir: string) => readlinkSync(join(dir, ".office/current"));
 
 const routing = (settings = "") => `  - name: chatgpt-routing\n${settings}`;
 

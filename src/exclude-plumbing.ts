@@ -1,7 +1,7 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
-import { editorLinks } from "./loader/package-imports.ts";
+import { editorLinks } from "./loader/generation/links.ts";
 import { git } from "./git.ts";
 import { officeEntries } from "./features/opencode/ownership.ts";
 import { atomicWrite } from "./lib/atomic-write.ts";

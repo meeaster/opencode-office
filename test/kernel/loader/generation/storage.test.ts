@@ -4,9 +4,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { beginGeneration, publishGeneration, recover } from "../../../src/loader/package-generation.ts";
-import type { PackageLock } from "../../../src/schema.ts";
-import { defaultPins, editLock, packageSectionKey, readLock, readLockSection, readLockText, writeLock } from "../../../src/versions.ts";
+import { beginGeneration, publishGeneration } from "../../../../src/loader/generation/storage.ts";
+import type { PackageLock } from "../../../../src/schema.ts";
+import { defaultPins, editLock, packageSectionKey, readLock, readLockSection, readLockText, writeLock } from "../../../../src/versions.ts";
 
 let dir: string;
 
@@ -56,11 +56,17 @@ function interrupted(active: "previous" | "candidate", yaml: "before" | "after",
 const active = () => readlinkSync(join(dir, ".office/current")).split("/")[1];
 const journal = () => existsSync(join(dir, ".office/publishing.json"));
 
+function reserveFrom() {
+  using reservation = beginGeneration(dir);
+
+  return reservation.transaction.previous;
+}
+
 test("recovery rolls an interrupted switch forward with the lock's packages: section, from both files written or office.yaml alone, keeping runtime pins, finishing a lock-only switch and removing the last section", () => {
   for (const lock of [sections.notes, sections.empty]) {
     const { candidate } = interrupted("previous", "after", lock);
 
-    recover(dir);
+    expect(reserveFrom()).toBe(candidate);
     expect(active()).toBe(candidate);
     expect(readLockSection(dir, "packages")).toEqual(sections.notes);
     expect(journal()).toBe(false);
@@ -68,13 +74,13 @@ test("recovery rolls an interrupted switch forward with the lock's packages: sec
 
   const { candidate } = interrupted("candidate", "after", sections.notes);
 
-  recover(dir);
+  expect(reserveFrom()).toBe(candidate);
   expect(active()).toBe(candidate);
 
   // `office pin` ran after the publisher died: the section is still at "before", the runtime pins are new and kept.
   const { candidate: pinned } = interrupted("previous", "after", sections.empty, { pins: true });
 
-  recover(dir);
+  expect(reserveFrom()).toBe(pinned);
   expect(active()).toBe(pinned);
   expect(readLockSection(dir, "packages")).toEqual(sections.notes);
   expect(readLock(dir)).toEqual(defaultPins);
@@ -83,18 +89,18 @@ test("recovery rolls an interrupted switch forward with the lock's packages: sec
   for (const lock of [sections.notes, sections.edited]) {
     const { candidate: moved } = interrupted("previous", "before", lock, { from: sections.notes, to: sections.edited, moves: false });
 
-    recover(dir);
+    expect(reserveFrom()).toBe(moved);
     expect(active()).toBe(moved);
     expect(readLockSection(dir, "packages")).toEqual(sections.edited);
   }
 
   // The last Git package went: office.lock goes with its section, or keeps its runtime pins.
   interrupted("previous", "after", sections.notes, { from: sections.notes, to: sections.empty });
-  recover(dir);
+  reserveFrom();
   expect(existsSync(join(dir, "office.lock"))).toBe(false);
 
   interrupted("previous", "after", sections.notes, { from: sections.notes, to: sections.empty, pins: true });
-  recover(dir);
+  reserveFrom();
   expect(readFileSync(join(dir, "office.lock"), "utf8")).not.toContain("packages:");
   expect(readLock(dir)).toEqual(defaultPins);
 });
@@ -102,7 +108,7 @@ test("recovery rolls an interrupted switch forward with the lock's packages: sec
 test("recovery accepts a switch that never began, and refuses office.yaml or the packages: section changed independently", () => {
   const { previous } = interrupted("previous", "before", sections.empty, { pins: true });
 
-  recover(dir);
+  expect(reserveFrom()).toBe(previous);
   expect(active()).toBe(previous);
   expect(readLockSection(dir, "packages")).toEqual(sections.empty);
   expect(journal()).toBe(false);
@@ -111,7 +117,7 @@ test("recovery accepts a switch that never began, and refuses office.yaml or the
     interrupted(pointer, yaml, lock);
     const before = readLockText(dir);
 
-    expect(() => recover(dir)).toThrow("office.yaml or office.lock's packages: section changed independently");
+    expect(reserveFrom).toThrow("office.yaml or office.lock's packages: section changed independently");
     expect(readLockText(dir)).toBe(before);
     expect(journal()).toBe(true);
   }
@@ -127,7 +133,7 @@ test("with a key office.lock doesn't know, no generation is made or published an
   addKey();
   const fresh = readLockText(dir);
 
-  expect(() => beginGeneration(dir)).toThrow(unknown);
+  expect(reserveFrom).toThrow(unknown);
   expect(existsSync(join(dir, ".office/current"))).toBe(false);
   expect(readLockText(dir)).toBe(fresh);
 
@@ -153,7 +159,7 @@ test("with a key office.lock doesn't know, no generation is made or published an
   addKey();
   const interruptedLock = readLockText(dir);
 
-  expect(() => recover(dir)).toThrow(unknown);
+  expect(reserveFrom).toThrow(unknown);
   expect(active()).toBe(previous);
   expect(journal()).toBe(true);
   expect(readLockText(dir)).toBe(interruptedLock);
@@ -170,4 +176,19 @@ test("a runtime pin write between reservation and publication neither supersedes
   expect(readLock(dir)).toEqual(defaultPins);
   expect(readLockSection(dir, "packages")).toEqual(sections.notes);
   expect(journal()).toBe(false);
+});
+
+test("publication checks for an interrupted switch that appeared after reservation", () => {
+  writeFileSync(join(dir, "office.yaml"), yamls.before);
+  using reservation = beginGeneration(dir);
+  const { previous, name } = reservation.transaction;
+
+  writeFileSync(join(dir, ".office/publishing.json"), JSON.stringify({
+    previous, candidate: name, before: digest(yamls.after), after: digest(yamls.after),
+    lock: { before: digest(packageSectionKey(sections.empty)), after: digest(packageSectionKey(sections.notes)), packages: Object.fromEntries(sections.notes) },
+  }));
+
+  expect(() => publishGeneration(reservation.transaction, yamls.before, sections.notes)).toThrow("office.yaml or office.lock's packages: section changed independently");
+  expect(active()).toBe(previous);
+  expect(journal()).toBe(true);
 });

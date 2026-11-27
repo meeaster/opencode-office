@@ -1,17 +1,18 @@
 import { changeSchema, failure, isFailure, type Change } from "../lib/change.ts";
-import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { bindPaths } from "../bound-paths.ts";
 import { loadOffice, type Office, OfficeError, type PackageEntry } from "../office.ts";
 import { parse } from "yaml";
 import * as v from "valibot";
 import { type LockedPackage, officeSchema, type PackageLock, parsePackageLock } from "../schema.ts";
-import { activeGeneration, beginGeneration, managedDirectory, pinActive, publishGeneration, type Candidate } from "./package-generation.ts";
-import { coupledFailures, writePackageLinks, writeSdk } from "./package-imports.ts";
+import { activeGeneration, beginGeneration, managedDirectory, publishGeneration, type Candidate } from "./generation/storage.ts";
+import { writePackageLinks, writeSdk } from "./generation/links.ts";
+import { bindReader, selectionText } from "./generation/reader.ts";
 import { publishedView, type GatheredPackage, type GatherProblem, gatherPackages, problemLines } from "../gather.ts";
 import { validateReplacement } from "./definitions/inventory.ts";
 import { materializePackage, readRecord, sourceDifferences, verifiedCommit, writeOfficeDeclaration } from "./sources/copies.ts";
+import { importEdges, readPackageJson, sdkName } from "./sources/manifest.ts";
 import { type ResolvedPackage, resolvePackages } from "./sources/selection.ts";
 import { lockFile, lockSections, packageLockChanges, readLockSection } from "../versions.ts";
 import { writeAppliedReferences } from "../features/references/applied-references.ts";
@@ -21,7 +22,7 @@ import { openCheckoutLease } from "../checkout-lease.ts";
 import { recordUnmet } from "../features/tools/host.ts";
 import { validateAssets } from "../features/opencode/assets.ts";
 import { renameNoReplace } from "../lib/no-replace.ts";
-import { runEvaluator, startReader } from "./worker.ts";
+import { runEvaluator } from "./worker.ts";
 
 type Admission = {
   transaction: Candidate;
@@ -59,46 +60,55 @@ const outcomeSchema = v.object({
 
 type Outcome = v.InferOutput<typeof outcomeSchema>;
 
-/** The selection a generation is published with, as its selection.json holds it. */
-export function selectionText(office: Pick<Office, "packages">) {
-  return JSON.stringify(office.packages.map(({ name, settings, source }) => ({ name, settings, ...source })));
+/**
+ * Each present package's import edges in this view: its declared office dependencies and its
+ * optional providers the view selects, whether or not their copies are present. Throws when a
+ * package.json can't be read.
+ */
+function declaredDependencies(packages: ResolvedPackage[]) {
+  const graph = new Map<string, Set<string>>();
+  const selected = new Set(packages.map(pkg => pkg.entry.name));
+
+  for (const pkg of packages) {
+    if (!existsSync(pkg.dir)) continue;
+    const read = readPackageJson(pkg.dir, pkg.entry.name);
+
+    if (!read.ok) throw new Error(read.errors.join("; "));
+    // @office/sdk is no package, so it couples nothing.
+    graph.set(pkg.entry.name, new Set(importEdges(read.value, selected).filter(name => name !== sdkName)));
+  }
+
+  return graph;
 }
 
 /**
- * Runs `args` in a reader bound to the published package set, and prints a package command's
- * result once the reader exits 0; undefined when the office has none.
+ * Which of the `pending` packages an update must hold back, given those `rejected`: each that
+ * depends on a rejected one, or that a rejected one depends on, in either view's import edges
+ * (selected optional providers included). An unreadable package.json is not evidence of independence: all are held back.
  */
-export async function runReader(dir: string, args: string[]) {
-  using active = pinActive(dir);
+export function coupledFailures(rejected: string[], pending: string[], views: ResolvedPackage[][]) {
+  try {
+    const graphs = views.map(declaredDependencies);
+    const failed = new Set(rejected.filter(name => pending.includes(name)));
 
-  if (!active) return;
-  const folder = managedDirectory(dir, active.name);
+    const reachable = (from: string) => {
+      const seen = new Set([from]);
 
-  // An office's first generation holds no selection until the first candidate publishes.
-  if (!existsSync(join(folder, "selection.json"))) return;
-  let status: number;
-  let bytes: Uint8Array;
+      for (const name of seen) for (const graph of graphs) for (const dependency of graph.get(name) ?? []) seen.add(dependency);
 
-  {
-    // A process started by the reader can hold the pipe open past the reader's exit.
-    using child = startReader(dir, active, args);
-    const { pipe, exited } = child;
-    const result = new Response(Bun.file(pipe).stream()).bytes().finally(() => closeSync(pipe));
-    status = await exited;
-    bytes = await result;
+      return seen;
+    };
+
+    const paths = new Map(pending.map(name => [name, reachable(name)]));
+
+    for (const name of failed) {
+      for (const [peer, imports] of paths) if (imports.has(name) || paths.get(name)?.has(peer)) failed.add(peer);
+    }
+
+    return [...failed];
+  } catch {
+    return pending;
   }
-
-  if (status === 0 && bytes.length) await Bun.write(Bun.stdout, bytes);
-
-  return status;
-}
-
-/** Binds this process to generation `name`, recording the packages its last sync rejected, whose copies don't load. */
-export function bindReader(dir: string, name: string) {
-  const folder = managedDirectory(dir, name);
-  const file = join(folder, "unavailable.json");
-  const unavailable = new Set(existsSync(file) ? v.parse(v.array(v.string()), JSON.parse(readFileSync(file, "utf8"))) : []);
-  bindPaths(dir, folder, unavailable);
 }
 
 /**

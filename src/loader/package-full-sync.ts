@@ -14,8 +14,8 @@ import { resultDescriptor } from "../command-stdout.ts";
 import { gatherPackages, problemLines } from "../gather.ts";
 import { officeInfo } from "../lifecycle-inputs.ts";
 import type { Office } from "../office.ts";
-import { managedDirectory, pinActive } from "./package-generation.ts";
-import { selectionText } from "./package-operation.ts";
+import { managedDirectory, pinActive } from "./generation/storage.ts";
+import { selectionText } from "./generation/reader.ts";
 import { startReader } from "./worker.ts";
 import type { Stage } from "../report/index.ts";
 

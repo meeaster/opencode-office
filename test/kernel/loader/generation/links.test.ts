@@ -2,9 +2,10 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { coupledFailures, editorLinks, linkForEditors, writePackageLinks } from "../../../src/loader/package-imports.ts";
-import type { ResolvedPackage } from "../../../src/loader/sources/selection.ts";
-import { packageJsonText } from "../../support/test-package.ts";
+import { editorLinks, linkForEditors, writePackageLinks } from "../../../../src/loader/generation/links.ts";
+import { coupledFailures } from "../../../../src/loader/package-operation.ts";
+import type { ResolvedPackage } from "../../../../src/loader/sources/selection.ts";
+import { packageJsonText } from "../../../support/test-package.ts";
 
 let dir: string;
 

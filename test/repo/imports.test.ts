@@ -256,6 +256,7 @@ const loaderEntries = new Map<string, readonly string[]>([
   ["definitions", ["definitions/inventory.ts", "definitions/settings.ts", "definitions/registration.ts", "definitions/sdk.ts"]],
   ["access", ["access.ts"]],
   ["worker", ["worker.ts"]],
+  ["generation", ["generation/storage.ts", "generation/reader.ts", "generation/links.ts"]],
 ]);
 
 function loaderModule(path: string) {
@@ -387,6 +388,8 @@ test("only loader entry files can be imported from outside their module", () => 
   expect(privateLoaderImport("src/gather.ts", "src/loader/definitions/nested/registration.ts")).toBe(true);
   expect(privateLoaderImport("src/gather.ts", "src/loader/definitions/registration.ts")).toBe(false);
   expect(privateLoaderImport("src/gather.ts", "src/loader/unlisted/entry.ts")).toBe(true);
+  expect(privateLoaderImport("src/loader/definitions/inventory.ts", "src/loader/generation/storage.ts")).toBe(false);
+  expect(privateLoaderImport("src/loader/definitions/inventory.ts", "src/loader/generation/internal.ts")).toBe(true);
 });
 
 test("worker transport cannot import access even through its entry file", () => {

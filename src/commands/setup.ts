@@ -22,7 +22,7 @@ import { installingMise, startExecutor, up } from "./compose.ts";
 import { ports } from "../lib/ports.ts";
 import { bootstrapExecutor } from "./executor.ts";
 import { summarize, sync } from "./sync.ts";
-import { runReader } from "../loader/package-operation.ts";
+import { runReader } from "../loader/generation/reader.ts";
 import { declaredAccess } from "../loader/access.ts";
 
 type SetupOptions = {

@@ -13,7 +13,7 @@ import { readAppliedSnapshot } from "../../sdk/applied-settings.ts";
 import { installedPackages, problemLine } from "./definitions/inventory.ts";
 import { officeInfo } from "../lifecycle-inputs.ts";
 import type { Office } from "../office.ts";
-import { managedDirectory } from "./package-generation.ts";
+import { managedDirectory } from "./generation/storage.ts";
 import { importEdges, readPackageJson } from "./sources/manifest.ts";
 import { type PackageProblem, type ResolvedPackage, resolvePackages } from "./sources/selection.ts";
 import { packageEntries } from "../schema.ts";

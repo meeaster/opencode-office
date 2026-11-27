@@ -2,12 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import * as v from "valibot";
-import { openCheckoutLease, publicationLease } from "../checkout-lease.ts";
-import { tryFileLock } from "../lib/file-lock.ts";
-import { atomicWrite } from "../lib/atomic-write.ts";
-import { OfficeError, readConfig } from "../office.ts";
-import { type PackageLock, parsePackageLock } from "../schema.ts";
-import { editLock, lockFile, lockSections, packageSectionKey, publicationBusy, readLockText, requireKnownLockKeys } from "../versions.ts";
+import { openCheckoutLease, publicationLease } from "../../checkout-lease.ts";
+import { tryFileLock } from "../../lib/file-lock.ts";
+import { atomicWrite } from "../../lib/atomic-write.ts";
+import { OfficeError, readConfig } from "../../office.ts";
+import { type PackageLock, parsePackageLock } from "../../schema.ts";
+import { editLock, lockFile, lockSections, packageSectionKey, publicationBusy, readLockText, requireKnownLockKeys } from "../../versions.ts";
 
 const id = v.pipe(v.string(), v.regex(/^g-[a-f0-9-]{36}$/));
 
@@ -198,7 +198,7 @@ export type Candidate = { dir: string; previous: string; name: string; original:
  * office.yaml at "after" finishes the section from the journal. Otherwise the old set remains
  * authoritative. Never overwrite manual edits: office.yaml or a section matching neither recorded
  * state refuses. The rest of office.lock isn't part of the publication and is kept. */
-export function recover(dir: string) {
+function recover(dir: string) {
   const path = join(dir, ".office/publishing.json");
 
   if (!existsSync(path)) return;

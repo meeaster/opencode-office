@@ -3,9 +3,8 @@
 // prints while gathering (child processes with inherited output included) and after; a `run`
 // handler's streaming output, terminal and exit status; help; and one gathering per command.
 import { expect, test } from "bun:test";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { activeGeneration, managedDirectory } from "../../src/loader/package-generation.ts";
 import { definitionFixture } from "../support/package-definition.fixture.ts";
 import { definitionText, writePackage } from "../support/test-package.ts";
 import { toolPath } from "../../src/tool.ts";
@@ -143,7 +142,7 @@ for (const launcher of ["compiled", "source"] as const) {
     expect(f.setups()).toBe(++count);
 
     // The handler ran in the reader holding the generation it pinned.
-    expect(readFileSync(join(f.dir, "lease"), "utf8")).toBe(managedDirectory(f.dir, activeGeneration(f.dir)!));
+    expect(readFileSync(join(f.dir, "lease"), "utf8")).toBe(join(f.dir, ".office", readlinkSync(join(f.dir, ".office/current"))));
 
     for (const [kind, message] of [["fail", "result failed"], ["number", "probe text: its result must be text: Invalid type: Expected string but received 7"]]) {
       const failed = f.streams(launcher, ["probe", "text", kind]);
