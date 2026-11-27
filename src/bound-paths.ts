@@ -51,7 +51,7 @@ export function linkProblem(dir: string, item: ResolvedPackage): string | undefi
 }
 
 /** What is wrong with the link to `item` in the package set `folder`: missing, or to another folder. */
-export function setLinkProblem(folder: string, item: ResolvedPackage): string | undefined {
+function setLinkProblem(folder: string, item: ResolvedPackage): string | undefined {
   const link = join(packageLinks(folder), item.entry.name);
 
   if (!lstatSync(link, { throwIfNoEntry: false })) return "selected since the last sync; run office sync";

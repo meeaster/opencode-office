@@ -4,7 +4,7 @@ import { configFile, installedPanelNames, isRegistered, locate, panelDir, readPa
 import { findOffice, loadOffice, OfficeError, readOfficeFields, type Office } from "../../src/office.ts";
 import { requiredPackages, resolvePackages } from "../../src/packages.ts";
 import { separateFolders } from "../../src/layout.ts";
-import { officeSchema, removedDesks } from "../../src/schema.ts";
+import { officeSchema } from "../../src/schema.ts";
 import { cloneTarget, declarationBinding, pluginClones } from "./delivery.ts";
 import { configSources, conventionSources, projectDirectories, type Source } from "./native.ts";
 import { readDeclarations } from "./declarations.ts";
@@ -186,11 +186,8 @@ export function inspect(folder: string, officeDir: string | undefined) {
     // YAML warnings can quote an entire source line to stderr even when parsing succeeds.
     if (!statSync(join(root, "office.yaml")).isFile()) throw new Error();
     office = loadOffice(root, readOfficeFields(root, officeSchema, "error"));
-  } catch (error) {
-    // The removed desks key's diagnostic is fixed text, safe to echo; any other problem may quote office.yaml.
-    const desks = error instanceof Error && error.message.includes(`desks: ${removedDesks}`);
-
-    throw new OfficeError(desks ? `cannot inspect: office.yaml's desks: ${removedDesks}` : "cannot inspect: office.yaml is unreadable or invalid");
+  } catch {
+    throw new OfficeError("cannot inspect: office.yaml is unreadable or invalid");
   }
 
   try {

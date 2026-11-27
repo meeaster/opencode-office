@@ -63,7 +63,7 @@ export function ghHosts(): string[] {
 }
 
 /** The host of an HTTPS URL; undefined for SSH, local paths and other schemes. */
-export function httpsHost(url: string): string | undefined {
+function httpsHost(url: string): string | undefined {
   if (!/^https:\/\//i.test(url)) return undefined;
 
   try {

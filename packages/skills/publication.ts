@@ -10,7 +10,7 @@ import { type Declared, type Generation, generatedFolder, generationFolder, gene
 import { skillId } from "./settings.ts";
 
 /** The skill folders a generation holds: a real folder named by a skill ID holding a regular SKILL.md. Anything else in it isn't offered. */
-export function admitted(folder: string): string[] {
+function admitted(folder: string): string[] {
   return readdirSync(folder).sort().filter(name => {
     if (!skillId.test(name) || !lstatSync(join(folder, name)).isDirectory()) return false;
 

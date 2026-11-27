@@ -24,9 +24,9 @@ import { type Office, OfficeError, type PackageEntry } from "./office.ts";
 import { readDefinition } from "./package-definition.ts";
 import type { OptionalIntegration } from "./package-integrations.ts";
 import { importEdges, readPackageJson, scope, sdkName } from "./package-manifest.ts";
-import { composeProblems, packageComposeFile } from "./package-services.ts";
+import { composeProblems, packageComposeFile } from "../standard/compose/services.ts";
 import { settingsEnv } from "../standard/compose/services.ts";
-import { gateDefaultProblem, systemSection } from "./package-system.ts";
+import { gateDefaultProblem, systemSection } from "../standard/mise-integration/system.ts";
 import { check, MalformedSettings, type PackageManifest, type Parsed, type SettingValue, settingVariable } from "./schema.ts";
 import { sha256 } from "./hash.ts";
 import { build, buildCommit, builtinFiles, builtinPackages } from "./tool.ts";
@@ -67,7 +67,7 @@ const recordSchema = v.union([remoteRecord, builtinRecord]);
 
 export type PackageRecord = v.InferOutput<typeof recordSchema>;
 
-export type PackageKind = "built-in" | "remote" | "local";
+type PackageKind = "built-in" | "remote" | "local";
 
 /** A package the office has, with the source folder to read (possibly bound or staged). */
 export type ResolvedPackage = { entry: PackageEntry; kind: PackageKind; dir: string };
@@ -92,7 +92,7 @@ export function pulledDir(office: Pick<Office, "dir">, name: string): string {
 }
 
 /** The folder of a package written in the office. */
-export function localDir(office: Pick<Office, "dir">, name: string): string {
+function localDir(office: Pick<Office, "dir">, name: string): string {
   return join(office.dir, "packages", name);
 }
 
@@ -309,7 +309,7 @@ export function builtinSource(hashes: PackageRecord["files"]): string {
   return `built-in:${filesDigest(hashes)}`;
 }
 
-export function filesDigest(hashes: PackageRecord["files"]): string {
+function filesDigest(hashes: PackageRecord["files"]): string {
   return sha256(JSON.stringify(Object.keys(hashes).sort().map(path => [path, hashes[path]])));
 }
 
@@ -318,7 +318,7 @@ export function gitSelection(source: NonNullable<PackageEntry["source"]>) {
   return `git:${sha256(JSON.stringify([source.repo, source.path, source.ref]))}`;
 }
 
-export async function embeddedPackage(name: string) {
+async function embeddedPackage(name: string) {
   const wanted = await builtinFiles(name);
   const hashes = Object.fromEntries([...wanted].map(([file, content]) => [file, sha256(content)]));
 
@@ -459,7 +459,7 @@ export function installedDefinition(office: Pick<Office, "dir">, resolved: Resol
 }
 
 /** A pulled-in copy must match its record; a local package isn't checked. */
-export function verifyInstalledCopy({ kind, entry, dir }: ResolvedPackage) {
+function verifyInstalledCopy({ kind, entry, dir }: ResolvedPackage) {
   if (kind === "local") return;
 
   const record = readRecord(dir);
@@ -482,7 +482,7 @@ export function verifyInstalledCopy({ kind, entry, dir }: ResolvedPackage) {
 }
 
 /** The pulled-in packages among `packages` that the set's sync `rejected`: they stay selected, get no link and don't load. */
-export function rejectedPackages(packages: ResolvedPackage[], rejected: ReadonlySet<string>) {
+function rejectedPackages(packages: ResolvedPackage[], rejected: ReadonlySet<string>) {
   return packages.filter(pkg => pkg.kind !== "local" && rejected.has(pkg.entry.name));
 }
 
@@ -560,13 +560,6 @@ export function definitionGate(office: Pick<Office, "dir" | "packages">, package
 /** One line for a package problem: `package <name>: <message>`. */
 export function problemLine(problem: PackageProblem) {
   return `package ${problem.packages.join(", ")}: ${problem.message}`;
-}
-
-/** For a reader of one package's definition (the GUI): fails, naming every problem, unless the whole selection passes `definitionGate`. */
-export function requireLoadable(office: Office) {
-  const problems = definitionGate(office, resolvePackages(office, undefined, true).packages);
-
-  if (problems.length) throw new OfficeError(`no package loaded: ${problems.map(problemLine).join("; ")}`);
 }
 
 /**

@@ -6,7 +6,6 @@ import { dirname, join } from "node:path";
 import { syncLines as sync } from "./sync.fixture.ts";
 import { git } from "./git.ts";
 import { loadOffice } from "./office.ts";
-import { settingsEnv } from "./package-services.ts";
 import { fetchPackage, readPackage, resolvePackages, validateReplacement, writeOfficeDeclaration } from "./packages.ts";
 import { publishAppliedSettings } from "./applied-settings.ts";
 import { readAppliedSettings } from "../sdk/applied-settings.ts";
@@ -76,8 +75,6 @@ test("settings are one JSON Schema, checked with its defaults applied: types, un
 
   publishAppliedSettings(loaded, [result.value]);
   expect(readAppliedSettings(dir, "demo")).toEqual({ port: 4600, enabled: true, roles: { review: ["fast", "deep"] } });
-  // Lists and objects don't reach a compose file.
-  expect(settingsEnv(result.value)).toBe("DEMO_PORT='4600'\nDEMO_ENABLED='true'\n");
   expect(errors("{ roles: { review: [other] } }")).toEqual(["packages.demo.settings.roles.review.0: must be equal to one of the allowed values"]);
   // A quoted port is text, not an integer.
   expect(errors('{ port: "4600" }')).toEqual(["packages.demo.settings.port: must be integer"]);

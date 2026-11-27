@@ -9,7 +9,7 @@ import type { App } from "./apps.ts";
 import { contributedFolder, readManifest, rootAppNames, rootFolder } from "./inventory.ts";
 
 /** Where `sync` records the contributed apps for `session`, in the office's uncommitted `.office/`. */
-export const contributedFile = ".office/executor/contributed.json";
+const contributedFile = ".office/executor/contributed.json";
 
 type Contributed = { slug: string; owner: string; description?: string };
 

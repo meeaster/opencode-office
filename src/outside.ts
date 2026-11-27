@@ -11,10 +11,10 @@ import { containerOfficeDir, type Office } from "./office.ts";
 import { check } from "./schema.ts";
 import { pluginSource } from "../standard/opencode/native.ts";
 
-export type OutsideKind = "config" | "instructions" | "skill" | "plugin" | "agent" | "command" | "MCP server";
+type OutsideKind = "config" | "instructions" | "skill" | "plugin" | "agent" | "command" | "MCP server";
 
 /** Printing order: what applies everywhere first, then each kind of item. */
-export const outsideKinds: OutsideKind[] = ["config", "instructions", "skill", "plugin", "agent", "command", "MCP server"];
+const outsideKinds: OutsideKind[] = ["config", "instructions", "skill", "plugin", "agent", "command", "MCP server"];
 
 export type OutsideItem = {
   kind: OutsideKind;

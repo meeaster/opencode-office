@@ -10,7 +10,7 @@ export type Resolved = { commit: string; via: string };
 export type RemoteTag = { name: string; commit: string };
 
 /** Whether `track` is a tag pattern rather than a branch. */
-export function isTagPattern(track: string): boolean {
+function isTagPattern(track: string): boolean {
   return track.includes("*");
 }
 

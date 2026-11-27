@@ -39,7 +39,7 @@ export type Dispatch =
  * The declared name or alias that starts `words` with the most words, and every command declaring
  * it; the words after it are its arguments. Undefined when no name starts them.
  */
-export function longestMatch(commands: readonly DeclaredCommand[], words: readonly string[]) {
+function longestMatch(commands: readonly DeclaredCommand[], words: readonly string[]) {
   let best: { name: string; length: number } | undefined;
 
   for (const { command } of commands) {

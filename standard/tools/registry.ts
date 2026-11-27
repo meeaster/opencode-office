@@ -90,7 +90,7 @@ function reportedVersion(path: string): string | undefined {
 }
 
 /** The mise version an office pins: office.yaml's `tools.mise`, else the release's default. */
-export function misePin(office: Pick<Office, "tools">): string {
+function misePin(office: Pick<Office, "tools">): string {
   return office.tools.runtimes.mise.version ?? defaultPins.mise.version;
 }
 
@@ -101,7 +101,7 @@ export function misePin(office: Pick<Office, "tools">): string {
  * that PATH could resolve differently later, and never another version: a newer or older mise is
  * refused, not installed over, replaced or repinned. Throws naming what each copy reports.
  */
-export function toolsMise(pin: string): AttestedMise {
+function toolsMise(pin: string): AttestedMise {
   const candidates = [...new Set([onPath("mise"), join(hostToolsRoot(), "bin/mise")].flatMap(path => (path !== undefined && existsSync(path) ? [realpathSync(path)] : [])))];
   const reports = candidates.map(path => ({ path, version: reportedVersion(path) }));
   const exact = reports.find(report => report.version === pin);

@@ -6,8 +6,9 @@ import { basename, dirname, join } from "node:path";
 import { parse } from "yaml";
 
 import { loadOffice } from "./office.ts";
-import { appliedSpawns, preparePackageServices } from "./package-services.ts";
-import { planSweep, type Spawned, spawnsLabel } from "./package-spawns.ts";
+import { appliedSpawns, spawnsLabel } from "../standard/compose/services.ts";
+import { preparePackageServices } from "./package-services.ts";
+import { planSweep, type Spawned } from "./package-spawns.ts";
 import { parseManifest } from "./schema.ts";
 import { recordRequiredBuiltins } from "./test-builtin-record.ts";
 import { writePackage } from "./test-package.ts";

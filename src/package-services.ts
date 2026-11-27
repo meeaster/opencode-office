@@ -11,8 +11,6 @@ import type { InstalledPackage } from "./packages.ts";
 import { say } from "./report/index.ts";
 import type { PackageManifest } from "./schema.ts";
 
-export { appliedServices, appliedSpawns, composeProblems, packageComposeFile, parseCompose, planServices, type ServiceChange, serviceFiles, serviceSettings, type UpgradedServices } from "../standard/compose/services.ts";
-
 export function secretsPath(office: Office, name: string): string {
   return join(office.state, "packages", `${name}.env`);
 }
@@ -29,7 +27,7 @@ export function packageSecret(office: Office, name: string, key: string): string
 }
 
 /** A new value for one of a package's secrets. */
-export function generateSecret(secret: PackageManifest["secrets"][string]): string {
+function generateSecret(secret: PackageManifest["secrets"][string]): string {
   return `${secret.prefix ?? ""}${randomBytes(secret.bytes).toString(secret.generate)}`;
 }
 
@@ -51,10 +49,6 @@ export function ensureSecrets(path: string, secrets: PackageManifest["secrets"])
 
 function source(item: InstalledPackage): compose.ComposeSource {
   return { name: item.entry.name, namespace: item.manifest.namespace, dir: item.dir, settings: item.settings, spawnLabel: item.manifest.spawns?.label };
-}
-
-export function settingsEnv(item: InstalledPackage): string {
-  return compose.settingsEnv(source(item));
 }
 
 export function sharedNamespaces(installed: InstalledPackage[]) {

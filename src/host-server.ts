@@ -18,8 +18,6 @@ import { shellQuote } from "./sfw.ts";
 import { compareVersions } from "./versions.ts";
 import { say } from "./report/index.ts";
 
-export { unitDirVariable } from "./systemd.ts";
-
 const legacyUnit = "opencode-serve.service";
 const revisionVariable = "OFFICE_SERVER_REVISION";
 

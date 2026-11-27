@@ -31,7 +31,7 @@ export type DeclaredCommand = { owner: string; command: RegisteredCommand; setti
 export type GatherProblem = PackageProblem & { named?: true };
 
 /** Who added an entry, as the loader knows it, never from the entry: the package, its namespace and settings in this run, the folder it loaded from and its delivery folder. */
-export type Contributor = { owner: string; namespace: string; settings: Record<string, SettingValue>; folder: string; root: string };
+type Contributor = { owner: string; namespace: string; settings: Record<string, SettingValue>; folder: string; root: string };
 
 /** A parsed entry: its registry, the provider's parser output, and who added it. */
 export type Entry = Contributor & { id: string; value: RegistryEntry };
@@ -181,7 +181,7 @@ export async function gatherPackages(office: Office, { skip = new Set<string>(),
 }
 
 /** The committed folders the definitions declare, sorted, and a problem naming both packages for each folder two of them declare. */
-export function committedFolders(definitions: ReadonlyMap<string, Pick<PackageManifest, "committed">>) {
+function committedFolders(definitions: ReadonlyMap<string, Pick<PackageManifest, "committed">>) {
   const owners = new Map<string, string>();
   const problems: GatherProblem[] = [];
 

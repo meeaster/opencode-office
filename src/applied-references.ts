@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import * as v from "valibot";
 import { check, type OfficeConfig, type Parsed, repository } from "./schema.ts";
 
-export const referenceFile = ".office/resolved/references.json";
+const referenceFile = ".office/resolved/references.json";
 
 /** A reference and who resolved it: `office.yaml`, or the name of the package that added it. */
 export type AppliedReference = v.InferOutput<typeof repository> & { owner: string };

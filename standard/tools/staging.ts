@@ -64,7 +64,7 @@ function attempt(run: Run, argv: readonly string[], options: Parameters<Run>[1],
 }
 
 /** A tool's own folder name: one per backend-qualified name, and never the same for two (`a/b` and `a-b` included), or a path. */
-export function toolFolder(tool: string): string {
+function toolFolder(tool: string): string {
   return encodeURIComponent(tool).replaceAll(".", "%2E");
 }
 
@@ -159,7 +159,7 @@ function taskSource(json: string): string | undefined {
 export type ProvidedRelease = { tool: string; version: string; bin: readonly string[]; folder: string; task: string; releases: readonly Pick<Release, "version" | "digests">[] };
 
 /** Where a provided tool's version is kept once staged. */
-export function providedFolder(office: { state: string }, tool: string, version: string): string {
+function providedFolder(office: { state: string }, tool: string, version: string): string {
   return join(toolsState(office), "provided", toolFolder(tool), versionFolder(tool, version));
 }
 

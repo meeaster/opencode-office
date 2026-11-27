@@ -39,7 +39,7 @@ import { envFilePath, hostEnvironment, hostLayout, hostWrappers, realMise } from
 import { type ServerPlan, serverUnit, serverUnitPath, userSystemd } from "./host-server.ts";
 import type { GatheredPackage } from "./gather.ts";
 import { type Office, OfficeError, readConfig } from "./office.ts";
-import { fragmentOwner, machineFile, machineFiles, ownerProjection, packagesFile } from "./package-tools.ts";
+import { fragmentOwner, machineFile, machineFiles, ownerProjection, packagesFile } from "../standard/mise-integration/delivery.ts";
 import { heldKeys } from "../standard/tools/admission.ts";
 import { platformAsset } from "./releases.ts";
 import { check, hostVariable, type Lock } from "./schema.ts";
@@ -60,7 +60,7 @@ export function machineRecordPath(): string {
 }
 
 /** mise's global config folder: `$OFFICE_MISE_CONFIG_DIR`, else as mise finds it, `$MISE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/mise`, else `~/.config/mise`. */
-export function miseConfigDir(): string {
+function miseConfigDir(): string {
   return process.env[miseConfigVariable] || process.env.MISE_CONFIG_DIR || join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "mise");
 }
 

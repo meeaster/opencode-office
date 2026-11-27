@@ -9,7 +9,7 @@ import { tools, type Provision, type Requirement as ToolRequirement } from "../.
 import type { Office } from "../../src/office.ts";
 import type { GatheredPackage } from "../../src/gather.ts";
 import type { InstalledPackage } from "../../src/packages.ts";
-import { gateDefaultProblem, systemApplies, systemSection } from "../../src/package-system.ts";
+import { gateDefaultProblem, systemApplies, systemSection } from "./system.ts";
 import { defaultOffSetting, settingValue, type SettingValue, systemBlock, type SystemBlock } from "../../src/schema.ts";
 
 /** Whether a registry holds machine claims: tools, tasks, host installs or system recipes. */

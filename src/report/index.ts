@@ -1,6 +1,6 @@
 // How `office setup`, `office sync` and `office up` show progress. `reported` runs one of them with
 // a reporter: Clack when stdin and stdout are a terminal, plain lines otherwise. Code deeper down
-// reports through `say`, `warn`, `progress` and `output`, which go to the stage running now, or
+// reports through `say`, `warn` and `progress`, which go to the stage running now, or
 // straight to the console when no reporter runs (other commands, tests): nothing may write around
 // a live spinner. `stream` runs a slow subprocess without blocking, so the display stays live.
 import { type ChildProcess, spawn } from "node:child_process";
@@ -8,7 +8,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { OfficeError } from "../office.ts";
 import { ClackReporter } from "./clack.ts";
 import { PlainReporter } from "./plain.ts";
-import { Cancelled, displayLines, type Question, type Reporter, type Stage } from "./reporter.ts";
+import { Cancelled, displayLines, type Reporter, type Stage } from "./reporter.ts";
 
 export { type NextStep, type Reporter, type Stage, silentStage } from "./reporter.ts";
 
@@ -51,14 +51,6 @@ export function progress(text: string): void {
   stage()?.detail(text);
 }
 
-/** One line of a subprocess's output: the running stage's, else the console. */
-export function output(line: string): void {
-  const active = stage();
-
-  if (active !== undefined) active.output(line);
-  else console.log(line);
-}
-
 /** Hands the terminal to `body` (a browser login, sudo's prompt), pausing any live display. */
 export async function inherit<T>(what: string, body: () => T | Promise<T>): Promise<T> {
   const active = stage();
@@ -95,13 +87,6 @@ export function terminalAsk(): ((text: string) => Promise<string>) | undefined {
 
     return (await current.ask({ kind: "text", message })).trim();
   };
-}
-
-/** A question on the terminal; callers check `currentReporter()?.interactive` first. */
-export function ask<Q extends Question>(question: Q) {
-  if (reporter === undefined || !reporter.interactive) throw new OfficeError(`${question.message} Rerun interactively or supply the documented setup options; no prompt was opened`);
-
-  return reporter.ask(question);
 }
 
 function killChildren(): void {

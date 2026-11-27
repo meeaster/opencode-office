@@ -59,9 +59,9 @@ export const settingsSchema = {
   },
 } as const;
 
-export type FolderSource = { folder: string };
+type FolderSource = { folder: string };
 
-export type GitSkill = { name: string; path: string };
+type GitSkill = { name: string; path: string };
 
 export type GitSource = { repo: string; ref: string; track?: string; skills: GitSkill[] };
 

@@ -26,7 +26,7 @@ import { fetchBytes } from "./download.ts";
 import { toolPins } from "./mise-toml.ts";
 import { type Office, OfficeError } from "./office.ts";
 import { floors } from "../packages/office/floors.ts";
-import { packagesFile, packagesPath } from "./package-tools.ts";
+import { packagesFile, packagesPath } from "../standard/mise-integration/delivery.ts";
 import { newestRelease, type Candidate } from "./releases.ts";
 import { appliedExecutable } from "../standard/tools/applied.ts";
 import { check } from "./schema.ts";

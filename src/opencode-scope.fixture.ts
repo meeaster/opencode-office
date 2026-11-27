@@ -11,9 +11,6 @@ import { pinnedMise, pluginDefinition, sharedToolsLock, writePackage } from "./t
 /** Opt-in: an absolute OpenCode V2 launcher for the native check. */
 export const launcher = process.env.OFFICE_TEST_OPENCODE;
 
-/** Opt-in: the compiled CLI from before authored registration, as a control. */
-export const groundwork = process.env.OFFICE_TEST_PRE_ASSETS;
-
 /** Opt-in control: the compiled CLI from before plugin delivery refused owner folders (567252f). */
 export const control = process.env.OFFICE_TEST_PLUGIN_CONTROL;
 

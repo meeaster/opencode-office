@@ -37,7 +37,7 @@ const nonempty = v.pipe(v.string(), v.trim(), v.nonEmpty());
 
 const serverSchema = v.record(serverVariable, v.pipe(v.string(), v.regex(/^[^\0]*$/)));
 
-export const ownerSchema = v.strictObject({
+const ownerSchema = v.strictObject({
   email: v.pipe(nonempty, v.email()),
   password: v.pipe(v.string(), v.nonEmpty()),
   name: nonempty,

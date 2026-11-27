@@ -8,7 +8,7 @@ import { envFilePath } from "./host-env.ts";
 import { gatherPackages } from "./gather.ts";
 import { grantConsent } from "./machine.ts";
 import { loadOffice } from "./office.ts";
-import { systemPlatformVariable } from "./package-system.ts";
+import { systemPlatformVariable } from "../standard/mise-integration/system.ts";
 import { offerRestart, type Run, type RunResult, systemStep, verifySystems } from "./system-setup.ts";
 import { sharedToolsLock, writePackage } from "./test-package.ts";
 

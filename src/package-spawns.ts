@@ -11,9 +11,7 @@ import { spawnSync } from "node:child_process";
 
 import { say, warn } from "./report/index.ts";
 
-export { spawnsLabel } from "../standard/compose/services.ts";
-
-export type SpawnedKind = "container" | "network" | "volume";
+type SpawnedKind = "container" | "network" | "volume";
 
 /** One Docker resource found by one of the labels. */
 export type Spawned = { kind: SpawnedKind; name: string; label: string };

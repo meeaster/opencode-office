@@ -52,7 +52,7 @@ export type Application = { ok: boolean; lines: string[] };
 const releaseList = v.array(v.object({ version: v.string(), published: v.optional(v.string()), digests: v.record(v.string(), v.pipe(v.string(), v.regex(/^sha256:[0-9a-f]{64}$/, "must be sha256:<hex>"))) }));
 
 /** A release as a provider's list gives it, before its publication time is checked. */
-export type ListedRelease = v.InferOutput<typeof releaseList>[number];
+type ListedRelease = v.InferOutput<typeof releaseList>[number];
 
 /**
  * Reads providers' release lists through the providers registry the tools package registered in
@@ -85,7 +85,7 @@ const isoTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{
 const clockSkew = 5 * 60_000;
 
 /** Why the provider's `version` of `tool` can't be installed at `age` at `now`, or undefined when it can. */
-export function releaseRefusal(tool: string, version: string, releases: readonly { version: string; published?: string }[], age: string, now: number): string | undefined {
+function releaseRefusal(tool: string, version: string, releases: readonly { version: string; published?: string }[], age: string, now: number): string | undefined {
   const release = releases.find(item => item.version === version);
 
   if (release === undefined) return `tool ${tool} ${version} isn't among the releases its provider lists`;

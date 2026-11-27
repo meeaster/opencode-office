@@ -25,7 +25,7 @@ export type Consumer = { package: string; name: string; minimum: string };
 export type Demand = { name: string; floor: string; consumers: Consumer[]; bin: string[] };
 
 /** The owner's exact choice of a required tool in machine.toml, under the key it is written with. */
-export type Hold = { key: string; version: string };
+type Hold = { key: string; version: string };
 
 /**
  * What admission establishes: the demands by tool, those mise installs (`managed`: the ones no

@@ -167,7 +167,7 @@ function serviceGitConfig(office: Office): string | undefined {
 }
 
 /** The unit name of a package's timer, refused when the name can't be one safe unit of that package. */
-export function packageTimerUnit(office: Pick<Office, "name">, name: string, id: string): string {
+function packageTimerUnit(office: Pick<Office, "name">, name: string, id: string): string {
   if (!packageName.test(name)) throw new OfficeError(`${JSON.stringify(name)} is not a package name`);
 
   if (!timerId.test(id)) throw new OfficeError(`package ${name}: timer id ${JSON.stringify(id)} must be letters, digits, dots, dashes and underscores, starting with a letter or digit`);

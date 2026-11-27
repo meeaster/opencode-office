@@ -2,7 +2,7 @@
 // manages its machine: the system setup the office's own files declare, and the managed OpenCode
 // server running with older settings.
 //
-// System setup. The packages' system blocks (src/package-system.ts) and the office's machine.toml
+// System setup. The packages' system blocks (standard/mise-integration/system.ts) and the office's machine.toml
 // declare mise `[bootstrap]` packages and files, such as Chrome from apt or the headers a tool
 // builds against. Setup asks mise what they would change, with mise reading only the office's own
 // files: a scratch MISE_CONFIG_DIR whose conf.d links the office's fragments and machine.toml, an
@@ -34,9 +34,9 @@ import type { StaleServer } from "./host-server.ts";
 import { envFilePath } from "./host-env.ts";
 import { claim } from "./machine.ts";
 import { type Office, OfficeError } from "./office.ts";
-import { systemApplies } from "./package-system.ts";
+import { systemApplies } from "../standard/mise-integration/system.ts";
 import { destinationProblems } from "../standard/mise-integration/projection.ts";
-import { machineFiles } from "./package-tools.ts";
+import { machineFiles } from "../standard/mise-integration/delivery.ts";
 import type { GatheredPackage } from "./gather.ts";
 import { check } from "./schema.ts";
 import { inherit, progress, say, warn } from "./report/index.ts";
@@ -47,7 +47,7 @@ export type RunResult = { status: number; stdout: string; stderr: string };
 /** Runs a command; `terminal` gives it this terminal, for sudo's password prompt. */
 export type Run = (command: string[], options: { env?: NodeJS.ProcessEnv; cwd?: string; terminal?: boolean }) => RunResult;
 
-export const runCommand: Run = (command, { env, cwd, terminal = false }) => {
+const runCommand: Run = (command, { env, cwd, terminal = false }) => {
   const result = spawnSync(command[0], command.slice(1), { env, cwd, encoding: "utf8", stdio: terminal ? "inherit" : ["ignore", "pipe", "pipe"] });
 
   return { status: result.status ?? 1, stdout: result.stdout ?? "", stderr: result.error?.message ?? result.stderr ?? "" };
@@ -97,7 +97,7 @@ const planSchema = v.object({
 });
 
 /** Where the office's system setup stands on this machine. */
-export type SystemStatus =
+type SystemStatus =
   | { kind: "skipped"; reason: string }
   | { kind: "ready"; unchanged: number }
   | { kind: "pending"; pending: string[] }
@@ -120,7 +120,7 @@ function notOurs(office: Office): string | undefined {
 }
 
 /** What the office's system setup would change here, asked without sudo, network or changes. */
-export function systemStatus(office: Office, installed: GatheredPackage[], mise: string, run: Run = runCommand): SystemStatus {
+function systemStatus(office: Office, installed: GatheredPackage[], mise: string, run: Run = runCommand): SystemStatus {
   const reason = notOurs(office);
 
   if (reason !== undefined) return { kind: "skipped", reason };

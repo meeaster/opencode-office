@@ -54,7 +54,7 @@ export function atomicWrite(path: string, content: string | Buffer, mode: number
 }
 
 /** `path` as one shell word in a printed command: as it is when plain, single-quoted otherwise. */
-export function shellWord(path: string): string {
+function shellWord(path: string): string {
   return /^[\w./@%+=:,-]+$/.test(path) ? path : `'${path.replaceAll("'", `'\\''`)}'`;
 }
 

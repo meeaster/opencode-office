@@ -44,14 +44,6 @@ export const repository = v.strictObject(
 
 const repositories = v.pipe(v.nullish(v.array(repository, "must be a list"), []), v.check(uniqueNames, "lists a name twice"));
 
-/**
- * Offices before working repositories declared desks: top-level folders with their own
- * repositories, instructions and Executor apps. The key is refused, even empty, rather than read,
- * so a desk office is never half-run: it moves with the one-time migration or stays on the
- * executable it was made with.
- */
-export const removedDesks = "desks are no longer supported, so office changed nothing here. Move this office off desks as \"Offices with desks\" in the office CLI's README describes, or keep running it with the office executable it was made with";
-
 // The office package's plugin is linked under this name, so a cloned plugin there would fight `office sync`.
 const reservedPlugins = ["office"];
 
@@ -174,7 +166,7 @@ export const modelReference = v.pipe(
  * branch name, or a pattern of stable SemVer tags with `*`, such as `v2.*`, of which the highest
  * version wins.
  */
-export const track = v.pipe(
+const track = v.pipe(
   text,
   v.regex(/^[A-Za-z0-9._\/*+-]+$/, "must be a branch such as main, or a tag pattern such as v2.*"),
   v.check((value) => !value.split("/").includes("..") && !value.startsWith("/") && !value.endsWith("/"), "must be a branch such as main, or a tag pattern such as v2.*"),
@@ -202,11 +194,11 @@ function jsonValue(value: unknown, ancestors = new Set<object>()): value is Sett
 export const settingValue = v.custom<SettingValue>((value) => jsonValue(value), "must be JSON-compatible YAML");
 
 /** Names no package may have, for the mise fragment sync writes as `.office/mise/<name>.toml`. */
-export const reservedPackageNames = ["machine", "config", "mise"];
+const reservedPackageNames = ["machine", "config", "mise"];
 
 // A package copied from a folder of another repository at a ref, or, without `repo`, one of the
 // tool's built-in packages or a package authored in the office under packages/<name>/.
-export const packageEntry = v.pipe(
+const packageEntry = v.pipe(
   v.strictObject(
     {
       // A package's mise setup goes in .office/mise/<name>.toml. mise loads mise/config.toml and mise.toml
@@ -257,15 +249,6 @@ const git = v.optional(
 
 export const packageEntries = v.pipe(v.nullish(v.array(packageEntry, "must be a list"), []), v.check(uniqueNames, "lists a name twice"));
 
-export const referenceInputSchema = v.object({ references: repositories, packages: packageEntries });
-
-// The reader's import guard reads this to check that a package another imports is selected
-// exactly once, with the source it was bound to. Other entries' sources and settings may be
-// invalid, so they are not checked here.
-export const commandBootstrapSchema = v.object({
-  name, references: v.optional(v.unknown()), packages: v.nullish(v.array(v.looseObject({ name: v.string() })), []),
-});
-
 export const officeSchema = v.pipe(v.strictObject(
   {
     name,
@@ -282,7 +265,6 @@ export const officeSchema = v.pipe(v.strictObject(
     minimum_release_age: v.optional(age),
     tools,
     references: repositories,
-    desks: v.optional(v.custom<never>(() => false, removedDesks)),
     plugins: v.pipe(v.nullish(v.array(plugin, "must be a list"), []), v.check(uniqueNames, "lists a name twice")),
     packages: packageEntries,
   },
@@ -292,7 +274,7 @@ export const officeSchema = v.pipe(v.strictObject(
 export type OfficeConfig = v.InferOutput<typeof officeSchema>;
 
 /** A runtime as an office runs it: its version (undefined: the tool's default) and how old a release upgrade-tools takes must be. */
-export type Runtime = { version: string | undefined; minimumReleaseAge: string };
+type Runtime = { version: string | undefined; minimumReleaseAge: string };
 
 /** `tools` from office.yaml, with its defaults. */
 export type ResolvedTools = {
@@ -329,7 +311,7 @@ const packageSecret = v.strictObject(
 );
 
 /** The prefix of every variable a package's compose file gets from office: its namespace in capitals, `-` as `_`. */
-export function packageVariablePrefix(namespace: string): string {
+function packageVariablePrefix(namespace: string): string {
   return `${namespace.toUpperCase().replaceAll("-", "_")}_`;
 }
 
@@ -376,7 +358,7 @@ const hostPathEntry = v.pipe(
 );
 
 /** Variables office's environment file sets itself, or that would change how a shell runs. */
-export const reservedVariables = ["PATH", "HOME", "SHELL", "ENV", "BASH_ENV", "ZDOTDIR", "IFS", "NPM_CONFIG_MIN_RELEASE_AGE", "pnpm_config_minimum_release_age", "UV_EXCLUDE_NEWER", "PIP_UPLOADED_PRIOR_TO", "MISE_MINIMUM_RELEASE_AGE", ...Object.keys(managedAgentEnvironment)];
+const reservedVariables = ["PATH", "HOME", "SHELL", "ENV", "BASH_ENV", "ZDOTDIR", "IFS", "NPM_CONFIG_MIN_RELEASE_AGE", "pnpm_config_minimum_release_age", "UV_EXCLUDE_NEWER", "PIP_UPLOADED_PRIOR_TO", "MISE_MINIMUM_RELEASE_AGE", ...Object.keys(managedAgentEnvironment)];
 
 export const hostVariable = v.pipe(
   v.string(),
@@ -435,7 +417,7 @@ const systemPlatform = v.pipe(v.string(), v.regex(/^[a-z0-9]+-[0-9.]+-[a-z0-9]+(
  * absolute paths whose presence shows it was applied, for `office check`, and `verify`, a bash
  * script setup runs once the tools are installed, proves it works from the environment file.
  */
-export const bootstrapFile = packageFile("toml", "system/bootstrap.toml");
+const bootstrapFile = packageFile("toml", "system/bootstrap.toml");
 
 export const systemBlock = v.strictObject(
   {
@@ -527,7 +509,7 @@ export function defaultOffSetting(schema: DeclaredSettings, name: string): boole
 }
 
 /** A package command's name or alias: lowercase words separated by spaces. */
-export const commandRoute = v.pipe(v.string(), v.regex(/^[a-z][a-z0-9-]*(?: [a-z][a-z0-9-]*)*$/, issue => `invalid route ${JSON.stringify(issue.input)}; expected lowercase command words separated by spaces`));
+const commandRoute = v.pipe(v.string(), v.regex(/^[a-z][a-z0-9-]*(?: [a-z][a-z0-9-]*)*$/, issue => `invalid route ${JSON.stringify(issue.input)}; expected lowercase command words separated by spaces`));
 
 /** What a package declares under one command name: its one-line summary, usage, aliases and its one handler. */
 const packageCommand = v.pipe(
@@ -560,7 +542,7 @@ const packageCommands = v.pipe(
 );
 
 /** The entries of `.office/` office itself keeps, which no package may declare committed. */
-export const officeFolders = new Set(["cache", "claude", "current", "generation-ticket", "generations", "mise", "node_modules", "packages", "plugins", "publishing.json", "resolved", "runtime", "tmp"]);
+const officeFolders = new Set(["cache", "claude", "current", "generation-ticket", "generations", "mise", "node_modules", "packages", "plugins", "publishing.json", "resolved", "runtime", "tmp"]);
 
 /** A committed folder: one plain folder name directly under `.office/`, written `.office/<name>/`, that office doesn't keep itself. */
 const committedFolder = v.pipe(
@@ -700,7 +682,7 @@ export type PackageManifest = v.InferOutput<ReturnType<typeof packageManifestSch
 const digest = v.pipe(v.string(), v.regex(/^sha256:[0-9a-f]{64}$/, "must be sha256:<64 hex digits>"));
 
 /** The machines a host-mode office installs a pinned tool on: Linux and macOS, x64 and arm64, by Node's names. */
-export const hostPlatforms = ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"] as const;
+const hostPlatforms = ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"] as const;
 
 export type HostPlatform = (typeof hostPlatforms)[number];
 

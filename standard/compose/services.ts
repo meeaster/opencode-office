@@ -126,7 +126,7 @@ export function settingsEnv(installed: ComposeSource): string {
 }
 
 /** A change to the compose file a package runs: `from` the applied copy, `to` the package's current file; undefined is none. */
-export type ServiceChange = { name: string; from: string | undefined; to: string | undefined };
+type ServiceChange = { name: string; from: string | undefined; to: string | undefined };
 
 /**
  * Which packages' compose files to apply now, and which wait for `--upgrade`. `current` holds each

@@ -13,7 +13,7 @@
 //   `.office/packages/`: the tool's folder, entirely sync's and rewritten on every sync. It holds
 //   the [hooks] postinstall and the `<package>:install` task of a host install, written only in a
 //   host-mode office (with the package's switch on), then a package's system setup where it
-//   applies (src/package-system.ts). A package with neither has no fragment.
+//   applies (system.ts). A package with neither has no fragment.
 //
 // mise loads neither where it is. Both take effect only through links in mise's global conf.d
 // (src/machine.ts: a host-mode office's machine, or the container), as does `machine.toml`, which
@@ -34,12 +34,12 @@ import { toolPins } from "../../src/mise-toml.ts";
 import type { Office } from "../../src/office.ts";
 import { shellQuote } from "../../src/sfw.ts";
 import { projectionPath } from "../tools/applied.ts";
-import { fragmentOfficeRoot, systemApplyCommand, systemMarker, systemNotes, systemSection, systemState } from "../../src/package-system.ts";
+import { fragmentOfficeRoot, systemApplyCommand, systemMarker, systemNotes, systemSection, systemState } from "./system.ts";
 import type { GatheredPackage } from "../../src/gather.ts";
 import type { Parsed } from "../../src/schema.ts";
 
 /** Where sync writes packages' fragments: in the tool's `.office/`, where mise loads nothing by itself. */
-export const fragmentsFolder = ".office/mise";
+const fragmentsFolder = ".office/mise";
 
 /** The office's own machine-wide mise file, at its root, which mise doesn't load by itself either. */
 export const machineFile = "machine.toml";
@@ -153,7 +153,7 @@ export function ownerProjection(text: string, held: ReadonlySet<string>): string
 export const packagesFile = "machine.packages.toml";
 
 /** The fragment that holds a package's mise setup. */
-export function fragmentPath(office: Office, name: string): string {
+function fragmentPath(office: Office, name: string): string {
   return join(office.dir, fragmentsFolder, `${name}.toml`);
 }
 
@@ -248,7 +248,7 @@ type PackagesPlan = { text: string | undefined; changes: PackageChange[] };
  * office.yaml lists but that didn't read (`declared`, not installed) stays as it is, since what that
  * package declares isn't known.
  */
-export function planPackageTools(office: Office, installed: GatheredPackage[], declared: string[]): PackagesPlan {
+function planPackageTools(office: Office, installed: GatheredPackage[], declared: string[]): PackagesPlan {
   const current = readPackagesFile(office);
   const existing = current === undefined ? new Map<string, PackageLine>() : packageLines(current);
   const tools = declaredTools(office, installed);
@@ -376,7 +376,7 @@ function installed(path: string, executable: boolean): boolean {
  * unconditionally. Both are inline commands that find the script from the fragment's own path, so
  * they work from any folder; mise puts the office's tools on their PATH, `bun` among them.
  */
-export function hostSection(office: Office, item: GatheredPackage): string | undefined {
+function hostSection(office: Office, item: GatheredPackage): string | undefined {
   const install = installOf(item);
 
   if (install === undefined || office.opencode.mode !== "host" || (!item.claims.install && !hostApplies(office, item))) return undefined;

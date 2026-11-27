@@ -9,7 +9,7 @@ import { dirname, join, resolve } from "node:path";
 import * as v from "valibot";
 import { isMap, isNode, isScalar, isSeq, parse, parseDocument, stringify } from "yaml";
 
-import { check, type OfficeConfig, officeSchema, removedDesks, type Parsed, type ResolvedTools, resolveTools, scalarSetting, type SettingValue } from "./schema.ts";
+import { check, type OfficeConfig, officeSchema, type Parsed, type ResolvedTools, resolveTools, scalarSetting, type SettingValue } from "./schema.ts";
 
 /** Where the office is mounted in the `opencode` container, and so the folder sessions start in. */
 export const containerOfficeDir = "/home/office/workspace";
@@ -26,7 +26,7 @@ export type PackageEntry = OfficeConfig["packages"][number];
  * reaches it, `containerUrl` as Executor and the office's other containers do, and `directory` the
  * office's path as the server sees it, where sessions start.
  */
-export type OpencodeMode = { mode: "container" | "host"; url: string | undefined; containerUrl: string; directory: string; managed?: { envCommands: Record<string, string>; listenHost?: "0.0.0.0" } };
+type OpencodeMode = { mode: "container" | "host"; url: string | undefined; containerUrl: string; directory: string; managed?: { envCommands: Record<string, string>; listenHost?: "0.0.0.0" } };
 
 export type Office = {
   dir: string;
@@ -98,25 +98,6 @@ export function readOfficeFields<S extends v.GenericSchema>(dir: string, schema:
   if (!result.ok) throw new OfficeError(`office.yaml is not valid:\n${result.errors.map((line) => `  ${line}`).join("\n")}`);
 
   return result.value;
-}
-
-/** Whether office.yaml still declares desks, read without its schema; false when it doesn't read. */
-export function declaresDesks(dir: string): boolean {
-  try {
-    const document: unknown = parse(readFileSync(join(dir, "office.yaml"), "utf8"), { stringKeys: true, logLevel: "silent" });
-
-    return typeof document === "object" && document !== null && !Array.isArray(document) && "desks" in document;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Stops with the migration diagnostic, as reading office.yaml does, when it still declares desks:
- * for a caller about to change something (repair discovery links, say) before it reads the office.
- */
-export function refuseDesks(dir: string) {
-  if (declaresDesks(dir)) throw new OfficeError(`office.yaml is not valid:\n  desks: ${removedDesks}`);
 }
 
 export function readConfig(dir: string): OfficeConfig {
@@ -237,7 +218,7 @@ function decodeConfig(text: string) {
  * Rewrites office.yaml with `edit` and returns the office re-read. A change that doesn't parse or
  * that the schema rejects is never written.
  */
-export function editConfig(office: Office, edit: (text: string) => string): Office {
+function editConfig(office: Office, edit: (text: string) => string): Office {
   const path = join(office.dir, "office.yaml");
   const text = edit(readFileSync(path, "utf8"));
   const result = check(v.safeParse(officeSchema, decodeConfig(text)));

@@ -7,9 +7,8 @@ import { parse } from "yaml";
 
 import { compose, composeArguments } from "./commands/compose.ts";
 import { loadOffice } from "./office.ts";
-import { settingsEnv as composeVariables } from "../standard/compose/services.ts";
-import { composeProblems, ensureSecrets, packageSecret, planServices, preparePackageServices, secretsPath, settingsEnv } from "./package-services.ts";
-import { installedPackages } from "./layout.ts";
+import { composeProblems, planServices, settingsEnv as composeVariables } from "../standard/compose/services.ts";
+import { ensureSecrets, packageSecret, preparePackageServices, secretsPath } from "./package-services.ts";
 import { parseManifest } from "./schema.ts";
 import { recordRequiredBuiltins } from "./test-builtin-record.ts";
 import { writePackage } from "./test-package.ts";
@@ -277,9 +276,6 @@ test("a schema's top-level text, numbers and booleans reach the compose file as 
   write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: floci-box\n    settings: {port: 4600}\n");
   writePackage(join(office, "packages/floci-box/package.yaml"), `settings: ${JSON.stringify(schema)}\n`);
   write(join(office, "packages/floci-box/compose.yaml"), 'services:\n  floci-box:\n    image: busybox\n    ports: ["127.0.0.1:${FLOCI_BOX_PORT}:${FLOCI_BOX_PORT}"]\n');
-  const [item] = installedPackages(loadOffice(office)).installed.filter(pkg => pkg.entry.name === "floci-box");
-
-  expect(settingsEnv(item)).toBe("FLOCI_BOX_PORT='4600'\nFLOCI_BOX_ON='true'\nFLOCI_BOX_TITLE='a = b'\n");
   (await preparePackageServices(loadOffice(office), false)).apply();
   // Compose reads the package's variables from this file: office.yaml's port, not the default.
   expect(readFileSync(join(office, "state/packages/floci-box/settings.env"), "utf8")).toBe("FLOCI_BOX_PORT='4600'\nFLOCI_BOX_ON='true'\nFLOCI_BOX_TITLE='a = b'\n");

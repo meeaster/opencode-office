@@ -152,19 +152,6 @@ export function cloneShallow(url: string, ref: string | undefined, dir: string):
   return "cloned";
 }
 
-/**
- * Brings a read-only clone to the newest commit of `ref`, discarding local changes: references
- * and plugin clones are never edited in place. Returns "updated" or "current".
- */
-export function refreshClone(ref: string | undefined, dir: string): "updated" | "current" {
-  const before = head(dir);
-
-  git(["fetch", "--quiet", "--depth", "1", "origin", ref ?? "HEAD"], dir);
-  git(["checkout", "--quiet", "--force", "--detach", "FETCH_HEAD"], dir);
-
-  return head(dir) === before ? "current" : "updated";
-}
-
 const licenseNames = ["LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"];
 
 /**
@@ -421,7 +408,7 @@ export async function clonePluginStreamed(
   }
 }
 
-/** `refreshClone` for a plugin checkout already verified to name a commit, without blocking. */
+/** Updates a verified plugin checkout to the newest commit of `ref`, streaming progress. */
 export async function refreshCloneStreamed(ref: string | undefined, dir: string, options: GitOptions, verifyCheckout: () => void): Promise<"updated" | "current"> {
   const before = verifiedHead(dir);
 

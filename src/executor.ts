@@ -122,7 +122,7 @@ function parsed<S extends v.GenericSchema>(schema: S, value: v.InferInput<S>): v
  * host is reused; one is created only when no app has one, through the same connection form a
  * browser would fill, with the office's server password, which never leaves this function.
  */
-export async function linkOpenCode(office: Office, call: Call, slug: string): Promise<OpenCodeLink> {
+async function linkOpenCode(office: Office, call: Call, slug: string): Promise<OpenCodeLink> {
   const { organization } = await call<{ organization: string }>("GET", "/api/context");
   const base = `/api/organizations/${organization}`;
   const apps = parsed(appList, await call<v.InferInput<typeof appList>>("GET", `${base}/apps`));

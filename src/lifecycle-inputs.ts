@@ -14,7 +14,7 @@ import { officeMise } from "../standard/tools/registry.ts";
 import { officeCommand } from "./tool.ts";
 
 /** The office's mode as packages see it: managed host is host mode with office managing the server. */
-export function officeMode(office: Pick<Office, "opencode">): OfficeInfo["mode"] {
+function officeMode(office: Pick<Office, "opencode">): OfficeInfo["mode"] {
   if (office.opencode.mode === "container") return "container";
 
   return office.opencode.managed === undefined ? "host" : "managed-host";

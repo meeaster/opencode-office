@@ -76,7 +76,7 @@ export function planningToml(blanket: string, planned: readonly Planned[]): stri
 }
 
 /** The exact release of each tool a dry run would install, by the name the planning file gives it; a tool named twice is an error. */
-export function plannedInstalls(stdout: string): Map<string, string> {
+function plannedInstalls(stdout: string): Map<string, string> {
   const selected = new Map<string, string>();
 
   for (const line of stdout.split("\n")) {

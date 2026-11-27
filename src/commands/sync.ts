@@ -2,7 +2,7 @@
 // references and plugin clones, installs, updates, restores and removes packages,
 // runs their `sync` functions (and, in a full sync that applied the set whole, their `fullSync`
 // items, src/package-full-sync.ts), writes the mise tools packages declare into machine.packages.toml
-// and their setup into .office/mise/ (src/package-tools.ts) and, in a host-mode office the user
+// and their setup into .office/mise/ (standard/mise-integration/delivery.ts) and, in a host-mode office the user
 // agreed may manage its machine, links them and machine.toml into mise's global conf.d
 // (src/machine.ts), links the server plugins packages register and installs their panels on the
 // desktop app's machine. Office's plugin links are recognized by their target
@@ -374,7 +374,7 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
  * `changes`. Returns whether the switch recorded the references it resolved, whether a package's
  * sync function stopped the sync, and, when the set was applied whole, the committed folders.
  */
-export async function syncPackages(office: Office, changes: { push: (...lines: Change[]) => void }, stage: Stage = silentStage, exclude = true) {
+async function syncPackages(office: Office, changes: { push: (...lines: Change[]) => void }, stage: Stage = silentStage, exclude = true) {
   requirePluginDestination(office);
   const result = await publishPackages(office, exclude);
 

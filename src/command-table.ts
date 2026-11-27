@@ -18,7 +18,7 @@ export function reservedWord(word: string) {
   return reserved.has(word);
 }
 
-export function inspectRoute(name: string) {
+function inspectRoute(name: string) {
   return name === "opencode inspect" || name.startsWith("opencode inspect ");
 }
 

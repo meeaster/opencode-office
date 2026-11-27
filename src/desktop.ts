@@ -51,7 +51,7 @@ export type Probe = {
   run(command: string, args: string[]): string;
 };
 
-export const systemProbe: Probe = {
+const systemProbe: Probe = {
   env: process.env,
   home: homedir(),
   exists: existsSync,
@@ -353,7 +353,7 @@ const recordSchema = v.object({ office: v.string(), dir: v.string(), package: v.
 export type PanelRecord = v.InferOutput<typeof recordSchema>;
 
 /** The record's name in a panel's folder. */
-export const panelRecordFile = "office-panel.json";
+const panelRecordFile = "office-panel.json";
 
 /** The bundle's name in a panel's folder, which its package.json exports. */
 const installedBundle = "gui-experimental.cjs";

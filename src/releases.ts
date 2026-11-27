@@ -23,7 +23,7 @@ type Source = {
   platforms: Record<HostPlatform, string> | undefined;
 };
 
-export const sources: Record<PinnedTool, Source> = {
+const sources: Record<PinnedTool, Source> = {
   codex: { repo: "openai/codex", tag: /^rust-v(\d+\.\d+\.\d+)$/, prereleases: false, asset: () => "codex-package-x86_64-unknown-linux-musl.tar.gz", platforms: undefined },
   opencode: { repo: "anomalyco/opencode", tag: /^v(\d+\.\d+\.\d+)$/, prereleases: false, asset: () => "opencode-linux-x64.tar.gz", platforms: undefined },
   claude: { repo: "anthropics/claude-code", tag: /^v(\d+\.\d+\.\d+)$/, prereleases: false, asset: () => "claude-linux-x64.tar.gz", platforms: undefined },

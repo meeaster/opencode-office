@@ -68,9 +68,9 @@ function deployedText(opencode: OpenCode, folder: AppFolder, path: string, versi
   return path === "office.ts" ? officeModule(opencode) : disk;
 }
 
-export type UploadFile = { path: string; content: string; encoding?: "base64" };
+type UploadFile = { path: string; content: string; encoding?: "base64" };
 
-export function sourceFiles(opencode: OpenCode, folder: AppFolder, version: string): UploadFile[] {
+function sourceFiles(opencode: OpenCode, folder: AppFolder, version: string): UploadFile[] {
   return readdirSync(folder.dir, { recursive: true, withFileTypes: true })
     .flatMap((entry): UploadFile[] => {
       const path = relative(folder.dir, join(entry.parentPath, entry.name));

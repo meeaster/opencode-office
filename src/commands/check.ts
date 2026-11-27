@@ -31,7 +31,8 @@ import { cloneFolder, entry as entryAt } from "../../standard/opencode/ownership
 import { contributedAssets } from "../../standard/opencode/assets.ts";
 import { packageLockProblems } from "../package-operation.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile, type Repository } from "../office.ts";
-import { appliedServices, appliedSpawns, packageComposeFile, parseCompose, serviceStatus, sharedNamespaces } from "../package-services.ts";
+import { appliedServices, appliedSpawns, packageComposeFile, parseCompose } from "../../standard/compose/services.ts";
+import { serviceStatus, sharedNamespaces } from "../package-services.ts";
 import { listSpawned, planSweep, sweepIsEmpty } from "../package-spawns.ts";
 import { hostServiceStatus } from "../package-host-services.ts";
 import { unitStatus } from "../../standard/systemd/units.ts";
@@ -40,7 +41,7 @@ import { claim, machineReport, matchesServerUnit, requireServerConsent } from ".
 import { wrappedCommands } from "../sfw.ts";
 import { toolPins } from "../mise-toml.ts";
 import { destinationProblems } from "../../standard/mise-integration/projection.ts";
-import { fragmentNotes, machineBelowFloors, machineFile, orphanFragments, packagesFile, packagesFileProblems, strayFragments } from "../package-tools.ts";
+import { fragmentNotes, machineBelowFloors, machineFile, orphanFragments, packagesFile, packagesFileProblems, strayFragments } from "../../standard/mise-integration/delivery.ts";
 import { describeRecord, fileHashes, type InstalledPackage, localEdits, localFolders, officeFile, officeText, pulledFolders, readOnlyNote, readRecord, resolvePackages, sourceDifferences, sourceFile } from "../packages.ts";
 import { appliedDifference, type AppliedState, appliedState, staleApplied } from "../applied-settings.ts";
 import { describeIgnoredSkills, ignoredFolders, ignoredSkills } from "../../packages/office/plugin/ignored-skills.ts";
@@ -320,7 +321,7 @@ const problemList = v.array(v.strictObject({ level: v.picklist(["warning", "fail
  * warning line for each warning, a failed line for each failure, and a failed line naming the
  * package for one that throws or returns something other than problems.
  */
-export async function packageCheckFunctions(office: Office, report: Report, gathered: Pick<Gathered, "packages" | "entries">): Promise<void> {
+async function packageCheckFunctions(office: Office, report: Report, gathered: Pick<Gathered, "packages" | "entries">): Promise<void> {
   for (const item of gathered.packages) {
     const name = `package ${item.entry.name}`;
 
@@ -778,7 +779,7 @@ function hours(age: string): number | undefined {
  * Notes on office.yaml's `tools`, none a failure: a `[settings] minimum_release_age` in the office's machine.toml or mise.toml
  * other than the office's, which MISE_MINIMUM_RELEASE_AGE in the office's environment overrides.
  */
-export function toolsNotes(office: Office): string[] {
+function toolsNotes(office: Office): string[] {
   const { tools } = office;
   const notes: string[] = [];
 
@@ -848,7 +849,7 @@ function shellCheck(report: Report): void {
 }
 
 /** The versions office.yaml pins, whether office.lock matches, the tested range, and what is pending. */
-export function versionChecks(office: Office, report: Report): void {
+function versionChecks(office: Office, report: Report): void {
   const tools = toolsFor(office);
   const list = (pins: typeof defaultPins) => tools.map((tool) => `${tool} ${pins[tool].version}`).join(", ");
   let wanted;

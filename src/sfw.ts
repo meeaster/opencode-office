@@ -57,7 +57,7 @@ export function releaseAgeVariables(age: string): [string, string][] {
 export const behindSfwVariable = "OFFICE_BEHIND_SFW";
 
 /** The environment file's own path, which it exports, so `office check` and a shell can tell it was sourced. */
-export const envFileVariable = "OFFICE_ENV_FILE";
+const envFileVariable = "OFFICE_ENV_FILE";
 
 /** Where the sfw binary, its wrappers' script and their folder are, and the real mise the mise wrapper runs. */
 export type SfwLayout = { root: string; sfw: string; script: string; bin: string; mise: string };
@@ -73,7 +73,7 @@ export function shellQuote(value: string): string {
 }
 
 /** The first line of every file the office writes for sfw and the environment, after a script's `#!` line. */
-export function marker(what: string): string {
+function marker(what: string): string {
   return `# office: ${what}. Written by office; don't edit it, office sync or the image rewrites it.`;
 }
 
@@ -101,7 +101,7 @@ function missingSfw(layout: SfwLayout, indent: string): string[] {
  * wrappers' folder from PATH, so sfw finds the real command and a nested call (an npm script that
  * runs npm) reaches the real one behind the same proxy, then runs `sfw <name>`.
  */
-export function packageManagerScript(layout: SfwLayout): string {
+function packageManagerScript(layout: SfwLayout): string {
   return [
     "#!/bin/sh",
     marker(`the Socket Firewall wrapper for ${wrappedCommands.join(", ")}, which link to it`),
@@ -128,7 +128,7 @@ export function packageManagerScript(layout: SfwLayout): string {
  * reads its name to act as a tool's shim and `mise activate` writes it into the shell's hook. bash,
  * for `exec -a`.
  */
-export function miseWrapperScript(layout: SfwLayout): string {
+function miseWrapperScript(layout: SfwLayout): string {
   return [
     "#!/usr/bin/env bash",
     marker("the mise wrapper that runs mise's installs through Socket Firewall"),

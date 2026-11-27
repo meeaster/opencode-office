@@ -30,7 +30,7 @@ export function sourceFolder(id: string): string {
 }
 
 /** A generation's name: unique, and never a dot file. */
-export const generationName = /^[0-9a-f]{12}-[0-9a-f]{8}$/;
+const generationName = /^[0-9a-f]{12}-[0-9a-f]{8}$/;
 
 /** The office-relative folder of a source's generations. */
 export function generationsFolder(id: string): string {
@@ -79,7 +79,7 @@ export function ownedFolder(office: string, folder: string, create = false): boo
 }
 
 /** Writes `text` to the office-relative `file`, in a folder `ownedFolder` checked, through a temporary file renamed into place. */
-export function replaceFile(office: string, file: string, text: string): void {
+function replaceFile(office: string, file: string, text: string): void {
   const path = join(office, file);
   const temporary = `${path}.${randomUUID()}`;
 

@@ -36,7 +36,7 @@ export const Start = object({
 });
 
 // Opus through the Claude agent provider.
-export const defaultModel = { providerID: "claude-agent", id: "opus", variant: "medium" };
+const defaultModel = { providerID: "claude-agent", id: "opus", variant: "medium" };
 
 export const SessionRef = object({ sessionID: string() });
 
@@ -96,7 +96,7 @@ function request(client: Client, method: string, path: string, body?: RequestBod
   return client.fetch(`${origin}${path}`, init);
 }
 
-export async function info(client: Client) {
+async function info(client: Client) {
   return decodeJson(await request(client, "GET", "/api/info"), Info);
 }
 

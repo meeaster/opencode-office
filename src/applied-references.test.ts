@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appliedReferences, referenceFile, writeAppliedReferences } from "./applied-references.ts";
+import { appliedReferences, writeAppliedReferences } from "./applied-references.ts";
 import { syncLines as sync } from "./sync.fixture.ts";
 import { gatherPackages } from "./gather.ts";
 import { sources } from "./github.ts";
@@ -17,6 +17,7 @@ beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "office-applied-")); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 const own = { references: [{ name: "docs", url: "https://example.com/docs.git" }] };
+const referenceFile = ".office/resolved/references.json";
 const file = () => join(dir, referenceFile);
 
 test("the applied references are read back with their owners, in the order written; without a file, office.yaml's own", () => {

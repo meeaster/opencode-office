@@ -47,7 +47,7 @@ const sha256Text = v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/));
 const receiptSchema = v.strictObject({ owner: v.string(), sha256: sha256Text, applied: v.optional(sha256Text), invocation: v.optional(v.pipe(v.string(), v.nonEmpty())) });
 
 /** How long a started unit gets to serve. */
-export type Patience = { attempts: number; interval: number };
+type Patience = { attempts: number; interval: number };
 
 const patience: Patience = { attempts: 60, interval: 500 };
 
@@ -71,7 +71,7 @@ type Declared = { owner: string; name: string; dir: string; unit: UserUnit };
 /** A declared unit rendered: its text, the identity of its launch inputs, and the revision both make. */
 type Desired = Declared & { text: string; sha256: string; revision: string; facts: UnitFacts };
 
-export function unitName(office: Pick<Office, "name">, owner: string, id: string): string {
+function unitName(office: Pick<Office, "name">, owner: string, id: string): string {
   return `office-${office.name}-pkg-${owner}.${id}.service`;
 }
 
@@ -161,7 +161,7 @@ function declaresTool(item: UnitPackage, tool: UnitToolClaim): boolean {
 type Declarations = { units: Declared[]; problems: string[] };
 
 /** The units the office's packages declare. Only a host-mode office has any. */
-export function declaredUnits(office: Office, gathered: UnitInputs): Declarations {
+function declaredUnits(office: Office, gathered: UnitInputs): Declarations {
   const units: Declared[] = [];
   const problems: string[] = [];
 

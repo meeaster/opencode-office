@@ -5,7 +5,7 @@ import * as v from "valibot";
 import { openCheckoutLease, publicationLease } from "./checkout-lease.ts";
 import { tryFileLock } from "./file-lock.ts";
 import { atomicWrite } from "./secrets.ts";
-import { OfficeError } from "./office.ts";
+import { OfficeError, readConfig } from "./office.ts";
 import { type PackageLock, parsePackageLock } from "./schema.ts";
 import { editLock, lockFile, lockSections, packageSectionKey, publicationBusy, readLockText, requireKnownLockKeys } from "./versions.ts";
 
@@ -235,15 +235,16 @@ function locked<T>(dir: string, action: () => T) {
   return action();
 }
 
-/** Healthy readers only inspect links and need no write access. Repair uses
- * the same preflight and lease as writers. */
-export function ensureDiscovery(dir: string) {
+/** Healthy readers only inspect links. Validate the office before repairing them for a command that requires valid configuration. */
+export function ensureDiscovery(dir: string, requiresConfig = true) {
   checkDirectories(dir);
 
   if (!activeGeneration(dir)) return;
   const { conflict, missing } = inspectBridges(dir);
 
   if (!conflict && !missing.length) return;
+
+  if (requiresConfig) readConfig(dir);
 
   locked(dir, () => establish(dir));
 }

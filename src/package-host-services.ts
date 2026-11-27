@@ -7,7 +7,7 @@ import { userSystemd } from "./host-server.ts";
 import { installedPackages, type InstalledPackages } from "./layout.ts";
 import { machineRecordPath } from "./machine.ts";
 import { type Office, OfficeError } from "./office.ts";
-import { hostApplies } from "./package-tools.ts";
+import { hostApplies } from "../standard/tooling/requirements.ts";
 import { say } from "./report/index.ts";
 import { officeCommand } from "./tool.ts";
 

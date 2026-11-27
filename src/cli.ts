@@ -29,7 +29,7 @@ import { update } from "./commands/update.ts";
 import { upgradeTools } from "./commands/upgrade.ts";
 import { bump } from "./commands/bump.ts";
 import { releaseMachine, serviceEnvironment } from "./machine.ts";
-import { currentOffice, declaresDesks, findOffice, type Office, OfficeError, refuseDesks } from "./office.ts";
+import { currentOffice, findOffice, type Office, OfficeError } from "./office.ts";
 import { type Gathered, gatherPackages } from "./gather.ts";
 import { checkDirectories, ensureDiscovery, hasPublishedSet } from "./package-generation.ts";
 import { bindReader, evaluateAdmission, restoreCallerEnv, runReader } from "./package-operation.ts";
@@ -344,8 +344,6 @@ async function main(): Promise<void> {
     try { found = findOffice(route.office ?? process.cwd()); } catch { /* not in an office: no package command can run */ }
 
     if (found) {
-      // A desk office is refused before anything repairs its discovery links.
-      refuseDesks(found);
       ensureDiscovery(found);
       const status = await runReader(found, args);
 
@@ -372,6 +370,7 @@ async function main(): Promise<void> {
 
   const { values: flags, positionals } = parsed;
   const [command, ...rest] = positionals;
+  const inspectCommand = command === "opencode" && rest[0] === "inspect";
 
   // The office this first process found; unset in a reader.
   let dir: string | undefined;
@@ -385,13 +384,9 @@ async function main(): Promise<void> {
     // Down's own shutdown can't depend on the package set: its reader is started on its own.
     const shutdown = command === "down" && !flags.help;
 
-    // A desk office is refused, naming the migration, before anything repairs its discovery links;
-    // the session guidance and help still say so, without the repair.
-    const legacy = dir !== undefined && declaresDesks(dir);
+    const guidance = command === "instructions" && !flags.packages && flags.session === undefined;
 
-    if (legacy && !(flags.help || command === undefined || (command === "instructions" && !flags.packages && flags.session === undefined))) refuseDesks(dir!);
-
-    if (dir && !shutdown && !legacy) ensureDiscovery(dir);
+    if (dir && !shutdown) ensureDiscovery(dir, !(flags.help || command === undefined || guidance || inspectCommand));
 
     // Help and bare `office` list package commands, so they load packages in the reader too.
     if (dir && !shutdown && (flags.help || command === undefined || !["sync", "refresh", "packages", "sfw-wrappers", "env"].includes(command))) {
@@ -411,7 +406,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (command === "opencode" && rest[0] === "inspect") {
+  if (inspectCommand) {
     if (flags.help) {
       console.log(inspectUsage);
 

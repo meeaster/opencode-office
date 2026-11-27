@@ -9,7 +9,7 @@ import { containerEnvFile } from "../sfw.ts";
 import { compose, composeAttached } from "./compose.ts";
 
 /** The container folder for a host folder: the same place in the office, else the office root. */
-export function containerFolder(office: Office, folder: string): string {
+function containerFolder(office: Office, folder: string): string {
   const inside = relative(office.dir, resolve(folder));
 
   return inside === "" || inside.startsWith("..") || isAbsolute(inside) ? containerOfficeDir : `${containerOfficeDir}/${inside}`;

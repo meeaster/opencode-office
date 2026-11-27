@@ -1,12 +1,11 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Registry, RegistryEntry } from "../sdk/index.ts";
 import { repositories } from "../packages/references/repositories.ts";
 import { opencode } from "../packages/opencode/handles.ts";
 import { contributedAssets } from "../standard/opencode/assets.ts";
-import { setLinkProblem } from "./bound-paths.ts";
 import { commandHelp, dispatchCommand } from "./direct-commands.ts";
 import { gatherPackages, parseEntries, readEntries, type SetUp } from "./gather.ts";
 import { loadOffice } from "./office.ts";
@@ -345,20 +344,6 @@ test("the selection is checked without importing: rejected, uncopied and edited 
     [["absent"], "not synced yet; run office sync"],
   ]);
   expect(existsSync(join(dir, "imported"))).toBe(false);
-});
-
-test("in a bound reader, a package the set has no link for, or a wrong link, is a problem", () => {
-  const set = join(dir, ".office/generations/g-1");
-  const item = local("added", "export default {}");
-  local("other", "export default {}");
-  mkdirSync(join(set, "node_modules/@office"), { recursive: true });
-
-  expect(setLinkProblem(set, item)).toBe("selected since the last sync; run office sync");
-  symlinkSync(join(dir, "packages/other"), join(set, "node_modules/@office/added"));
-  expect(setLinkProblem(set, item)).toBe("the package set links it to a different folder; run office sync");
-  rmSync(join(set, "node_modules/@office/added"));
-  symlinkSync(join(dir, "packages/added"), join(set, "node_modules/@office/added"));
-  expect(setLinkProblem(set, item)).toBeUndefined();
 });
 
 const registered = (part: Partial<Registered>): Registered => ({ registries: new Map(), additions: [], ...part });

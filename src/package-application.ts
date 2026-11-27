@@ -7,7 +7,7 @@ import { installPanel, locate, panelId, removalNote } from "./desktop.ts";
 import { syncMachine } from "./machine.ts";
 import { linkPlugins, withPluginPlan } from "../standard/opencode/delivery.ts";
 import { type Declaration, readDeclarations } from "../standard/opencode/declarations.ts";
-import { syncTools } from "./package-tools.ts";
+import { syncTools } from "../standard/mise-integration/delivery.ts";
 import { type Office } from "./office.ts";
 import { removePackage, writeOfficeDeclaration } from "./packages.ts";
 import { prepareAppliedSettings, publishAppliedSettings } from "./applied-settings.ts";

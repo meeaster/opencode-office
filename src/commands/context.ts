@@ -127,7 +127,7 @@ async function firstAnswer(office: Office, id: string) {
 }
 
 /** One session in `directory` with `model`: one prompt, its first request's tokens, then the session deleted. */
-export async function probe(office: Office, directory: string, model: Model, withEntries: boolean): Promise<Probe> {
+async function probe(office: Office, directory: string, model: Model, withEntries: boolean): Promise<Probe> {
   const { response, server } = await requestOpenCode(office, "POST", "/api/session", { body: { title: probeTitle, location: { directory }, model } });
 
   if (!response.ok) return { ok: false, error: await failure("creating the session", response) };

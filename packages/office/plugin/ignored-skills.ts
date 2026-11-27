@@ -7,7 +7,7 @@ import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /** Where the Claude desktop app syncs account skills, which `ignore_claude_synced_skills` covers. */
-export const claudeSyncedSkills = "~/.claude/skills/synced";
+const claudeSyncedSkills = "~/.claude/skills/synced";
 
 type FolderSettings = { ignore_claude_synced_skills?: unknown; ignore_skill_folders?: unknown };
 
