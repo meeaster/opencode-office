@@ -1,20 +1,20 @@
 import { readdirSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { linkForEditors } from "./generation/links.ts";
-import type { Gathered } from "../gather.ts";
-import { runPackageHooks } from "../lifecycle-inputs.ts";
-import { installPanel, locate, panelId, removalNote } from "../features/opencode/desktop.ts";
-import { syncMachine } from "../features/host/machine.ts";
-import { linkPlugins, withPluginPlan } from "../features/opencode/delivery.ts";
-import { type Declaration, readDeclarations } from "../features/opencode/declarations.ts";
-import { syncTools } from "../features/mise-integration/delivery.ts";
-import { type Office } from "../office.ts";
-import { removePackage, writeOfficeDeclaration } from "./sources/copies.ts";
-import { prepareAppliedSettings, publishAppliedSettings } from "../applied-settings.ts";
-import { publishToolsLocation } from "../features/tools/applied.ts";
-import { failure, isFailure, type Change } from "../lib/change.ts";
-import { appliedSettingsPath } from "../../sdk/applied-settings.ts";
-import { excludeAppliedSettings, excludedPath, excludePlumbing, updateExcluded } from "../exclude-plumbing.ts";
+import { linkForEditors } from "../generation/links.ts";
+import type { Gathered } from "../../gather.ts";
+import { runPackageHooks } from "../../lifecycle-inputs.ts";
+import { installPanel, locate, panelId, removalNote } from "../../features/opencode/desktop.ts";
+import { syncMachine } from "../../features/host/machine.ts";
+import { linkPlugins, withPluginPlan } from "../../features/opencode/delivery.ts";
+import { type Declaration, readDeclarations } from "../../features/opencode/declarations.ts";
+import { syncTools } from "../../features/mise-integration/delivery.ts";
+import { type Office } from "../../office.ts";
+import { removePackage, writeOfficeDeclaration } from "../sources/copies.ts";
+import { prepareAppliedSettings, publishAppliedSettings } from "../../applied-settings.ts";
+import { publishToolsLocation } from "../../features/tools/applied.ts";
+import { failure, isFailure, type Change } from "../../lib/change.ts";
+import { appliedSettingsPath } from "../../../sdk/applied-settings.ts";
+import { excludeAppliedSettings, excludedPath, excludePlumbing, updateExcluded } from "../../exclude-plumbing.ts";
 
 /**
  * Applies a published package set from its gathering. While a selected package is unread (this

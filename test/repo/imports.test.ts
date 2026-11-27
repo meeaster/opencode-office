@@ -30,14 +30,14 @@ const allowed: readonly Allowed[] = [
   { from: "src/lifecycle-inputs.ts", to: "features/executor", needsApi: true },
   { from: "src/lifecycle-inputs.ts", to: "features/systemd", needsApi: true },
   { from: "src/lifecycle-inputs.ts", to: "features/tools", needsApi: true },
-  { from: "src/loader/package-application.ts", to: "features/host", needsApi: true },
-  { from: "src/loader/package-application.ts", to: "features/mise-integration", needsApi: true },
-  { from: "src/loader/package-application.ts", to: "features/opencode", needsApi: true },
-  { from: "src/loader/package-application.ts", to: "features/tools", needsApi: true },
-  { from: "src/loader/package-operation.ts", to: "features/mise-integration", needsApi: true },
-  { from: "src/loader/package-operation.ts", to: "features/opencode", needsApi: true },
-  { from: "src/loader/package-operation.ts", to: "features/references", needsApi: true },
-  { from: "src/loader/package-operation.ts", to: "features/tools", needsApi: true },
+  { from: "src/loader/publication/application.ts", to: "features/host", needsApi: true },
+  { from: "src/loader/publication/application.ts", to: "features/mise-integration", needsApi: true },
+  { from: "src/loader/publication/application.ts", to: "features/opencode", needsApi: true },
+  { from: "src/loader/publication/application.ts", to: "features/tools", needsApi: true },
+  { from: "src/loader/publication/admission.ts", to: "features/mise-integration", needsApi: true },
+  { from: "src/loader/publication/admission.ts", to: "features/opencode", needsApi: true },
+  { from: "src/loader/publication/admission.ts", to: "features/references", needsApi: true },
+  { from: "src/loader/publication/admission.ts", to: "features/tools", needsApi: true },
   { from: "src/loader/definitions/inventory.ts", to: "features/compose", needsApi: true },
   { from: "src/loader/definitions/inventory.ts", to: "features/mise-integration", needsApi: true },
   { from: "src/features/mise-integration/projection.ts", to: "packages/tooling" },
@@ -257,10 +257,12 @@ const loaderEntries = new Map<string, readonly string[]>([
   ["access", ["access.ts"]],
   ["worker", ["worker.ts"]],
   ["generation", ["generation/storage.ts", "generation/reader.ts", "generation/links.ts"]],
+  ["publication", ["publication/publish.ts", "publication/admission.ts"]],
+  ["lifecycle", ["lifecycle/full-sync.ts", "lifecycle/session.ts", "lifecycle/shutdown.ts"]],
 ]);
 
 function loaderModule(path: string) {
-  return /^src\/loader\/([^/]+)\//.exec(path)?.[1] ?? /^src\/loader\/(access|worker)\.ts$/.exec(path)?.[1];
+  return /^src\/loader\/([^/]+)\//.exec(path)?.[1] ?? /^src\/loader\/([^/]+)\.ts$/.exec(path)?.[1];
 }
 
 function privateLoaderImport(from: string, to: string): boolean {
@@ -388,19 +390,26 @@ test("only loader entry files can be imported from outside their module", () => 
   expect(privateLoaderImport("src/gather.ts", "src/loader/definitions/nested/registration.ts")).toBe(true);
   expect(privateLoaderImport("src/gather.ts", "src/loader/definitions/registration.ts")).toBe(false);
   expect(privateLoaderImport("src/gather.ts", "src/loader/unlisted/entry.ts")).toBe(true);
+  expect(privateLoaderImport("src/gather.ts", "src/loader/unlisted.ts")).toBe(true);
   expect(privateLoaderImport("src/loader/definitions/inventory.ts", "src/loader/generation/storage.ts")).toBe(false);
-  expect(privateLoaderImport("src/loader/definitions/inventory.ts", "src/loader/generation/internal.ts")).toBe(true);
+  expect(privateLoaderImport("src/loader/lifecycle/session.ts", "src/loader/publication/stage.ts")).toBe(true);
+  expect(privateLoaderImport("src/loader/lifecycle/session.ts", "src/loader/publication/publish.ts")).toBe(false);
+  expect(privateLoaderImport("src/loader/publication/publish.ts", "src/loader/publication/stage.ts")).toBe(false);
 });
 
-test("worker transport cannot import access even through its entry file", () => {
+test("worker transport cannot import handlers even through their entry files", () => {
   const from = "src/loader/worker.ts";
-  const to = "src/loader/access.ts";
 
   expect(loaderModule(from)).toBe("worker");
-  expect(loaderModule(to)).toBe("access");
-  expect(privateLoaderImport(from, to)).toBe(false);
-  expect(workerImportsHandler(from, to)).toBe(true);
-  expect(workerImportsHandler(to, from)).toBe(false);
+  expect(loaderModule("src/loader/access.ts")).toBe("access");
+
+  for (const entry of ["access.ts", "generation/reader.ts", "publication/admission.ts", "lifecycle/shutdown.ts"]) {
+    const to = `src/loader/${entry}`;
+
+    expect(privateLoaderImport(from, to)).toBe(false);
+    expect(workerImportsHandler(from, to)).toBe(true);
+    expect(workerImportsHandler(to, from)).toBe(false);
+  }
 });
 
 test("reads multiline, type-only, re-export, side-effect, import-equals and literal dynamic imports", () => {

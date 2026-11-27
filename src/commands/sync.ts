@@ -1,7 +1,7 @@
 // `office sync`: makes the office's folders match office.yaml and the tool. It clones and updates
 // references and plugin clones, installs, updates, restores and removes packages,
 // runs their `sync` functions (and, in a full sync that applied the set whole, their `fullSync`
-// items, src/loader/package-full-sync.ts), writes the mise tools packages declare into machine.packages.toml
+// items, src/loader/lifecycle/full-sync.ts), writes the mise tools packages declare into machine.packages.toml
 // and their setup into .office/mise/ (src/features/mise-integration/delivery.ts) and, in a host-mode office the user
 // agreed may manage its machine, links them and machine.toml into mise's global conf.d
 // (src/features/host/machine.ts), links the server plugins packages register and installs their panels on the
@@ -14,8 +14,8 @@ import { join, relative } from "node:path";
 import { prepareReferenceRefresh } from "../../packages/references/tasks/refresh.ts";
 import { claudeFiles } from "../features/claude/claude.ts";
 import { appliedReferences } from "../features/references/applied-references.ts";
-import { publishPackages } from "../loader/package-operation.ts";
-import { fullSyncStep } from "../loader/package-full-sync.ts";
+import { publishPackages } from "../loader/publication/publish.ts";
+import { fullSyncStep } from "../loader/lifecycle/full-sync.ts";
 import { openCheckoutLease } from "../checkout-lease.ts";
 import { clonePluginStreamed, existingPluginDestination, git, isClone, PluginCheckoutProblem, referenceGit, referenceOriginProblem, refreshCloneStreamed, verifiedHead } from "../git.ts";
 import { type Clone, clones } from "../layout.ts";

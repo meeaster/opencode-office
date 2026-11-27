@@ -3,7 +3,6 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { editorLinks, linkForEditors, writePackageLinks } from "../../../../src/loader/generation/links.ts";
-import { coupledFailures } from "../../../../src/loader/package-operation.ts";
 import type { ResolvedPackage } from "../../../../src/loader/sources/selection.ts";
 import { packageJsonText } from "../../../support/test-package.ts";
 
@@ -13,10 +12,10 @@ beforeEach(() => { dir = realpathSync(mkdtempSync(join(tmpdir(), "office-links-"
 
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
-function pkg(name: string, kind: ResolvedPackage["kind"], folder: string, dependencies: string[] = []): ResolvedPackage {
+function pkg(name: string, kind: ResolvedPackage["kind"], folder: string): ResolvedPackage {
   mkdirSync(folder, { recursive: true });
   writeFileSync(join(folder, "office.ts"), "export default {}");
-  writeFileSync(join(folder, "package.json"), packageJsonText(name, "office.ts", { dependencies }));
+  writeFileSync(join(folder, "package.json"), packageJsonText(name));
 
   return { entry: { name, settings: {}, source: undefined }, kind, dir: folder };
 }
@@ -69,31 +68,4 @@ test("sync points packages/node_modules/@office at the published set for editors
   symlinkSync("stale", `${path}.${process.pid}`);
   expect(linkForEditors(dir)).toEqual([`linked ${editorLinks} to the published package set, for editors`]);
   expect(readdirSync(join(dir, "packages/node_modules"))).toEqual(["@office"]);
-});
-
-test("an update holds back a package that declares a dependency on a rejected one; an unreadable package.json holds back all", () => {
-  const consumer = pkg("consumer", "remote", join(dir, "consumer"), ["provider"]);
-  const provider = pkg("provider", "remote", join(dir, "provider"));
-  const other = pkg("other", "remote", join(dir, "other"));
-  const pending = ["consumer", "provider", "other"];
-
-  expect(coupledFailures(["provider"], pending, [[consumer, provider, other]]).sort()).toEqual(["consumer", "provider"]);
-  expect(coupledFailures(["consumer"], pending, [[consumer, provider, other]]).sort()).toEqual(["consumer", "provider"]);
-  expect(coupledFailures(["other"], pending, [[consumer, provider, other]])).toEqual(["other"]);
-  writeFileSync(join(other.dir, "package.json"), "{");
-  expect(coupledFailures(["other"], pending, [[consumer, provider, other]])).toEqual(pending);
-});
-
-test("an update holds back a consumer with its selected optional provider, active or not; an unselected provider couples nothing", () => {
-  const consumer = pkg("consumer", "remote", join(dir, "consumer"));
-  writeFileSync(join(consumer.dir, "skills.ts"), "");
-  writeFileSync(join(consumer.dir, "package.json"), JSON.stringify({ name: "@office/consumer", office: { definition: "./office.ts", integrations: { "@office/provider": "./skills.ts" } } }));
-  const provider = pkg("provider", "remote", join(dir, "provider"));
-  const other = pkg("other", "remote", join(dir, "other"));
-  // A selected provider whose copy isn't there still has its edge: selection, not the copy, decides.
-  const absent: ResolvedPackage = { ...provider, dir: join(dir, "gone") };
-
-  expect(coupledFailures(["provider"], ["consumer", "provider", "other"], [[consumer, provider, other]]).sort()).toEqual(["consumer", "provider"]);
-  expect(coupledFailures(["provider"], ["consumer", "provider"], [[consumer, absent]]).sort()).toEqual(["consumer", "provider"]);
-  expect(coupledFailures(["consumer"], ["consumer", "other"], [[consumer, other]])).toEqual(["consumer"]);
 });

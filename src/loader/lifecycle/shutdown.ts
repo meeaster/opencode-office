@@ -6,14 +6,14 @@
 // gets its settings, checked against its own schema, and the host helpers. No `setup` runs, so
 // there are no registries. Every package left out is named, and the reader exits 1; the kernel's
 // own shutdown runs in the process that started this one, whatever happens here.
-import { officeInfo, packageHost, packageLines } from "../lifecycle-inputs.ts";
-import type { Office } from "../office.ts";
-import { definitionGate, installedDefinition } from "./definitions/inventory.ts";
-import { schemaSettings } from "./definitions/settings.ts";
-import { importEdges, readPackageJson } from "./sources/manifest.ts";
-import { type ResolvedPackage, resolvePackages, selectedNames } from "./sources/selection.ts";
-import type { PackageManifest } from "../schema.ts";
-import { say } from "../report/index.ts";
+import { officeInfo, packageHost, packageLines } from "../../lifecycle-inputs.ts";
+import type { Office } from "../../office.ts";
+import { definitionGate, installedDefinition } from "../definitions/inventory.ts";
+import { schemaSettings } from "../definitions/settings.ts";
+import { importEdges, readPackageJson } from "../sources/manifest.ts";
+import { type ResolvedPackage, resolvePackages, selectedNames } from "../sources/selection.ts";
+import type { PackageManifest } from "../../schema.ts";
+import { say } from "../../report/index.ts";
 
 /**
  * Each package's import edges, for those whose package.json reads: its optional providers office.yaml

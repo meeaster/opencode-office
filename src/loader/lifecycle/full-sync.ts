@@ -8,16 +8,16 @@ import { closeSync, existsSync, readFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";
 
-import type { ItemResult, SyncItem } from "../../sdk/index.ts";
-import { failure, type Change } from "../lib/change.ts";
-import { resultDescriptor } from "../command-stdout.ts";
-import { gatherPackages, problemLines } from "../gather.ts";
-import { officeInfo } from "../lifecycle-inputs.ts";
-import type { Office } from "../office.ts";
-import { managedDirectory, pinActive } from "./generation/storage.ts";
-import { selectionText } from "./generation/reader.ts";
-import { startReader } from "./worker.ts";
-import type { Stage } from "../report/index.ts";
+import type { ItemResult, SyncItem } from "../../../sdk/index.ts";
+import { failure, type Change } from "../../lib/change.ts";
+import { resultDescriptor } from "../../command-stdout.ts";
+import { gatherPackages, problemLines } from "../../gather.ts";
+import { officeInfo } from "../../lifecycle-inputs.ts";
+import type { Office } from "../../office.ts";
+import { managedDirectory, pinActive } from "../generation/storage.ts";
+import { selectionText } from "../generation/reader.ts";
+import { startReader } from "../worker.ts";
+import type { Stage } from "../../report/index.ts";
 
 /** How many items run at once, across packages. */
 const slots = 8;

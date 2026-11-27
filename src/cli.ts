@@ -33,13 +33,13 @@ import { currentOffice, findOffice, type Office, OfficeError } from "./office.ts
 import { type Gathered, gatherPackages } from "./gather.ts";
 import { checkDirectories, ensureDiscovery, hasPublishedSet } from "./loader/generation/storage.ts";
 import { bindReader, runReader } from "./loader/generation/reader.ts";
-import { evaluateAdmission } from "./loader/package-operation.ts";
+import { evaluateAdmission } from "./loader/publication/admission.ts";
 import { restoreCallerEnv } from "./loader/worker.ts";
 import { packageSecret } from "./features/compose/package-services.ts";
-import { shutdownPackages } from "./loader/package-shutdown.ts";
-import { emitEvent, runFullSync } from "./loader/package-full-sync.ts";
+import { shutdownPackages } from "./loader/lifecycle/shutdown.ts";
+import { emitEvent, runFullSync } from "./loader/lifecycle/full-sync.ts";
 import { evaluateAccess } from "./loader/access.ts";
-import { packageSessionText } from "./loader/package-session.ts";
+import { packageSessionText } from "./loader/lifecycle/session.ts";
 import { divertStdout, writeResult } from "./command-stdout.ts";
 import { decrypt } from "./features/secrets/secrets.ts";
 import { onTerminal, reported, type Reporter, type Stage } from "./report/index.ts";

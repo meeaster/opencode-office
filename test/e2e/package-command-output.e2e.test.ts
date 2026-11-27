@@ -3,7 +3,7 @@
 // prints while gathering (child processes with inherited output included) and after; a `run`
 // handler's streaming output, terminal and exit status; help; and one gathering per command.
 import { expect, test } from "bun:test";
-import { mkdirSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { definitionFixture } from "../support/package-definition.fixture.ts";
 import { definitionText, writePackage } from "../support/test-package.ts";
@@ -44,6 +44,12 @@ const probe = definitionText(`{
         if (args[0] === "number") return 7;
         if (args[0] === "status") process.exitCode = 23;
         if (args[0] === "bun-options") return spawnSync("/bin/sh", ["-c", 'printf "%s\\\\n" "\${BUN_OPTIONS-unset}" "\${OFFICE_CALLER_BUN_OPTIONS-unset}"']).stdout.toString();
+        if (args[0] === "hold-result") {
+          const holder = Bun.spawn(["/bin/sh", "-c", 'for i in $(/usr/bin/seq 500); do [ -f "$RESULT_GATE" ] && exit; /bin/sleep .02; done'], { stdio: ["ignore", "ignore", "ignore", "ignore", 4] });
+          holder.unref();
+          writeFileSync(join(office.dir, "reader-pid"), String(process.pid));
+          return "buffered result";
+        }
         return { lines: "one\\ntwo", terminated: "one\\ntwo\\n", empty: "", large, status: large }[args[0]];
       },
     },
@@ -240,6 +246,33 @@ test("the compiled reader restores the caller's Bun options before a package sta
 
   for (const [env, options] of [[{ BUN_OPTIONS: "--smol" }, "--smol"], [{ BUN_OPTIONS: "" }, "unset"], [{}, "unset"]] as const) {
     expect(f.streams("compiled", args, env)).toEqual({ status: 0, stdout: `${options}\nunset\n`, stderr: `${noise}handler log\n` });
+  }
+});
+
+test("an ordinary command keeps its SIGINT handler while a descendant still holds its result pipe", async () => {
+  const f = office("result-pipe");
+  const gate = join(f.home, "result-gate");
+  const pidFile = join(f.dir, "reader-pid");
+  const child = Bun.spawn([exe, "--office", f.dir, "probe", "text", "hold-result"], { cwd: root, env: f.env({ RESULT_GATE: gate }), stdout: "pipe", stderr: "pipe" });
+  const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+
+  try {
+    for (let attempt = 0; attempt < 300 && child.exitCode === null; attempt++) {
+      if (existsSync(pidFile) && !existsSync(join("/proc", readFileSync(pidFile, "utf8")))) break;
+      await Bun.sleep(20);
+    }
+
+    expect(existsSync(pidFile)).toBe(true);
+    expect(existsSync(join("/proc", readFileSync(pidFile, "utf8")))).toBe(false);
+    expect(child.exitCode).toBeNull();
+    child.kill("SIGINT");
+    writeFileSync(gate, "");
+    expect(await child.exited).toBe(0);
+    expect(await output).toEqual(["buffered result\n", `${noise}handler log\n`]);
+  } finally {
+    writeFileSync(gate, "");
+
+    if (child.exitCode === null) child.kill();
   }
 });
 

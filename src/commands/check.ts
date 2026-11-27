@@ -29,7 +29,7 @@ import { clones, unignoredFolders } from "../layout.ts";
 import { cloneTarget, pluginClones, pluginLinks, restartNotice, withPluginPlan } from "../features/opencode/delivery.ts";
 import { cloneFolder, entry as entryAt } from "../features/opencode/ownership.ts";
 import { contributedAssets } from "../features/opencode/assets.ts";
-import { packageLockProblems } from "../loader/package-operation.ts";
+import { packageLockProblems } from "../loader/publication/publish.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile, type Repository } from "../office.ts";
 import { appliedServices, appliedSpawns, packageComposeFile, parseCompose } from "../features/compose/services.ts";
 import { serviceStatus, sharedNamespaces } from "../features/compose/package-services.ts";

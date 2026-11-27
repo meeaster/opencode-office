@@ -9,14 +9,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";
 
-import { readAppliedSnapshot } from "../../sdk/applied-settings.ts";
-import { installedPackages, problemLine } from "./definitions/inventory.ts";
-import { officeInfo } from "../lifecycle-inputs.ts";
-import type { Office } from "../office.ts";
-import { managedDirectory } from "./generation/storage.ts";
-import { importEdges, readPackageJson } from "./sources/manifest.ts";
-import { type PackageProblem, type ResolvedPackage, resolvePackages } from "./sources/selection.ts";
-import { packageEntries } from "../schema.ts";
+import { readAppliedSnapshot } from "../../../sdk/applied-settings.ts";
+import { installedPackages, problemLine } from "../definitions/inventory.ts";
+import { officeInfo } from "../../lifecycle-inputs.ts";
+import type { Office } from "../../office.ts";
+import { managedDirectory } from "../generation/storage.ts";
+import { importEdges, readPackageJson } from "../sources/manifest.ts";
+import { type PackageProblem, type ResolvedPackage, resolvePackages } from "../sources/selection.ts";
+import { packageEntries } from "../../schema.ts";
 
 /**
  * The packages `blocked` names and every package that imports one of them, directly or through
@@ -67,6 +67,7 @@ export async function packageSessionText(office: Office, generation: string): Pr
     const named = new Set(installed.blocked.flatMap(problem => problem.packages));
 
     for (const problem of installed.blocked) console.error(`office: no session text from ${problemLine(problem)}`);
+
     for (const name of left) if (!named.has(name)) console.error(`office: no session text from package ${name}: it imports a package that doesn't load`);
     installed = installedPackages(view, left);
 

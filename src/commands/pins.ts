@@ -10,7 +10,7 @@ import { fullCommit, sourceDifferences } from "../loader/sources/copies.ts";
 import { requirePackageOwnership, resolvePackages } from "../loader/sources/selection.ts";
 import type { Stage } from "../report/index.ts";
 import { resolveRef, resolveTrack, type Resolved, short } from "../track.ts";
-import { publishPackages } from "../loader/package-operation.ts";
+import { publishPackages } from "../loader/publication/publish.ts";
 import { readLockSection } from "../versions.ts";
 
 type Resolution = ({ ok: true } & Resolved) | { ok: false; reason: string };
