@@ -43,7 +43,7 @@ import { fragmentOwner, machineFile, machineFiles, ownerProjection, packagesFile
 import { heldKeys } from "../tools/admission.ts";
 import { platformAsset } from "../tools/releases.ts";
 import { check, hostVariable, type Lock } from "../../schema.ts";
-import { atomicWrite } from "../secrets/secrets.ts";
+import { atomicWrite } from "../../lib/atomic-write.ts";
 import { envScript, wrapperFiles } from "./sfw.ts";
 import { defaultPins, hostPlatform, readApplied, wantedPins } from "../../versions.ts";
 import { say } from "../../report/index.ts";

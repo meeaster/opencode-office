@@ -8,7 +8,7 @@ import * as v from "valibot";
 
 import { OfficeError } from "../../office.ts";
 import { check, type HostPlatform, type PinnedTool } from "../../schema.ts";
-import { atomicWrite } from "../secrets/secrets.ts";
+import { atomicWrite } from "../../lib/atomic-write.ts";
 import { compareVersions, type Pin } from "../../versions.ts";
 
 type Source = {

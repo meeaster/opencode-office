@@ -35,7 +35,7 @@ import { officeInfo } from "../../lifecycle-inputs.ts";
 import { type Office, OfficeError } from "../../office.ts";
 import { packageLaunch } from "./package-host-services.ts";
 import { check } from "../../schema.ts";
-import { atomicWrite } from "../secrets/secrets.ts";
+import { atomicWrite } from "../../lib/atomic-write.ts";
 import { unitDir } from "./systemd.ts";
 import { activationProblem, enableUnit, installProblem, ownershipProblem, removeUnit, running, type UnitManager, unitPresent, unitSha256, type UnitState, userManager, writeUnit } from "./user-units.ts";
 import { toolsState } from "../tools/applied.ts";

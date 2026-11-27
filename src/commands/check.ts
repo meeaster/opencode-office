@@ -49,7 +49,8 @@ import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces
 import { pinnedTools } from "../schema.ts";
 import { builtinFiles, builtinPackages, version } from "../tool.ts";
 import { changes, defaultPins, describeMove, executorImage, isTested, readApplied, tested, toolsFor, wantedPins } from "../versions.ts";
-import { compose, officeImage, ports, runningPins } from "./compose.ts";
+import { compose, officeImage, runningPins } from "./compose.ts";
+import { ports } from "../lib/ports.ts";
 import { keyOrganization } from "./executor.ts";
 import type { Stage } from "../report/index.ts";
 

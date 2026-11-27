@@ -1,7 +1,7 @@
 import { join } from "node:path";
 
 import { type Office, OfficeError, readEnvFile } from "../../office.ts";
-import { ports } from "../../commands/compose.ts";
+import { ports } from "../../lib/ports.ts";
 
 /** A JSON body to send, and how long to wait for the answer (10 seconds unless set). */
 export type OpenCodeRequestOptions = { body?: unknown; timeoutMs?: number };

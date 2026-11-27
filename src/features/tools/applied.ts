@@ -11,7 +11,7 @@ import { basename, join, relative } from "node:path";
 
 import { activeBin, type AppliedRecord, type AppliedTool, currentLink, driftMessage, driftOf, readRecord, toolsLocationPath, type ToolsLocation } from "../../../packages/tools/applied.ts";
 import { type Office, OfficeError } from "../../office.ts";
-import { atomicWrite } from "../secrets/secrets.ts";
+import { atomicWrite } from "../../lib/atomic-write.ts";
 
 export type { AppliedExecutable, AppliedTool } from "../../../packages/tools/applied.ts";
 

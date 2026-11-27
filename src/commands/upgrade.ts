@@ -24,7 +24,7 @@ import { type Document, isMap, isNode, isScalar, parseDocument } from "yaml";
 
 import { type Office, OfficeError } from "../office.ts";
 import { newestRelease, pinFor } from "../features/tools/releases.ts";
-import { atomicWrite } from "../features/secrets/secrets.ts";
+import { atomicWrite } from "../lib/atomic-write.ts";
 import { type Stage, stream } from "../report/index.ts";
 import { check, type LockedTool, type PinnedTool, pinnedTools } from "../schema.ts";
 import { compareVersions as compareSemver, editLock, lockFile, lockSections, readLockText, wantedPins } from "../versions.ts";

@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { type AppliedSettings, AppliedSettingsError, appliedSettingsFile, appliedSettingsPath, canonicalJson, readAppliedSnapshot } from "../sdk/applied-settings.ts";
 import { type Office, OfficeError } from "./office.ts";
-import { atomicWrite } from "./features/secrets/secrets.ts";
+import { atomicWrite } from "./lib/atomic-write.ts";
 
 /** A selected package's settings, as package application and check hold them. */
 type PackageSettings = { entry: { name: string }; settings: AppliedSettings };

@@ -4,7 +4,7 @@ import { dirname, join, relative } from "node:path";
 import * as v from "valibot";
 import { openCheckoutLease, publicationLease } from "../checkout-lease.ts";
 import { tryFileLock } from "../lib/file-lock.ts";
-import { atomicWrite } from "../features/secrets/secrets.ts";
+import { atomicWrite } from "../lib/atomic-write.ts";
 import { OfficeError, readConfig } from "../office.ts";
 import { type PackageLock, parsePackageLock } from "../schema.ts";
 import { editLock, lockFile, lockSections, packageSectionKey, publicationBusy, readLockText, requireKnownLockKeys } from "../versions.ts";

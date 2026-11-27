@@ -1,12 +1,12 @@
 // SOPS runs only on the host. Plaintext travels over stdin/stdout, never command arguments.
 import { execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import * as v from "valibot";
 
+import { atomicWrite } from "../../lib/atomic-write.ts";
 import { requireOfficeTool } from "../host/host-tools.ts";
 import { type Office, OfficeError } from "../../office.ts";
 import { check, serverVariable } from "../../schema.ts";
@@ -70,24 +70,6 @@ export function source(office: Office, file: string): string {
   if (isAbsolute(file) || within.startsWith("..")) throw new OfficeError("secret/config sources must be relative paths inside the office");
 
   return path;
-}
-
-/**
- * Replaces `path` whole by rename. The temporary is written beside it, or in `staging`, a folder on
- * the same filesystem, when a leftover beside it would be in the way (as in a committed folder).
- */
-export function atomicWrite(path: string, content: string | Buffer, mode = 0o600, staging = dirname(path)): void {
-  mkdirSync(dirname(path), { recursive: true });
-  mkdirSync(staging, { recursive: true });
-
-  const temporary = join(staging, `${basename(path)}.${randomBytes(8).toString("hex")}.new`);
-
-  try {
-    writeFileSync(temporary, content, { mode, flag: "wx" });
-    renameSync(temporary, path);
-  } finally {
-    rmSync(temporary, { force: true });
-  }
 }
 
 export function requireTool(tool: string, args = ["--version"]): void {

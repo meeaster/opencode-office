@@ -5,7 +5,7 @@ import { join } from "node:path";
 import * as v from "valibot";
 
 import type { ExecutorAccess, JsonValue, OpenCodeLink } from "../../../sdk/index.ts";
-import { ports } from "../../commands/compose.ts";
+import { ports } from "../../lib/ports.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../../office.ts";
 import { check } from "../../schema.ts";
 

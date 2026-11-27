@@ -6,7 +6,7 @@ import { join } from "node:path";
 import * as v from "valibot";
 import { OfficeError, type Office } from "../../office.ts";
 import { check } from "../../schema.ts";
-import { atomicWrite } from "../secrets/secrets.ts";
+import { atomicWrite } from "../../lib/atomic-write.ts";
 import { assetPaths } from "./assets.ts";
 
 const file = ".office/resolved/opencode-assets.json";

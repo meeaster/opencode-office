@@ -4,8 +4,9 @@ import { existsSync } from "node:fs";
 import * as v from "valibot";
 
 import { executorEnvFile, type Office, OfficeError, readEnvFile } from "../office.ts";
-import { atomicWrite, ownerRecord, parsed, saveOwner, source } from "../features/secrets/secrets.ts";
-import { ports } from "./compose.ts";
+import { ownerRecord, parsed, saveOwner, source } from "../features/secrets/secrets.ts";
+import { atomicWrite } from "../lib/atomic-write.ts";
+import { ports } from "../lib/ports.ts";
 import { currentReporter, progress, say } from "../report/index.ts";
 
 export function executorUrl(): string {

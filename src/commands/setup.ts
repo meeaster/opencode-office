@@ -18,7 +18,8 @@ import { decrypt, encrypt, initializeIdentity, prepareSecrets, requireTool } fro
 import { configureStartup, interactiveShell } from "../features/host/shell-startup.ts";
 import { offerRestart, systemStep, verifySystems } from "../features/host/system-setup.ts";
 import { check } from "./check.ts";
-import { installingMise, ports, startExecutor, up } from "./compose.ts";
+import { installingMise, startExecutor, up } from "./compose.ts";
+import { ports } from "../lib/ports.ts";
 import { bootstrapExecutor } from "./executor.ts";
 import { summarize, sync } from "./sync.ts";
 import { runReader } from "../loader/package-operation.ts";

@@ -13,7 +13,7 @@ import { lstatSync, readdirSync, readFileSync, readlinkSync, rmSync } from "node
 import { isAbsolute, join } from "node:path";
 
 import { OfficeError } from "../../office.ts";
-import { atomicWrite } from "../secrets/secrets.ts";
+import { atomicWrite } from "../../lib/atomic-write.ts";
 
 /** What systemd reports of a unit, as office reads it before touching the unit; `stale` is NeedDaemonReload. */
 export type UnitState = { fragment: string; dropIns: string; active: string; enabled: string; pid: number; invocation: string; stale: boolean };

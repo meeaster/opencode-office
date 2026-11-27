@@ -41,13 +41,7 @@ import { placeExecutable, toolPath, unpackedImage } from "../tool.ts";
 import { baseImage, changes, compareVersions, defaultPins, describeMove, executorImage, readApplied, wantedPins, writeApplied } from "../versions.ts";
 import { connection } from "../features/executor/executor.ts";
 import { precheckTools, reconcileTools } from "../features/tools/host.ts";
-
-export function ports() {
-  return {
-    executor: process.env.EXECUTOR_PORT ?? "41440",
-    opencode: process.env.OPENCODE_PORT ?? "41497",
-  };
-}
+import { ports } from "../lib/ports.ts";
 
 /** The opencode container's image: the base image, or the office's own on top of it, named for the versions. */
 export function officeImage(office: Office, pins: Lock): string {

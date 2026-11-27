@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "no
 import { editorLinks } from "./loader/package-imports.ts";
 import { git } from "./git.ts";
 import { officeEntries } from "./features/opencode/ownership.ts";
-import { atomicWrite } from "./features/secrets/secrets.ts";
+import { atomicWrite } from "./lib/atomic-write.ts";
 import { type Office, OfficeError } from "./office.ts";
 import { changeText, failure, isFailure, type Change } from "./lib/change.ts";
 import * as v from "valibot";
