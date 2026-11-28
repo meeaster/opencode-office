@@ -6,7 +6,6 @@ import { ports } from "../../lib/ports.ts";
 import { executorEnvFile, type Office, readEnvFile } from "../../office.ts";
 import type { Stage } from "../../report/index.ts";
 import { version } from "../../tool.ts";
-import { isTested, tested } from "../../versions.ts";
 import { compose, officeImage, runningPins } from "../compose.ts";
 import { keyOrganization } from "../executor.ts";
 import type { Context, Report, RootAnswer } from "./context.ts";
@@ -110,7 +109,7 @@ async function executorKey(office: Office, report: Report): Promise<void> {
   }
 }
 
-/** OpenCode's own version: the applied one in the container, within the tested range on the host. */
+/** Reports the OpenCode server's version and checks it against the applied pin in container mode. */
 async function opencodeVersion(office: Office, report: Report, auth: Record<string, string>, url: string): Promise<void> {
   let info;
 
@@ -123,7 +122,7 @@ async function opencodeVersion(office: Office, report: Report, auth: Record<stri
   }
 
   if (office.opencode.mode === "host") {
-    report(true, "OpenCode version", `the host's server runs ${info.version} (not pinned by office)${isTested("opencode", info.version) ? "" : `; tested with ${tested.opencode.from}–${tested.opencode.to}`}`);
+    report(true, "OpenCode version", `the host's server runs ${info.version} (not pinned by office)`);
 
     return;
   }

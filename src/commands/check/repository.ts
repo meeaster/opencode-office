@@ -10,11 +10,11 @@ import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces
 import { ghConfigDir, ghLogin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../../github.ts";
 import { declaredAccess, type DeclaredAccess } from "../../loader/access.ts";
 import { type Office, OfficeError, type Repository } from "../../office.ts";
-import { defaultPins, isTested, tested } from "../../versions.ts";
+import type { defaultPins } from "../../versions.ts";
 import { compose } from "../compose.ts";
 import type { Context, Report, RootAnswer } from "./context.ts";
 
-/** The versions office.yaml pins, whether office.lock matches, the tested range, and what is pending. */
+/** The versions office.yaml pins, whether office.lock matches, and what is pending. */
 export function versionChecks(office: Office, report: Report): void {
   const tools = toolsFor(office);
   const list = (pins: typeof defaultPins) => tools.map((tool) => `${tool} ${pins[tool].version}`).join(", ");
@@ -29,12 +29,6 @@ export function versionChecks(office: Office, report: Report): void {
   }
 
   report(true, "versions", office.tools.pinsVersions ? `${list(wanted)}, matching office.lock` : `office.yaml pins no versions, so the tool's defaults apply: ${list(wanted)}`);
-
-  const untested = tools.flatMap((tool) => tool !== "executor" && !isTested(tool, wanted[tool].version) ? [`${tool} ${wanted[tool].version} is outside ${tested[tool].from}–${tested[tool].to}`] : []);
-
-  if (untested.length > 0) {
-    report("warn", "tested versions", `${untested.join("; ")}, the range this office tool was tested with`);
-  }
 
   const applied = readApplied(office);
   const pending = applied === undefined ? [] : changes(office, applied.pins, wanted);

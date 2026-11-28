@@ -1,4 +1,4 @@
-// Starting pins, tested runtime ranges and the whole-file editor for office.lock.
+// Starting pins and the whole-file editor for office.lock.
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -31,15 +31,6 @@ export const defaultPins: Lock = {
       "darwin-arm64": "sha256:29df049df2ef705a8ce726c6c41fe73a6034f6b1cd0d87f3f15a780d074b6d83",
     },
   },
-};
-
-/** The versions this release of the tool was tested with, lowest and highest. */
-export const tested: Record<Exclude<PinnedTool, "executor">, { from: string; to: string }> = {
-  opencode: { from: "2.2.7", to: "2.3.0" },
-  claude: { from: "2.1.322", to: "2.1.322" },
-  codex: { from: "0.170.0", to: "0.170.0" },
-  mise: { from: "2026.11.7", to: "2026.11.7" },
-  sfw: { from: "1.16.0", to: "1.16.0" },
 };
 
 /** Compares two versions by semver precedence: numbers numerically, a pre-release before its release. */
@@ -285,9 +276,4 @@ export function writeLock(dir: string, lock: Lock): void {
   editLock(dir, (sections) => {
     sections.runtime = lock;
   }, { replacing: "runtime" });
-}
-
-/** Whether a version lies in the range this release of the tool was tested with. */
-export function isTested(tool: keyof typeof tested, value: string): boolean {
-  return compareVersions(value, tested[tool].from) >= 0 && compareVersions(value, tested[tool].to) <= 0;
 }
