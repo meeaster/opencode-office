@@ -2,10 +2,9 @@
 // installed, and registers the package's browser-automation skill. (OpenCode ships a skill named
 // `browser` itself, for its in-app browser.)
 //
-// - agent-browser drives a headless Chromium of its own. The package declares it as a mise tool,
-//   so `office sync` writes it into the office's machine.packages.toml, which mise reads through
-//   a link in its global conf.d, and it is on the PATH of the office's container (mise's shims) and
-//   of a host whose mise installs it. It launches AGENT_BROWSER_EXECUTABLE_PATH when that is set:
+// - agent-browser drives a headless Chromium of its own. On the host it runs the executable
+//   Office activated; in the container it uses the container's own tool. It launches
+//   AGENT_BROWSER_EXECUTABLE_PATH when that is set:
 //   the container's Chromium, or Google Chrome from apt on a host that opted in (system_chrome),
 //   which the office's environment file sets and the server has from its start.
 // - Browse drives the user's own Chrome through its relay and extension. It is host-mode only, as the
@@ -18,12 +17,14 @@
 // A missing command registers nothing, and nothing here fails a session. The office bundles it
 // with the applied settings reader into the one index.js an office holds, so it runs with nothing
 // installed.
-import { accessSync, constants, readFileSync } from "node:fs";
+import { accessSync, constants, lstatSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { officeRootOf, readAppliedSettings, watchAppliedSettings, watchPackageFolder } from "@office/sdk/applied-settings";
+import { currentLink, readLocation, resolveTool, toolsLocationPath } from "@office/tools/applied";
+import { agentBrowser } from "../tool.ts";
 
 type Skill = { id: string; name: string; description: string; path: string; content: string };
 
@@ -81,13 +82,29 @@ function executable(path: string): boolean {
   }
 }
 
-/** The first `agent-browser` on this server's PATH: mise's shim in the container. */
-function findAgentBrowser(): string | undefined {
-  return (process.env.PATH ?? "")
-    .split(delimiter)
-    .filter((dir) => dir !== "")
-    .map((dir) => join(dir, "agent-browser"))
-    .find(executable);
+function watchToolFile(path: string, changed: () => void): () => void {
+  const identity = () => {
+    try {
+      const entry = lstatSync(path, { throwIfNoEntry: false });
+
+      return entry === undefined ? undefined : `${entry.ino}:${entry.mtimeMs}`;
+    } catch {
+      return undefined;
+    }
+  };
+
+  // Take the baseline now: activation can replace a missing link before the first poll.
+  let previous = identity();
+
+  const timer = setInterval(() => {
+    const next = identity();
+
+    if (previous === next) return;
+    previous = next;
+    changed();
+  }, 1500).unref();
+
+  return () => clearInterval(timer);
 }
 
 /** Browse's binary, where its installer puts it. */
@@ -131,12 +148,30 @@ function launchNotes(settings: Settings, mode: Mode): string[] {
 function servers(settings: Settings, mode: Mode): Servers {
   const present = new Map<string, string[]>();
   const absent: string[] = [];
-  const agentBrowser = findAgentBrowser();
   const browse = findBrowse();
 
   if (settings.agentBrowserTools === "") absent.push("`agent-browser`: turned off (the package's `agent_browser_tools` setting is empty)");
-  else if (agentBrowser === undefined) absent.push("`agent-browser`: the command isn't on this server's PATH (the office's `machine.packages.toml` declares it, through a link in mise's global conf.d; `office up` installs it)");
-  else present.set("agent-browser", [agentBrowser, "mcp", "--tools", settings.agentBrowserTools]);
+  else {
+    try {
+      const resolved = resolveTool(office, agentBrowser);
+
+      if (resolved.status === "ready") present.set("agent-browser", [resolved.path, "mcp", "--tools", settings.agentBrowserTools]);
+      else if (resolved.status === "container") {
+        if (process.env.OFFICE_CONTAINER !== "1") absent.push("`agent-browser`: supplied by this office's container; this server is outside it");
+        else {
+          const path = Bun.which(agentBrowser.bin);
+
+          if (path === null) absent.push("`agent-browser`: the container has no executable");
+          else present.set("agent-browser", [path, "mcp", "--tools", settings.agentBrowserTools]);
+        }
+      }
+      else if (resolved.status === "missing") absent.push("`agent-browser`: no applied executable; `office up` activates it");
+      else if (resolved.status === "upgrade-pending") absent.push(`\`agent-browser\`: applied version ${resolved.version} is below ${agentBrowser.minimum}; run \`office up --upgrade\``);
+      else absent.push(`\`agent-browser\`: ${resolved.message}`);
+    } catch (error) {
+      absent.push(`\`agent-browser\`: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 
   if (mode === "container") {
     absent.push(
@@ -186,7 +221,6 @@ export default {
       }
     });
 
-    // Looked up on each load of the MCP servers, so a tool installed since is found on the next.
     await ctx.mcp.transform((editor) => {
       try {
         for (const [name, command] of servers(readSettings(), readMode()).present) editor.set(name, { type: "local", command });
@@ -199,6 +233,28 @@ export default {
       void ctx.skill.reload().catch(console.error);
       void ctx.mcp.reload().catch(console.error);
     };
+
+    let stopWatchingCurrent: (() => void) | undefined;
+
+    const watchCurrent = () => {
+      stopWatchingCurrent?.();
+      stopWatchingCurrent = undefined;
+
+      try {
+        const location = readLocation(office);
+
+        if (location?.mode === "host") stopWatchingCurrent = watchToolFile(currentLink(location.tools), reload);
+      } catch (error) {
+        console.error("browser plugin: applied tools aren't watched:", error);
+      }
+    };
+
+    const stopWatchingLocation = watchToolFile(join(office, toolsLocationPath), () => {
+      watchCurrent();
+      reload();
+    });
+
+    watchCurrent();
 
     // A new package set can bring new skill text or a new mode.
     const packageWatcher = watchPackageFolder(office, "browser", reload, console.error);
@@ -214,6 +270,8 @@ export default {
     }
 
     return () => {
+      stopWatchingLocation();
+      stopWatchingCurrent?.();
       packageWatcher.close();
       settingsWatcher?.close();
     };

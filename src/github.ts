@@ -11,6 +11,7 @@ import { isAbsolute, join } from "node:path";
 import * as v from "valibot";
 import { parse } from "yaml";
 
+import { redactUrl } from "../sdk/redact-url.ts";
 import { git } from "./git.ts";
 import { ghLink, officeTool } from "./features/tools/host-tools.ts";
 import { type InstalledTool } from "./features/tools/mise-bootstrap.ts";
@@ -71,20 +72,6 @@ function httpsHost(url: string): string | undefined {
     return new URL(url).hostname.toLowerCase();
   } catch {
     return undefined;
-  }
-}
-
-/** A URL without any user name or password in it, for messages. */
-function redact(url: string): string {
-  try {
-    const parsed = new URL(url);
-
-    parsed.username = "";
-    parsed.password = "";
-
-    return parsed.toString();
-  } catch {
-    return url;
   }
 }
 
@@ -357,6 +344,6 @@ export async function unreachableSources(office: Office, references: readonly Re
     const host = httpsHost(source.url);
     const loggedIn = host === undefined || gh === undefined ? undefined : ghLogin(gh, host)?.state === "success";
 
-    return [`${source.what} (${redact(source.url)}): ${cause(result.error, loggedIn)}`];
+    return [redactUrl(`${source.what} (${source.url}): ${cause(result.error, loggedIn)}`)];
   });
 }

@@ -1,5 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
+import { redactUrl } from "../../../sdk/redact-url.ts";
 import { type PackageKind, packageRoot, pulledFolder } from "../../bound-paths.ts";
 import { type Office, OfficeError, type PackageEntry } from "../../office.ts";
 import { builtinPackages } from "../../tool.ts";
@@ -66,11 +67,11 @@ function ownershipProblems(office: Pick<Office, "dir" | "packages">, builtins: s
 
     if (existsSync(local)) problems.push({ packages: [name], message: `built-in package ${name} conflicts with local ${relative(office.dir, local)}; rename one before syncing` });
 
-    if (entry?.source) problems.push({ packages: [name], message: `built-in package ${name} conflicts with ${entry.source.repo}@${entry.source.ref}:${entry.source.path}; rename one before syncing` });
+    if (entry?.source) problems.push({ packages: [name], message: `built-in package ${name} conflicts with ${redactUrl(entry.source.repo)}@${entry.source.ref}:${entry.source.path}; rename one before syncing` });
     else {
       const installed = readRecord(pulledDir(office, name));
 
-      if (installed && "repo" in installed) problems.push({ packages: [name], message: `built-in package ${name} conflicts with installed ${installed.repo}@${installed.ref}:${installed.path}; move the existing copy before syncing` });
+      if (installed && "repo" in installed) problems.push({ packages: [name], message: `built-in package ${name} conflicts with installed ${redactUrl(installed.repo)}@${installed.ref}:${installed.path}; move the existing copy before syncing` });
 
       // A live load leaves such a copy to fail its own source check.
       if (!live && requiredPackages.includes(name) && name !== "office" && !installed && existsSync(pulledDir(office, name))) {

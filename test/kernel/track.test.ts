@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { git } from "../../src/git.ts";
-import { highestTag, resolveRef, resolveTrack } from "../../src/track.ts";
+import { highestTag } from "../../sdk/git-tags.ts";
+import { resolveRef, resolveTrack } from "../../src/track.ts";
 
 let dir: string;
 
@@ -27,6 +28,13 @@ test("a tag pattern picks the highest stable version, not the newest push, and i
   expect(highestTag("release-*", [{ name: "release-1.2.3", commit: "a" }, { name: "release-1.10.0", commit: "b" }])?.tag.commit).toBe("b");
   // Two names for one version: the first in sort order, whatever order they come in.
   expect(highestTag("*", [{ name: "v1.0.0", commit: "b" }, { name: "1.0.0", commit: "a" }])?.tag.name).toBe("1.0.0");
+});
+
+test("a failed package track lookup redacts credentials before shortening the Git command", async () => {
+  const credential = `fixture-user:${"p".repeat(200)}`;
+  const source = `https://${credential}@example.invalid/package.git`;
+
+  await expect(resolveTrack(source, "main")).rejects.toThrow(/^Command failed: git ls-remote --heads https:\/\/\*\*\*@example\.invalid\/package\.git/);
 });
 
 test("a branch resolves to its commit and a pattern or untracked ref to the commit an annotated tag points at, through git ls-remote", async () => {
@@ -60,6 +68,7 @@ test("a branch resolves to its commit and a pattern or untracked ref to the comm
   const head = git(["rev-parse", "HEAD"], repo);
 
   for (const ref of ["refs/tags/v1.2.0", "tags/v1.2.0"]) expect(await resolveRef(repo, ref)).toEqual({ commit: first, via: "tag v1.2.0" });
+
   for (const ref of ["refs/heads/v1.2.0", "heads/v1.2.0"]) expect(await resolveRef(repo, ref)).toEqual({ commit: head, via: "branch v1.2.0" });
   await expect(resolveRef(repo, "tags/main")).rejects.toThrow("has no tag main");
 });

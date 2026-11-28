@@ -10,6 +10,7 @@ import { dirname, join, relative } from "node:path";
 
 import type { ExecutorAccess } from "@office/sdk";
 import { catalogPlan, type ExecutorApp, frameworkVersion, installedApps, installMissing, organizationPath, unexpected } from "./catalog.ts";
+import { withFramework } from "./framework-pin.ts";
 import { adoptionMarker, type AppFolder, readManifest } from "./inventory.ts";
 
 /** The generated module that gives a contributed app its office's resolved settings. */
@@ -46,11 +47,6 @@ export const opencode = ${JSON.stringify(opencode.mode)};
 `;
 }
 
-/** A package.json with its `apps` dependency set to `version`, editing only that value. */
-function withFramework(manifest: string, version: string): string {
-  return manifest.replace(/("apps"\s*:\s*")[^"]*(")/, `$1${version}$2`);
-}
-
 /**
  * The text deploy sends for a file of a folder, which differs from the disk for generated files and
  * for a manifest naming another `apps` version.
@@ -58,10 +54,13 @@ function withFramework(manifest: string, version: string): string {
 function deployedText(opencode: OpenCode, folder: AppFolder, path: string, version: string): string {
   const disk = readFileSync(join(folder.dir, path), "utf8");
 
-  if (folder.adopted) return disk;
+  if (path === "package.json") {
+    const { text } = withFramework(disk, version, `${folder.where}/package.json`);
 
-  // An office app's package.json as deploy will have set its framework version.
-  if (path === "package.json") return folder.contributor !== undefined || readManifest(folder.dir).dependencies?.apps !== version ? withFramework(disk, version) : disk;
+    return folder.adopted ? disk : text;
+  }
+
+  if (folder.adopted) return disk;
 
   if (folder.contributor !== undefined) return path === packageModulePath ? packageModule(opencode, folder.contributor) : disk;
 
@@ -212,12 +211,13 @@ function matchFramework(folders: readonly AppFolder[], version: string): string[
 
   for (const folder of folders) {
     const path = join(folder.dir, "package.json");
-    const before = readManifest(folder.dir).dependencies?.apps;
+    const disk = readFileSync(path, "utf8");
+    const { text, previous } = withFramework(disk, version, `${folder.where}/package.json`);
 
-    if (before === version) continue;
+    if (text === disk) continue;
 
-    writeFileSync(path, withFramework(readFileSync(path, "utf8"), version));
-    lines.push(`updated ${folder.where}/package.json: apps ${before ?? "(none)"} → ${version}`);
+    writeFileSync(path, text);
+    lines.push(`updated ${folder.where}/package.json: apps ${previous} → ${version}`);
   }
 
   return lines;
@@ -313,7 +313,7 @@ export async function deploy(executor: ExecutorAccess, folders: readonly AppFold
       app = existing.find(entry => entry.slug === folder.slug);
 
       if (app === undefined) {
-        app = await executor.request<ExecutorApp>("POST", `${base}/apps`, { name: readManifest(folder.dir).executor?.title ?? folder.slug, files });
+        app = await executor.request<ExecutorApp>("POST", `${base}/apps`, { name: folder.slug, files });
         reporting.line(`created ${app.slug} (${app.id})`);
       }
 

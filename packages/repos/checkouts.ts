@@ -9,6 +9,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import type { ItemResult } from "@office/sdk";
+import { redactUrl } from "@office/sdk/redact-url";
 import type { Entry } from "./settings.ts";
 
 /** Where working checkouts live, relative to the office root. */
@@ -19,11 +20,6 @@ const environment = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
 /** A checkout's office-relative folder, as sessions and messages show it. */
 export function checkoutPath(name: string): string {
   return `${checkoutRoot}/${name}/`;
-}
-
-/** `text` with the user information of every URL in it (a token, a password) replaced. */
-export function redact(text: string): string {
-  return text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1***@");
 }
 
 /** Reads from Git without a network or a write; undefined when Git refuses. */
@@ -106,15 +102,15 @@ export function originProblem(office: string, dir: string, url: string): string 
   const values = (gitValue(["config", "--get-all", "remote.origin.url"], dir) ?? "").split("\n");
   const configured = values.slice(values.lastIndexOf("") + 1)[0];
 
-  if (configured === undefined) return `has no origin remote; office.yaml declares ${redact(url)}`;
+  if (configured === undefined) return `has no origin remote; office.yaml declares ${redactUrl(url)}`;
 
-  if (location(configured, dir) !== location(url, office)) return redact(`has origin ${configured}, not the declared ${url}`);
+  if (location(configured, dir) !== location(url, office)) return redactUrl(`has origin ${configured}, not the declared ${url}`);
   const fetches = gitValue(["ls-remote", "--get-url", "--", "origin"], dir);
   // Where the declared URL leads as the clone read it: from the office, not the checkout's own rules.
   const declared = gitValue(["ls-remote", "--get-url", "--", url], office);
 
   if (fetches === undefined || declared === undefined || location(fetches, dir) !== location(declared, office)) {
-    return redact(`fetches origin from ${fetches ?? "nowhere Git can say"}, not from ${declared ?? url}, where the declared ${url} leads (Git's url.insteadOf rules)`);
+    return redactUrl(`fetches origin from ${fetches ?? "nowhere Git can say"}, not from ${declared ?? url}, where the declared ${url} leads (Git's url.insteadOf rules)`);
   }
 }
 
@@ -129,7 +125,7 @@ async function streamed(args: string[], cwd: string, output: (line: string) => v
 
   const show = (line: string) => {
     if (line.trim() === "") return;
-    const safe = redact(line);
+    const safe = redactUrl(line);
 
     lines.push(safe);
     output(safe);

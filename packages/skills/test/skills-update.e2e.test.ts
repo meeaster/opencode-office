@@ -18,6 +18,35 @@ function repository(name: string) {
   return repo;
 }
 
+test("skills commands show the redacted source URL while Git fetches the original", () => {
+  const f = fixture("redacted-source");
+  const repo = repository("credential-url-source");
+  const source = "https://fixture-user:fixture-pass@example.invalid/skills.git";
+  const label = "https://***@example.invalid/skills.git";
+
+  write(join(repo, "review/SKILL.md"), skill("review one"));
+  const one = commit(repo);
+
+  write(join(f.home, ".gitconfig"), `[url "${repo}"]\n\tinsteadOf = ${source}\n`);
+  f.select(`  - name: skills\n    settings: {sources: [{repo: ${source}, ref: ${one}, track: main, skills: [{name: review, path: review}]}], enabled: [review]}\n`);
+  const synced = f.cli(0, "sync");
+  const listed = f.cli(0, "skills", "list");
+
+  write(join(repo, "review/SKILL.md"), skill("review two"));
+  const two = commit(repo);
+  const updated = f.cli(0, "skills", "update");
+
+  renameSync(repo, `${repo}.away`);
+  const failed = f.cli(1, "skills", "update");
+
+  expect(synced).toContain(`fetched ${label} at ${one.slice(0, 12)}`);
+  expect(listed).toContain(`${label} at ${one.slice(0, 12)}`);
+  expect(updated).toContain(`${label}: pinned ${one.slice(0, 12)} → ${two}`);
+  expect(failed).toContain(`could not list ${label}'s refs`);
+
+  for (const output of [synced, listed, updated, failed]) expect(output).not.toContain("fixture-user:fixture-pass");
+});
+
 test("plain sync keeps pins, offline once fetched; update moves tracked branch and tag pins with a review line, relinks, and changes only those scalars", () => {
   const f = fixture("tracked");
   git(["init", "-q", f.dir]);

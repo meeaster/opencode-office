@@ -2,6 +2,7 @@ import { opencode } from "@office/opencode";
 import { Package } from "@office/sdk";
 import { installs, recipes } from "@office/mise-integration/claims";
 import { tools } from "@office/tools";
+import { agentBrowser } from "./tool.ts";
 
 const chrome = "/usr/bin/google-chrome-stable";
 
@@ -17,7 +18,7 @@ export default Package.define({
   },
   setup(ctx) {
     opencode.plugins.add(ctx, { directory: "plugin" });
-    tools.require(ctx, { name: "npm:agent-browser", minimum: "0.43.0", bin: "agent-browser" });
+    tools.require(ctx, agentBrowser);
 
     if (ctx.settings.browse) {
       tools.require(ctx, { name: "bun", minimum: "1.4.4", bin: "bun", hostOnly: true });

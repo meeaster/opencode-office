@@ -22,7 +22,6 @@ type Skill = { id: string; name: string; description: string; path: string; cont
 type RemoteServer = { type: "remote"; url: string; oauth: false; headers: Record<string, string> };
 
 type Context = {
-  location: { directory: string };
   skill: {
     transform(callback: (editor: { add(skill: Skill): void }) => void): Promise<{ dispose(): Promise<void> }>;
     reload(): Promise<void>;
@@ -64,15 +63,6 @@ function serverAddress(settings: Settings): string {
   return process.env.OFFICE_CONTAINER === "1" ? `http://doop:${settings.port}` : `http://localhost:${settings.port}`;
 }
 
-/** The nearest folder at or above `directory` with an office.yaml. */
-function findOffice(directory: string): string | undefined {
-  for (let dir = directory; ; dir = dirname(dir)) {
-    if (existsSync(join(dir, "office.yaml"))) return dir;
-
-    if (dirname(dir) === dir) return undefined;
-  }
-}
-
 const executorConnection =
   "Sessions reach it through Executor: the `doop` app's tools, found with office-executor's search, as described under \"Through Executor\". There is no `doop` MCP server.";
 
@@ -101,8 +91,6 @@ function doopSkill(settings: Settings): Skill {
 export default {
   id: "design",
   async setup(ctx: Context) {
-    const office = findOffice(ctx.location.directory);
-
     const reload = () => {
       void ctx.skill.reload().catch(console.error);
       void ctx.mcp.reload().catch(console.error);
@@ -132,9 +120,7 @@ export default {
       if (applied !== undefined) editor.add(doopSkill(settingsOf(applied)));
     });
 
-    if (office === undefined) return () => settingsWatcher.close();
-
-    const keyDir = join(office, ".opencode/doop");
+    const keyDir = join(packageOffice, ".opencode/doop");
     const keyFile = join(keyDir, "agent-key");
 
     // Read on each load of the MCP servers. Without a key there is nothing to connect with yet; the

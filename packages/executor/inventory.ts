@@ -13,6 +13,9 @@ export const adoptionMarker = ".office-catalog";
 /** The office's own app sources. */
 export const rootFolder = "executor-apps";
 
+// Executor derives its slug from the name, collapsing punctuation and reserving tool roots.
+const reservedSlugs = new Set(["search", "constructor", "prototype", "then"]);
+
 /**
  * An app's source folder. `contributor` is the package that offers it, whose folder is read-only:
  * deploy sends its files with the served `apps` version and a generated `package.ts`.
@@ -76,6 +79,10 @@ export function appFolders(officeDir: string, catalogApps: readonly string[], en
   const seen = new Map<string, string>();
 
   for (const folder of folders) {
+    if (folder.slug.length > 63 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(folder.slug) || reservedSlugs.has(folder.slug)) {
+      throw new Error(`${folder.where}: ${folder.slug} is not an Executor slug; use up to 63 lowercase letters or digits joined by single hyphens, and avoid ${[...reservedSlugs].join(", ")}`);
+    }
+
     const other = seen.get(folder.slug);
 
     if (other !== undefined) throw new Error(`${folder.where} and ${other} both deploy the Executor app ${folder.slug}; rename one of them`);

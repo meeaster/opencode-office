@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { type Entries, type ExclusionUpdate, type OfficeInfo, Package, type Problem } from "@office/sdk";
 import { copyExcludePath } from "@office/sdk/copy-tree";
+import { redactUrl } from "@office/sdk/redact-url";
 import { bundleProblem, catalog, linkFolder, linkTarget, type Pending, selection } from "./catalog.ts";
 import { type Declared, declaredSources, nextGeneration, type Published, readPublished, type Runner } from "./generated.ts";
 import { checkoutFolder, checkoutProblem, comparison, ensureCheckout, resolveTrack, short } from "./git.ts";
@@ -16,7 +17,7 @@ function fetchSources(office: string, settings: SkillSettings): string[] {
   return settings.sources.flatMap(source => {
     if (!isGit(source)) return [];
 
-    return ensureCheckout(office, source.repo, source.ref).fetched ? [`fetched ${source.repo} at ${short(source.ref)}`] : [];
+    return ensureCheckout(office, source.repo, source.ref).fetched ? [`fetched ${redactUrl(source.repo)} at ${short(source.ref)}`] : [];
   });
 }
 
@@ -224,7 +225,7 @@ function list(office: string, settings: SkillSettings, entries: Entries, runner:
   for (const note of [...problems, ...notes, ...pending.map(pendingLine)]) console.error(note);
 
   for (const source of settings.sources) {
-    if (isGit(source) && !existsSync(join(office, checkoutFolder(source.repo, source.ref)))) console.error(`${source.repo} at ${short(source.ref)} isn't fetched yet; office sync fetches it`);
+    if (isGit(source) && !existsSync(join(office, checkoutFolder(source.repo, source.ref)))) console.error(`${redactUrl(source.repo)} at ${short(source.ref)} isn't fetched yet; office sync fetches it`);
   }
 
   const rows = offers.map(offer => [offer.id, offer.source, `${enabled.has(offer.id) ? "enabled" : "available"}${(byId.get(offer.id)?.length ?? 0) > 1 ? ", conflicting" : ""}`]);
@@ -259,8 +260,10 @@ function moveTracks(office: string, start: SkillSettings, entries: Entries, runn
   for (const { source, index } of sources) {
     const names = source.skills.map(skill => skill.name).join(", ");
 
+    const label = redactUrl(source.repo);
+
     if (source.track === undefined) {
-      console.log(`${source.repo}: pinned at ${short(source.ref)} with no track, so left there`);
+      console.log(`${label}: pinned at ${short(source.ref)} with no track, so left there`);
       continue;
     }
 
@@ -270,11 +273,11 @@ function moveTracks(office: string, start: SkillSettings, entries: Entries, runn
     try {
       found = resolveTrack(source.repo, source.track);
     } catch (error) {
-      throw new Error(`${source.repo}: ${error instanceof Error ? error.message : String(error)}; pin left at ${short(source.ref)}`, { cause: error });
+      throw new Error(`${label}: ${error instanceof Error ? error.message : String(error)}; pin left at ${short(source.ref)}`, { cause: error });
     }
 
     if (found.commit === source.ref) {
-      console.log(`${source.repo}: already at ${short(found.commit)} (${found.via})`);
+      console.log(`${label}: already at ${short(found.commit)} (${found.via})`);
       continue;
     }
 
@@ -285,7 +288,7 @@ function moveTracks(office: string, start: SkillSettings, entries: Entries, runn
     try {
       prepared = prepare(office, candidate, entries, runner);
     } catch (error) {
-      throw new Error(`${source.repo} at ${short(found.commit)} (${found.via}): ${error instanceof Error ? error.message : String(error)}; ${unchanged}`, { cause: error });
+      throw new Error(`${label} at ${short(found.commit)} (${found.via}): ${error instanceof Error ? error.message : String(error)}; ${unchanged}`, { cause: error });
     }
 
     const excluded = new Set(prepared.owned.map(path => prepared.copying.get(path) ?? path));
@@ -294,7 +297,7 @@ function moveTracks(office: string, start: SkillSettings, entries: Entries, runn
     settings = replaceSetting(["sources", index, "ref"], found.commit);
     const compare = comparison(source.repo, source.ref, found.commit);
 
-    console.log(`${source.repo}: pinned ${short(source.ref)} → ${found.commit} (${found.via}); skills ${names}${compare === undefined ? "" : `; changes: ${compare}`}`);
+    console.log(`${label}: pinned ${short(source.ref)} → ${found.commit} (${found.via}); skills ${names}${compare === undefined ? "" : `; changes: ${compare}`}`);
 
     for (const line of applyDelivery(office, prepared.changes, prepared.receipt, path => excluded.has(path) ? [] : updateExcluded({ add: [path] }))) console.log(line);
     const gone = ownedPaths(prepared.receipt).filter(path => !prepared.owned.includes(path));

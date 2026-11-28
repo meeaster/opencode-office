@@ -37,7 +37,7 @@ A change reaches sessions when `office sync` writes the resolved settings, witho
 
 `office.ts` registers `npm:agent-browser` at the version the package was tested with. In host mode, `office.lock` holds the desired release and `office up` installs it. Use `office bump` to select a release or pin an exact version at or above the minimum in `machine.toml`. In container mode, `machine.packages.toml` holds the pin and the container installs it at start. `office upgrade-tools` can update the pin in either mode. Agent-browser needs Node: a project `mise.toml` supplies it in that project's folders; `machine.toml` can supply it everywhere.
 
-The plugin uses the applied executable on the host and the container's `agent-browser` on PATH in container mode.
+The plugin registers only the applied executable on the host, and reloads when the active tools change. Inside the office's container it uses the container's `agent-browser`.
 
 ## Browse
 

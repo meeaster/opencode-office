@@ -12,6 +12,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { join, relative } from "node:path";
 import { prepareReferenceRefresh } from "../../packages/references/tasks/refresh.ts";
+import { redactUrl } from "../../sdk/redact-url.ts";
 import { claudeFiles } from "../features/claude/claude.ts";
 import { appliedReferences } from "../features/references/applied-references.ts";
 import { publishPackages } from "../loader/publication/publish.ts";
@@ -225,9 +226,11 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
     const where = relative(office.dir, clone.dir);
 
     const failed = (message: string) => {
-      lines[index].push(failure(`FAILED ${clone.kind} ${where}: ${message}`));
+      const safe = redactUrl(message);
 
-      return message;
+      lines[index].push(failure(`FAILED ${clone.kind} ${where}: ${safe}`));
+
+      return safe;
     };
 
     try {
@@ -245,7 +248,7 @@ async function syncClones(office: Office, scope: "references" | "others" | "all"
 
       (present ? updates : missing).push(async () => {
         const part = stage.part(where, present ? "updating" : "cloning");
-        const options = { line: part.output, verbose };
+        const options = { line: (text: string) => part.output(redactUrl(text)), verbose };
 
         try {
           let result;

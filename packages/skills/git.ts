@@ -6,6 +6,8 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { highestTag, type RemoteTag } from "@office/sdk/git-tags";
+import { redactUrl } from "@office/sdk/redact-url";
 
 /** Where the package keeps what it fetches and records, inside the office's uncommitted `.office/`. */
 export const stateFolder = ".office/skills";
@@ -79,7 +81,7 @@ export function ensureCheckout(office: string, repo: string, commit: string) {
     return { folder, fetched: true };
   } catch {
     // Git's own output can quote a URL with its credentials, so it isn't repeated here.
-    throw new Error(`could not fetch ${short(commit)} from ${repo}; check the repository URL, the commit, the network and this machine's git credentials`);
+    throw new Error(`could not fetch ${short(commit)} from ${redactUrl(repo)}; check the repository URL, the commit, the network and this machine's git credentials`);
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
@@ -88,16 +90,13 @@ export function ensureCheckout(office: string, repo: string, commit: string) {
 /** A track, resolved: the commit and how it was chosen, for messages. */
 export type Resolved = { commit: string; via: string };
 
-// A stable version at the end of a tag, after a prefix that ends in neither a digit nor a dot.
-const stableTag = /^(?:.*[^0-9.])?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-
-function remoteRefs(repo: string, args: string[]): { name: string; commit: string }[] {
+function remoteRefs(repo: string, args: string[]): RemoteTag[] {
   let output: string;
 
   try {
     output = git(["ls-remote", ...args, repo]);
   } catch {
-    throw new Error(`could not list ${repo}'s refs; check the repository URL, the network and this machine's git credentials`);
+    throw new Error(`could not list ${redactUrl(repo)}'s refs; check the repository URL, the network and this machine's git credentials`);
   }
 
   return output.split("\n").flatMap(line => {
@@ -107,21 +106,16 @@ function remoteRefs(repo: string, args: string[]): { name: string; commit: strin
   });
 }
 
-function compareVersions(left: number[], right: number[]): number {
-  return left[0] - right[0] || left[1] - right[1] || left[2] - right[2];
-}
-
 /** Where `track` of `repo` points now: a branch's commit, or that of the highest stable tag matching a pattern with `*`. */
 export function resolveTrack(repo: string, track: string): Resolved {
   if (!track.includes("*")) {
     const branch = remoteRefs(repo, ["--heads"]).find(ref => ref.name === `refs/heads/${track}`);
 
-    if (branch === undefined) throw new Error(`${repo} has no branch ${track}`);
+    if (branch === undefined) throw new Error(`${redactUrl(repo)} has no branch ${track}`);
 
     return { commit: branch.commit, via: `branch ${track}` };
   }
 
-  const glob = new RegExp(`^${track.split("*").map(part => part.replaceAll(/[.+?^${}()|[\]\\/]/g, "\\$&")).join(".*")}$`);
   const tags = new Map<string, string>();
 
   // An annotated tag is listed twice; its peeled line (^{}) names the commit.
@@ -131,21 +125,11 @@ export function resolveTrack(repo: string, track: string): Resolved {
     if (name.endsWith("^{}") || !tags.has(tag)) tags.set(tag, commit);
   }
 
-  let best: { tag: string; commit: string; version: number[] } | undefined;
+  const best = highestTag(track, Array.from(tags, ([name, commit]) => ({ name, commit })));
 
-  for (const [tag, commit] of [...tags].sort(([a], [b]) => a.localeCompare(b))) {
-    const parts = stableTag.exec(tag);
+  if (best === undefined) throw new Error(`no stable SemVer tag of ${redactUrl(repo)} matches ${track}`);
 
-    if (parts === null || !glob.test(tag)) continue;
-    const version = [Number(parts[1]), Number(parts[2]), Number(parts[3])];
-
-    // Of equal versions, the first name in sort order stays.
-    if (best === undefined || compareVersions(version, best.version) > 0) best = { tag, commit, version };
-  }
-
-  if (best === undefined) throw new Error(`no stable SemVer tag of ${repo} matches ${track}`);
-
-  return { commit: best.commit, via: `tag ${best.tag}` };
+  return { commit: best.tag.commit, via: `tag ${best.tag.name}` };
 }
 
 /** A page comparing two commits, for repositories on GitHub. */

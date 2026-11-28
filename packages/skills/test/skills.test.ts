@@ -265,6 +265,13 @@ test("a track resolves to a branch's commit or the highest stable tag matching i
   expect(() => resolveTrack(repo, "v9.*")).toThrow("no stable SemVer tag");
 });
 
+test("ties between equally versioned tags use lexical order, as package updates do", () => {
+  commit("repo", {}, "a-1.2.3");
+  const preferred = commit("repo", {}, "Z-1.2.3");
+
+  expect(resolveTrack(join(root, "repo"), "*-1.*")).toEqual({ commit: preferred, via: "tag Z-1.2.3" });
+});
+
 test("update moves a tracked pin and copies at once; a candidate missing a skill keeps the pin and delivery", async () => {
   const first = commit("repo", { "review/SKILL.md": "one\n", "lint/SKILL.md": "lint\n" });
   const repo = join(root, "repo");

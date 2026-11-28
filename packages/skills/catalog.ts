@@ -6,6 +6,7 @@
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, posix, relative, sep } from "node:path";
 import type { Entries } from "@office/sdk";
+import { redactUrl } from "@office/sdk/redact-url";
 import { declaredSources, type Published, pendingReason, readPublished, type Runner } from "./generated.ts";
 import { checkoutFolder, short } from "./git.ts";
 import { skills } from "./handles.ts";
@@ -61,8 +62,9 @@ export function catalog(office: string, settings: SkillSettings, entries: Entrie
   for (const source of settings.sources) {
     if (isGit(source)) {
       const within = checkoutFolder(source.repo, source.ref);
+      const label = `${redactUrl(source.repo)} at ${short(source.ref)}`;
 
-      for (const skill of source.skills) offers.push({ id: skill.name, source: `${source.repo} at ${short(source.ref)}`, bundle: posix.join(within, skill.path), within, git: true, copy: true });
+      for (const skill of source.skills) offers.push({ id: skill.name, source: label, bundle: posix.join(within, skill.path), within, git: true, copy: true });
 
       continue;
     }

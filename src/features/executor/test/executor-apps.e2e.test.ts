@@ -97,7 +97,7 @@ test("an office-local package's app deploys under its namespace; the inventory i
 
   // A catalog app without a source stays the catalog's: installed, and listed as such.
   select(f, "  - name: executor\n    settings: { catalog_apps: [github] }\n  - name: widgets\n    settings: { app: true }\n");
-  write(join(f.dir, "executor-apps/assistant/package.json"), '{ "description": "Briefs." }\n');
+  write(join(f.dir, "executor-apps/assistant/package.json"), '{ "description": "Briefs.", "dependencies": { "apps": "1.0.0" } }\n');
   write(join(f.dir, "executor-apps/assistant/index.ts"), "export default {};\n");
   await cli(f, 0, "sync", "--packages");
   const third = await cli(f, 0, "apps", "deploy");

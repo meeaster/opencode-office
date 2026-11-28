@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { redactUrl } from "../../../sdk/redact-url.ts";
 import { pulledFolder } from "../../bound-paths.ts";
 import { copyFromRepository } from "../../git.ts";
 import { failure, type Change } from "../../lib/change.ts";
@@ -119,7 +120,7 @@ async function fetchPackage(office: Office, entry: PackageEntry, source: NonNull
       return copied;
     });
 
-    if (record === undefined) return [`installed ${where} from ${source.repo} at ${commit}`];
+    if (record === undefined) return [redactUrl(`installed ${where} from ${source.repo} at ${commit}`)];
 
     if (current && !known) return [`restored ${where} to ${commit} for ${source.ref}; its record named commit ${record.commit}`];
 
@@ -127,7 +128,7 @@ async function fetchPackage(office: Office, entry: PackageEntry, source: NonNull
 
     return [`updated ${where} from ${describeRecord(record)} to ${source.ref} (${commit})`];
   } catch (error) {
-    return [failure(`FAILED ${where} from ${source.repo}:${source.path} @ ${source.ref} (revision ${revision}): ${error instanceof Error ? error.message.trim() : String(error)}`)];
+    return [failure(redactUrl(`FAILED ${where} from ${source.repo}:${source.path} @ ${source.ref} (revision ${revision}): ${error instanceof Error ? error.message.trim() : String(error)}`))];
   }
 }
 

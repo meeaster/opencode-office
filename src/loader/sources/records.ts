@@ -1,6 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import * as v from "valibot";
+import { redactUrl } from "../../../sdk/redact-url.ts";
 import type { Office } from "../../office.ts";
 import { sha256 } from "../../lib/hash.ts";
 import { check, type Parsed } from "../../parse.ts";
@@ -89,7 +90,7 @@ export function localEdits(dir: string, record: Pick<PackageRecord, "files">): s
 
 /** What a record says the copy is, for messages. */
 export function describeRecord(record: PackageRecord): string {
-  return "repo" in record ? `${record.repo} ${record.path} at ${record.commit.slice(0, 12)} (ref ${record.ref})` : `the built-in copy of office ${record.office} (commit ${record.commit.slice(0, 12)})`;
+  return "repo" in record ? `${redactUrl(record.repo)} ${record.path} at ${record.commit.slice(0, 12)} (ref ${record.ref})` : `the built-in copy of office ${record.office} (commit ${record.commit.slice(0, 12)})`;
 }
 
 /** How to change a package pulled into the office, which is read-only. */

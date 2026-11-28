@@ -1,5 +1,6 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,18 +14,59 @@ type Skill = { id: string; content: string };
 type Plugin = typeof browserPlugin;
 
 const scratch = mkdtempSync(join(tmpdir(), "browser-plugin-"));
-const saved = { home: process.env.OPENCODE_BROWSER_HOME, path: process.env.PATH };
-
-beforeAll(() => {
-  // No agent-browser: what the skill says then depends on the settings and the mode.
-  process.env.OPENCODE_BROWSER_HOME = join(scratch, "no-browse");
-  process.env.PATH = join(scratch, "no-bin");
-});
 
 afterAll(() => {
-  process.env.OPENCODE_BROWSER_HOME = saved.home;
-  process.env.PATH = saved.path;
   rmSync(scratch, { recursive: true, force: true });
+});
+
+test("a host session takes only the activated agent-browser, ignoring a misleading PATH", async () => {
+  const office = join(scratch, "host-tools");
+  const bin = join(office, "misleading-bin");
+  const shim = join(bin, "agent-browser");
+  const misleading = "#!/bin/sh\nexit 99\n";
+  const tools = join(office, "tools");
+  const generation = join(tools, "generations/approved");
+  const path = join(generation, "agent-browser");
+  const contents = "#!/bin/sh\nexit 0\n";
+  const sha256 = `sha256:${createHash("sha256").update(contents).digest("hex")}`;
+
+  await officePlugin<Plugin>("browser", office, { browser: { agent_browser_tools: "core", browse: false, system_chrome: false } });
+  mkdirSync(generation, { recursive: true });
+  writeFileSync(path, contents, { mode: 0o755 });
+  writeFileSync(join(generation, "applied.json"), JSON.stringify({
+    tools: { "npm:agent-browser": { version: "0.43.0", identity: sha256, names: [], bin: { "agent-browser": { path, sha256 } } } },
+    highest: {},
+  }));
+  writeFileSync(join(office, ".office/runtime/tools.json"), JSON.stringify({ mode: "host", tools }));
+  mkdirSync(bin);
+  writeFileSync(shim, misleading, { mode: 0o755 });
+
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, "host-tools.fixture.ts"), office], {
+    env: { HOME: office, PATH: bin },
+    stderr: "pipe",
+  });
+
+  const [status, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+
+  expect(status, stderr).toBe(0);
+  expect(readFileSync(shim, "utf8")).toBe(misleading);
+});
+
+test("the container session omits agent-browser when the container lacks it", async () => {
+  const office = join(scratch, "container-tools");
+
+  await officePlugin<Plugin>("browser", office, { browser: { agent_browser_tools: "core", browse: false } });
+  writeFileSync(join(office, ".office/packages/browser/.office.json"), '{"opencode":"container"}');
+  writeFileSync(join(office, ".office/runtime/tools.json"), '{"mode":"container"}');
+
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, "host-tools.fixture.ts"), office], {
+    env: { HOME: office, PATH: join(office, "no-bin"), OFFICE_CONTAINER: "1" },
+    stderr: "pipe",
+  });
+
+  const [status, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+
+  expect(status, stderr).toBe(0);
 });
 
 /** Sets the plugin up in an office in host mode, returning its skill on each load and a count of its reloads. */

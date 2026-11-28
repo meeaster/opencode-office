@@ -61,7 +61,8 @@ export function fakeExecutor() {
       if (path === `${base}/apps` && request.method === "GET") return Response.json(apps);
 
       if (path === `${base}/apps` && request.method === "POST") {
-        const app: FakeApp = { id: `app_${apps.length + 1}`, slug: String(body.name).toLowerCase(), activeVersion: null };
+        const slug = String(body.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+        const app: FakeApp = { id: `app_${apps.length + 1}`, slug, activeVersion: null };
 
         apps.push(app);
 

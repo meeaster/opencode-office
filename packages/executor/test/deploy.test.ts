@@ -46,7 +46,7 @@ function rootApp(slug: string, { broken = false, apps = "1.0.0" } = {}): void {
 function contributed(settings: Record<string, string | boolean> = { color: "blue" }): AppFolder {
   const app = join(dir, "packages/demo/executor-app");
 
-  write(join(app, "package.json"), '{ "dependencies": { "apps": "0.0.1" } }\n');
+  write(join(app, "package.json"), '{ "dependencies": { "apps": "0.0.1" }, "executor": { "title": "Widget Dashboard" } }\n');
   write(join(app, "index.ts"), 'import { settings } from "./package.js";\nexport const color: string = settings.color;\n');
   write(join(app, "package.ts"), 'export const settings = { color: "red" };\nexport const opencode = "container";\n');
 
@@ -120,7 +120,7 @@ test("a contributed app deploys under its namespace with its generated package.t
 
   expect(executor.apps[0].slug).toBe("widget");
   expect(files.find(file => file.path === "package.ts")?.content).toBe(packageModule(opencode, folder.contributor!));
-  expect(files.find(file => file.path === "package.json")?.content).toBe('{ "dependencies": { "apps": "1.0.0" } }\n');
+  expect(files.find(file => file.path === "package.json")?.content).toBe('{ "dependencies": { "apps": "1.0.0" }, "executor": { "title": "Widget Dashboard" } }\n');
   expect(readFileSync(join(folder.dir, "package.json"), "utf8")).toBe(disk);
 
   executor.apps[0].requirements = { accounts: { doop: { scope: "app", provider: "doop-key" }, opencode: { scope: "app" } } };
@@ -128,6 +128,7 @@ test("a contributed app deploys under its namespace with its generated package.t
 
   expect(await again.done).toBe("0 deployed, 1 unchanged");
   expect(again.lines).toContain("widget: connect its doop account. Open https://executor.example/connect/conn_1 (the link expires in thirty minutes; office apps deploy makes a new one)");
+  expect(executor.writes().filter(line => line === "POST /api/organizations/proof/apps")).toHaveLength(1);
 
   // A settings change is a changed upload: the same app gets a new version.
   expect(await run([contributed({ color: "green" })]).done).toBe("1 deployed, 0 unchanged");
@@ -155,13 +156,45 @@ export const opencode = "host";
 `);
 });
 
-test("an office app sets its apps dependency to the served version after the type-checks pass", async () => {
-  rootApp("demo", { apps: "0.9.0" });
+test("deploy edits only dependencies.apps, then leaves an already-correct pin byte for byte", async () => {
+  rootApp("demo");
+  const path = join(dir, "executor-apps/demo/package.json");
+  const manifest = '{\r\n  "devDependencies": {"apps": "keep"},\r\n  "extra": [{"dependencies": {"apps": "keep here too"}}],\r\n  "dependencies": {"\\u0061pps" : "0.9.0" }\r\n}\r\n';
+  const expected = manifest.replace("0.9.0", "1.0.0");
+
+  write(path, manifest);
   const { lines, done } = run();
 
   await done;
   expect(lines).toContain("updated executor-apps/demo/package.json: apps 0.9.0 → 1.0.0");
-  expect(JSON.parse(readFileSync(join(dir, "executor-apps/demo/package.json"), "utf8")).dependencies.apps).toBe("1.0.0");
+  expect(readFileSync(path, "utf8")).toBe(expected);
+  expect(executor.sources.get("app_1@v1")?.find(file => file.path === "package.json")?.content).toBe(expected);
+
+  const escaped = expected.replace("1.0.0", "\\u0031.0.0");
+
+  write(path, escaped);
+  const again = run();
+
+  await again.done;
+  expect(again.lines.some(line => line.startsWith("updated "))).toBe(false);
+  expect(readFileSync(path, "utf8")).toBe(escaped);
+  expect(executor.sources.get("app_1@v2")?.find(file => file.path === "package.json")?.content).toBe(escaped);
+});
+
+test("a missing dependencies.apps stops the batch before any manifest edit or Executor write", async () => {
+  rootApp("good", { apps: "0.9.0" });
+  rootApp("missing");
+  write(join(dir, "executor-apps/missing/package.json"), '{"devDependencies":{"apps":"1.0.0"}}');
+
+  await expect(run().done).rejects.toThrow("executor-apps/missing/package.json must declare dependencies.apps as a version string");
+  expect(executor.writes()).toEqual([]);
+  expect(readFileSync(join(dir, "executor-apps/good/package.json"), "utf8")).toBe('{"dependencies":{"apps":"0.9.0"}}');
+});
+
+test.each(["my_app", "search", "test--app", "a".repeat(64)])("refuses %s before Executor can create a differently named app", (slug) => {
+  rootApp(slug);
+  expect(() => run()).toThrow(`executor-apps/${slug}: ${slug} is not an Executor slug`);
+  expect(executor.requests).toEqual([]);
 });
 
 test("catalog apps install once, keep the adopted app's identity, and an unadopted source can't take an installed catalog app's slug", async () => {

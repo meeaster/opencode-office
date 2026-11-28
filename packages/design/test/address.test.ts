@@ -46,7 +46,6 @@ async function pluginAddress(settings: AddressSettings, office: string): Promise
   let content = "";
 
   const close = await plugin.setup({
-    location: { directory: office },
     skill: { transform: async (add: (editor: { add(skill: { content: string }): void }) => void) => (add({ add: (skill) => (content = skill.content) }), { dispose: async () => {} }), reload: async () => {} },
     mcp: { transform: async () => ({ dispose: async () => {} }), reload: async () => {} },
   });
@@ -79,7 +78,6 @@ test("before its settings are applied the plugin registers neither skill nor ser
   writeFileSync(join(office, ".opencode/doop/agent-key"), "key\n");
 
   const close = await plugin.setup({
-    location: { directory: office },
     skill: { transform: async (callback: typeof skill) => ((skill = callback), { dispose: async () => {} }), reload: async () => void reloads++ },
     mcp: { transform: async (callback: typeof mcp) => ((mcp = callback), { dispose: async () => {} }), reload: async () => {} },
   });
@@ -100,5 +98,46 @@ test("before its settings are applied the plugin registers neither skill nor ser
     expect(registered()).toEqual(["skill", "doop"]);
   } finally {
     close?.();
+  }
+});
+
+test("the outer plugin ignores the nested office's key and uses its own", async () => {
+  const outer = join(scratch, "outer");
+  const nested = join(outer, "nested");
+  const location = { directory: nested };
+  const plugin = await officePlugin<Plugin>("design", outer, { design: { port: 41441, url: "", executor_app: false, oauth: false } });
+  const registration = { dispose: async () => {} };
+
+  type Transform = Parameters<Parameters<Plugin["setup"]>[0]["mcp"]["transform"]>[0];
+
+  let transform: Transform | undefined;
+
+  mkdirSync(join(nested, ".opencode/doop"), { recursive: true });
+  writeFileSync(join(nested, "office.yaml"), "name: nested\n");
+  writeFileSync(join(nested, ".opencode/doop/agent-key"), "nested-fixture\n");
+  mkdirSync(join(outer, ".opencode/doop"));
+
+  const context = {
+    location,
+    skill: { transform: async () => registration, reload: async () => {} },
+    mcp: { transform: async (callback: Transform) => ((transform = callback), registration), reload: async () => {} },
+  };
+
+  const close = await plugin.setup(context);
+
+  const credentials = () => {
+    const found: string[] = [];
+
+    transform?.({ set(name, server) { if (name === "doop") found.push(server.headers.Authorization); } });
+
+    return found;
+  };
+
+  try {
+    expect(credentials()).toEqual([]);
+    writeFileSync(join(outer, ".opencode/doop/agent-key"), "outer-fixture\n");
+    expect(credentials()).toEqual(["Bearer outer-fixture"]);
+  } finally {
+    close();
   }
 });
