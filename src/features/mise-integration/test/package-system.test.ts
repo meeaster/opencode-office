@@ -144,7 +144,7 @@ content = "on\\n"
 test("an office that opts in on a supported host gets the setup in the fragment and the variable in the environment file, and check looks for what it installs", async () => {
   demo();
   mode("host", on);
-  grantConsent(loadOffice(office));
+  grantConsent(loadOffice(office), "");
 
   const changes = await sync(loadOffice(office));
 
@@ -254,7 +254,7 @@ test("the built-in browser package leaves agent-browser's own Chromium alone by 
   const text = () => readFileSync(join(office, ".office/mise/browser.toml"), "utf8");
 
   browser("");
-  grantConsent(loadOffice(office));
+  grantConsent(loadOffice(office), "");
   await sync(loadOffice(office));
 
   expect(text()).not.toContain("bootstrap");

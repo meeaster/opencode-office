@@ -16,7 +16,7 @@
 //   applies (system.ts). A package with neither has no fragment.
 //
 // mise loads neither where it is. Both take effect only through links in mise's global conf.d
-// (src/features/machine/machine.ts: a host-mode office's machine, or the container), as does `machine.toml`, which
+// (machine-files.ts for a host-mode office, or the container entrypoint), as does `machine.toml`, which
 // loads last and so wins over the packages' versions; a mise.toml (the office's, a working
 // repository's) wins over all of them in its folder, as project config wins over global. mise does
 // load `mise/config.toml` and `mise.toml` in place below `.office/`, so `config` and `mise` are

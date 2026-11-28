@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFi
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { miseShims } from "../../src/features/machine/host-env.ts";
-import { hostToolsRoot } from "../../src/features/tools/host-tools.ts";
+import { miseShims } from "../../src/features/machine/paths.ts";
+import { hostToolsRoot } from "../../src/features/tools/mise-bootstrap.ts";
 import { applyOfficeTools } from "../support/test-package.ts";
 import { toolPath } from "../../src/tool.ts";
 

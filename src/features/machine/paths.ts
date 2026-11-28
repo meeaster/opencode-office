@@ -1,10 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-/** Replace the machine record's path and the global mise config folder, for tests and scratch offices. */
+/** Replace the machine record's path for tests and scratch offices. */
 export const machineRecordVariable = "OFFICE_MACHINE_RECORD";
-
-export const miseConfigVariable = "OFFICE_MISE_CONFIG_DIR";
 
 /** The machine record: `$OFFICE_MACHINE_RECORD`, else `$XDG_DATA_HOME/office/machine.json`. */
 export function machineRecordPath(): string {
@@ -26,4 +24,14 @@ export function machineDir(): string {
 /** The environment file the user's shell (and, later, the server's unit) sources. */
 export function envFilePath(): string {
   return join(machineDir(), "env.sh");
+}
+
+/** mise's shims on this machine, as mise finds its data folder. */
+export function miseShims(): string {
+  return join(process.env.MISE_DATA_DIR || join(process.env.XDG_DATA_HOME || join(home(), ".local/share"), "mise"), "shims");
+}
+
+/** Where OpenCode's installer puts the `opencode` command. */
+export function opencodeBin(): string {
+  return join(home(), ".opencode/bin");
 }

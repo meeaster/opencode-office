@@ -7,8 +7,9 @@ import { accessSync, constants, existsSync, realpathSync, statSync } from "node:
 import { join } from "node:path";
 import * as v from "valibot";
 
-import { hostWrappers, miseShims } from "../machine/host-env.ts";
-import { hostToolsRoot } from "./host-tools.ts";
+import { hostWrappers } from "./sfw.ts";
+import { miseShims } from "../machine/paths.ts";
+import { hostToolsRoot } from "./mise-bootstrap.ts";
 import type { Office } from "../../office.ts";
 import { check } from "../../schema.ts";
 import { defaultPins } from "../../versions.ts";

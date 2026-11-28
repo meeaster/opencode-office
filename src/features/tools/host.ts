@@ -19,7 +19,8 @@ import { execFileSync } from "node:child_process";
 import { dirname } from "node:path";
 
 import type { Gathered, GatheredPackage } from "../../gather.ts";
-import { hostLayout, hostWrappers, miseShims } from "../machine/host-env.ts";
+import { hostLayout, hostWrappers } from "./sfw.ts";
+import { miseShims } from "../machine/paths.ts";
 import { claim } from "../machine/record.ts";
 import { fileState } from "../machine/owned-files.ts";
 import type { Office } from "../../office.ts";

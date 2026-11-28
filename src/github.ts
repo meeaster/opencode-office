@@ -12,7 +12,8 @@ import * as v from "valibot";
 import { parse } from "yaml";
 
 import { git } from "./git.ts";
-import { ghLink, type InstalledTool, officeTool } from "./features/tools/host-tools.ts";
+import { ghLink, officeTool } from "./features/tools/host-tools.ts";
+import { type InstalledTool } from "./features/tools/mise-bootstrap.ts";
 import { clones } from "./layout.ts";
 import type { DeclaredAccess } from "./loader/access.ts";
 import { type Office, OfficeError, type Repository, updateConfig } from "./office.ts";

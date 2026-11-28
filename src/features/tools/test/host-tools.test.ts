@@ -4,7 +4,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { ghLink, hostToolsRoot, installedTool, installMise, miseAsset, needsInstall, officePins, officeTool, officeToolNamed, onboardHostTools, requireOfficeTool, startingVersions, verifyDigest } from "../host-tools.ts";
+import { ghLink, installedTool, needsInstall, officePins, officeTool, officeToolNamed, onboardHostTools, requireOfficeTool, startingVersions } from "../host-tools.ts";
+import { hostToolsRoot } from "../mise-bootstrap.ts";
+import { installMise, miseAsset, verifyDigest } from "../mise-bootstrap.ts";
 import { loadOffice, type Office } from "../../../office.ts";
 import { toolPath } from "../../../tool.ts";
 import { type Candidate, type Release, selectToolRelease } from "../releases.ts";

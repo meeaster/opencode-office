@@ -2,11 +2,9 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, wr
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { argument, quoted, requireLocalUnit, unitDir } from "./systemd.ts";
-import { machineDir } from "../machine/paths.ts";
-import { miseShims } from "../machine/host-env.ts";
+import { machineDir, machineRecordPath, miseShims } from "../machine/paths.ts";
 import { userSystemd } from "../opencode/host-server.ts";
 import { installedPackages, type InstalledPackages } from "../../loader/definitions/inventory.ts";
-import { machineRecordPath } from "../machine/paths.ts";
 import { type Office, OfficeError } from "../../office.ts";
 import { hostApplies } from "../tooling/requirements.ts";
 import { say } from "../../report/index.ts";

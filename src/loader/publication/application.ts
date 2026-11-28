@@ -4,7 +4,8 @@ import { linkForEditors } from "../generation/links.ts";
 import type { Gathered } from "../../gather.ts";
 import { runPackageHooks } from "../../lifecycle-inputs.ts";
 import { installPanel, locate, panelId, removalNote } from "../../features/opencode/desktop.ts";
-import { syncMachine } from "../../features/machine/machine.ts";
+import { syncMachine } from "../../features/machine/owned-files.ts";
+import { machineReconciliation } from "../../features/machine/plan.ts";
 import { linkPlugins, withPluginPlan } from "../../features/opencode/delivery.ts";
 import { type Declaration, readDeclarations } from "../../features/opencode/declarations.ts";
 import { syncTools } from "../../features/mise-integration/delivery.ts";
@@ -77,7 +78,7 @@ export async function applyPackages(office: Office, gathered: Gathered, changes:
       changes.push(...result.lines);
     }
 
-    changes.push(...syncTools(office, gathered.packages, [...gathered.selected]), ...syncMachine(office, gathered));
+    changes.push(...syncTools(office, gathered.packages, [...gathered.selected]), ...syncMachine(office, machineReconciliation, gathered));
   }
 
   const plan = withPluginPlan(office, { ...installed, problems: [] }, gathered.assets);

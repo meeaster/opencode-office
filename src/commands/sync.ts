@@ -4,7 +4,7 @@
 // items, src/loader/lifecycle/full-sync.ts), writes the mise tools packages declare into machine.packages.toml
 // and their setup into .office/mise/ (src/features/mise-integration/delivery.ts) and, in a host-mode office the user
 // agreed may manage its machine, links them and machine.toml into mise's global conf.d
-// (src/features/machine/machine.ts), links the server plugins packages register and installs their panels on the
+// (src/features/machine/owned-files.ts), links the server plugins packages register and installs their panels on the
 // desktop app's machine. Office's plugin links are recognized by their target
 // (src/features/opencode/ownership.ts) and kept out of commits through the repository's info/exclude,
 // with the paths packages' sync functions exclude. It never rewrites AGENTS.md, other hand-written

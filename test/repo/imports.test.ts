@@ -280,6 +280,19 @@ function workerImportsHandler(from: string, to: string): boolean {
   return from === "src/loader/worker.ts" && (module === "access" || module === "generation" || module === "publication" || module === "lifecycle");
 }
 
+const machineCore = new Set([
+  "src/features/machine/paths.ts",
+  "src/features/machine/record.ts",
+  "src/features/machine/owned-files.ts",
+]);
+
+const machinePlanCallers = new Set([
+  "src/loader/publication/application.ts",
+  "src/commands/check/run.ts",
+  "src/commands/compose.ts",
+  "src/commands/setup.ts",
+]);
+
 function violation(from: string, origin: Location, destination: Location, pkg: Package | undefined): Allowed["to"] | undefined {
   if (pkg && (origin === "kernel" || origin === "kernel/commands")) return pkg;
 
@@ -333,6 +346,10 @@ test("imports follow loader entry points and production imports follow the sourc
 
       if (!productionFile) continue;
       const destination = fileFolder(to);
+
+      if (machineCore.has(from) && isFeature(destination) && !machineCore.has(to)) problems.push(`machine core imports a feature: ${key(from, to)}`);
+
+      if (to === "src/features/machine/plan.ts" && !machinePlanCallers.has(from)) problems.push(`machine plan import outside its callers: ${key(from, to)}`);
 
       if (packageFolder(from) && to.startsWith("src/")) packageImports.add(key(from, to));
 

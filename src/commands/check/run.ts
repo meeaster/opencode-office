@@ -1,4 +1,5 @@
-import { machineReport } from "../../features/machine/machine.ts";
+import { machineReport } from "../../features/machine/owned-files.ts";
+import { machineReconciliation } from "../../features/machine/plan.ts";
 import { matchesServerUnit, requireServerConsent } from "../../features/opencode/server-units.ts";
 import { planServer, serverReport } from "../../features/opencode/host-server.ts";
 import { unitStatus } from "../../features/systemd/units.ts";
@@ -56,7 +57,7 @@ export async function check(office: Office, stage?: Stage, verbose = false, gath
 
   firewallChecks(office, report);
 
-  for (const line of machineReport(office, run.claims)) report(line.ok, line.name, line.detail);
+  for (const line of machineReport(office, machineReconciliation, run.claims)) report(line.ok, line.name, line.detail);
 
   if (office.opencode.managed !== undefined) {
     try {

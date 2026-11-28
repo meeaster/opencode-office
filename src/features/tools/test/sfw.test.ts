@@ -4,7 +4,8 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { containerEnvironment, envScript, releaseAgeVariables, sfwLayout, shellQuote, wrapperFiles } from "../sfw.ts";
+import { containerEnvironment, releaseAgeVariables, sfwLayout, shellQuote, wrapperFiles } from "../sfw.ts";
+import { envScript } from "../../machine/host-env.ts";
 
 let dir: string;
 

@@ -5,11 +5,11 @@
 // managers and mise also wait the office's minimum release age (`minimum_release_age`)
 // before they take a new release, whether or not the firewall is on.
 //
-// This module is the one list of what is wrapped and of the variables, and writes the wrappers and
-// the environment file both for the container (its image and entrypoint) and for a host-mode
-// office's machine (src/features/machine/machine.ts).
+// The wrappers and release ages are shared by the container image and the host machine plan.
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { machineDir } from "../machine/paths.ts";
 
 /** The package managers whose commands go through sfw, by the names their wrappers have on PATH. */
 export const wrappedCommands = ["npm", "npx", "pnpm", "pip", "pip3", "uv", "uvx", "cargo"] as const;
@@ -56,9 +56,6 @@ export function releaseAgeVariables(age: string): [string, string][] {
  */
 export const behindSfwVariable = "OFFICE_BEHIND_SFW";
 
-/** The environment file's own path, which it exports, so `office check` and a shell can tell it was sourced. */
-const envFileVariable = "OFFICE_ENV_FILE";
-
 /** Where the sfw binary, its wrappers' script and their folder are, and the real mise the mise wrapper runs. */
 export type SfwLayout = { root: string; sfw: string; script: string; bin: string; mise: string };
 
@@ -73,12 +70,12 @@ export function shellQuote(value: string): string {
 }
 
 /** The first line of every file the office writes for sfw and the environment, after a script's `#!` line. */
-function marker(what: string): string {
+export function marker(what: string): string {
   return `# office: ${what}. Written by office; don't edit it, office sync or the image rewrites it.`;
 }
 
 // Removes every `$1` from PATH, in POSIX sh with no subprocess, leaving the rest in order.
-const dropFromPath = (variable: string, entry: string) => [
+export const dropFromPath = (variable: string, entry: string) => [
   `${variable}=":$PATH:"`,
   "while :; do",
   `  case $${variable} in`,
@@ -172,31 +169,6 @@ export function wrapperFiles(layout: SfwLayout): WrapperFiles {
 /** What the environment file sets: PATH entries, first to last, and plain variables. */
 export type Environment = { path: string[]; variables: [string, string][] };
 
-/**
- * The environment file: POSIX shell for sh, bash and zsh that puts `path` first on PATH in that
- * order, moving an entry already there rather than adding it twice, so sourcing it again changes
- * nothing, then exports the variables. It prints nothing and runs no other program.
- */
-export function envScript(what: string, file: string, environment: Environment): string {
-  return [
-    marker(what),
-    "# It sets PATH and plain variables only. Source it with `. <this file>`, after `mise activate` in",
-    "# your shell's startup file so the Socket Firewall wrappers stay ahead of mise's tool folders.",
-    "__office_path() {",
-    ...dropFromPath("__office_rest", "$1").map((line) => `  ${line}`),
-    "  __office_rest=${__office_rest%:}",
-    '  if [ -n "$__office_rest" ]; then PATH="$1:$__office_rest"; else PATH=$1; fi',
-    "}",
-    ...environment.path.toReversed().map((entry) => `__office_path ${shellQuote(entry)}`),
-    "unset -f __office_path",
-    "unset __office_rest",
-    "export PATH",
-    `export ${envFileVariable}=${shellQuote(file)}`,
-    ...environment.variables.map(([name, value]) => `export ${name}=${shellQuote(value)}`),
-    "",
-  ].join("\n");
-}
-
 /** The image's sfw layout: sfw and mise in /usr/local/bin, the wrappers in /usr/local/lib/office/sfw. */
 export const containerLayout = sfwLayout("/usr/local/lib/office/sfw", "/usr/local/bin/sfw", "/usr/local/bin/mise");
 
@@ -225,4 +197,16 @@ export function writeContainerWrappers(): string[] {
   }
 
   return [files.script.path, files.mise.path, ...files.links.map((link) => link.path)];
+}
+
+/** The host's sfw layout, its mise wrapper running the real mise at `mise`. */
+export function hostLayout(mise: string): SfwLayout {
+  const root = join(machineDir(), "sfw");
+
+  return sfwLayout(root, join(root, "sfw"), mise);
+}
+
+/** The folder of the host's wrappers, which the environment file puts first on PATH. */
+export function hostWrappers(): string {
+  return join(machineDir(), "sfw/bin");
 }

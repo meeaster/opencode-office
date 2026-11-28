@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadOffice } from "../../../office.ts";
 import { grantConsent, serviceEnvironment } from "../../machine/record.ts";
-import { syncMachine } from "../../machine/machine.ts";
+import { syncMachine } from "../../machine/owned-files.ts";
+import { machineReconciliation } from "../../machine/plan.ts";
 import { envFilePath } from "../../machine/paths.ts";
 import { recordRequiredFixtures } from "../../../../test/support/test-builtin-record.ts";
 import { reconcileHostServices } from "../package-host-services.ts";
@@ -26,11 +27,11 @@ test("host services only load the recorded environment of the same office", () =
 
     writeFileSync(file, "echo foreign");
     expect(serviceEnvironment(office)).toBe("");
-    grantConsent(office);
+    grantConsent(office, "");
     expect(statSync(record).mode & 0o777).toBe(0o600);
     expect(() => serviceEnvironment(office)).toThrow("unrecorded");
     rmSync(file);
-    syncMachine(office, { unread: new Set(), packages: [] });
+    syncMachine(office, machineReconciliation, { unread: new Set(), packages: [] });
     expect(serviceEnvironment(office)).toContain("export MISE_MINIMUM_RELEASE_AGE=");
     expect(serviceEnvironment({ ...office, dir: join(root, "other") })).toBe("");
 

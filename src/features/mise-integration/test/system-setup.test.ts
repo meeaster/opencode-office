@@ -70,7 +70,7 @@ system:
 }
 
 async function prepare(consent = true) {
-  if (consent) grantConsent(loadOffice(office));
+  if (consent) grantConsent(loadOffice(office), "");
 
   await sync(loadOffice(office));
 

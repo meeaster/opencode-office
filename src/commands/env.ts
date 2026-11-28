@@ -3,7 +3,8 @@
 // entrypoint writes at start (and the image at build, for an office it can't read yet).
 import { type Office } from "../office.ts";
 import { defaultReleaseAge } from "../schema.ts";
-import { containerEnvFile, containerEnvironment, envScript } from "../features/tools/sfw.ts";
+import { containerEnvFile, containerEnvironment } from "../features/tools/sfw.ts";
+import { envScript } from "../features/machine/host-env.ts";
 
 /** The container's environment file for `office` (undefined: the defaults, the firewall on and a three-day age). */
 export function containerEnvText(office: Office | undefined): string {

@@ -21,15 +21,18 @@ import { refreshOwner, refreshTimer, removePackageTimers, removeTimers, writeTim
 import { ghConfigDir, ghHosts } from "../github.ts";
 import { hostTool } from "../features/tools/host-tools.ts";
 import { notify } from "../features/executor/notify.ts";
+import { releaseMachine as releaseOwnedMachine } from "../features/machine/owned-files.ts";
+import { machineReconciliation } from "../features/machine/plan.ts";
 import { CommandFailed, progress, say, streamChecked, warn } from "../report/index.ts";
 import { displayLines } from "../report/reporter.ts";
 import { type Gathered, gatherPackages, problemLines } from "../gather.ts";
 import { runPackageHooks } from "../lifecycle-inputs.ts";
 import { type Office, OfficeError, readEnvFile } from "../office.ts";
-import { hostLayout, hostWrappers } from "../features/machine/host-env.ts";
+import { hostLayout, hostWrappers } from "../features/tools/sfw.ts";
 import { markServerStopped, planServer, serverIncumbent, startServer } from "../features/opencode/host-server.ts";
 import { claim } from "../features/machine/record.ts";
-import { globalConfD, installSfw } from "../features/machine/machine.ts";
+import { globalConfD } from "../features/mise-integration/machine-files.ts";
+import { installSfw } from "../features/tools/firewall.ts";
 import { removeUnwantedServer, requireServerConsent, stopRecordedServer, writeServerUnit } from "../features/opencode/server-units.ts";
 import { machineFiles } from "../features/mise-integration/delivery.ts";
 import { appliedSpawns, packageComposeFile, serviceFiles, serviceSettings, type UpgradedServices } from "../features/compose/services.ts";
@@ -629,6 +632,10 @@ export async function startExecutor(office: Office): Promise<void> {
   progress("waiting for Executor to answer");
 
   if (!(await waitForExecutor())) throw new OfficeError("Executor didn't become ready; fix its startup and rerun office setup");
+}
+
+export function releaseMachine(office: Office) {
+  return releaseOwnedMachine(office, machineReconciliation);
 }
 
 /**

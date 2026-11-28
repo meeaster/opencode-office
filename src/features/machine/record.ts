@@ -154,7 +154,7 @@ export const consentCommand = "office setup (unattended: office setup --manage-m
  * Records the user's yes: this office now manages the machine. Refuses when another office does;
  * a moved office keeps its entries, which the next sync relinks.
  */
-export function grantConsent(office: Office, grantedMessage = `office ${office.name} now manages this machine`): string {
+export function grantConsent(office: Office, grantedMessage: string): string {
   const current = claim(office);
 
   if (current.kind === "other") throw new OfficeError(ownedElsewhere(current.record));

@@ -71,7 +71,7 @@ async function published(): Promise<void> {
   select();
   write(join(office, "office.lock"), sharedToolsLock());
   applyOfficeTools(loadOffice(office).state);
-  grantConsent(loadOffice(office));
+  grantConsent(loadOffice(office), "");
   await sync(loadOffice(office), { scope: "packages" });
 }
 

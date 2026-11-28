@@ -3,8 +3,7 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { machineDir } from "../features/machine/paths.ts";
-import { opencodeBin } from "../features/machine/host-env.ts";
+import { machineDir, opencodeBin } from "../features/machine/paths.ts";
 import { applyAgentServerVersion, inManagedServer, updatePeer } from "../features/opencode/host-server.ts";
 import { recordedAgentUpdate } from "../features/opencode/server-units.ts";
 import { type Office, OfficeError } from "../office.ts";

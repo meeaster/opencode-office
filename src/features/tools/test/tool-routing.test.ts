@@ -11,9 +11,12 @@ import { officeMise } from "../registry.ts";
 import { bump } from "../../../commands/bump.ts";
 import { isolatedEnvironment } from "../selection.ts";
 import { git } from "../../../git.ts";
-import { hostEnvironment, hostLayout, miseShims } from "../../machine/host-env.ts";
-import { hostToolsRoot, officeTool } from "../host-tools.ts";
-import { globalConfD, linkName } from "../../machine/machine.ts";
+import { hostEnvironment } from "../../machine/host-env.ts";
+import { hostLayout } from "../sfw.ts";
+import { miseShims } from "../../machine/paths.ts";
+import { hostToolsRoot } from "../mise-bootstrap.ts";
+import { officeTool } from "../host-tools.ts";
+import { globalConfD, linkName } from "../../mise-integration/machine-files.ts";
 import { grantConsent, readMachine } from "../../machine/record.ts";
 import { machineRecordPath } from "../../machine/paths.ts";
 import { loadOffice } from "../../../office.ts";
@@ -112,7 +115,7 @@ async function published(): Promise<void> {
   select();
   write(join(office, "office.lock"), sharedToolsLock());
   applyOfficeTools(loadOffice(office).state);
-  grantConsent(loadOffice(office));
+  grantConsent(loadOffice(office), "");
   await run();
 }
 

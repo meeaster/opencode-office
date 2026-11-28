@@ -3,10 +3,10 @@ import { join } from "node:path";
 import * as v from "valibot";
 
 import { envFilePath } from "../../features/machine/paths.ts";
-import { hostWrappers, sourceLine, sourcedBy } from "../../features/machine/host-env.ts";
+import { sourceLine, sourcedBy } from "../../features/machine/host-env.ts";
 import { officeCommands, officePins, officeTool, officeToolNamed, type OfficeTool, required } from "../../features/tools/host-tools.ts";
 import { claim } from "../../features/machine/record.ts";
-import { wrappedCommands } from "../../features/tools/sfw.ts";
+import { hostWrappers, wrappedCommands } from "../../features/tools/sfw.ts";
 import { machineFile, packagesFile } from "../../features/mise-integration/delivery.ts";
 import { toolPins } from "../../features/mise-integration/mise-toml.ts";
 import { type Office, OfficeError } from "../../office.ts";

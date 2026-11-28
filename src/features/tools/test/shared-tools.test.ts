@@ -15,8 +15,8 @@ import { effectiveAge, type PlanningEnvironment, planningToml, type Run } from "
 import { reservedWord } from "../../../command-table.ts";
 import { bump } from "../../../commands/bump.ts";
 import { gatherPackages } from "../../../gather.ts";
-import { miseShims } from "../../machine/host-env.ts";
-import { globalConfD } from "../../machine/machine.ts";
+import { miseShims } from "../../machine/paths.ts";
+import { globalConfD } from "../../mise-integration/machine-files.ts";
 import { grantConsent } from "../../machine/record.ts";
 import { machineRecordPath } from "../../machine/paths.ts";
 import { loadOffice } from "../../../office.ts";
@@ -70,7 +70,7 @@ async function published(): Promise<void> {
   select();
   write(join(office, "office.lock"), sharedToolsLock());
   applyOfficeTools(loadOffice(office).state);
-  grantConsent(loadOffice(office));
+  grantConsent(loadOffice(office), "");
   await run();
 }
 

@@ -24,7 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { GatheredPackage } from "../../gather.ts";
-import { miseShims } from "../machine/host-env.ts";
+import { miseShims } from "../machine/paths.ts";
 import type { Office } from "../../office.ts";
 import type { LockedTool, ToolLock } from "../../schema.ts";
 import { ageHours } from "./sfw.ts";

@@ -8,7 +8,7 @@ import { fileState, removeFile } from "../machine/owned-files.ts";
 import { envFilePath } from "../machine/paths.ts";
 import { claim, consentCommand, type MachineFile, type MachineRecord, ownedElsewhere, type RealFile, removeReceipt, replaceReceipt } from "../machine/record.ts";
 import { ownershipProblem, removeUnit, running, type UnitManager, userManager, writeUnit } from "../systemd/user-units.ts";
-import { hostLayout } from "../machine/host-env.ts";
+import { hostLayout } from "../tools/sfw.ts";
 import { type ServerPlan, serverUnitPath, userSystemd } from "./host-server.ts";
 
 function managedFile(file: MachineFile): file is RealFile & { service: "opencode" } {

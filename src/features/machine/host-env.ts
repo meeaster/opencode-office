@@ -1,93 +1,17 @@
-// What a host-mode office writes in its own data folder (`$XDG_DATA_HOME/office`, the folder that also
-// holds the machine record and host-tools) for Socket Firewall and the shared environment:
-//
-// - `sfw/sfw`, the pinned Socket Firewall, which `office up` downloads and checks against office.lock;
-// - `sfw/package-manager.sh` and `sfw/bin/`, the wrappers (src/features/tools/sfw.ts), which `office sync` writes;
-// - `env.sh`, the environment agents and the user's terminal share: PATH entries (the wrappers, mise's
-//   shims, OpenCode's bin, then what packages declare) and plain variables (the release ages for
-//   package managers and mise, from `minimum_release_age`, then what packages declare). The user sources it from their shell's startup file; the OpenCode
-//   server's unit will source it once the office owns that unit.
-//
-// Each is a file in the machine record (src/features/machine/machine.ts), written only with the user's consent. The
-// folder is the office tool's own, so these names carry no office name: a machine has one host-mode
-// office, and the user's startup file names one stable path.
-//
-// OFFICE_MACHINE_DIR replaces the folder for tests and scratch offices.
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { hostToolsRoot } from "../tools/host-tools.ts";
-import { projectionPath } from "../tools/applied.ts";
+import type { GatheredPackage } from "../../gather.ts";
+import { sha256 } from "../../lib/hash.ts";
+import type { InstalledPackage } from "../../loader/definitions/inventory.ts";
 import type { Office } from "../../office.ts";
+import { managedAgentEnvironment } from "../../schema.ts";
+import { projectionPath } from "../tools/applied.ts";
 import { systemVariables } from "../mise-integration/system.ts";
 import { hostApplies } from "../tooling/requirements.ts";
-import type { GatheredPackage } from "../../gather.ts";
-import type { InstalledPackage } from "../../loader/definitions/inventory.ts";
-import { managedAgentEnvironment } from "../../schema.ts";
-import { type Environment, releaseAgeVariables, type SfwLayout, sfwLayout, shellQuote } from "../tools/sfw.ts";
-import { envFilePath, home, machineDir, machineDirVariable } from "./paths.ts";
-
-/** The host's sfw layout, its mise wrapper running the real mise at `mise`. */
-export function hostLayout(mise: string): SfwLayout {
-  const root = join(machineDir(), "sfw");
-
-  return sfwLayout(root, join(root, "sfw"), mise);
-}
-
-/** The folder of the host's wrappers, which the environment file puts first on PATH. */
-export function hostWrappers(): string {
-  return join(machineDir(), "sfw/bin");
-}
-
-/** mise's shims on this machine, as mise finds its data folder. */
-export function miseShims(): string {
-  return join(process.env.MISE_DATA_DIR || join(process.env.XDG_DATA_HOME || join(home(), ".local/share"), "mise"), "shims");
-}
-
-/** Where OpenCode's installer puts the `opencode` command. */
-export function opencodeBin(): string {
-  return join(home(), ".opencode/bin");
-}
-
-/** Whether `path` is an executable program file, not a script: a wrapper such as the office's or mise-guard starts with `#!`. */
-function isProgram(path: string): boolean {
-  let fd;
-
-  try {
-    const stats = statSync(path);
-
-    if (!stats.isFile() || (stats.mode & 0o111) === 0) return false;
-
-    fd = openSync(path, "r");
-
-    const head = Buffer.alloc(2);
-
-    return readSync(fd, head, 0, 2, 0) === 2 && head.toString("latin1") !== "#!";
-  } catch {
-    return false;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
-}
-
-/**
- * The real mise the mise wrapper runs: the first mise program on PATH outside the wrappers' folder
- * and mise's shims, skipping wrappers such as Mindframe-Z's mise-guard, else the office's own copy
- * in host-tools. Undefined when there is none.
- */
-export function realMise(): string | undefined {
-  const skip = [hostWrappers(), miseShims()];
-
-  for (const dir of (process.env.PATH ?? "").split(":")) {
-    if (dir === "" || skip.includes(dir)) continue;
-
-    if (isProgram(join(dir, "mise"))) return join(dir, "mise");
-  }
-
-  const managed = join(hostToolsRoot(), "bin/mise");
-
-  return isProgram(managed) ? managed : undefined;
-}
+import { dropFromPath, type Environment, hostWrappers, marker, releaseAgeVariables, shellQuote } from "../tools/sfw.ts";
+import type { PlanContext, WantedFile } from "./owned-files.ts";
+import { envFilePath, home, machineDirVariable, miseShims, opencodeBin } from "./paths.ts";
 
 /** What a package's host block adds to the environment file, with absolute folders. */
 export type PackageEnvironment = { name: string; path: string[]; variables: [string, string][] };
@@ -207,4 +131,49 @@ export function sourcedBy(): string | undefined {
   }
 
   return undefined;
+}
+
+/** The environment file's own path, which it exports, so `office check` and a shell can tell it was sourced. */
+const envFileVariable = "OFFICE_ENV_FILE";
+
+/**
+ * The environment file: POSIX shell for sh, bash and zsh that puts `path` first on PATH in that
+ * order, moving an entry already there rather than adding it twice, so sourcing it again changes
+ * nothing, then exports the variables. It prints nothing and runs no other program.
+ */
+export function envScript(what: string, file: string, environment: Environment): string {
+  return [
+    marker(what),
+    "# It sets PATH and plain variables only. Source it with `. <this file>`, after `mise activate` in",
+    "# your shell's startup file so the Socket Firewall wrappers stay ahead of mise's tool folders.",
+    "__office_path() {",
+    ...dropFromPath("__office_rest", "$1").map((line) => `  ${line}`),
+    "  __office_rest=${__office_rest%:}",
+    '  if [ -n "$__office_rest" ]; then PATH="$1:$__office_rest"; else PATH=$1; fi',
+    "}",
+    ...environment.path.toReversed().map((entry) => `__office_path ${shellQuote(entry)}`),
+    "unset -f __office_path",
+    "unset __office_rest",
+    "export PATH",
+    `export ${envFileVariable}=${shellQuote(file)}`,
+    ...environment.variables.map(([name, value]) => `export ${name}=${shellQuote(value)}`),
+    "",
+  ].join("\n");
+}
+
+export function wantedEnvironment({ office, record, packages, unread }: PlanContext) {
+  const path = envFilePath();
+  const previous = record.files.find(file => file.path === path);
+  const retained = previous?.kind === "file" ? previous.contributions?.filter(item => unread.has(item.name)) : [];
+  const { environment, problems, contributions } = hostEnvironment(office, packages, retained);
+  const text = envScript(`the environment of office ${office.name}, which agents and your terminal share`, path, environment);
+
+  const entry = {
+    file: { kind: "file", path, package: null, sha256: sha256(text), contributions },
+    what: "the office's environment file",
+    made: "; source it from your shell's startup file (office setup prints the line)",
+    text,
+  } satisfies WantedFile;
+
+  return { entry, problems };
 }

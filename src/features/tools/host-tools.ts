@@ -15,19 +15,17 @@
 // that gh, the stable path git's credential helper names, since the install's own path changes
 // with every version.
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import * as v from "valibot";
 
-import { fetchBytes } from "../../lib/download.ts";
 import { toolPins } from "../mise-integration/mise-toml.ts";
 import { type Office, OfficeError } from "../../office.ts";
 import { floors } from "../../../packages/office/floors.ts";
 import { packagesFile, packagesPath } from "../mise-integration/delivery.ts";
 import { newestRelease, type Candidate } from "./releases.ts";
+import { hostToolsRoot, installMise, type InstalledTool, reported, requireHostPlatform } from "./mise-bootstrap.ts";
 import { appliedExecutable } from "./applied.ts";
 import { check } from "../../schema.ts";
 import { compareVersions } from "../../versions.ts";
@@ -36,10 +34,6 @@ import { displayLines } from "../../report/reporter.ts";
 
 /** A command the office CLI runs that comes from the office package's tools. */
 export type OfficeCommand = "sops" | "age" | "age-keygen" | "gh" | "pre-commit";
-
-type Tool = "mise" | OfficeCommand;
-
-export type InstalledTool = { path: string; version: string };
 
 /** The office package's tool each command comes from, by its key in `machine.packages.toml`. */
 const packageTool = { sops: "sops", age: "age", "age-keygen": "age", gh: "gh", "pre-commit": "pre-commit" } satisfies Record<OfficeCommand, string>;
@@ -68,26 +62,9 @@ export function officeToolNamed(key: string): string | undefined {
   return Object.entries(repositories).find(([tool, repository]) => name === tool || name === `pypi:${tool}` || name === repository || name.endsWith(`:${repository}`))?.[0];
 }
 
-export function hostToolsRoot(): string {
-  return join(process.env.XDG_DATA_HOME ?? join(homedir(), ".local/share"), "office/host-tools");
-}
-
 /** The stable link to the office's gh that git's credential helper names. */
 export function ghLink(): string {
   return join(hostToolsRoot(), "bin/gh");
-}
-
-function reported(tool: Tool, path: string): InstalledTool | undefined {
-  try {
-    const text = execFileSync(path, ["--version"], { encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
-    const version = (tool === "mise" ? /^(\d+\.\d+\.\d+(?:-[\w.-]+)?)/ : /(?:^|\s)v?(\d+\.\d+\.\d+(?:-[\w.-]+)?)/).exec(text)?.[1];
-
-    if (version !== undefined) return { path, version };
-  } catch {
-    // Missing, non-executable and broken installations are not usable candidates.
-  }
-
-  return undefined;
 }
 
 /** The newest of the mise on PATH and the private one in host-tools; PATH wins ties. */
@@ -215,61 +192,6 @@ export function requireOfficeTool(office: Office, command: OfficeCommand): strin
 
 export function needsInstall(installed: InstalledTool | undefined, candidate: string): boolean {
   return installed === undefined || compareVersions(installed.version, candidate) < 0;
-}
-
-/** Only these four Unix targets are published by office. */
-function requireHostPlatform(platform: string, arch: string): void {
-  if (!["linux", "darwin"].includes(platform) || !["x64", "arm64"].includes(arch)) {
-    throw new OfficeError(`host dependency installation is unsupported on ${platform}-${arch}; install mise, SOPS and age manually on PATH (on Windows, run office in WSL)`);
-  }
-}
-
-export function miseAsset(version: string, platform = process.platform, arch = process.arch): string {
-  requireHostPlatform(platform, arch);
-
-  return `mise-v${version}-${platform === "darwin" ? "macos" : platform}-${arch}`;
-}
-
-export function verifyDigest(bytes: Uint8Array, digest: string | null | undefined, name: string): void {
-  if (digest === undefined || digest === null || !/^sha256:[0-9a-f]{64}$/.test(digest)) {
-    throw new OfficeError(`${name} has no authoritative SHA-256 digest; nothing was installed`);
-  }
-
-  if (`sha256:${createHash("sha256").update(bytes).digest("hex")}` !== digest) {
-    throw new OfficeError(`${name} failed SHA-256 verification; nothing was installed`);
-  }
-}
-
-export async function installMise(candidate: Candidate): Promise<void> {
-  const name = miseAsset(candidate.version);
-  const asset = candidate.release.assets.find((entry) => entry.name === name && entry.state === "uploaded");
-
-  if (asset === undefined) throw new OfficeError(`mise ${candidate.version} publishes no ${name}; install mise manually on PATH`);
-
-  if (!asset.digest) throw new OfficeError(`${name} has no authoritative digest; nothing was installed`);
-
-  const bytes = await fetchBytes(asset.browser_download_url, name);
-
-  verifyDigest(bytes, asset.digest, name);
-
-  const bin = join(hostToolsRoot(), "bin");
-
-  mkdirSync(bin, { recursive: true });
-
-  // mise is a multicall binary: a different basename is interpreted as a tool shim.
-  const staging = mkdtempSync(join(bin, ".mise-"));
-  const temporary = join(staging, "mise");
-
-  try {
-    writeFileSync(temporary, bytes, { mode: 0o755, flag: "wx" });
-
-    if (reported("mise", temporary)?.version !== candidate.version) throw new OfficeError(`downloaded mise does not report ${candidate.version}; existing mise preserved`);
-
-    renameSync(temporary, join(bin, "mise"));
-  } finally {
-    rmSync(temporary, { force: true });
-    rmdirSync(staging);
-  }
 }
 
 /** Points `link` at `target`, replacing what was there in one rename. */
