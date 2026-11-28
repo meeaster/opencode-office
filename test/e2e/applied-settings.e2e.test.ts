@@ -288,6 +288,10 @@ test("an office inside another repository's worktree publishes only when that re
   expect(read(exclude)).toBe(excluded);
 
   write(join(enclosing, ".gitignore"), "/nested-office/.office/\n");
+  expect(sync(1)).toContain("Git doesn't ignore .opencode/plugins/office/");
+  expect(existsSync(join(dir, ".opencode/plugins/office"))).toBe(false);
+  expect(read(exclude)).toBe(excluded);
+  write(join(enclosing, ".gitignore"), "/nested-office/.office/\n/nested-office/.opencode/plugins/office/\n/nested-office/.opencode/plugins/knowledge/\n/nested-office/.opencode/plugins/browser/\n");
   sync(0);
   expect(existsSync(join(dir, snapshotPath))).toBe(true);
   expect(read(exclude)).toBe(excluded);
@@ -310,7 +314,7 @@ test("an office in a repository's folder or a linked worktree publishes nothing 
   };
 
   git(["init", "-q", "-b", "main", main]);
-  write(join(main, ".gitignore"), "/office/.office/\n");
+  write(join(main, ".gitignore"), "/office/.office/\n/office/.opencode/plugins/office/\n/office/.opencode/plugins/knowledge/\n/office/.opencode/plugins/browser/\n");
   commit(main);
   git(["worktree", "add", "-q", "--detach", linked], main);
   // A linked worktree's .git is a file naming its folder in the main repository.

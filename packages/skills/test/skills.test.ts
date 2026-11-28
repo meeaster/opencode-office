@@ -211,7 +211,7 @@ test("an occupied destination, a dangling owner link, a lost receipt, a conflict
   write(join(office, ".agents/skills/beta/SKILL.md"), "the owner's\n");
   mkdirSync(join(office, ".agents/skills"), { recursive: true });
   symlinkSync("../../nowhere", link("gamma"));
-  await expect(sync({ sources: [{ folder: "skills" }], enabled: ["alpha", "beta", "gamma"] })).rejects.toThrow("no skill link changed: .agents/skills/beta is already there and isn't a link this package recorded; move it aside or disable that skill; .agents/skills/gamma is already there");
+  await expect(sync({ sources: [{ folder: "skills" }], enabled: ["alpha", "beta", "gamma"] })).rejects.toThrow("no skill delivery changed: .agents/skills/beta is already there and isn't a delivery this package recorded; move it aside or disable that skill; .agents/skills/gamma is already there");
   expect(existsSync(link("alpha"))).toBe(false);
   await expect(sync({ sources: [{ folder: "skills" }], enabled: ["alpha", "ghost"] })).rejects.toThrow("skill ghost is enabled, but no source offers it");
   write(join(office, "packages/tools/skills/alpha/SKILL.md"));
@@ -222,10 +222,10 @@ test("an occupied destination, a dangling owner link, a lost receipt, a conflict
   // Linked, then the receipt is lost: the link is reported as occupied, never taken over.
   await sync({ sources: [{ folder: "skills" }], enabled: ["alpha"] });
   rmSync(join(office, receiptFile));
-  await expect(sync({ sources: [{ folder: "skills" }], enabled: ["alpha"] })).rejects.toThrow(".agents/skills/alpha is already there and isn't a link this package recorded");
+  await expect(sync({ sources: [{ folder: "skills" }], enabled: ["alpha"] })).rejects.toThrow(".agents/skills/alpha is already there and isn't a delivery this package recorded");
   const problems = await definition.check?.({ ...syncInputs({ sources: [{ folder: "skills" }], enabled: ["alpha"] }).inputs, host });
 
-  expect(problems).toEqual([{ level: "failed", message: ".agents/skills/alpha is already there and isn't a link this package recorded; move it aside or disable that skill" }]);
+  expect(problems).toEqual([{ level: "failed", message: ".agents/skills/alpha is already there and isn't a delivery this package recorded; move it aside or disable that skill" }]);
 });
 
 test("a Git source is fetched once at its pinned commit and then used offline; its folders share that checkout", async () => {
@@ -235,10 +235,10 @@ test("a Git source is fetched once at its pinned commit and then used offline; i
 
   expect((await sync(settings)).lines).toEqual([
     `fetched ${repo} at ${first.slice(0, 12)}`,
-    `linked .agents/skills/review (${repo} at ${first.slice(0, 12)})`,
-    `linked .agents/skills/lint (${repo} at ${first.slice(0, 12)})`,
+    `copied skill .agents/skills/review (${repo} at ${first.slice(0, 12)})`,
+    `copied skill .agents/skills/lint (${repo} at ${first.slice(0, 12)})`,
   ]);
-  expect(readlinkSync(link("review"))).toBe(`../../${checkoutFolder(repo, first)}/engineering/review`);
+  expect(lstatSync(link("review")).isDirectory()).toBe(true);
   expect(readFileSync(join(link("review"), "notes.md"), "utf8")).toBe("one\n");
 
   // Upstream moves and then disappears: plain sync keeps the pin and needs no remote.
@@ -265,7 +265,7 @@ test("a track resolves to a branch's commit or the highest stable tag matching i
   expect(() => resolveTrack(repo, "v9.*")).toThrow("no stable SemVer tag");
 });
 
-test("update moves a tracked pin through the settings helper and relinks at once; a candidate missing a skill keeps the pin and the links", async () => {
+test("update moves a tracked pin and copies at once; a candidate missing a skill keeps the pin and delivery", async () => {
   const first = commit("repo", { "review/SKILL.md": "one\n", "lint/SKILL.md": "lint\n" });
   const repo = join(root, "repo");
   const fixed = { repo, ref: first, skills: [{ name: "fixed", path: "review" }] };
@@ -281,6 +281,7 @@ test("update moves a tracked pin through the settings helper and relinks at once
   };
 
   await sync(settings);
+  updates.length = 0;
   const second = commit("repo", { "review/SKILL.md": "two\n" });
   const out = spyOn(console, "log").mockImplementation(() => undefined);
 
@@ -290,13 +291,12 @@ test("update moves a tracked pin through the settings helper and relinks at once
     await found.run?.(inputs);
     expect(out.mock.calls.map(call => String(call[0]))).toEqual([
       `${repo}: pinned ${first.slice(0, 12)} → ${second} (branch main); skills review, lint`,
-      `relinked .agents/skills/review (${repo} at ${second.slice(0, 12)})`,
+      `copied skill .agents/skills/review (${repo} at ${second.slice(0, 12)})`,
       `${repo}: pinned at ${first.slice(0, 12)} with no track, so left there`,
     ]);
     expect(edits).toEqual([[["sources", 0, "ref"], second]]);
     expect(readFileSync(join(link("review"), "SKILL.md"), "utf8")).toBe("two\n");
-    // Its links' exclusions follow at once, without waiting for a sync.
-    expect(updates).toEqual([{ add: [".agents/skills/review"], remove: [] }]);
+    expect(updates).toEqual([{ add: [".agents/skills/review/"] }]);
 
     // The next candidate drops lint, which isn't even enabled: nothing moves.
     const third = commit("repo", { lint: null });
@@ -304,8 +304,7 @@ test("update moves a tracked pin through the settings helper and relinks at once
 
     expect(() => next.found.run?.(next.inputs)).toThrow(`skill lint from ${repo} at ${third.slice(0, 12)}: lint has no SKILL.md file at that commit; pin left at ${second.slice(0, 12)} and its skills unchanged`);
     expect(edits).toHaveLength(1);
-    expect(readlinkSync(link("review"))).toContain(second);
-    expect(lstatSync(link("review")).isSymbolicLink()).toBe(true);
+    expect(readFileSync(join(link("review"), "SKILL.md"), "utf8")).toBe("two\n");
   } finally {
     out.mockRestore();
   }
@@ -332,7 +331,7 @@ test("sync checks every folder a Git source names, enabled or not, before any li
   const ref = commit("repo", { "review/SKILL.md": "review\n" });
   const repo = join(root, "repo");
 
-  await expect(sync({ sources: [{ repo, ref, skills: [{ name: "review", path: "review" }, { name: "lint", path: "lint" }] }], enabled: ["review"] })).rejects.toThrow(`no skill link changed: skill lint from ${repo} at ${ref.slice(0, 12)}: lint has no SKILL.md file at that commit`);
+  await expect(sync({ sources: [{ repo, ref, skills: [{ name: "review", path: "review" }, { name: "lint", path: "lint" }] }], enabled: ["review"] })).rejects.toThrow(`no skill delivery changed: skill lint from ${repo} at ${ref.slice(0, 12)}: lint has no SKILL.md file at that commit`);
   expect(existsSync(link("review"))).toBe(false);
 });
 
@@ -341,22 +340,20 @@ test("update checks the whole candidate, link conflicts included, before its pin
   const repo = join(root, "repo");
   const settings: Given = { sources: [{ repo, ref: first, track: "main", skills: [{ name: "review", path: "review" }] }], enabled: ["review"] };
 
-  await sync(settings);
-  // The owner puts a folder of their own where the managed link was.
-  rmSync(link("review"));
+  // A folder without a receipt belongs to the owner.
   write(join(link("review"), "SKILL.md"), "the owner's\n");
   const second = commit("repo", { "review/SKILL.md": "two\n" });
   const { found, inputs } = command("skills update", settings);
   const out = spyOn(console, "log").mockImplementation(() => undefined);
 
   try {
-    expect(() => found.run?.(inputs)).toThrow(`${repo} at ${second.slice(0, 12)} (branch main): no skill link changed: .agents/skills/review is already there and isn't a link this package recorded; move it aside or disable that skill; pin left at ${first.slice(0, 12)} and its skills unchanged; stopped excluding /.agents/skills/review`);
+    expect(() => found.run?.(inputs)).toThrow(`${repo} at ${second.slice(0, 12)} (branch main): no skill delivery changed: .agents/skills/review is already there and isn't a delivery this package recorded; move it aside or disable that skill; pin left at ${first.slice(0, 12)} and its skills unchanged`);
   } finally {
     out.mockRestore();
   }
 
   expect(readFileSync(join(link("review"), "SKILL.md"), "utf8")).toBe("the owner's\n");
-  expect(updates).toEqual([{ remove: [".agents/skills/review"] }]);
+  expect(updates).toEqual([]);
 });
 
 test("a refused sync releases the exclusion of each recorded link the owner replaced, with a folder, a file or another link, and of no other", async () => {
@@ -371,19 +368,19 @@ test("a refused sync releases the exclusion of each recorded link the owner repl
   rmSync(link("gamma"));
   symlinkSync("../../nowhere", link("gamma"));
 
-  await expect(sync(settings)).rejects.toThrow("no skill link changed: .agents/skills/alpha is already there");
+  await expect(sync(settings)).rejects.toThrow("no skill delivery changed: .agents/skills/alpha is already there");
   expect(updates).toEqual([{ remove: [".agents/skills/alpha", ".agents/skills/beta", ".agents/skills/gamma"] }]);
   expect(readlinkSync(link("delta"))).toBe("../../skills/delta");
   expect(readlinkSync(link("gamma"))).toBe("../../nowhere");
 });
 
-test("the receipt counts only when it is a file recording links at .agents/skills/<id>; anything else stops sync, naming it", async () => {
+test("the receipt accepts only deliveries at .agents/skills/<id>", async () => {
   write(join(office, "skills/alpha/SKILL.md"));
   const settings = { sources: [{ folder: "skills" }], enabled: ["alpha"] };
 
   for (const links of [{ "../outside": "x" }, { ".agents/skills/alpha/inner": "x" }, { ".agents/skills/Alpha": "x" }, { ".agents/skills/alpha": 1 }]) {
     write(join(office, receiptFile), JSON.stringify({ links }));
-    await expect(sync(settings)).rejects.toThrow(`${receiptFile} isn't a record of links in .agents/skills/; move it aside`);
+    await expect(sync(settings)).rejects.toThrow(`${receiptFile} isn't a record of skill links and copies in .agents/skills/; move it aside`);
   }
 
   rmSync(join(office, receiptFile));
@@ -461,6 +458,6 @@ test("check reports a cached checkout at the wrong commit, even with the same fo
   rmSync(repo, { recursive: true });
   const before = tree(office);
 
-  expect(await definition.check?.({ ...syncInputs(settings).inputs, host })).toEqual([{ level: "failed", message: `${checkoutFolder(repo, first)} isn't a checkout of ${first.slice(0, 12)}; remove it and sync again` }]);
+  expect(await definition.check?.({ ...syncInputs(settings).inputs, host })).toContainEqual({ level: "failed", message: `${checkoutFolder(repo, first)} isn't a checkout of ${first.slice(0, 12)}; remove it and sync again` });
   expect(tree(office)).toEqual(before);
 });

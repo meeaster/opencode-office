@@ -21,7 +21,7 @@ export function validateAssets(root: string, dir: string, paths: AssetPaths) {
     const expected = dirname(dir) === managed ? join(realpathSync(managed), basename(dir), path) : join(realpathSync(root), inside);
 
     if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside) || !(part === "server" ? info?.isDirectory() : info?.isFile()) || realpathSync(dest) !== expected) {
-      throw new Error(`OpenCode ${part} asset must be an existing ${part === "server" ? "directory" : "regular file"} inside the package, without redirected paths`);
+      throw new Error(`OpenCode ${part} asset must be an existing ${part === "server" ? "directory" : "regular file"} inside the package, without redirected paths: ${path}`);
     }
   }
 }

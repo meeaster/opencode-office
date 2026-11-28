@@ -17,9 +17,7 @@ type Context = {
 const packageDir = dirname(realpathSync(dirname(fileURLToPath(import.meta.url))));
 
 /**
- * The office this plugin belongs to: the nearest folder above it holding office.yaml. OpenCode
- * loads it through the link `.opencode/plugins/knowledge`, and the runtime may report either that
- * path or the package's own `.office/packages/knowledge/plugin/`; both are inside the office.
+ * The office this plugin belongs to: the nearest folder above its copy holding office.yaml.
  */
 function findOffice(): string {
   for (let dir = packageDir; ; dir = dirname(dir)) {

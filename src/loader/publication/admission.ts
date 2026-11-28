@@ -46,7 +46,7 @@ export async function evaluateAdmission(temporary: string) {
   const folder = managedDirectory(office.dir, transaction.name);
   let published = false;
   let recorded = false;
-  let stopped = false;
+  let stopped: SyncStopped["step"] | undefined;
   let committed: string[] | undefined;
   let excluded: string[] | undefined;
   let rejectedOwners: string[] | undefined;
@@ -142,9 +142,10 @@ export async function evaluateAdmission(temporary: string) {
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
 
-    stopped = error instanceof SyncStopped;
+    stopped = error instanceof SyncStopped ? error.step : undefined;
 
-    if (stopped) lines.push(failure(`FAILED ${text}; the new package set is active and the rest of this sync did not run: fix the package, then run office sync again`));
+    if (stopped === "hook") lines.push(failure(`FAILED ${text}; the new package set is active and the rest of this sync did not run: fix the package, then run office sync again`));
+    else if (stopped === "plugins") lines.push(failure(`FAILED plugin delivery: ${text}; the new package set is active, but no later plugin delivery ran; fix the problem and run office sync again`));
     else lines.push(failure(`FAILED ${published ? `generation ${transaction.name} is active; retry application with office sync --packages: ` : ""}${text}`));
   }
 

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, readlinkSync, renameSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "../../src/git.ts";
 import { loadOffice } from "../../src/office.ts";
@@ -58,7 +58,7 @@ test("tracked updates validate the consuming settings and staged assets before p
     writePackage(join(source, "office.ts"), candidate, uses);
     commit(repo);
     expect(cli(1, "packages", "update")).toContain(reason);
-    expect(readlinkSync(link)).toBe("../../.office/packages/shared/plugin");
+    expect(lstatSync(link).isDirectory()).toBe(true);
     expect(paths.map(read)).toEqual(before);
     expect(cli(0, "edition")).toContain("original edition");
     expect(existsSync(join(dir, "seeded/extra.md"))).toBe(false);
@@ -114,7 +114,7 @@ test("a broken embedded replacement leaves the installed package usable and fail
   select("  - name: artifact-share\n    settings: {url: https://example.org}\n");
   cli(0, "sync", "--packages");
   const pkg = join(dir, ".office/packages/artifact-share");
-  const paths = [join(dir, ".opencode/plugins/artifact-share/index.ts"), join(dir, "artifacts/README.md"), join(dir, "office.lock"), join(dir, ".office/runtime/settings.json"), ...[".source.json", "office.ts", "scripts/build-site.ts"].map(file => join(pkg, file))];
+  const paths = [join(dir, ".opencode/plugins/artifact-share/index.js"), join(dir, "artifacts/README.md"), join(dir, "office.lock"), join(dir, ".office/runtime/settings.json"), ...[".source.json", "office.ts", "scripts/build-site.ts"].map(file => join(pkg, file))];
   const before = paths.map(read);
   expect(newer(1, "sync", "--packages")).toContain("missing.ts");
   expect(paths.map(read)).toEqual(before);
@@ -286,6 +286,7 @@ test("the executable installs a TS-only Git package at its locked commit, repair
   // A fresh clone has office.lock but no .office/: sync installs the locked commit, not the tag's.
   expect(read(lock)).toContain(`    ref: v1\n    commit: ${first}\n`);
   rmSync(join(dir, ".office"), { recursive: true });
+  rmSync(join(dir, ".opencode/plugins"), { recursive: true });
   cli(0, "sync", "--packages");
   expect(JSON.parse(read(record))).toMatchObject({ ref: "v1", commit: first });
   expect(read(join(dest, "title.ts"))).toBe(sibling);

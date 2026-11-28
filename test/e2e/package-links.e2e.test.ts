@@ -24,6 +24,7 @@ test("a first sync resolves local packages through the new set's links, and expo
   const { dir, probe, cli, select } = fixture("first-sync");
   const provider = join(dir, "packages/provider");
   rmSync(join(dir, ".office"), { recursive: true });
+  rmSync(join(dir, ".opencode/plugins"), { recursive: true });
   select("  - name: consumer\n  - name: provider\n");
   // The provider has libraries of its own (devDependencies, a node_modules folder) and imports a built-in's export.
   write(join(provider, "office.ts"), definitionText(`{commands:{"provider show":{summary:"show",run(){console.log("tools", typeof tools.require)}}}}`, `import {tools} from "@office/tools";`));

@@ -5,10 +5,10 @@ import { findOffice, loadOffice, OfficeError, readOfficeFields, type Office } fr
 import { requiredPackages, resolvePackages } from "../../loader/sources/selection.ts";
 import { separateFolders } from "../../layout.ts";
 import { officeSchema } from "../../schema.ts";
-import { cloneTarget, declarationBinding, pluginClones } from "./delivery.ts";
+import { cloneTarget, declarationBinding, pluginClones, pluginProblem } from "./delivery.ts";
 import { configSources, conventionSources, projectDirectories, type Source } from "./native.ts";
 import { readDeclarations } from "./declarations.ts";
-import { officeTarget, pluginFolder } from "./ownership.ts";
+import { officeTarget, pluginFolder, readCopies } from "./ownership.ts";
 import { readPackageJson } from "../../loader/sources/manifest.ts";
 
 /** What the last sync recorded of a selected package's panel: declared, withheld, or not confirmed for its current inputs. */
@@ -73,6 +73,7 @@ function inventory(office: Office, folder: string) {
   const managed = join(office.dir, pluginFolder);
   const matches = new Map<string, string[]>();
   const declarations = readDeclarations(office);
+  const copies = readCopies(office);
   const { packages, problems } = resolvePackages(office);
   const kinds = new Map(packages.map(item => [item.entry.name, item.kind === "remote" ? "pinned Git" : item.kind]));
   const panels = new Map<string, PanelState>();
@@ -115,12 +116,13 @@ function inventory(office: Office, folder: string) {
       const name = basename(path);
       const target = dirname(path) === managed && lstatSync(path).isSymbolicLink() ? readlinkSync(path) : undefined;
       const owned = target !== undefined && officeTarget(name, target);
-      const clone = owned && target === cloneTarget(name);
+      const copied = dirname(path) === managed && copies.has(name);
+      const clone = !copied && owned && target === cloneTarget(name);
       const known = dirname(path) === managed && (selected.has(name) || office.plugins.some(item => item.name === name));
       const origin = join(scopePath(office, dir), ".opencode", basename(dirname(path)), known ? name : `<entry-${index + 1}>`);
       const state = selected.has(name) ? `selected ${kinds.get(name) ?? "unresolved"} package` : "not selected";
       const declared = office.plugins.some(item => item.name === name) ? "declared" : "not declared";
-      const kind = clone ? `Office link to a Git clone (${declared})` : owned ? `Office package link (${state})` : "convention plugin candidate";
+      const kind = copied ? `Office package copy (${state})` : clone ? `Office link to a Git clone (${declared})` : owned ? `Office package link (${state})` : "convention plugin candidate";
 
       describe(dir, { origin, description: identity ? kind : `${kind} (dangling)`, identity });
     }
@@ -145,9 +147,16 @@ function inventory(office: Office, folder: string) {
 
         panels.set(entry.name, panel ? "declared" : "withheld");
         describe(office.dir, { origin, description: `last synced registration: server ${server ? "declared" : "withheld"}, desktop ${panel ? "declared" : "withheld"}` });
-        const link = join(managed, entry.name);
 
-        if (server && (!lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink() || readlinkSync(link) !== relative(managed, join(dir, server)))) describe(office.dir, { origin, description: "declared server link missing or different" });
+        if (server) {
+          const plugin = item.kind === "local"
+            ? { kind: "link", target: relative(managed, join(dir, server)) } as const
+            : { kind: "copy", source: join(dir, server) } as const;
+
+          const problem = pluginProblem(office, entry.name, plugin, copies);
+
+          if (problem) describe(office.dir, { origin, description: `declared server ${plugin.kind} missing or different` });
+        }
       }
 
       continue;
@@ -160,7 +169,7 @@ function inventory(office: Office, folder: string) {
 
   for (const clone of pluginClones(office)) {
     const status = existsSync(join(clone.dir, ".git")) ? ".git present; identity not checked" : "no checkout observed";
-    const link = linkTarget(clone.link) === cloneTarget(clone.name) ? `linked as ${pluginFolder}/${clone.name}` : `not linked as ${pluginFolder}/${clone.name}`;
+    const link = !copies.has(clone.name) && linkTarget(clone.link) === cloneTarget(clone.name) ? `linked as ${pluginFolder}/${clone.name}` : `not linked as ${pluginFolder}/${clone.name}`;
     describe(office.dir, { origin: `office.yaml plugins: ${clone.name} -> ${relative(office.dir, clone.dir)}`, description: `declared Git clone (${status}; ${link})` });
   }
 

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -132,17 +132,17 @@ test("a pending source names the applied tool's state: below the minimum or chan
   expect((await list(settings, entriesOf("openspec", added))).err[0]).toMatch(/^generated source openspec \(package openspec\) hasn't published yet: tool npm:@fission-ai\/openspec 2\.1\.1: its applied executable openspec at .* is sha256:[0-9a-f]{64}, not the sha256:[0-9a-f]{64} office activated/);
 });
 
-test("once published, its skills are offered and linked, and an enabled ID nobody offers fails as for any source", async () => {
+test("once published, its skills are offered and copied, and an enabled ID nobody offers fails as for any source", async () => {
   const { added } = openspecSetup();
   const entries = entriesOf("openspec", added);
 
   publish(["openspec-propose", "openspec-explore"]);
   const { sync } = inputs({ sources: [], enabled: ["openspec-propose"] }, entries);
 
-  expect(await definition.sync?.(sync)).toEqual(["linked .agents/skills/openspec-propose (generated source openspec (package openspec))"]);
-  expect(readlinkSync(join(office, ".agents/skills/openspec-propose"))).toBe("../../.office/skills/generated/openspec/current/openspec-propose");
+  expect(await definition.sync?.(sync)).toEqual(["copied skill .agents/skills/openspec-propose (generated source openspec (package openspec))"]);
+  expect(lstatSync(join(office, ".agents/skills/openspec-propose")).isDirectory()).toBe(true);
   expect((await list({ sources: [], enabled: ["openspec-propose"] }, entries)).out).toBe(["openspec-explore  generated source openspec (package openspec)  available", "openspec-propose  generated source openspec (package openspec)  enabled"].join("\n"));
-  expect(() => definition.sync?.(inputs({ sources: [], enabled: ["openspec-propose", "openspec-onboard"] }, entries).sync)).toThrow("no skill link changed: skill openspec-onboard is enabled, but no source offers it");
+  expect(() => definition.sync?.(inputs({ sources: [], enabled: ["openspec-propose", "openspec-onboard"] }, entries).sync)).toThrow("no skill delivery changed: skill openspec-onboard is enabled, but no source offers it");
 });
 
 test("the key is the applied version and identity, the revision and the inputs, whatever the inputs' field order, and is computed without generating", () => {
@@ -245,6 +245,7 @@ test("skills update moves a pin while a generated source defers an enabled ID, s
     git("init", "-q", "-b", "main");
     let settings: Given = { sources: [{ repo, ref: commit("one"), track: "main", skills: [{ name: "review", path: "review" }] }], enabled: ["review", "openspec-propose"] };
     const replaceSetting = (_path: readonly (string | number)[], value: string | number | boolean) => (settings = { ...settings, sources: [{ ...(settings.sources[0] as object), ref: String(value) }] });
+
     const update = async () => {
       out.mockClear();
       await definition.commands?.["skills update"]?.run?.({ office: officeInfo(), entries, settings, args: [], replaceSetting, updateExcluded });
@@ -257,7 +258,7 @@ test("skills update moves a pin while a generated source defers an enabled ID, s
 
     expect(await update()).toEqual([
       expect.stringContaining(`pinned`),
-      `relinked .agents/skills/review (${repo} at ${second.slice(0, 12)})`,
+      `copied skill .agents/skills/review (${repo} at ${second.slice(0, 12)})`,
       "generated source openspec (package openspec) hasn't published yet: tool npm:@fission-ai/openspec isn't installed yet; office up installs it and generates the source",
       "enabled skills openspec-propose are deferred: no source offers them until generated source openspec (package openspec) publishes",
     ]);
@@ -267,10 +268,10 @@ test("skills update moves a pin while a generated source defers an enabled ID, s
 
     expect(await update()).toEqual([
       expect.stringContaining(`→ ${third}`),
-      "linked .agents/skills/openspec-propose (generated source openspec (package openspec))",
-      `relinked .agents/skills/review (${repo} at ${third.slice(0, 12)})`,
+      "copied skill .agents/skills/openspec-propose (generated source openspec (package openspec))",
+      `copied skill .agents/skills/review (${repo} at ${third.slice(0, 12)})`,
     ]);
-    expect(readlinkSync(join(office, ".agents/skills/openspec-propose"))).toBe("../../.office/skills/generated/openspec/current/openspec-propose");
+    expect(lstatSync(join(office, ".agents/skills/openspec-propose")).isDirectory()).toBe(true);
   } finally {
     out.mockRestore();
     rmSync(repo, { recursive: true, force: true });

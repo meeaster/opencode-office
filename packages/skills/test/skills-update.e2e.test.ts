@@ -1,7 +1,7 @@
 // Git skill pins in the compiled office: plain sync never moves one, `office skills update` and
 // `office refresh` do, through the package's scalar edit of its own settings, and relink at once.
 import { expect, test } from "bun:test";
-import { readFileSync, readlinkSync, renameSync } from "node:fs";
+import { readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "../../../src/git.ts";
 import { definitionFixture } from "../../../test/support/package-definition.fixture.ts";
@@ -70,10 +70,10 @@ test("plain sync keeps pins, offline once fetched; update moves tracked branch a
 
   expect(updated).toContain(`${branchRepo}: pinned ${branchOne.slice(0, 12)} → ${branchTwo} (branch main); skills review`);
   expect(updated).toContain(`${tagRepo}: pinned ${tagOne.slice(0, 12)} → ${tagTwo} (tag v1.1.0); skills lint`);
-  expect(updated).toContain(`relinked .agents/skills/review (${branchRepo} at ${branchTwo.slice(0, 12)})`);
+  expect(updated).toContain(`copied skill .agents/skills/review (${branchRepo} at ${branchTwo.slice(0, 12)})`);
   expect(read(join(f.dir, "office.yaml"))).toBe(yaml.replace(branchOne, branchTwo).replace(tagOne, tagTwo).replace("enabled: [review, lint]", "enabled: [review, lint, alpha]"));
   expect(readFileSync(review, "utf8")).toBe(skill("review two"));
-  expect(readlinkSync(join(f.dir, ".agents/skills/lint"))).toContain(tagTwo);
+  expect(updated).toContain(`copied skill .agents/skills/lint (${tagRepo} at ${tagTwo.slice(0, 12)})`);
   expect(f.cli(0, "skills", "update")).toContain(`already at ${branchTwo.slice(0, 12)}`);
 
   // A candidate without a named skill moves nothing and fails the command.

@@ -20,9 +20,9 @@ When the docs run out, read the OpenCode source ([anomalyco/opencode](https://gi
 
 ## How a package becomes a plugin
 
-- **Loading.** `office sync` links `plugin/` as `.opencode/plugins/<name>`, which OpenCode loads for the root and every folder below it. The entry is `server.ts`, else `index.ts` or `index.js`, or what a `package.json` there exports. An edit to a file the entry imports inside `plugin/` reloads it.
-- **Imports.** Nothing is installed beside the plugin. Import only Node's and Bun's built-ins, `@opencode/plugin` and `effect`, which OpenCode provides; `import type` anything, since types go when it loads.
-- **Files beside `plugin/`.** OpenCode resolves relative imports from the link, so `../anything` fails. Find the package folder with `dirname(realpathSync(dirname(fileURLToPath(import.meta.url))))`, the office by walking up to `office.yaml`. Read the package's settings with `readAppliedSettings(officeRootOf(packageDir), name)` from `@office/sdk/applied-settings` inside a hook or transform, or keep them with `watchAppliedSettings` (its `settings` are undefined until a sync applies the package) and reload when sync applies new ones; the plugin then ships as a bundle, since nothing is installed beside it. Read `.office.json`, the office's declared mode, from the package folder the same way when behaviour depends on it.
+- **Loading.** `office sync` delivers the registered server directory as `.opencode/plugins/<name>`: a copy for a built-in or Git package, a link for a local package. OpenCode loads it in every location below the office. Entries come from `package.json` exports or conventional `server` and `index` files. OpenCode reloads changed entrypoints and their relative imports in a running server; sync leaves unchanged files untouched.
+- **Imports.** Keep relative imports inside the registered directory. Use Node's and Bun's built-ins and OpenCode's `@opencode/plugin` and `effect`, or ship a bundle for other runtime dependencies.
+- **Package assets and settings.** Find the office with `officeRootOf(dirname(fileURLToPath(import.meta.url)))` from `@office/sdk/applied-settings` (bundle it into the plugin). Read other assets and `.office.json` from `.office/packages/<name>/` for a managed package or `packages/<name>/` for a local package. Use `readAppliedSettings(office, name)` on demand or `watchAppliedSettings` to reload when sync applies new settings.
 - **What it registers**, each from `setup(ctx)`:
   - skills: `ctx.skill.transform((editor) => editor.add({ id, name, description, path, content }))`, with `path` the absolute `SKILL.md` so its references resolve;
   - MCP servers: `ctx.mcp.transform((editor) => editor.set(name, config))`;
@@ -40,7 +40,7 @@ When the docs run out, read the OpenCode source ([anomalyco/opencode](https://gi
 - **Mirror prompt changes into `generate`.** When a `context` hook adds messages or system text, register the same handler for `generate` (and `compaction` when it matters), or `ctx.session.generate` calls miss the session's prompt cache. `session.generate` returns text only: it runs no tool loop and reports no usage.
 - **Panel APIs are narrower than they look.** In 2.3.0 `ctx.ui.Markdown` takes only `text` and `class`. A rejected RPC call is not an `Error`: show its `message`, since `String(error)` prints `[object Object]`.
 - **The sidecar ignores a symbolic-link bundle.** A panel folder whose `gui-experimental.cjs` is a link isn't listed at all; copy the file.
-- **Hot reload keeps the last good generation.** A reload while several files are half-edited can cache a stale module, and later reloads fail the same way until the server restarts. After changing a plugin's imports or entry, prove it in a fresh server and read its log (`~/.local/share/opencode/log/opencode.log` in the home of the user running it) for `failed to load plugin`.
+- **Copies reload file by file.** Sync writes supporting files before exported entrypoints and `package.json`. A slow update can briefly show mixed code or a failed load; check `/api/plugin` after sync and read the server's log if the new code does not load.
 
 ## Verify
 

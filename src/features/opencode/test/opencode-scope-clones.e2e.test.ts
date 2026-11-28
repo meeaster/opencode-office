@@ -156,7 +156,7 @@ test("a plugin checkout with no commit is refused before fetching, even with the
     const owner = join(f.dir, ".opencode/plugins/imported");
     renameSync(plugin, owner);
     const kept = snapshot(owner);
-    expect(await f.run(["sync"], 1)).toContain(".opencode/plugins/imported is the office's own (not a link office sync made), kept; move it aside or rename the plugins: entry");
+    expect(await f.run(["sync"], 1)).toContain(".opencode/plugins/imported is the office's own, kept; move it aside or rename the plugins: entry");
     expect(snapshot(owner)).toEqual(kept);
     expect(existsSync(plugin)).toBe(false);
   }
@@ -258,7 +258,7 @@ test("a Git-cloned plugin lives in .office/plugins, is linked after publication 
   rmSync(link);
   gitAt(f.home, f.env, "clone", "-q", remote, link);
   const owner = snapshot(link);
-  expect(await f.run(["sync"], 1)).toContain(".opencode/plugins/imported is the office's own (not a link office sync made), kept; move it aside or rename the plugins: entry");
+  expect(await f.run(["sync"], 1)).toContain(".opencode/plugins/imported is the office's own, kept; move it aside or rename the plugins: entry");
   expect(snapshot(link)).toEqual(owner);
 }, 60_000);
 

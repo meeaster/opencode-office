@@ -111,8 +111,9 @@ test("a Git package that can't be fetched doesn't stop the others, but no packag
   const tools = read(join(dir, "machine.packages.toml"));
   const fragments = ["remote", "local"].map(name => read(join(dir, `.office/mise/${name}.toml`)));
   const lock = read(join(dir, "office.lock"));
-  const plugin = join(dir, ".opencode/plugins/remote");
-  const target = readlinkSync(plugin);
+  const plugin = join(dir, ".opencode/plugins/remote/index.ts");
+  const bytes = read(plugin);
+  const receipt = join(dir, ".office/opencode/copies.json");
 
   renameSync(repo, `${repo}-gone`);
   rmSync(join(dir, ".office/packages/remote"), { recursive: true });
@@ -138,7 +139,8 @@ test("a Git package that can't be fetched doesn't stop the others, but no packag
   expect(output).toContain("not running any package's sync function: what package remote registers is unknown");
   expect(read(join(dir, "notes/local.md"))).toBe("v1\n");
   expect(read(join(dir, "office.lock"))).toBe(lock);
-  expect(readlinkSync(plugin)).toBe(target);
+  expect(read(plugin)).toBe(bytes);
+  expect(JSON.parse(read(receipt)).copies).toContain(".opencode/plugins/remote");
   expect(cli(1, "references", "list")).toContain("package remote: rejected by the last sync; run office sync");
 
   // The unfetched package is the only provider of a registry the local one adds to: nothing publishes.
@@ -163,7 +165,8 @@ test("while a Git package can't be fetched, another's changed copy is still admi
 
   select(first);
   cli(0, "sync", "--packages");
-  const plugin = readlinkSync(join(dir, ".opencode/plugins/moving"));
+  const plugin = join(dir, ".opencode/plugins/moving/index.ts");
+  const bytes = read(plugin);
   rmSync(gone, { recursive: true });
   rmSync(join(dir, ".office/packages/gone"), { recursive: true });
   writePackage(join(moving, "moving/office.ts"), pluginDefinition("missing"), { name: "moving", dependencies: ["opencode"] });
@@ -174,5 +177,5 @@ test("while a Git package can't be fetched, another's changed copy is still admi
   expect(output).toContain("FAILED package moving: OpenCode registration: OpenCode server asset must be an existing directory inside the package");
   expect(output).toContain("no package set was published");
   expect(readlinkSync(join(dir, ".office/current"))).toBe(current);
-  expect(readlinkSync(join(dir, ".opencode/plugins/moving"))).toBe(plugin);
+  expect(read(plugin)).toBe(bytes);
 }, 60_000);

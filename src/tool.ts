@@ -38,7 +38,7 @@ export const assets = ["template", "LICENSE", "image", "compose.yaml", "sdk"];
  * plugin imports the tool's own code: the office.yaml schema and its libraries, or the applied
  * settings reader, `@office/sdk/applied-settings`.
  */
-export const bundledPlugins = ["aws-emulator", "browser", "design", "office"];
+export const bundledPlugins = ["artifact-share", "aws-emulator", "browser", "design", "office"];
 
 /**
  * A built-in package's plugin bundled into one `index.js` with what it imports, so an office's

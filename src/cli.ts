@@ -71,9 +71,9 @@ const usage = `usage: office <command> [--office <dir>]
                                loaded and office.yaml isn't read, so --office is required
   sync [--packages | --references | --release-machine]
                                clone and update references, install, restore and apply packages
-                               (their sync functions, such as the skills package's links, and
+                               (their sync functions, such as the skills package's deliveries, and
                                full-sync work, such as the repos package's checkouts), link a host-mode office's tools into mise's global conf.d,
-                               link package plugins and install panels on the desktop app's
+                               deliver package plugins and install panels on the desktop app's
                                machine. --release-machine only removes every file the office
                                wrote on this machine, and its consent.
                                --packages applies packages at their declared pins without refreshing

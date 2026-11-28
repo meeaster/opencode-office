@@ -7,7 +7,7 @@ import { divertStdout, writeResult } from "./command-stdout.ts";
 import { type DeclaredCommand, gatherPackages, problemLines } from "./gather.ts";
 import { executorAccess } from "./features/executor/executor.ts";
 import { officeInfo } from "./lifecycle-inputs.ts";
-import { updateExcluded } from "./exclude-plumbing.ts";
+import { updateExcludedOrThrow } from "./exclude-plumbing.ts";
 import { loadOffice, OfficeError, replacePackageSetting } from "./office.ts";
 import { schemaSettings } from "./loader/definitions/settings.ts";
 import { relative } from "node:path";
@@ -90,7 +90,7 @@ export async function dispatchCommand({ dir }: Reader, words: string[]): Promise
     return replacePackageSetting(loadOffice(dir), owner, path, value, entry => schemaSettings({ entry }, item.manifest, `${relative(dir, item.dir)}/package.json`));
   };
 
-  const inputs = { office: officeInfo(office), entries: load.entries, settings: structuredClone(settings), args: match.args, executor: executorAccess(office), replaceSetting, updateExcluded: (change: { add?: readonly string[]; remove?: readonly string[] }) => updateExcluded(office, change) };
+  const inputs = { office: officeInfo(office), entries: load.entries, settings: structuredClone(settings), args: match.args, executor: executorAccess(office), replaceSetting, updateExcluded: (change: { add?: readonly string[]; remove?: readonly string[] }) => updateExcludedOrThrow(office, change) };
 
   if (command.result) {
     // An untyped definition's handler can return anything.

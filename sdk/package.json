@@ -7,6 +7,7 @@
       "types": "./index.ts",
       "default": "./disk.js"
     },
-    "./applied-settings": "./applied-settings.ts"
+    "./applied-settings": "./applied-settings.ts",
+    "./copy-tree": "./copy-tree.ts"
   }
 }

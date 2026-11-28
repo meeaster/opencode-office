@@ -9,9 +9,9 @@ import { packageComposeFile } from "../../features/compose/services.ts";
 import { executorAccess } from "../../features/executor/executor.ts";
 import { fragmentNotes, machineBelowFloors, machineFile, orphanFragments, packagesFile, packagesFileProblems, strayFragments } from "../../features/mise-integration/delivery.ts";
 import { destinationProblems } from "../../features/mise-integration/projection.ts";
-import { cloneTarget, pluginClones, pluginLinks, restartNotice } from "../../features/opencode/delivery.ts";
+import { cloneTarget, pluginClones, pluginProblem } from "../../features/opencode/delivery.ts";
 import { configFile, installedPanelNames, locate, panelDir, panelId, panelState, readPanelRecord, removalNote } from "../../features/opencode/desktop.ts";
-import { cloneFolder, entry as entryAt } from "../../features/opencode/ownership.ts";
+import { cloneFolder, entries as pluginEntries, entry as entryAt, pluginFolder, readCopies } from "../../features/opencode/ownership.ts";
 import { appliedReferences } from "../../features/references/applied-references.ts";
 import type { Gathered } from "../../gather.ts";
 import { appliedReferenceProblem, referenceOriginProblem } from "../../git.ts";
@@ -43,21 +43,22 @@ export async function drift(office: Office, { loaded, claims, references, applie
     }
   }
 
-  const plugins = pluginLinks(office, loaded.plugins);
+  const copies = readCopies(office);
+  const cloned = new Set(office.plugins.map(plugin => plugin.name));
 
-  for (const [name, target] of plugins.links) {
-    const wanted = plugins.wanted.get(name);
+  for (const name of copies) {
+    if (!loaded.unread.has(name) && !loaded.plugins.has(name)) problems.push(`${pluginFolder}/${name} is a copy of no declared package plugin (office sync removes it)`);
+  }
 
-    if (loaded.unread.has(name) || wanted === target || (office.plugins.some((plugin) => plugin.name === name) && target === cloneTarget(name))) continue;
-
-    if (wanted) problems.push(`.opencode/plugins/${name} links to ${target}, but its package's plugin is ${wanted} (office sync relinks it; then ${restartNotice(name)})`);
-    else problems.push(`.opencode/plugins/${name} links to ${target}, the plugin of no declared package (office sync removes it)`);
+  for (const { name, office: owned, target, copied } of pluginEntries(office, copies)) {
+    if (copied || !owned || target === undefined || loaded.unread.has(name) || loaded.plugins.has(name) || (cloned.has(name) && target === cloneTarget(name))) continue;
+    problems.push(`${pluginFolder}/${name} links to ${target}, the plugin of no declared package or clone (office sync removes it)`);
   }
 
   for (const clone of pluginClones(office)) {
-    const link = entryAt(office, clone.name);
+    const link = entryAt(office, clone.name, copies);
 
-    if (existsSync(join(clone.dir, ".git")) && !(link?.office && link.target === cloneTarget(clone.name))) problems.push(`plugin ${clone.name} is cloned but .opencode/plugins/${clone.name} doesn't link to it${link ? " (an entry of the office's own is there)" : " (office sync links it)"}`);
+    if (existsSync(join(clone.dir, ".git")) && !(link?.office && !link.copied && link.target === cloneTarget(clone.name))) problems.push(`plugin ${clone.name} is cloned but ${pluginFolder}/${clone.name} doesn't link to it${link && !link.office ? " (an entry of the office's own is there)" : " (office sync links it)"}`);
   }
 
   const { packages } = resolvePackages(office);
@@ -98,13 +99,13 @@ export function withdrawnClones(office: Office, report: Report): void {
 
 /**
  * One line per package: its kind and where it came from, whether a pulled-in copy was edited,
- * whether its settings are valid and applied, its mise tools, and the plugin it links.
+ * whether its settings are valid and applied, its mise tools, and its delivered plugin.
  */
 export async function packageChecks(office: Office, report: Report, { gathered, loaded, claims, applied }: Context): Promise<void> {
   const { installed, plugins } = loaded;
   const problems = [...gathered.problems, ...loaded.problems.filter(problem => !gathered.problems.some(known => known.message === problem.message))];
   const shared = sharedNamespaces(installed);
-  const links = pluginLinks(office, plugins);
+  const copies = readCopies(office);
   const { packages } = resolvePackages(office);
   const reported = new Set<string>();
   let running: string[] | undefined;
@@ -175,12 +176,14 @@ export async function packageChecks(office: Office, report: Report, { gathered, 
       if (!tools.ok) ok = false;
     }
 
-    if (plugins.has(entry.name)) {
-      const pluginLinked = links.links.get(entry.name) === links.wanted.get(entry.name);
+    const plugin = plugins.get(entry.name);
 
-      notes.push(pluginLinked ? `plugin linked as .opencode/plugins/${entry.name} (office-wide discovery)` : `plugin not linked; office sync links it as .opencode/plugins/${entry.name}`);
+    if (plugin) {
+      const problem = pluginProblem(office, entry.name, plugin, copies);
 
-      if (!pluginLinked) ok = false;
+      notes.push(problem ?? `plugin ${plugin.kind === "copy" ? "copied to" : "linked as"} ${pluginFolder}/${entry.name} (office-wide discovery)`);
+
+      if (problem) ok = false;
     }
 
     notes.push(...own);

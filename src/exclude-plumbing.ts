@@ -45,7 +45,7 @@ const unlocated = "could not locate the office repository's info/exclude; Office
  * Keeps Office's plumbing out of commits without touching the owner's .gitignore: one block in the
  * repository's info/exclude naming every entry of `.office/` (packages, clones, staging and
  * generated state) but the `committed` folders packages declare, sorted, each written
- * `.office/<name>/`, which are committed, each Office plugin link, and each path packages' sync
+ * `.office/<name>/`, which are committed, each Office plugin delivery, and each path packages' sync
  * functions `excluded`, with a leading slash and no trailing one so a link matches, and a path's
  * pattern characters escaped so it names that one path. Lines outside the block are the
  * owner's and stay, byte for byte, CRLF endings included. An office that isn't a Git repository's
@@ -58,8 +58,8 @@ const unlocated = "could not locate the office repository's info/exclude; Office
  * edit made within that moment, between a sync's read and its rename, can be overwritten.
  */
 export function excludePlumbing(office: Office, committed: readonly string[], excluded: readonly string[] = []): Change[] {
-  const links = [...new Set([...officeEntries(office), ...excluded])].sort();
-  const wanted = ["/.office/*", runtimeLine, ...[...committed].sort().map(folder => `!/${folder}`), `/${dirname(editorLinks)}/`, ...links.map(literal)];
+  const paths = [...new Set([...officeEntries(office), ...excluded])].sort();
+  const wanted = ["/.office/*", runtimeLine, ...[...committed].sort().map(folder => `!/${folder}`), `/${dirname(editorLinks)}/`, ...paths.map(literal)];
 
   return editExcludeBlock(office, () => wanted);
 }
@@ -80,21 +80,21 @@ export function excludeAppliedSettings(office: Office): Change[] {
   const changes = editExcludeBlock(office, block => (block.includes(runtimeLine) ? [...block] : [...block, runtimeLine])).map(change => (change === unlocated ? failure(`FAILED ${unlocated}`) : change));
 
   if (changes.some(isFailure)) return changes;
-  const committable = appliedSettingsCommittable(office);
+  const problem = committable(office, appliedSettingsPath);
 
-  return committable === undefined ? changes : [...changes, failure(`FAILED ${committable}`)];
+  return problem === undefined ? changes : [...changes, failure(`FAILED ${problem}`)];
 }
 
 /**
- * Why Git would commit the applied settings, asked of Git with the office's real index, or nothing
+ * Why Git would commit the path, asked of Git with the office's real index, or nothing
  * when it ignores them. An owner's rule can re-include what the block excludes, and an office
  * inside another repository's worktree has no block of its own; an office in no worktree has
  * nothing to commit. When Git can't say whether the office is in a worktree (missing, or failing),
  * a `.git` in its folder or one above means it may be.
  */
-function appliedSettingsCommittable(office: Office): string | undefined {
+function committable(office: Office, path: string): string | undefined {
   const ask = (...args: string[]) => spawnSync("git", args, { cwd: office.dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  const unasked = (result: SpawnSyncReturns<string>) => `couldn't ask Git whether it ignores ${appliedSettingsPath}: ${result.error?.message ?? result.stderr.trim()}`;
+  const unasked = (result: SpawnSyncReturns<string>) => `couldn't ask Git whether it ignores ${path}: ${result.error?.message ?? result.stderr.trim()}`;
 
   if (!existsSync(join(office.dir, ".git"))) {
     const inside = ask("rev-parse", "--is-inside-work-tree");
@@ -106,12 +106,12 @@ function appliedSettingsCommittable(office: Office): string | undefined {
     }
   }
 
-  const tracked = ask("ls-files", "-z", "--cached", "--", appliedSettingsPath);
+  const tracked = ask("--literal-pathspecs", "ls-files", "-z", "--cached", "--", path.replace(/\/$/, ""));
 
   if (tracked.status !== 0) return unasked(tracked);
 
-  if (tracked.stdout !== "") return `${appliedSettingsPath} is tracked in Git's index, so its changes would be committed; take it out of the index (git rm --cached ${appliedSettingsPath}) and sync again`;
-  const ignored = ask("check-ignore", "-q", "--", appliedSettingsPath);
+  if (tracked.stdout !== "") return `${path} is tracked in Git's index, so its changes would be committed; take it out of the index (git rm --cached ${path}) and sync again`;
+  const ignored = ask("check-ignore", "-q", "--", path);
 
   if (ignored.status === 0) return undefined;
 
@@ -119,13 +119,13 @@ function appliedSettingsCommittable(office: Office): string | undefined {
 
   // Verbose also names a negating rule and exits 0 for it, so it only explains. The rule that
   // re-includes the file can be one on a folder above it, which Git names only for that folder.
-  for (let path = appliedSettingsPath; path !== "."; path = dirname(path)) {
-    const [rule = ""] = ask("check-ignore", "-v", "-n", "--", path).stdout.split("\t");
+  for (let parent = path; parent !== "."; parent = dirname(parent)) {
+    const [rule = ""] = ask("check-ignore", "-v", "-n", "--", parent).stdout.split("\t");
 
-    if (rule !== "" && rule !== "::") return `Git doesn't ignore ${appliedSettingsPath}: ${rule} re-includes ${path}, so it would be committed; make Git ignore it and sync again`;
+    if (rule !== "" && rule !== "::") return `Git doesn't ignore ${path}: ${rule} re-includes ${parent}, so it would be committed; make Git ignore it and sync again`;
   }
 
-  return `Git doesn't ignore ${appliedSettingsPath}, so it would be committed; make Git ignore it and sync again`;
+  return `Git doesn't ignore ${path}, so it would be committed; make Git ignore it and sync again`;
 }
 
 /**
@@ -148,23 +148,25 @@ function gitMarkerAbove(dir: string): string | undefined {
  * package that placed or gave up paths outside a whole sync, which rewrites the block from every
  * package's paths: its command, or its sync that is about to stop the rest.
  */
-export function updateExcluded(office: Office, change: { add?: readonly string[]; remove?: readonly string[] }): string[] {
-  return exclusionChanges(office, change).map(changeText);
-}
-
-/** `updateExcluded` for an up, which places what it excludes next: throws, naming why, when the block can't be changed. */
 export function updateExcludedOrThrow(office: Office, change: { add?: readonly string[]; remove?: readonly string[] }): string[] {
   const changes = exclusionChanges(office, change);
   const failed = changes.flatMap(each => (isFailure(each) ? [each.failure.replace(/^FAILED /, "")] : each === unlocated ? [unlocated] : []));
 
   if (failed.length) throw new OfficeError(failed.join("; "));
 
+  for (const path of change.add ?? []) {
+    const problem = committable(office, path);
+
+    if (problem !== undefined) throw new OfficeError(problem);
+  }
+
   return changes.map(changeText);
 }
 
 function exclusionChanges(office: Office, { add = [], remove = [] }: { add?: readonly string[]; remove?: readonly string[] }): Change[] {
-  const adding = add.map(path => literal(excludedPath(path)));
-  const removing = new Set(remove.map(path => literal(excludedPath(path))));
+  const exact = (path: string) => literal(excludedPath(path.replace(/\/$/, "")));
+  const adding = add.map(exact);
+  const removing = new Set(remove.map(exact));
 
   return editExcludeBlock(office, block => {
     const kept = block.filter(line => !removing.has(line) || adding.includes(line));

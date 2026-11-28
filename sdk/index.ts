@@ -148,8 +148,8 @@ export type ExclusionUpdate = {
   /**
    * Changes the office's Git exclude block now, not at the end of a whole sync: each office-relative
    * path in `remove` stops being excluded and each in `add` is excluded, literally; every other line
-   * stays. For paths a command or an up placed or gave up, or that a sync gave up before it throws,
-   * since a sync that throws rewrites no exclusions. Returns one line per change.
+   * stays. Use a trailing slash in `add` to verify Git ignores a directory before it exists.
+   * Throws if an addition cannot be kept out of Git. Returns one line per change.
    */
   updateExcluded(change: { add?: readonly string[]; remove?: readonly string[] }): readonly string[];
 };

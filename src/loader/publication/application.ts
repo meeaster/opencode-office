@@ -6,7 +6,7 @@ import { runPackageHooks } from "../../lifecycle-inputs.ts";
 import { installPanel, locate, panelId, removalNote } from "../../features/opencode/desktop.ts";
 import { syncMachine } from "../../features/machine/owned-files.ts";
 import { machineReconciliation } from "../../features/machine/plan.ts";
-import { linkPlugins, withPluginPlan } from "../../features/opencode/delivery.ts";
+import { deliverPlugins, withPluginPlan } from "../../features/opencode/delivery.ts";
 import { type Declaration, readDeclarations } from "../../features/opencode/declarations.ts";
 import { syncTools } from "../../features/mise-integration/delivery.ts";
 import { type Office } from "../../office.ts";
@@ -15,7 +15,7 @@ import { prepareAppliedSettings, publishAppliedSettings } from "../../applied-se
 import { publishToolsLocation } from "../../features/tools/applied.ts";
 import { failure, isFailure, type Change } from "../../lib/change.ts";
 import { appliedSettingsPath } from "../../../sdk/applied-settings.ts";
-import { excludeAppliedSettings, excludedPath, excludePlumbing, updateExcluded } from "../../exclude-plumbing.ts";
+import { excludeAppliedSettings, excludedPath, excludePlumbing, updateExcludedOrThrow } from "../../exclude-plumbing.ts";
 
 /**
  * Applies a published package set from its gathering. While a selected package is unread (this
@@ -73,17 +73,27 @@ export async function applyPackages(office: Office, gathered: Gathered, changes:
 
     for await (const result of runPackageHooks(office, gathered, { phase: "sync", exclude: additions => {
       for (const path of additions) paths.add(excludedPath(path));
-    }, updateExcluded: change => updateExcluded(office, change) })) {
-      if (!result.ok) throw new SyncStopped(result.problem);
+    }, updateExcluded: change => updateExcludedOrThrow(office, change) })) {
+      if (!result.ok) throw new SyncStopped(result.problem, "hook");
       changes.push(...result.lines);
     }
 
     changes.push(...syncTools(office, gathered.packages, [...gathered.selected]), ...syncMachine(office, machineReconciliation, gathered));
   }
 
-  const plan = withPluginPlan(office, { ...installed, problems: [] }, gathered.assets);
-  changes.push(...plan.problems.map((problem) => failure(`FAILED package ${problem.packages.join(", ")}: ${problem.message}`)));
-  changes.push(...linkPlugins(office, plan));
+  let plan: ReturnType<typeof withPluginPlan>;
+
+  try {
+    plan = withPluginPlan(office, { ...installed, problems: [] }, gathered.assets);
+
+    changes.push(...plan.problems.map((problem) => failure(`FAILED package ${problem.packages.join(", ")}: ${problem.message}`)));
+
+    if (plan.conflict) throw new Error("a plugin destination belongs to the owner");
+    changes.push(...deliverPlugins(office, plan, path => updateExcludedOrThrow(office, { add: [path] })));
+  } catch (error) {
+    throw new SyncStopped(error instanceof Error ? error.message : String(error), "plugins", { cause: error });
+  }
+
   changes.push(...installPanels(office, plan.panels, removedPanels));
   changes.push(...linkForEditors(office.dir));
 
@@ -94,8 +104,11 @@ export async function applyPackages(office: Office, gathered: Gathered, changes:
   return excluded;
 }
 
-/** A package's `sync` function threw: the sync stops there, with the package set switched. */
-export class SyncStopped extends Error {}
+export class SyncStopped extends Error {
+  constructor(message: string, readonly step: "hook" | "plugins", options?: ErrorOptions) {
+    super(message, options);
+  }
+}
 
 /**
  * Installs each package's desktop app panel on the machine the app runs on, and says how to remove

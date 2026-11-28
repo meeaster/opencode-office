@@ -6,20 +6,19 @@
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, posix, relative, sep } from "node:path";
 import type { Entries } from "@office/sdk";
-import { currentLink, declaredSources, generationFolder, type Published, pendingReason, readPublished, type Runner } from "./generation.ts";
+import { declaredSources, generationFolder, type Published, pendingReason, readPublished, type Runner } from "./generation.ts";
 import { checkoutFolder, short } from "./git.ts";
 import { skills } from "./handles.ts";
 import { isGit, type SkillSettings, skillId } from "./settings.ts";
 
-/** Where enabled skills are linked, from the office root: the folder agent runtimes read. */
+/** Where enabled skills are delivered, from the office root. */
 export const linkFolder = ".agents/skills";
 
 /**
  * One skill a source offers: its ID, the source for messages, its folder and the folder it must
- * stay inside (both office-relative), whether that is a Git checkout, and for a generated skill the
- * path its link goes through (the source's `current` link) instead of its generation's folder.
+ * stay inside (both office-relative), whether that is a Git checkout, and how it is delivered.
  */
-export type Offer = { id: string; source: string; bundle: string; within: string; git: boolean; link?: string };
+export type Offer = { id: string; source: string; bundle: string; within: string; git: boolean; copy: boolean };
 
 /** A generated source that hasn't published yet, so offers nothing so far: its label and why it waits. */
 export type Pending = { label: string; reason: string };
@@ -41,7 +40,7 @@ export function catalog(office: string, settings: SkillSettings, entries: Entrie
   for (const { owner, root, value } of entries(skills)) {
     const within = portable(relative(office, root));
 
-    offers.push({ id: posix.basename(value.directory), source: `package ${owner}`, bundle: posix.join(within, value.directory), within, git: false });
+    offers.push({ id: posix.basename(value.directory), source: `package ${owner}`, bundle: posix.join(within, value.directory), within, git: false, copy: within.startsWith(".office/packages/") });
   }
 
   const { sources, problems } = declaredSources(entries);
@@ -56,14 +55,14 @@ export function catalog(office: string, settings: SkillSettings, entries: Entrie
 
     const within = generationFolder(source.id, published.generation);
 
-    for (const id of published.skills) offers.push({ id, source: label, bundle: posix.join(within, id), within, git: false, link: posix.join(currentLink(source.id), id) });
+    for (const id of published.skills) offers.push({ id, source: label, bundle: posix.join(within, id), within, git: false, copy: true });
   }
 
   for (const source of settings.sources) {
     if (isGit(source)) {
       const within = checkoutFolder(source.repo, source.ref);
 
-      for (const skill of source.skills) offers.push({ id: skill.name, source: `${source.repo} at ${short(source.ref)}`, bundle: posix.join(within, skill.path), within, git: true });
+      for (const skill of source.skills) offers.push({ id: skill.name, source: `${source.repo} at ${short(source.ref)}`, bundle: posix.join(within, skill.path), within, git: true, copy: true });
 
       continue;
     }
@@ -78,7 +77,7 @@ export function catalog(office: string, settings: SkillSettings, entries: Entrie
     for (const name of readdirSync(dir).sort()) {
       if (!existsSync(join(dir, name, "SKILL.md"))) continue;
 
-      if (skillId.test(name)) offers.push({ id: name, source: `folder ${source.folder}`, bundle: posix.join(source.folder, name), within: source.folder, git: false });
+      if (skillId.test(name)) offers.push({ id: name, source: `folder ${source.folder}`, bundle: posix.join(source.folder, name), within: source.folder, git: false, copy: false });
       else notes.push(`${posix.join(source.folder, name)} isn't offered: a skill ID is lowercase letters and digits, joined by single dashes`);
     }
   }
@@ -87,8 +86,8 @@ export function catalog(office: string, settings: SkillSettings, entries: Entrie
 }
 
 /** The link text for an offer, from `.agents/skills/`: relative, so it resolves on the host and in the container. */
-export function linkTarget(offer: Pick<Offer, "bundle" | "link">): string {
-  return posix.relative(linkFolder, offer.link ?? offer.bundle);
+export function linkTarget(offer: Offer): string {
+  return posix.relative(linkFolder, offer.bundle);
 }
 
 function realPath(path: string): string | undefined {

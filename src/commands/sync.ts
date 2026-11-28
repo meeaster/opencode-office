@@ -102,11 +102,11 @@ function claimPluginLink(office: Office, clone: Clone): LinkClaim {
     return { linked: true, notes: linkPresent(office, clone) };
   }
 
-  if (existing.office && existing.target === cloneTarget(clone.name)) return { linked: true, notes: [] };
+  if (existing.office && !existing.copied && existing.target === cloneTarget(clone.name)) return { linked: true, notes: [] };
 
-  if (existing.office) throw new PluginCheckoutProblem(`${at} links to a package's plugin; a package and a plugins: entry can't share a name, so rename one of them`);
+  if (existing.office) throw new PluginCheckoutProblem(`${at} holds a package's plugin; a package and a plugins: entry can't share a name, so rename one of them`);
 
-  throw new PluginCheckoutProblem(`${at} is the office's own (not a link office sync made), kept; move it aside or rename the plugins: entry`);
+  throw new PluginCheckoutProblem(`${at} is the office's own, kept; move it aside or rename the plugins: entry`);
 }
 
 /** Whether `dir` is provably this plugin's checkout, with a commit. */
@@ -138,7 +138,7 @@ function linkClone(office: Office, clone: Clone, remake: boolean): string[] {
   const target = cloneTarget(clone.name);
   const existing = entryAt(office, clone.name);
 
-  if (existing && !(existing.office && existing.target === target)) throw new PluginCheckoutProblem(`${at} changed during delivery; kept, and the clone is not linked`);
+  if (existing && !(existing.office && !existing.copied && existing.target === target)) throw new PluginCheckoutProblem(`${at} changed during delivery; kept, and the clone is not linked`);
 
   if (existing && !remake) return [];
   placeLink(office, join(office.dir, at), target, existing ? target : undefined);
@@ -351,7 +351,12 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
   // sync function that threw stops the sync here.
   const applied = await syncPackages(office, changes, stage, false);
 
-  if (applied.stopped) return reported;
+  if (applied.stopped) {
+    if (applied.stopped === "plugins" && applied.recorded) reported.push(...(await syncClones(office, "references", stage, verbose)).changes);
+
+    return reported;
+  }
+
   const cloned = await syncClones(office, applied.recorded ? "all" : "others", stage, verbose);
 
   reported.push(...cloned.changes);
@@ -369,7 +374,7 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
 /**
  * Installs, updates, restores and removes the office's packages at the refs office.yaml pins, then
  * applies them: settings, packages' sync functions, their mise tools (linked machine-wide where the
- * office manages the machine), plugin links and desktop panels. `office sync` and `office packages
+ * office manages the machine), plugins and desktop panels. `office sync` and `office packages
  * update` both apply packages this way. A rejected candidate applies nothing. Each change goes to
  * `changes`. Returns whether the switch recorded the references it resolved, whether a package's
  * sync function stopped the sync, and, when the set was applied whole, the committed folders.
@@ -386,5 +391,5 @@ async function syncPackages(office: Office, changes: { push: (...lines: Change[]
   // their own conditions, `recorded` and `committed`.
   const generation = result.committed === undefined || result.lines.some(isFailure) ? undefined : result.generation;
 
-  return { recorded: result.recorded === true, stopped: result.stopped === true, committed: result.committed, excluded: result.excluded ?? [], generation };
+  return { recorded: result.recorded === true, stopped: result.stopped, committed: result.committed, excluded: result.excluded ?? [], generation };
 }

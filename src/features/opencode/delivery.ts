@@ -1,9 +1,7 @@
-// Package plugin links and Git-cloned plugins at the office root, where every folder of the office
-// inherits them. A working repository's own plugin folders belong to its owners. Office's entries are recognized by their
-// target (ownership.ts); nothing records which links Office made.
 import { randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { excludeCopy, planCopy, stagingFolder } from "../../../sdk/copy-tree.ts";
 import { RenameError, renameNoReplace } from "../../lib/no-replace.ts";
 import { OfficeError, type Office } from "../../office.ts";
 import type { InstalledPackages } from "../../loader/definitions/inventory.ts";
@@ -11,11 +9,14 @@ import { builtinSource, gitSelection, readRecord, sourceFile } from "../../loade
 import type { ResolvedPackage } from "../../loader/sources/selection.ts";
 import { validateAssets, type AssetPaths } from "./assets.ts";
 import { type Declaration, readDeclarations, writeDeclarations } from "./declarations.ts";
-import { cloneFolder, entries, entry as entryAt, pluginFolder } from "./ownership.ts";
+import { pluginEntrypoints } from "./entrypoints.ts";
+import { cloneFolder, entries, entry as entryAt, pluginFolder, readCopies, writeCopies } from "./ownership.ts";
+
+export { stagingFolder };
 
 /** Sync owns entries in these directories, never the targets of a redirected parent. */
 export function requirePluginDestination(office: Office) {
-  for (const folder of [".opencode", pluginFolder, ".office", cloneFolder]) {
+  for (const folder of [".opencode", pluginFolder, ".office", cloneFolder, stagingFolder]) {
     const info = lstatSync(join(office.dir, folder), { throwIfNoEntry: false });
 
     if (info && !info.isDirectory()) throw new OfficeError(`cannot deliver plugins: ${folder} is not an office directory (refusing to follow or replace it)`);
@@ -50,20 +51,18 @@ export function declarationBinding(item: ResolvedPackage) {
   return new Bun.CryptoHasher("sha256").update(JSON.stringify([source, item.entry.settings])).digest("hex");
 }
 
-/**
- * Each package's OpenCode plugin and panel. `collected` is what this run's gathering registered,
- * by package (sync and check); without it, the applied record of the last sync is observed, as
- * readers that run no package code do. A package registering neither has none: no folder is
- * looked for by name. `plugins` maps each package to the plugin directory to link, `panels` to its
- * desktop bundle.
- */
+type Plugin = { kind: "copy"; source: string } | { kind: "link"; target: string };
+
+/** Uses this run's registrations, or observes those of the last sync when no collection is available. */
 export function withPluginPlan(office: Office, installed: InstalledPackages, collected?: ReadonlyMap<string, AssetPaths>) {
-  const plugins = new Map<string, string>();
+  const plugins = new Map<string, Plugin>();
   const panels = new Map<string, string>();
   const problems = [...installed.problems];
+  let conflict = false;
   const unread = new Set(installed.unread);
   const saved = collected ? undefined : readDeclarations(office);
   const declarations = new Map<string, Declaration>();
+  const copies = readCopies(office);
 
   for (const name of unread) {
     // Unknown source: withhold both outputs, never restore a previous declaration as new authority.
@@ -103,40 +102,50 @@ export function withPluginPlan(office: Office, installed: InstalledPackages, col
     if (!paths.server) continue;
     const plugin = join(item.kind === "local" ? dir : join(office.dir, ".office/packages", entry.name), paths.server);
     const at = `${pluginFolder}/${entry.name}`;
-    const existing = entryAt(office, entry.name);
+    const existing = entryAt(office, entry.name, copies);
     const taken = existing !== undefined && !existing.office;
 
-    const problem = office.plugins.some(cloned => cloned.name === entry.name)
-      ? `its plugin would be ${at}, where the plugins: entry ${entry.name} is cloned`
-      : taken
-        ? `its plugin would be ${at}, which holds a plugin of this office's own (not a link office sync made)`
+    const problem = taken
+      ? `its plugin would be ${at}, which holds a plugin of this office's own (no Office copy or link owns it)`
+      : office.plugins.some(cloned => cloned.name === entry.name)
+        ? `its plugin would be ${at}, where the plugins: entry ${entry.name} is cloned`
         : undefined;
 
-    if (problem === undefined) plugins.set(entry.name, plugin);
-    else problems.push({ packages: [entry.name], message: `${problem}, so it isn't linked; rename one of them` });
+    if (problem !== undefined) {
+      const message = `${problem}, so it isn't delivered; rename one of them`;
+
+      if (taken) conflict = true;
+      problems.push({ packages: [entry.name], message });
+    } else if (item.kind === "local") {
+      plugins.set(entry.name, { kind: "link", target: relative(join(office.dir, pluginFolder), plugin) });
+    } else {
+      plugins.set(entry.name, { kind: "copy", source: plugin });
+    }
   }
 
-  return { ...installed, unread, plugins, panels, declarations, problems };
+  return { ...installed, unread, plugins, panels, declarations, problems, conflict };
 }
 
-/**
- * What the root's plugin folder should hold for `plugins` (package name to plugin directory), and
- * Office's links there now. `withPluginPlan` already left out names the owner holds.
- */
-export function pluginLinks(office: Office, plugins: Map<string, string>) {
-  const folder = join(office.dir, pluginFolder);
-  const wanted = new Map([...plugins].map(([name, dir]) => [name, relative(folder, dir)]));
-  const links = new Map<string, string>();
+export function pluginProblem(office: Office, name: string, plugin: Plugin, copies: ReadonlySet<string>): string | undefined {
+  const at = `${pluginFolder}/${name}`;
+  const current = entryAt(office, name, copies);
 
-  for (const item of entries(office)) {
-    if (item.office && item.target !== undefined) links.set(item.name, item.target);
+  if (plugin.kind === "link") {
+    if (current?.copied || current?.target !== plugin.target) return `${at} isn't linked to ${plugin.target}; office sync links it${current?.office && !current.copied && current.target !== undefined ? `; ${restartNotice(name)}` : ""}`;
+
+    return;
   }
 
-  return { folder, wanted, links };
-}
+  if (!current?.copied) return `${at} is missing its Office copy; office sync copies it`;
 
-/** Office's staging folder, on the office's filesystem and never scanned by OpenCode. */
-export const stagingFolder = ".office/tmp";
+  try {
+    const { differences } = planCopy(plugin.source, join(office.dir, at));
+
+    if (differences.length) return `${at} differs from the package's plugin (${differences.map(path => join(at, path)).join(", ")}); office sync restores it`;
+  } catch (error) {
+    return `${at}: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
 
 /**
  * Places the link `path` -> `target`. It is made in `.office/tmp/`, never as a dot-name in a folder
@@ -179,10 +188,6 @@ export function placeLink(office: Office, path: string, target: string, previous
   }
 }
 
-export function restartNotice(name: string) {
-  return `restart OpenCode to pick up ${name}: a running server keeps loading a plugin from where it first found it`;
-}
-
 function unlinkPlugin(folder: string, name: string, target: string) {
   const path = join(folder, name);
 
@@ -190,12 +195,11 @@ function unlinkPlugin(folder: string, name: string, target: string) {
   unlinkSync(path);
 }
 
-/**
- * Makes the root's `.opencode/plugins/` hold a link for each package plugin, and no other Office
- * link except those of declared clones, which the clone step manages. An Office link whose package
- * is selected but unreadable stays. A name the owner holds is never replaced.
- */
-export function linkPlugins(office: Office, installed: ReturnType<typeof withPluginPlan>): string[] {
+function restartNotice(name: string) {
+  return `restart OpenCode to pick up ${name}: it keeps the previous target of a moved plugin link`;
+}
+
+export function deliverPlugins(office: Office, installed: ReturnType<typeof withPluginPlan>, exclude: (path: string) => readonly string[]): string[] {
   requirePluginDestination(office);
 
   for (const item of installed.installed) {
@@ -204,24 +208,65 @@ export function linkPlugins(office: Office, installed: ReturnType<typeof withPlu
     if (claim?.state === "declared") validateAssets(office.dir, item.dir, claim.paths);
   }
 
-  writeDeclarations(office, installed.declarations);
   const changes: string[] = [];
-  const { folder, wanted, links } = pluginLinks(office, installed.plugins);
+  const folder = join(office.dir, pluginFolder);
+  const copies = readCopies(office);
+  const current = new Map(entries(office, copies).map(item => [item.name, item]));
   const cloned = new Set(office.plugins.map(plugin => plugin.name));
+  const plans = new Map<string, ReturnType<typeof planCopy>>();
 
-  for (const [name, target] of links) {
-    if (installed.unread.has(name) || wanted.has(name) || (cloned.has(name) && target === cloneTarget(name))) continue;
-    unlinkPlugin(folder, name, target);
+  for (const [name, plugin] of installed.plugins) {
+    if (plugin.kind === "copy") plans.set(name, planCopy(plugin.source, join(folder, name), pluginEntrypoints));
+  }
+
+  writeDeclarations(office, installed.declarations);
+
+  for (const name of copies) {
+    if (installed.unread.has(name) || plans.has(name)) continue;
+    requirePluginDestination(office);
+    rmSync(join(folder, name), { recursive: true, force: true });
+    copies.delete(name);
+    writeCopies(office, copies);
+    current.delete(name);
+    const transition = cloned.has(name) || installed.plugins.has(name);
+
+    changes.push(`removed plugin copy ${pluginFolder}/${name}${transition ? `; restart OpenCode to pick up ${name} if it loaded the previous delivery` : ""}`);
+  }
+
+  for (const [name, item] of current) {
+    if (!item.office || item.copied || item.target === undefined || installed.unread.has(name) || installed.plugins.has(name) || (cloned.has(name) && item.target === cloneTarget(name))) continue;
+    unlinkPlugin(folder, name, item.target);
     changes.push(cloned.has(name) ? `unlinked ${pluginFolder}/${name} for the plugins: entry of that name; ${restartNotice(name)}` : `unlinked ${pluginFolder}/${name}`);
   }
 
-  for (const [name, target] of wanted) {
-    const current = links.get(name);
+  for (const [name, plugin] of installed.plugins) {
+    const at = `${pluginFolder}/${name}`;
+    const target = current.get(name)?.target;
 
-    if (current === target) continue;
-    // A running server keeps the location it first resolved for a name: moving it needs a restart.
-    placeLink(office, join(folder, name), target, current);
-    changes.push(current === undefined ? `linked ${pluginFolder}/${name}` : `relinked ${pluginFolder}/${name} to ${target}; ${restartNotice(name)}`);
+    if (plugin.kind === "link") {
+      if (target === plugin.target) continue;
+      placeLink(office, join(folder, name), plugin.target, target);
+      changes.push(target === undefined ? `linked ${at}` : `relinked ${at} to ${plugin.target}; ${restartNotice(name)}`);
+      continue;
+    }
+
+    const plan = plans.get(name);
+
+    if (!plan?.differences.length) continue;
+
+    const recorded = copies.has(name);
+    const existing = entryAt(office, name, copies);
+
+    if (!recorded && (target === undefined ? existing !== undefined : existing?.target !== target)) throw new OfficeError(`kept changed ${at}; retry sync after the edit`);
+    changes.push(...excludeCopy(office.dir, at, exclude));
+
+    if (!recorded) {
+      copies.add(name);
+      writeCopies(office, copies);
+    }
+
+    plan.write(office.dir);
+    changes.push(`copied plugin ${at}`);
   }
 
   return changes;

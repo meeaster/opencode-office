@@ -146,7 +146,7 @@ test("a package's session text reaches the office plugin from the applied settin
   expect(await promptEntries(o.dir, o.dir)).not.toHaveProperty("packages");
 });
 
-test("a failed step of this sync's application runs no full-sync work, while references still complete", () => {
+test("a failed plugin delivery runs no full-sync work while references still complete", () => {
   const o = office("failed-apply");
   const healthy = upstream("failed-apply-healthy");
 
@@ -158,8 +158,8 @@ test("a failed step of this sync's application runs no full-sync work, while ref
 
   const output = o.cli(1, "sync");
 
-  expect(output).toContain("not a link office sync made");
-  expect(output).toContain("no package's full-sync work ran");
+  expect(output).toContain("no Office copy or link owns it");
+  expect(output).toContain("no later plugin delivery ran");
   expect(o.trace()).toEqual(["sync"]);
   expect(o.lsRemotes()).toBe(0);
   expect(existsSync(join(o.dir, "references/manual/README.md"))).toBe(true);

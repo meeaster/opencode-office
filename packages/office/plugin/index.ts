@@ -10,10 +10,10 @@
 // - none of the skills in the folders the office's `ignore_claude_synced_skills` and `ignore_skill_folders` settings name.
 //
 // The office package is built into the `office` tool, which bundles this plugin with what it
-// imports into the one index.js an office holds; `office sync` restores that copy.
-import { closeSync, constants, existsSync, openSync, readdirSync, readFileSync, realpathSync, watch } from "node:fs";
+// imports into the one index.js delivered to OpenCode; `office sync` restores that copy.
+import { existsSync, readdirSync, readFileSync, watch } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { type AppliedSettings, officeRootOf, watchAppliedSettings } from "@office/sdk/applied-settings";
@@ -21,7 +21,6 @@ import { compactSessionTool } from "./compact-session.ts";
 import { expandFolder, ignoredFolders, inFolders } from "./ignored-skills.ts";
 import { findOffice, officeInstructions } from "./instructions.ts";
 import { packageText } from "./package-text.ts";
-import { tryFileLock } from "../../../src/lib/file-lock.ts";
 
 type Skill = { id: string; name: string; description: string; path: string; content: string };
 
@@ -47,12 +46,8 @@ type Context = {
   mcp: { transform(callback: (editor: { set(name: string, config: RemoteServer): void }) => void): Promise<Registration> };
 };
 
-// OpenCode loads the plugin through the link `.opencode/plugins/office`; the real folder is the
-// one beside the package's skills/.
-const sourceDir = dirname(realpathSync(dirname(fileURLToPath(import.meta.url))));
-const packageDir = sourceDir.replace(/\/\.office\/generations\/g-[a-f0-9-]+\/packages\/([^/]+)$/, "/.office/packages/$1");
-const packageName = basename(packageDir);
-const skillsDir = join(packageDir, "skills");
+const settingsOffice = officeRootOf(dirname(fileURLToPath(import.meta.url)));
+const skillsDir = join(settingsOffice, ".office/packages/office/skills");
 
 /** A skill as OpenCode registers it: the description from its front matter and the body after it. */
 function packageSkill(id: string): Skill {
@@ -87,27 +82,18 @@ function executorValue(office: string, variable: string, file: string): string |
 
 async function register(ctx: Context) {
   const office = findOffice(ctx.location.directory);
-  // The office whose settings apply: the one holding this package, which a session in a
-  // repository nested in it, with an office.yaml of its own, doesn't change.
-  const settingsOffice = officeRootOf(packageDir);
   const reload = () => void ctx.skill.reload().catch(console.error);
 
   // The setting as the next `office sync` applies it takes effect at once, a folder taken out of
   // it included; another package's settings reload nothing. Until a sync has applied it, the
   // Claude app's folder is ignored.
-  const watcher = office === undefined ? undefined : watchAppliedSettings(settingsOffice, packageName, (next) => {
+  const watcher = office === undefined ? undefined : watchAppliedSettings(settingsOffice, "office", (next) => {
     settings = next;
     reload();
   }, console.error);
 
   // The skill-folder settings as `office sync` last applied them.
   let settings: AppliedSettings | undefined = watcher?.settings;
-
-  // A new package set can bring new skill text with the same settings. The office's folder is
-  // watched, since sync replaces `current`; a local copy has no package set to follow.
-  const generations = office === undefined || sourceDir === packageDir ? undefined : watch(dirname(dirname(packageDir)), (_event, file) => {
-    if (file === "current") reload();
-  });
 
   // The text last attached to each session, so an unchanged text isn't announced again.
   const attached = new Map<string, string>();
@@ -174,6 +160,11 @@ async function register(ctx: Context) {
 
   if (office === undefined) return;
 
+  // Skill text can change when sync switches package sets, even if the plugin and settings don't.
+  const generations = watch(join(settingsOffice, ".office"), (_event, file) => {
+    if (file === "current") reload();
+  });
+
   // A prompt never starts with one still listed.
   await ctx.session.hook("prompt", removeIgnored);
 
@@ -202,32 +193,11 @@ async function register(ctx: Context) {
     stopped = true;
     clearTimeout(check);
     watcher?.close();
-    generations?.close();
+    generations.close();
   };
 }
 
 export default {
   id: "office",
-  async setup(ctx: Context) {
-    // OpenCode watches the physical module entrypoints, even though discovery links
-    // follow current. Keep this installed set while the server uses its modules.
-    const generation = sourceDir === packageDir ? undefined : dirname(dirname(sourceDir));
-    const fd = generation && existsSync(generation) ? openSync(generation, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW) : undefined;
-
-    if (fd !== undefined && !tryFileLock(fd, true)) {
-      closeSync(fd);
-      throw new Error("Office package generation is being retired; reload OpenCode");
-    }
-
-    try {
-      const stop = await register(ctx);
-
-      return () => {
-        try { stop?.(); } finally { if (fd !== undefined) closeSync(fd); }
-      };
-    } catch (error) {
-      if (fd !== undefined) closeSync(fd);
-      throw error;
-    }
-  },
+  setup: register,
 };

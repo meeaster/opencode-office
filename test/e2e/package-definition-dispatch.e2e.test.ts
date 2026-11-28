@@ -105,7 +105,7 @@ test("checking out a tracked package tree, a real folder where a discovery link 
   write(yaml, "name: history\npackages: [{name: knowledge}]\n");
   cli(0, "sync", "--packages");
   expect(readlinkSync(packages)).toBe("current/packages");
-  expect(realpathSync(join(dir, ".opencode/plugins/knowledge"))).toBe(realpathSync(join(packages, "knowledge/plugin")));
+  expect(read(join(dir, ".opencode/plugins/knowledge/index.ts"))).toBe(read(join(packages, "knowledge/plugin/index.ts")));
 });
 
 test("a symlinked office resolves public imports after it moves, and a definition reads assets beside it", () => {

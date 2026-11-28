@@ -1,6 +1,5 @@
-// The last successful collection of each package's typed OpenCode registration, so check, inspect
-// and gui dev can report it without running package code. It confers no ownership: which links are
-// Office's is decided by their target (ownership.ts).
+// The last collection of each package's typed OpenCode registration, for readers that run no
+// package code. Delivery ownership is tracked separately.
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";

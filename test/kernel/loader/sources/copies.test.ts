@@ -138,8 +138,8 @@ test("a package plugin is linked while declared, gives way to a plugins: entry o
   const changes = await sync(loadOffice(office));
 
   expect(changes).toContain("cloned plugin .office/plugins/demo");
-  expect(changes).toContain("FAILED package demo: its plugin would be .opencode/plugins/demo, where the plugins: entry demo is cloned, so it isn't linked; rename one of them");
-  expect(changes).toContain("unlinked .opencode/plugins/demo for the plugins: entry of that name; restart OpenCode to pick up demo: a running server keeps loading a plugin from where it first found it");
+  expect(changes).toContain("FAILED package demo: its plugin would be .opencode/plugins/demo, where the plugins: entry demo is cloned, so it isn't delivered; rename one of them");
+  expect(changes).toContain("unlinked .opencode/plugins/demo for the plugins: entry of that name; restart OpenCode to pick up demo: it keeps the previous target of a moved plugin link");
   expect(readlinkSync(link)).toBe("../../.office/plugins/demo");
   expect(git(["rev-parse", "--show-toplevel"], link)).toBe(realpathSync(join(office, ".office/plugins/demo")));
 
@@ -285,8 +285,8 @@ test("sync installs the built-in packages from the tool and restores an edited c
 
   expect(installed).toContain("installed .office/packages/office, the built-in office package");
   expect(installed).toContain("installed .office/packages/knowledge, the built-in knowledge package");
-  expect(installed).toContain("linked .opencode/plugins/office");
-  expect(readlinkSync(join(office, ".opencode/plugins/office"))).toBe("../../.office/packages/office/plugin");
+  expect(installed).toContain("copied plugin .opencode/plugins/office");
+  expect(readFileSync(join(office, ".opencode/plugins/office/index.js"), "utf8")).toBe(readFileSync(join(office, ".office/packages/office/plugin/index.js"), "utf8"));
   expect(existsSync(join(office, ".office/packages/office/plugin/index.js"))).toBe(true);
 
   const original = readFileSync(skill, "utf8");

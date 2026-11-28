@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { command, gitAt, scopeFixture, write } from "./opencode-scope.fixture.ts";
 import { definitionText, pluginDefinition, writePackage } from "../../../../test/support/test-package.ts";
@@ -220,9 +220,9 @@ test("a pinned package's registrations repair the bound revision and an invalid 
   git("tag", "stable");
   select("stable");
   await f.run(["sync", "--packages"]);
-  const link = join(f.dir, ".opencode/plugins/folio");
-  expect(readlinkSync(link)).toBe("../../.office/packages/folio/src/server");
-  expect(await f.run(["opencode", "inspect"])).toContain("Office package link (selected pinned Git package)");
+  const copy = join(f.dir, ".opencode/plugins/folio");
+  expect(lstatSync(copy).isDirectory()).toBe(true);
+  expect(await f.run(["opencode", "inspect"])).toContain("Office package copy (selected pinned Git package)");
   writePackage(join(pkg, "office.ts"), definition.replace("dist/panel.cjs", "missing.cjs"), { name: "folio", dependencies: ["opencode"] });
   git("commit", "-qam", "invalid edition B");
   git("tag", "-f", "stable");
@@ -232,7 +232,7 @@ test("a pinned package's registrations repair the bound revision and an invalid 
   select(git("rev-parse", "HEAD"));
   expect(await f.run(["sync", "--packages"], 1)).toContain("existing regular file");
   expect(readFileSync(join(pulled, "office.ts"), "utf8")).toBe(definition);
-  expect(readlinkSync(link)).toBe("../../.office/packages/folio/src/server");
+  expect(readFileSync(join(copy, "index.js"), "utf8")).toBe(command("bound-asset"));
   expect(readFileSync(join(f.env.OFFICE_APP_PANELS_DIR, "folio/gui-experimental.cjs"), "utf8")).toBe("// edition A");
 }, 60_000);
 

@@ -1,7 +1,7 @@
 // The skills package in the compiled office: what `office skills list` shows, what sync links into
 // `.agents/skills/` and keeps out of commits, what it refuses, and what a link outlives.
 import { expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "../../../src/git.ts";
 import { definitionFixture } from "../../../test/support/package-definition.fixture.ts";
@@ -104,7 +104,7 @@ test("an occupied destination, a lost receipt or an enabled ID nobody offers sto
   f.select(`${skillsEntry("[{folder: skills}]", "[alpha, beta, ghost]")}  - name: later\n`);
   const stopped = f.cli(1, "sync");
 
-  expect(stopped).toContain("package skills: its sync failed: no skill link changed: skill ghost is enabled, but no source offers it; .agents/skills/beta is already there and isn't a link this package recorded");
+  expect(stopped).toContain("package skills: its sync failed: no skill delivery changed: skill ghost is enabled, but no source offers it; .agents/skills/beta is already there and isn't a delivery this package recorded");
   // Earlier steps stay done: the new package set is active; later ones didn't run.
   expect(stopped).toContain("the new package set is active and the rest of this sync did not run");
   expect(existsSync(join(f.dir, ".opencode/plugins/later"))).toBe(false);
@@ -115,7 +115,7 @@ test("an occupied destination, a lost receipt or an enabled ID nobody offers sto
   rmSync(join(f.dir, ".agents/skills/beta"));
   rmSync(join(f.dir, ".office/skills/links.json"));
   f.select(`${skillsEntry("[{folder: skills}]", "[alpha]")}  - name: later\n`);
-  expect(f.cli(1, "sync")).toContain(".agents/skills/alpha is already there and isn't a link this package recorded");
+  expect(f.cli(1, "sync")).toContain(".agents/skills/alpha is already there and isn't a delivery this package recorded");
   expect(f.cli(1, "check")).toMatch(/^FAIL package skills: \.agents\/skills\/alpha is already there/m);
   rmSync(join(f.dir, ".agents/skills/alpha"));
   f.cli(0, "sync");
@@ -130,7 +130,7 @@ test("an occupied destination, a lost receipt or an enabled ID nobody offers sto
   write(join(f.dir, ".agents/skills/alpha/SKILL.md"), skill("owner"));
   const replaced = f.cli(1, "sync");
 
-  expect(replaced).toContain(".agents/skills/alpha is already there and isn't a link this package recorded");
+  expect(replaced).toContain(".agents/skills/alpha is already there and isn't a delivery this package recorded");
   expect(replaced).toContain("the rest of this sync did not run");
   expect(git(["status", "--porcelain", "--untracked-files=all"], f.dir)).toContain(".agents/skills/alpha/SKILL.md");
   expect(git(["check-ignore", ".opencode/plugins/later"], f.dir)).toBe(".opencode/plugins/later");
@@ -138,8 +138,9 @@ test("an occupied destination, a lost receipt or an enabled ID nobody offers sto
   expect(f.cli(1, "sync")).toContain(".agents/skills/alpha is already there");
 }, 60_000);
 
-test("a skill a pulled package offers is linked through its stable folder: the link's text and contents survive the generation it was made in", () => {
+test("a managed package skill replaces its recorded legacy link and ignores unchanged files when a later sync updates it", () => {
   const f = fixture("generations");
+  git(["init", "-q", f.dir]);
   const { repo, ref } = repository("generations-offer", { "pkg/skills/guide/SKILL.md": skill("guide"), "pkg/skills/guide/notes.md": "one\n" });
   writePackage(join(repo, "pkg/office.ts"), definitionText('{setup(ctx){skills.add(ctx, {directory: "skills/guide"})}}', 'import {skills} from "@office/skills";'), { name: "guides", dependencies: ["skills"] });
   const first = commit(repo);
@@ -148,18 +149,36 @@ test("a skill a pulled package offers is linked through its stable folder: the l
   expect(first).not.toBe(ref);
   f.select(entry(first));
   f.cli(0, "sync");
-  const link = join(f.dir, ".agents/skills/guide");
-  const text = readlinkSync(link);
+  const copy = join(f.dir, ".agents/skills/guide");
   const generation = readlinkSync(join(f.dir, ".office/current"));
+  const receipt = join(f.dir, ".office/skills/links.json");
+  const legacy = "../../.office/packages/guides/skills/guide";
 
-  expect(text).toBe("../../.office/packages/guides/skills/guide");
+  rmSync(copy, { recursive: true });
+  symlinkSync(legacy, copy);
+  write(receipt, JSON.stringify({ links: { ".agents/skills/guide": legacy } }));
+  f.cli(0, "sync");
+
+  expect(lstatSync(copy).isDirectory()).toBe(true);
+  expect(JSON.parse(read(receipt))).toEqual({ links: {}, copies: [".agents/skills/guide"] });
+  const marker = join(copy, "SKILL.md");
+  const unchanged = lstatSync(marker);
+  write(join(copy, "notes.md"), "edited\n");
+  expect(f.cli(1, "check")).toContain(".agents/skills/guide/notes.md");
 
   write(join(repo, "pkg/skills/guide/notes.md"), "two\n");
-  f.select(entry(commit(repo)));
+  const next = commit(repo);
+
+  f.select(entry(next));
   f.cli(0, "sync");
   f.cli(0, "sync");
   expect(readlinkSync(join(f.dir, ".office/current"))).not.toBe(generation);
   expect(existsSync(join(f.dir, ".office", generation))).toBe(false);
-  expect(readlinkSync(link)).toBe(text);
-  expect(readFileSync(join(link, "notes.md"), "utf8")).toBe("two\n");
+  expect(lstatSync(marker).ino).toBe(unchanged.ino);
+  expect(lstatSync(marker).mtimeMs).toBe(unchanged.mtimeMs);
+  expect(readFileSync(join(copy, "notes.md"), "utf8")).toBe("two\n");
+  expect(git(["check-ignore", ".agents/skills/guide"], f.dir)).toBe(".agents/skills/guide");
+  f.select(entry(next).replace("[guide]", "[]"));
+  f.cli(0, "sync");
+  expect(existsSync(copy)).toBe(false);
 }, 60_000);

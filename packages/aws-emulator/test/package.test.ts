@@ -88,7 +88,7 @@ test("the plugin registers the floci skill with this office's addresses on the h
   expect(skills.map((skill) => skill.id)).toEqual(["floci"]);
   expect(skills[0].name).toBe("floci");
   expect(skills[0].description).toStartWith("Run AWS CLI and SDK calls against the office's local AWS emulator");
-  expect(skills[0].path).toBe(join(scratch, "host/packages/aws-emulator/skills/floci/SKILL.md"));
+  expect(skills[0].path).toBe(join(scratch, "host/.office/packages/aws-emulator/skills/floci/SKILL.md"));
   expect(skills[0].content).toContain("- Endpoint: http://localhost.floci.io:4566\n");
   expect(skills[0].content).toContain("- Console: http://floci.localhost:4500\n");
   expect(skills[0].content).toContain("a restart of Floci starts empty");
@@ -134,7 +134,7 @@ test("the skill reloads when sync applies new settings for the package, not for 
 test("a plugin linked before its settings are applied registers the skill once a sync applies them, and follows new skill text in a new package set", async () => {
   const office = join(scratch, "unapplied");
   // As a sync that couldn't fetch another package leaves a newly selected one: linked, with no entry.
-  const plugin = await officePlugin<Plugin>("aws-emulator", office, { office: {} }, { installed: true });
+  const plugin = await officePlugin<Plugin>("aws-emulator", office, { office: {} });
   let transform: ((editor: { add(skill: { content: string }): void }) => void) | undefined;
   let reloads = 0;
 

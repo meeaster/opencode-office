@@ -34,7 +34,6 @@ for (const kind of ["local", "tracked"]) {
 
     if (kind === "tracked") paths.push(join(installed, ".source.json"));
     const old = paths.map(read);
-    const target = readlinkSync(link);
     rmSync(probe);
 
     for (const args of [["sync"], ["sync", "--packages"], ["packages", "update"], ["refresh"]]) {
@@ -42,7 +41,6 @@ for (const kind of ["local", "tracked"]) {
       expect(output).toContain("built-in package arrival");
       expect(output).toContain(identity);
       expect(existsSync(probe)).toBe(false);
-      expect(readlinkSync(link)).toBe(target);
       expect(paths.map(read)).toEqual(old);
 
       if (kind === "local") expect(existsSync(join(dir, ".office/packages/arrival"))).toBe(false);

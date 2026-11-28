@@ -37,7 +37,7 @@ export async function rootSession(office: Office, report: Report, run: Context, 
     const linkedClones = office.plugins.filter((plugin) => {
       const link = entryAt(office, plugin.name);
 
-      return link?.office === true && link.target === cloneTarget(plugin.name) && existsSync(join(office.dir, cloneFolder, plugin.name, ".git"));
+      return link?.office === true && !link.copied && link.target === cloneTarget(plugin.name) && existsSync(join(office.dir, cloneFolder, plugin.name, ".git"));
     });
 
     const plugins = [...run.loaded.plugins.keys(), ...linkedClones.map((plugin) => plugin.name)];
@@ -59,8 +59,8 @@ export async function rootSession(office: Office, report: Report, run: Context, 
       return state === undefined ? [`${name} not loaded`] : state.status === "active" ? [] : [`${name} failed: ${state.error ?? "no error given"}`];
     });
 
-    const unloaded = plugins.filter((name) => !states.has(name));
-    const hint = unloaded.length === 0 ? "" : `; if office sync just linked or moved ${unloaded.join(", ")}, restart OpenCode: a running server keeps loading a plugin from where it first found it`;
+    const movedLinks = plugins.filter(name => !states.has(name) && (run.loaded.plugins.get(name)?.kind === "link" || linkedClones.some(clone => clone.name === name)));
+    const hint = movedLinks.length ? `; if sync just moved a link for ${movedLinks.join(", ")}, restart OpenCode to pick up its new target` : "";
 
     report(pluginProblems.length === 0, "root: plugins", pluginProblems.length === 0 ? `${plugins.join(", ")} active` : pluginProblems.join("; ") + hint);
 

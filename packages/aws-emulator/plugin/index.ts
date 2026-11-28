@@ -2,8 +2,8 @@
 //
 // The office bundles it with the applied settings reader into the one index.js an office holds,
 // so it runs with nothing installed.
-import { readFileSync, realpathSync, watch } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { readFileSync, watch } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { type AppliedSettings, officeRootOf, watchAppliedSettings } from "@office/sdk/applied-settings";
@@ -19,13 +19,8 @@ type Context = {
 
 type Settings = { port: number; uiPort: number; storage: string };
 
-// OpenCode loads the plugin through the link `.opencode/plugins/aws-emulator`; the real folder is
-// the package's, beside its skills/.
-const sourceDir = dirname(realpathSync(dirname(fileURLToPath(import.meta.url))));
-const packageDir = sourceDir.replace(/\/\.office\/generations\/g-[a-f0-9-]+\/packages\/([^/]+)$/, "/.office/packages/$1");
-const packageName = basename(packageDir);
-
-const skillFile = join(packageDir, "skills/floci/SKILL.md");
+const office = officeRootOf(dirname(fileURLToPath(import.meta.url)));
+const skillFile = join(office, ".office/packages/aws-emulator/skills/floci/SKILL.md");
 
 /** The package's applied settings, defaults included. */
 function settingsOf(read: AppliedSettings): Settings {
@@ -79,16 +74,14 @@ export default {
 
     // The settings `office sync` last applied in the office holding the package. Only a change to
     // this package's reloads the skill, not another package's.
-    const watcher = watchAppliedSettings(officeRootOf(packageDir), packageName, (next) => {
+    const watcher = watchAppliedSettings(office, "aws-emulator", (next) => {
       applied = next;
       reload();
     }, console.error);
 
     let applied = watcher.settings;
 
-    // A new package set can bring new skill text with the same settings. The office's folder is
-    // watched, since sync replaces `current`; a local copy has no package set to follow.
-    const generations = sourceDir === packageDir ? undefined : watch(dirname(dirname(packageDir)), (_event, file) => {
+    const generations = watch(join(office, ".office"), (_event, file) => {
       if (file === "current") reload();
     });
 
@@ -100,7 +93,7 @@ export default {
 
     return () => {
       watcher.close();
-      generations?.close();
+      generations.close();
     };
   },
 };

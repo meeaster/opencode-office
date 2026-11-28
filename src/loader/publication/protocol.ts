@@ -30,7 +30,7 @@ export type Admission = {
 export const outcomeSchema = v.object({
   published: v.boolean(),
   recorded: v.optional(v.boolean()),
-  stopped: v.optional(v.boolean()),
+  stopped: v.optional(v.picklist(["hook", "plugins"])),
   excluded: v.optional(v.array(v.string())),
   committed: v.optional(v.array(v.string())),
   lines: v.array(changeSchema),

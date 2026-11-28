@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -33,7 +33,7 @@ async function started(office: string, packages: Record<string, AppliedSettings>
   let transform: ((editor: { add(skill: Skill): void }) => void) | undefined;
   let reloads = 0;
 
-  writeFileSync(join(office, "packages/browser/.office.json"), JSON.stringify({ opencode: "host" }));
+  writeFileSync(join(office, ".office/packages/browser/.office.json"), JSON.stringify({ opencode: "host" }));
 
   const close = await plugin.setup({
     skill: { transform: async (callback: typeof transform) => ((transform = callback), { dispose: async () => {} }), reload: async () => void reloads++ },
@@ -66,23 +66,16 @@ test("the skill follows the settings the office applied, and the package's defau
   unpublished.close();
 });
 
-test("a rewritten mode reloads only when it changes, and so do the package's settings", async () => {
+test("a published mode or this package's applied settings reload the skill", async () => {
   const office = join(scratch, "mode");
   const session = await started(office, { browser: { agent_browser_tools: "core", browse: true, system_chrome: false }, design: { port: 1 } });
-  const mode = join(office, "packages/browser/.office.json");
-
-  const rewrite = (opencode: string) => {
-    writeFileSync(`${mode}.new`, JSON.stringify({ opencode }));
-    renameSync(`${mode}.new`, mode);
-  };
 
   try {
-    rewrite("host");
     writeAppliedSnapshot(office, { browser: { agent_browser_tools: "core", browse: true, system_chrome: false }, design: { port: 2 } });
     await settle(() => session.reloads() > 0);
     expect(session.reloads()).toBe(0);
 
-    rewrite("container");
+    switchPackageSet(office, packages => writeFileSync(join(packages, "browser/.office.json"), JSON.stringify({ opencode: "container" })));
     await settle(() => session.reloads() > 0);
     expect(session.reloads()).toBe(1);
     expect(session.skill()).toContain("`browse`: not in this office");
@@ -95,21 +88,16 @@ test("a rewritten mode reloads only when it changes, and so do the package's set
   }
 });
 
-test("a new package set reloads the skill and servers, whatever its mode and settings", async () => {
+test("a new package set reloads changed skill text with the same mode, settings and plugin", async () => {
   const office = join(scratch, "installed");
-  const plugin = await officePlugin<Plugin>("browser", office, { browser: { agent_browser_tools: "core", browse: true, system_chrome: false } }, { installed: true });
-  let reloads = 0;
-
-  const close = await plugin.setup({
-    skill: { transform: async () => ({ dispose: async () => {} }), reload: async () => void reloads++ },
-    mcp: { transform: async () => ({ dispose: async () => {} }), reload: async () => {} },
-  });
+  const session = await started(office, { browser: { agent_browser_tools: "core", browse: true, system_chrome: false } });
 
   try {
-    switchPackageSet(office, () => {});
-    await settle(() => reloads > 0);
-    expect(reloads).toBe(1);
+    switchPackageSet(office, packages => appendFileSync(join(packages, "browser/skills/browser-automation/SKILL.md"), "\nNew browser guidance.\n"));
+    await settle(() => session.reloads() > 0);
+    expect(session.reloads()).toBe(1);
+    expect(session.skill()).toContain("New browser guidance.");
   } finally {
-    close();
+    session.close();
   }
 });

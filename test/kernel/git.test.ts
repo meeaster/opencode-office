@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { excludeAppliedSettings, excludedPath, updateExcluded, updateExcludedOrThrow, excludeEnd, excludeStart, excludePlumbing } from "../../src/exclude-plumbing.ts";
+import { excludeAppliedSettings, excludedPath, updateExcludedOrThrow, excludeEnd, excludeStart, excludePlumbing } from "../../src/exclude-plumbing.ts";
 import { summarize, sync as syncChanges } from "../../src/commands/sync.ts";
 import { syncLines as sync } from "../support/sync.fixture.ts";
 import { cloneShallow, git } from "../../src/git.ts";
@@ -269,7 +269,7 @@ test("sync of an office that is a Git worktree excludes its plumbing in the excl
   expect(readFileSync(exclude, "utf8")).toBe(block);
 });
 
-/** An office with Office's links on disk (officeEntries reads them by their text) and the owner's entries beside them. */
+/** An office with Office's copies and links and the owner's entries beside them. */
 function linkedOffice(office: string) {
   const link = (target: string, path: string) => {
     mkdirSync(dirname(join(office, path)), { recursive: true });
@@ -282,14 +282,14 @@ function linkedOffice(office: string) {
   };
 
   file("office.yaml", `name: t\nplugins: [{ name: imported, repo: ${join(dir, "remote")} }]\n`);
-  file(".office/packages/office/plugin/index.js", "export default {}\n");
+  file(".opencode/plugins/office/index.js", "export default {}\n");
+  file(".office/opencode/copies.json", JSON.stringify({ copies: [".opencode/plugins/office"] }));
   file("skills/alpha/SKILL.md", "---\nname: alpha\ndescription: fixture\n---\n");
   file(".opencode/plugins/owner-plugin/index.js", "export default {}\n");
   file(".opencode/skills/owner-skill/SKILL.md", "---\nname: owner-skill\ndescription: fixture\n---\n");
   file(".agents/skills/owner-skill/SKILL.md", "---\nname: owner-skill\ndescription: fixture\n---\n");
   link("../../packages/common/plugin", ".opencode/plugins/common");
   link("../../.office/plugins/imported", ".opencode/plugins/imported");
-  link("../../.office/packages/office/plugin", ".opencode/plugins/office");
   // A link a package's sync placed, excluded only because that sync names it.
   link("../../skills/alpha", ".agents/skills/alpha");
 }
@@ -427,7 +427,7 @@ test("an immediate exclusion update changes only its paths' lines, literally, so
   linkedOffice(office);
   git(["init", "--quiet", office]);
   // Before any sync wrote a block, removing nothing writes nothing.
-  expect(updateExcluded(loadOffice(office), { remove: [".agents/skills/alpha"] })).toEqual([]);
+  expect(updateExcludedOrThrow(loadOffice(office), { remove: [".agents/skills/alpha"] })).toEqual([]);
   expect(existsSync(exclude) ? readFileSync(exclude, "utf8") : "").not.toContain(excludeStart);
   excludePlumbing(loadOffice(office), [], [".agents/skills/alpha", ".agents/skills/b*"]);
   const before = readFileSync(exclude, "utf8");
@@ -436,7 +436,7 @@ test("an immediate exclusion update changes only its paths' lines, literally, so
   writeFileSync(join(office, ".agents/skills/alpha/SKILL.md"), "the owner's\n");
 
   expect(ignored(".agents/skills/alpha")).toBe(true);
-  expect(updateExcluded(loadOffice(office), { add: [".agents/skills/gamma"], remove: [".agents/skills/alpha", ".agents/skills/b*"] })).toEqual([
+  expect(updateExcludedOrThrow(loadOffice(office), { add: [".agents/skills/gamma"], remove: [".agents/skills/alpha", ".agents/skills/b*"] })).toEqual([
     "excluded /.agents/skills/gamma from commits (info/exclude)",
     "stopped excluding /.agents/skills/alpha from commits (info/exclude)",
     "stopped excluding /.agents/skills/b\\* from commits (info/exclude)",
@@ -457,6 +457,17 @@ test("an up's exclusion update throws, changing nothing, when the block can't be
   writeFileSync(exclude, `${excludeStart}\n${excludeStart}\n${excludeEnd}\n`);
   expect(() => updateExcludedOrThrow(loadOffice(office), { add: [".agents/skills/alpha"] })).toThrow(`has 2 "${excludeStart}" and 1 "${excludeEnd}" lines, not one block`);
   expect(readFileSync(exclude, "utf8")).toBe(`${excludeStart}\n${excludeStart}\n${excludeEnd}\n`);
+});
+
+test("a copy exclusion checks directory-only rules even before the copy exists", () => {
+  const office = join(dir, "office");
+  const path = ".agents/skills/guide";
+
+  linkedOffice(office);
+  git(["init", "--quiet", office]);
+  writeFileSync(join(office, ".gitignore"), `!/${path}/\n`);
+  expect(() => updateExcludedOrThrow(loadOffice(office), { add: [`${path}/`] })).toThrow(`Git doesn't ignore ${path}/`);
+  expect(existsSync(join(office, path))).toBe(false);
 });
 
 test("a path a package's sync excludes must be a normalized office path outside .office/, on one line", () => {
