@@ -1,6 +1,5 @@
 import { join } from "node:path";
 
-import { hostServiceStatus } from "../../features/systemd/package-host-services.ts";
 import { executorImage, toolsFor } from "../../features/tools/runtime-pins.ts";
 import { ports } from "../../lib/ports.ts";
 import { executorEnvFile, type Office, readEnvFile } from "../../office.ts";
@@ -55,7 +54,6 @@ export async function runtime(office: Office, report: Report, run: Context, stag
   await opencodeVersion(office, report, auth, opencode);
 
   stage?.detail("services and timers");
-  hostServiceStatus(office, report, run.gathered.inventory);
   scheduling(office, report, running, run);
 
   return root;

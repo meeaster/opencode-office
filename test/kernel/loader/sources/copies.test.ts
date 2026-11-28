@@ -45,7 +45,7 @@ function read(office: string, name: string) {
   return { loaded, result: { ok: false as const, errors, settings } };
 }
 
-const manifest = "settings: {type: object, additionalProperties: false, properties: {url: {type: string}, title: {type: string, default: Shared}}, required: [url]}\n";
+const manifest = definitionText(`{ settings: ${settingsSchema({ title: "Shared" }, { url: "string" })} }`);
 
 test("an install ignores the source office's records, an update by full commit SHA replaces the package, and an edited copy is restored", async () => {
   const repo = join(dir, "repo");
@@ -58,7 +58,7 @@ test("an install ignores the source office's records, an update by full commit S
     return git(["rev-parse", "HEAD"], repo);
   };
 
-  writePackage(join(repo, "pkgs/demo/package.yaml"), manifest);
+  writePackage(join(repo, "pkgs/demo/office.ts"), manifest);
   write(join(repo, "pkgs/demo/scripts/run.sh"), "echo one\n");
   // Committed by the office that authored the package, as when sharing from its packages/.
   write(join(repo, "pkgs/demo/.template.json"), '["out/AGENTS.md"]\n');
@@ -68,9 +68,6 @@ test("an install ignores the source office's records, an update by full commit S
   const first = commit("one");
 
   write(join(repo, "pkgs/demo/scripts/run.sh"), "echo two\n");
-  // Copying evaluates nothing: the replacement's module definition loads when admission gathers.
-  rmSync(join(repo, "pkgs/demo/package.yaml"));
-  writePackage(join(repo, "pkgs/demo/office.ts"), definitionText(`{settings:${settingsSchema({ title: "Shared" }, { url: "string" })}}`));
 
   const second = commit("two");
   const entry = (ref: string) => `name: t\npackages:\n  - name: demo\n    repo: ${repo}\n    path: pkgs/demo\n    ref: ${ref}\n    settings: { url: https://example.com }\n`;
@@ -168,7 +165,7 @@ test("sync removes a copied package whose entry is gone, even an edited copy, an
   expect(readFileSync(join(office, "out/marker.md"), "utf8")).toBe("from the package\n");
   write(join(office, "out/my-page/index.md"), "the office's own\n");
   write(join(office, ".office/packages/demo/office.ts"), "// edited\n");
-  writePackage(join(office, "packages/own/package.yaml"), "{}\n");
+  writePackage(join(office, "packages/own/office.ts"), definitionText("{}"));
   write(join(office, "office.yaml"), "name: t\n");
 
   const changes = await sync(loadOffice(office));
@@ -183,7 +180,7 @@ test("sync removes a copied package whose entry is gone, even an edited copy, an
   expect(() => readAppliedSettings(office, "demo")).toThrow("has no settings for package demo");
   expect(readFileSync(join(office, "out/marker.md"), "utf8")).toBe("from the package\n");
   expect(readFileSync(join(office, "out/my-page/index.md"), "utf8")).toBe("the office's own\n");
-  expect(existsSync(join(office, "packages/own/package.yaml"))).toBe(true);
+  expect(existsSync(join(office, "packages/own/office.ts"))).toBe(true);
   expect(await sync(loadOffice(office))).toEqual([]);
 });
 
@@ -193,14 +190,14 @@ test("a package set that can't be read runs no package's sync function, and the 
 
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n  - name: other\n");
   writePackage(join(office, "packages/demo/office.ts"), markingDefinition("marker.md", "v1\n"));
-  writePackage(join(office, "packages/other/package.yaml"), "{}\n");
+  writePackage(join(office, "packages/other/office.ts"), definitionText("{}"));
   git(["init", "--quiet", office]);
   await sync(loadOffice(office));
   expect(readFileSync(marker, "utf8")).toBe("v1\n");
 
   // Another package breaks: demo's new version doesn't run.
   writePackage(join(office, "packages/demo/office.ts"), markingDefinition("marker.md", "v2\n"));
-  writePackage(join(office, "packages/other/package.yaml"), "name: other\n  description: [not, valid\n");
+  writePackage(join(office, "packages/other/office.ts"), 'throw new Error("broken definition")');
 
   const changes = await sync(loadOffice(office));
 
@@ -208,7 +205,7 @@ test("a package set that can't be read runs no package's sync function, and the 
   expect(readFileSync(marker, "utf8")).toBe("v1\n");
 
   // Read again, demo's sync runs.
-  writePackage(join(office, "packages/other/package.yaml"), "{}\n");
+  writePackage(join(office, "packages/other/office.ts"), definitionText("{}"));
   await sync(loadOffice(office));
   expect(readFileSync(marker, "utf8")).toBe("v2\n");
 });
@@ -226,7 +223,7 @@ test("sync locks a Git package's commit in office.lock, keeps the entry when a c
     return git(["rev-parse", "HEAD"], repo);
   };
 
-  writePackage(join(repo, "pkgs/demo/package.yaml"), manifest);
+  writePackage(join(repo, "pkgs/demo/office.ts"), manifest);
   git(["init", "--quiet", repo]);
   const first = commit();
 

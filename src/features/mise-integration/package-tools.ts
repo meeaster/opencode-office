@@ -1,38 +1,24 @@
 import type { Office } from "../../office.ts";
-import type { ProjectedPackage } from "../mise-integration/projection.ts";
-import type { InstalledPackage } from "../../loader/definitions/inventory.ts";
-import { compareToolVersions } from "../../../packages/tools/versions.ts";
-
-export { compareToolVersions };
+import { compareToolVersions } from "../tools/versions.ts";
+import type { ProjectedPackage } from "./projection.ts";
 
 /** The package whose tools are the ones the office CLI itself runs: SOPS, age, gh and pre-commit (src/features/tools/host-tools.ts). */
 const cliToolsPackage = "office";
-
-/** Whether the package's own switch for its host block, if it names one, is on. */
-export function switchedOn(item: InstalledPackage): boolean {
-  const setting = item.manifest.host?.setting;
-
-  return setting === undefined || String(item.settings[setting]) === "true";
-}
-
-/** Whether a package's host block applies: the office runs OpenCode on the host, and the package's switch is on. */
-export function hostApplies(office: Office, item: InstalledPackage): boolean {
-  return item.manifest.host !== undefined && office.opencode.mode === "host" && switchedOn(item);
-}
 
 /**
  * The tools a package declares in this office, at the versions it was tested with. A container
  * keeps its tools here, so there the package's `@office/tools` requirements count as declared too;
  * a host-mode office installs those itself (src/features/tools/).
  */
-export function wantedTools(office: Office, item: ProjectedPackage): Record<string, string> {
-  const tools = hostApplies(office, item) ? { ...item.manifest.tools, ...item.manifest.host?.tools } : { ...item.manifest.tools };
-  const shared = office.opencode.mode === "host" ? [] : item.claims.required.map(({ name, minimum, hostOnly }) => ({ name, minimumVersion: minimum, hostOnly }));
+export function wantedTools(office: Office, item: ProjectedPackage) {
+  const tools: Record<string, string> = {};
 
-  for (const { name, minimumVersion, hostOnly } of [...item.claims.tools, ...shared]) {
-    if (hostOnly && office.opencode.mode !== "host") continue;
+  if (office.opencode.mode === "host") return tools;
 
-    if (!Object.hasOwn(tools, name) || (compareToolVersions(minimumVersion, tools[name]) ?? 0) > 0) tools[name] = minimumVersion;
+  for (const { name, minimum, hostOnly } of item.claims.required) {
+    if (hostOnly) continue;
+
+    if (!Object.hasOwn(tools, name) || (compareToolVersions(minimum, tools[name]) ?? 0) > 0) tools[name] = minimum;
   }
 
   return tools;

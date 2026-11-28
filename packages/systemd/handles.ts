@@ -19,8 +19,8 @@ export type UnitFacts = {
   /** The package's folder, as the office delivered it. */
   readonly dir: string;
   /**
-   * The `Environment=` and `ExecStart=` lines that run a package script the way `host.services`
-   * does: from the package's folder, with the office launcher and the verified machine environment.
+   * The `Environment=` and `ExecStart=` lines that run a script from the package's folder, with
+   * the office launcher and the verified machine environment.
    */
   launch(script: string): string;
   /** A stable path to an executable of a tool in `restartWhenChanged`, which keeps naming the activated release. */

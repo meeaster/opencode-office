@@ -8,7 +8,7 @@ import { installedPackages } from "../../../../src/loader/definitions/inventory.
 import { requiredPackages } from "../../../../src/loader/sources/selection.ts";
 import { publishAppliedSettings } from "../../../../src/applied-settings.ts";
 import { readAppliedSettings } from "../../../../sdk/applied-settings.ts";
-import { writePackage } from "../../../support/test-package.ts";
+import { definitionText, settingsSchema, writePackage } from "../../../support/test-package.ts";
 
 let dir: string;
 
@@ -41,10 +41,14 @@ function read(office: string, name: string) {
   return { loaded, result: { ok: false as const, errors, settings } };
 }
 
-const manifest = "settings: {type: object, additionalProperties: false, properties: {url: {type: string}, title: {type: string, default: Shared}}, required: [url]}\n";
-
 test("settings are one JSON Schema, checked with its defaults applied: types, unknown and required settings, nested $defs, and none when undeclared", () => {
-  const path = join(dir, "packages/demo/package.yaml");
+  const path = join(dir, "packages/demo/office.ts");
+
+  const define = (body: string) => {
+    delete require.cache[path];
+    writePackage(path, definitionText(body));
+  };
+
   const config = (settings: string) => write(join(dir, "office.yaml"), `name: t\npackages:\n  - name: demo\n    settings: ${settings}\n`);
 
   const errors = (settings: string) => {
@@ -54,21 +58,18 @@ test("settings are one JSON Schema, checked with its defaults applied: types, un
     return result.ok ? [] : result.errors;
   };
 
-  const nested = `settings:
-  type: object
-  additionalProperties: false
-  properties:
-    port: { type: integer, default: 4566 }
-    enabled: { type: boolean, default: true }
-    roles:
-      type: object
-      properties:
-        review: { type: array, items: { $ref: '#/$defs/model' } }
-  $defs:
-    model: { enum: [fast, deep] }
-`;
+  const nested = `{ settings: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      port: { type: "integer", default: 4566 },
+      enabled: { type: "boolean", default: true },
+      roles: { type: "object", properties: { review: { type: "array", items: { $ref: "#/$defs/model" } } } },
+    },
+    $defs: { model: { enum: ["fast", "deep"] } },
+  } }`;
 
-  writePackage(path, nested);
+  define(nested);
   config("{ port: 4600, roles: { review: [fast, deep] } }");
 
   const { loaded, result } = read(dir, "demo");
@@ -82,36 +83,39 @@ test("settings are one JSON Schema, checked with its defaults applied: types, un
   expect(errors('{ port: "4600" }')).toEqual(["packages.demo.settings.port: must be integer"]);
   expect(errors("{ colour: blue }")).toEqual(["packages.demo.settings.colour: the package declares no such setting; remove it from office.yaml"]);
 
-  writePackage(path, manifest);
+  define(`{ settings: ${settingsSchema({ title: "Shared" }, { url: "string" })} }`);
   expect(errors("{}")).toEqual(["packages.demo.settings.url: is required; add it to office.yaml"]);
   expect(errors("{ url: https://example.com/site }")).toEqual([]);
   expect(read(dir, "demo").result).toMatchObject({ ok: true, value: { settings: { url: "https://example.com/site", title: "Shared" } } });
 
   // A package that declares no settings accepts none.
-  writePackage(path, "{}\n");
+  define("{}");
   expect(errors("{ label: x }")).toEqual(["packages.demo.settings.label: the package declares no such setting; remove it from office.yaml"]);
 
   // The root is an object schema; a removed key is an unknown one; an invalid schema names the file.
   const root = 'its root must have type: "object"';
 
-  writePackage(path, "settings: { type: array }\n");
-  expect(errors("{}")).toEqual([`packages/demo/package.yaml: settings: ${root}`]);
-  writePackage(path, "settings: { $ref: '#/$defs/all' }\n");
-  expect(errors("{}")).toEqual([`packages/demo/package.yaml: settings: ${root}`]);
-  // Settings that aren't a mapping are a settings problem too, reported before a check of the package's folder.
-  writePackage(path, "settings: null\nhost: {services: {svc: {description: Service, script: missing.sh}}}\n");
-  expect(read(dir, "demo").result).toMatchObject({ ok: false, errors: ["packages/demo/package.yaml: settings: must be a JSON Schema object"], settings: ["packages/demo/package.yaml: settings: must be a JSON Schema object"] });
-  writePackage(path, "settings_schema: { type: object }\n");
-  expect(errors("{}")).toEqual([expect.stringMatching(/^packages\/demo\/package\.yaml: settings_schema: must be a mapping of /)]);
-  writePackage(path, nested.replace("type: boolean", "type: invalid"));
-  expect(errors("{}")).toEqual([expect.stringContaining("packages/demo/package.yaml: settings: schema is invalid")]);
+  define('{ settings: { type: "array" } }');
+  expect(errors("{}")).toEqual([`packages/demo/office.ts: settings: ${root}`]);
+  define('{ settings: { $ref: "#/$defs/all" } }');
+  expect(errors("{}")).toEqual([`packages/demo/office.ts: settings: ${root}`]);
+  define("{ settings: null }");
+  expect(read(dir, "demo").result).toMatchObject({ ok: false, errors: ["packages/demo/office.ts: settings: must be a JSON Schema object"], settings: ["packages/demo/office.ts: settings: must be a JSON Schema object"] });
+  define('{ settings_schema: { type: "object" } }');
+  expect(errors("{}")).toEqual([expect.stringContaining("packages/demo/office.ts: settings_schema: must be a mapping of ")]);
+  define(nested.replace('type: "boolean"', 'type: "invalid"'));
+  expect(errors("{}")).toEqual([expect.stringContaining("packages/demo/office.ts: settings: schema is invalid")]);
 });
 
 test("two packages' schemas with the same $id each validate, with their own $refs and defaults", () => {
-  const schema = (type: string, value: string) => `settings: {$id: "https://example.com/settings", type: object, additionalProperties: false, properties: {size: {$ref: "#/$defs/size"}, label: {type: string, default: ${value}}}, $defs: {size: {type: ${type}}}}\n`;
+  const schema = (type: string, value: string) => definitionText(`{ settings: {
+    $id: "https://example.com/settings", type: "object", additionalProperties: false,
+    properties: { size: { $ref: "#/$defs/size" }, label: { type: "string", default: "${value}" } },
+    $defs: { size: { type: "${type}" } },
+  } }`);
 
-  writePackage(join(dir, "packages/one/package.yaml"), schema("integer", "one"));
-  writePackage(join(dir, "packages/two/package.yaml"), schema("string", "two"));
+  writePackage(join(dir, "packages/one/office.ts"), schema("integer", "one"));
+  writePackage(join(dir, "packages/two/office.ts"), schema("string", "two"));
   write(join(dir, "office.yaml"), "name: t\npackages:\n  - name: one\n    settings: {size: 3}\n  - name: two\n    settings: {size: large}\n");
 
   expect(read(dir, "one").result).toMatchObject({ ok: true, value: { settings: { size: 3, label: "one" } } });

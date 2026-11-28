@@ -10,7 +10,7 @@ import { grantConsent } from "../../machine/record.ts";
 import { loadOffice } from "../../../office.ts";
 import { systemPlatformVariable } from "../system.ts";
 import { offerRestart, type Run, type RunResult, systemStep, verifySystems } from "../system-setup.ts";
-import { sharedToolsLock, writePackage } from "../../../../test/support/test-package.ts";
+import { definitionText, settingsSchema, sharedToolsLock, writePackage } from "../../../../test/support/test-package.ts";
 
 let dir: string;
 
@@ -43,29 +43,25 @@ function write(path: string, content: string): void {
 
 const ready = () => join(dir, "root/usr/bin/demo-browser");
 
-/** A host-mode office with a local package `demo` whose system block is on, and a machine.toml with `machine`. */
+/** A host-mode office with a local package `demo` whose system recipe is on, and a machine.toml with `machine`. */
 function makeOffice({ demo = true, machine = "", mode = "host" } = {}): void {
   const opencode = mode === "host" ? "opencode:\n  mode: host\n  url: http://127.0.0.1:49999\n" : "opencode: container\n";
 
   write(join(office, "office.yaml"), `name: t\n${opencode}packages:\n${demo ? "  - name: demo\n    settings:\n      on: true\n" : "  []\n"}`);
   write(join(office, "machine.toml"), `[tools]\n${machine}`);
   write(join(office, "office.lock"), sharedToolsLock());
-  writePackage(
-    join(office, "packages/demo/package.yaml"),
-    `# A demo package.
-settings: {type: object, additionalProperties: false, properties: {on: {type: boolean, default: false}}}
-system:
-  setting: on
-  description: Demo Browser
-  platforms: [ubuntu-24.04-amd64-wsl]
-  prepare: scripts/prepare.sh
-  verify: scripts/verify.sh
-  bootstrap: system/bootstrap.toml
-  ready: [${ready()}]
-  env:
-    DEMO_BROWSER: /usr/bin/demo-browser
-`,
-  );
+  writePackage(join(office, "packages/demo/office.ts"), definitionText(`{
+    settings: ${settingsSchema({ on: false })},
+    setup(ctx) {
+      ctx.add(recipes, {
+        name: "demo", setting: "on", description: "Demo Browser", platforms: ["ubuntu-24.04-amd64-wsl"],
+        prepare: "scripts/prepare.sh", verify: "scripts/verify.sh", bootstrap: "system/bootstrap.toml",
+        ready: [${JSON.stringify(ready())}], env: { DEMO_BROWSER: "/usr/bin/demo-browser" },
+      });
+    },
+  }`, 'const recipes = { id: "mise-integration.recipes", parse: value => value };'));
+  write(join(office, "packages/demo/scripts/prepare.sh"), "");
+  write(join(office, "packages/demo/scripts/verify.sh"), "");
   write(join(office, "packages/demo/system/bootstrap.toml"), '[bootstrap.packages]\n"apt:demo-browser" = "latest"\n');
 }
 
@@ -118,7 +114,7 @@ const ok = (stdout = ""): RunResult => ({ status: 0, stdout, stderr: "" });
 const pendingCheck: RunResult = { status: 100, stdout: "add Google's repository\n", stderr: "" };
 
 // These tests share one synced office: none changes it but for the ready path, which each removes.
-describe("in a synced host-mode office whose demo system block is on", () => {
+describe("in a synced host-mode office whose demo system recipe is on", () => {
   let shared: string;
   let fresh: string;
   let synced: Awaited<ReturnType<typeof prepare>>;
@@ -248,7 +244,7 @@ test("a fresh machine: setup lists what is pending, applies it in the office's s
   expect(printed.at(-1)).toBe("System setup: applied, and nothing is left to do");
 });
 
-test("machine.toml's packages alone are offered, without any package's system block", async () => {
+test("machine.toml's packages alone are offered, without any package recipe", async () => {
   makeOffice({ demo: false });
   write(join(office, "machine.toml"), '[tools]\n\n[bootstrap.packages]\n"apt:nasm" = { os = "linux" }\n');
 

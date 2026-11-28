@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { git } from "../../src/git.ts";
 import { loadOffice } from "../../src/office.ts";
 import { preparePackageServices } from "../../src/features/compose/package-services.ts";
+import { unitSha256 } from "../../src/features/systemd/user-units.ts";
 import { definitionFixture } from "../support/package-definition.fixture.ts";
 import { definitionText, writePackage } from "../support/test-package.ts";
 
@@ -125,28 +126,26 @@ test("a broken embedded replacement leaves the installed package usable and fail
   expect(existsSync(join(fresh, ".office/packages/artifact-share"))).toBe(false);
 }, 60_000);
 
-test("built-in YAML and TS enforce the same record and bootstrap repair rules", () => {
+test("a built-in definition enforces the record and bootstrap repair rules", () => {
   const { dir, newer, select } = fixture("integrity");
-  select("  - name: arrival\n  - name: legacy\n");
+  select("  - name: arrival\n");
   newer(0, "sync", "--packages");
 
-  for (const [name, file] of [["arrival", "office.ts"], ["legacy", "package.yaml"]]) {
-    const pkg = join(dir, ".office/packages", name);
-    const path = join(pkg, file);
-    const original = read(path);
-    newer(0, "cron", "list");
-    write(path, original + "\n");
-    expect(newer(1, "cron", "list")).toContain(`${file} (edited)`);
-    newer(0, "sync", "--packages");
-    expect(read(path)).toBe(original);
-    rmSync(join(pkg, ".source.json"));
-    expect(newer(1, "cron", "list")).toContain("no readable .source.json");
-    newer(0, "sync", "--packages");
-    newer(0, "cron", "list");
-  }
+  const pkg = join(dir, ".office/packages/arrival");
+  const path = join(pkg, "office.ts");
+  const original = read(path);
+  newer(0, "cron", "list");
+  write(path, original + "\n");
+  expect(newer(1, "cron", "list")).toContain("office.ts (edited)");
+  newer(0, "sync", "--packages");
+  expect(read(path)).toBe(original);
+  rmSync(join(pkg, ".source.json"));
+  expect(newer(1, "cron", "list")).toContain("no readable .source.json");
+  newer(0, "sync", "--packages");
+  newer(0, "cron", "list");
 }, 60_000);
 
-test("down tears down from the applied Compose inputs and marked unit when the owner's definition throws on import, naming it", async () => {
+test("down tears down from the applied Compose inputs and recorded unit when the owner's definition throws on import, naming it", async () => {
   const { dir, home, probe, cli, select } = fixture("teardown");
   select("  - name: notes\nstate: ./state\n");
   const pkg = join(dir, "packages/notes");
@@ -156,7 +155,9 @@ test("down tears down from the applied Compose inputs and marked unit when the o
   (await preparePackageServices(loadOffice(dir), false)).apply();
   writePackage(join(pkg, "office.ts"), `${marker} throw Error("unread")`);
   const unit = "office-teardown-pkg-notes.bridge.service";
-  write(join(home, "units", unit), `# office package services: ${dir}\n`);
+  const unitText = "[Service]\nExecStart=/bin/true\n";
+  write(join(home, "units", unit), unitText);
+  write(join(dir, "state/systemd", `${unit}.json`), JSON.stringify({ owner: "notes", sha256: unitSha256(unitText) }));
   write(join(home, "bin/systemctl"), '#!/bin/sh\necho "$*" >> "$HOME/service.calls"\n', 0o755);
   write(join(home, "bin/docker"), '#!/bin/sh\necho "$*" >> "$HOME/docker.calls"\ncase "$1" in ps) echo fixture-container;; esac\n', 0o755);
   // The shutdown reader imports the owner for its `down` and names it; the office's own teardown doesn't need it.

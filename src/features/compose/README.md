@@ -1,6 +1,6 @@
 # Package services in the Office Compose project
 
-[`services.ts`](services.ts) owns the native package-service planner linked into `office`. An author still places `compose.yaml` beside `office.ts` or `package.yaml`. Both readers resolve settings and package provenance before the CLI calls the same planner. An office's own `compose.yaml` remains its final override.
+[`services.ts`](services.ts) owns the package-service planner linked into `office`. An author places `compose.yaml` in the package root. The CLI resolves settings and package provenance before it calls the planner. An office's own `compose.yaml` remains its final override.
 
 The planner is an internal interface for callers holding **validated selections and resolved directories**. It is not a reader of untrusted package definitions. For example, the workflow can plan a change without starting Docker or reading a secret:
 

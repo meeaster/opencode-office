@@ -39,11 +39,8 @@ const allowed: readonly Allowed[] = [
   { from: "src/loader/publication/admission.ts", to: "features/references", needsApi: true },
   { from: "src/loader/publication/admission.ts", to: "features/tools", needsApi: true },
   { from: "src/loader/definitions/inventory.ts", to: "features/compose", needsApi: true },
-  { from: "src/loader/definitions/inventory.ts", to: "features/mise-integration", needsApi: true },
-  { from: "src/features/mise-integration/projection.ts", to: "packages/tooling" },
   { from: "src/features/mise-integration/projection.ts", to: "packages/tools" },
   { from: "src/features/systemd/units.ts", to: "packages/tools" },
-  { from: "src/features/tooling/requirements.ts", to: "packages/tools" },
 ];
 
 // Read tokens rather than matching lines: type imports, comments between tokens and semicolon-free

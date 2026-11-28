@@ -1,7 +1,7 @@
 // Words after a package command's name, in the compiled office: they reach the command exactly as
 // typed, through the first process and the reader, while the CLI's own commands keep their options.
 import { expect, test } from "bun:test";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { sha256 } from "../../packages/seeds/store.ts";
 import { definitionFixture } from "../support/package-definition.fixture.ts";
@@ -35,8 +35,48 @@ test("a package command gets the words after its name as typed: paths with space
 
   // The CLI's own commands still refuse an option they don't know; a command that takes no words says so.
   expect(cli(1, "check", "--force")).toContain("Unknown option '--force'");
-  expect(cli(1, "references", "list", "extra")).toContain("office references list takes no arguments, not extra");
 }, 60_000);
+
+test("package handler errors print one line on stderr and exit 1", () => {
+  const { dir, env, cli, select } = fixture("command-errors");
+  select("  - name: skills\n  - name: executor\n");
+  cli(0, "sync", "--packages");
+
+  for (const [args, message] of [
+    [["cron", "run", "nope"], "cron nope: not enabled for this office; see office cron list"],
+    [["cron", "list", "extra"], "usage: office cron list"],
+    [["skills", "list", "x"], "usage: office skills list"],
+    [["apps", "deploy", "extra"], "usage: office apps deploy [--verbose]"],
+    [["apps", "adopt"], "usage: office apps adopt <catalog-id>"],
+    [["seeds", "diff", "one", "two"], "usage: office seeds diff [<path>]: one path at most, not 2"],
+    [["seeds", "settle"], "usage: office seeds settle <path>: exactly one path, not 0"],
+    [["references", "list", "extra"], "office references list takes no arguments, not extra"],
+  ] satisfies [string[], string][]) {
+    const result = Bun.spawnSync([exe, "--office", dir, ...args], { cwd: root, env });
+
+    expect({ status: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString() }).toEqual({
+      status: 1, stdout: "", stderr: `office: ${message}\n`,
+    });
+  }
+});
+
+test("a package handler's error naming two problems fits on one stderr line", () => {
+  const { dir, env, cli, select } = fixture("command-error-list");
+  const scripts = ["one.sh", "two.sh"];
+  select("  - name: cron\n    settings:\n      jobs:\n        one: { schedule: '@daily', script: one.sh }\n        two: { schedule: '@daily', script: two.sh }\n");
+
+  for (const script of scripts) write(join(dir, script), "true\n");
+  cli(0, "sync", "--packages");
+
+  for (const script of scripts) rmSync(join(dir, script));
+
+  const result = Bun.spawnSync([exe, "--office", dir, "cron", "list"], { cwd: root, env });
+  const errors = scripts.map(script => `cron office.${script.slice(0, -3)}: ${script} must be an existing regular script inside the office folder, with no symlink`);
+
+  expect({ status: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString() }).toEqual({
+    status: 1, stdout: "", stderr: `office: ${errors.join("; ")}\n`,
+  });
+});
 
 test("the seeds commands office prints for paths that look like options run as printed, each on its own path in this office", () => {
   const { dir, env, cli, select } = fixture("printed");

@@ -1,7 +1,6 @@
 // Deliver resolved requirements, tasks, install-once hooks and native bootstrap recipes.
-// A definition's tools, host.install and system declarations use the same writers.
 //
-// - Every package's tools go in one file, `machine.packages.toml` at the office root, beside the
+// - Tools required in container mode go in `machine.packages.toml` at the office root, beside the
 //   office's own `machine.toml`: a single [tools] table, one line per tool, each with a comment
 //   naming the packages that declare it. Sync owns which tools are there and the comments; the
 //   versions are the office's. A package's version is the one it was tested with and a floor: sync
@@ -26,14 +25,15 @@ import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 
-import { adoptVersion, compareToolVersions, declaredTools, hostApplies, switchedOn, wantedTools } from "../tooling/requirements.ts";
 import * as v from "valibot";
 
 import { packageDeliveryDir } from "../../bound-paths.ts";
+import { adoptVersion, declaredTools, wantedTools } from "./package-tools.ts";
 import { toolPins } from "./mise-toml.ts";
 import type { Office } from "../../office.ts";
 import { shellQuote } from "../tools/sfw.ts";
 import { projectionPath } from "../tools/applied.ts";
+import { compareToolVersions } from "../tools/versions.ts";
 import { fragmentOfficeRoot, systemApplyCommand, systemMarker, systemNotes, systemSection, systemState } from "./system.ts";
 import type { ProjectedPackage } from "./projection.ts";
 import type { Parsed } from "../../parse.ts";
@@ -169,9 +169,9 @@ const marker = /^# The mise setup of package ([a-z0-9][a-z0-9-]*)\./;
 function header(name: string): string[] {
   return [
     `# The mise setup of package ${name}. office sync writes this file and rewrites it on every sync, so`,
-    "# change nothing here; the package's tools are in machine.packages.toml at the office root. mise",
-    "# doesn't load this file where it is: in a host-mode office, office sync links it into mise's global",
-    "# conf.d, and the container links it inside itself, so it applies in every folder.",
+    "# change nothing here. mise loads it through a global conf.d link: office sync places the link",
+    "# on the host in host mode, and the container places it inside itself in container mode,",
+    "# so it applies in every folder.",
   ];
 }
 
@@ -214,9 +214,8 @@ const packagesHeader = [
   "# package declares any more (office check reports a tool added or removed by hand). The versions are",
   "# the office's: office upgrade-tools bumps them, and sync changes one only to raise it to the version",
   "# a package needs at least, which it says when it does. To hold a tool back, pin it in machine.toml",
-  "# beside this file, the office's own, which wins over it. mise doesn't load this file where it is: in",
-  "# a host-mode office, office sync links it into mise's global conf.d, and the container links it",
-  "# inside itself, so it applies in every folder; the same tool in a mise.toml wins in that mise.toml's",
+  "# beside this file, the office's own, which wins over it. The OpenCode container links this file",
+  "# into mise's global conf.d, so it applies in every folder. The same tool in a mise.toml wins in that file's",
   "# folder. These comment lines and each line's comment are office sync's, rewritten on every sync.",
 ];
 
@@ -336,25 +335,12 @@ function appliedFirst(office: Office): string {
   return office.opencode.mode === "host" ? `PATH=${shellQuote(projectionPath(office))}:"$PATH" ` : "";
 }
 
-/**
- * Who keeps a host install current once it exists: an executable updates itself (Browse); a
- * regular file stays as installed until its task runs again.
- */
-function installOf(item: ProjectedPackage) {
-  const typed = item.claims.install;
-
-  if (typed) return { ...typed, creates: typed.ready };
-  const host = item.manifest.host?.install;
-
-  return host && { ...host, name: "install" };
-}
-
 function installTask(item: ProjectedPackage) {
-  return `${item.entry.name}:${installOf(item)?.name ?? "install"}`;
+  return `${item.entry.name}:${item.claims.install?.name ?? "install"}`;
 }
 
 function afterInstall(item: ProjectedPackage): string {
-  return installOf(item)?.executable === false ? `mise run ${installTask(item)} repairs or updates it` : "it updates itself";
+  return item.claims.install?.executable === false ? `mise run ${installTask(item)} repairs or updates it` : "it updates itself";
 }
 
 /** Whether `path` is what a host install creates: a regular file, executable unless the install says otherwise. */
@@ -377,21 +363,21 @@ function installed(path: string, executable: boolean): boolean {
  * they work from any folder; mise puts the office's tools on their PATH, `bun` among them.
  */
 function hostSection(office: Office, item: ProjectedPackage): string | undefined {
-  const install = installOf(item);
+  const install = item.claims.install;
 
-  if (install === undefined || office.opencode.mode !== "host" || (!item.claims.install && !hostApplies(office, item))) return undefined;
+  if (install === undefined || office.opencode.mode !== "host") return undefined;
 
   const script = relative(office.dir, join(packageDeliveryDir(office.dir, item), install.script));
-  const creates = install.creates.replace(/^~\//, "$HOME/");
+  const creates = install.ready.replace(/^~\//, "$HOME/");
   const test = install.executable ? "test -x" : "test -f";
 
   return [
     "[hooks]",
-    `# ${install.description}, in ${install.creates}: installed by mise install on this host-mode office's machine when it is missing; ${afterInstall(item)}.`,
+    `# ${install.description}, in ${install.ready}: installed by mise install on this host-mode office's machine when it is missing; ${afterInstall(item)}.`,
     `postinstall = ${JSON.stringify(`${test} "${creates}" || ${appliedFirst(office)}bun "${officeRoot}/${script}"`)}`,
     "",
     `[tasks.${JSON.stringify(installTask(item))}]`,
-    `description = ${JSON.stringify(`Install or repair ${install.description} in ${install.creates}`)}`,
+    `description = ${JSON.stringify(`Install or repair ${install.description} in ${install.ready}`)}`,
     `env = { OFFICE_ROOT = ${JSON.stringify(officeRoot)} }`,
     `run = ${JSON.stringify(`${appliedFirst(office)}bun "$OFFICE_ROOT/${script}"`)}`,
     "",
@@ -454,10 +440,10 @@ function removeEmptyFolders(office: Office): void {
 }
 
 /** Why a package's host install isn't in its fragment, for messages. */
-function hostAbsence(office: Office, item: ProjectedPackage): string {
+function hostAbsence(office: Office): string {
   if (office.opencode.mode !== "host") return "the office runs OpenCode in its container (opencode: container)";
 
-  return item.manifest.host?.setting ? `its ${item.manifest.host.setting} setting is off` : "its setup no longer selects the install";
+  return "its setup no longer selects the install";
 }
 
 /** What changed in a package's setup, from `before` (the fragment's old text) to now, one line each. */
@@ -465,10 +451,10 @@ function sectionChanges(office: Office, item: ProjectedPackage, before: string, 
   const name = item.entry.name;
   const lines: string[] = [];
   const host = hostSection(office, item);
-  const install = installOf(item)?.description ?? "its host install";
+  const install = item.claims.install?.description ?? "its host install";
 
-  if (host === undefined && before.includes(hostMarker(item))) lines.push(`removed package ${name}'s install of ${install} from ${where}: ${hostAbsence(office, item)}`);
-  else if (host !== undefined && !before.includes(host.trim())) lines.push(`wrote package ${name}'s install of ${install} to ${where}: mise install installs it once, through the link (or mise run ${name}:install)`);
+  if (host === undefined && before.includes(hostMarker(item))) lines.push(`removed package ${name}'s install of ${install} from ${where}: ${hostAbsence(office)}`);
+  else if (host !== undefined && !before.includes(host.trim())) lines.push(`wrote package ${name}'s install of ${install} to ${where}: mise install installs it once, through the link (or mise run ${installTask(item)})`);
 
   const system = item.system;
   const state = systemState(office, item);
@@ -559,24 +545,20 @@ type FragmentReport = { ok: boolean; notes: string[] };
 
 /** The host install's notes: why it is off here, or whether what it creates exists. */
 function hostNotes(office: Office, item: ProjectedPackage): FragmentReport {
-  const host = item.manifest.host;
-  const install = installOf(item);
+  const install = item.claims.install;
 
-  if (!item.claims.install && (host === undefined || !switchedOn(item))) return { ok: true, notes: [] };
-
-  const what = install?.description ?? "its host-mode tools";
+  if (install === undefined) return { ok: true, notes: [] };
+  const what = install.description;
 
   if (office.opencode.mode !== "host") return { ok: true, notes: [`${what} is host-mode only, so this container-mode office doesn't have it`] };
 
-  if (install === undefined) return { ok: true, notes: [] };
-
   // $HOME first, as the hook's test reads it.
-  const path = install.creates.replace(/^~\//, `${process.env.HOME ?? homedir()}/`);
+  const path = install.ready.replace(/^~\//, `${process.env.HOME ?? homedir()}/`);
 
-  if (installed(path, install.executable)) return { ok: true, notes: [`${what} installed in ${install.creates}; ${afterInstall(item)}`] };
+  if (installed(path, install.executable)) return { ok: true, notes: [`${what} installed in ${install.ready}; ${afterInstall(item)}`] };
 
   const wrong = install.executable ? "not an executable file" : "not a regular file";
-  const state = existsSync(path) ? `is ${wrong} in ${install.creates}` : `is missing from ${install.creates}`;
+  const state = existsSync(path) ? `is ${wrong} in ${install.ready}` : `is missing from ${install.ready}`;
 
   return { ok: false, notes: [`${what} ${state}; office up installs it (or mise install, or mise run ${installTask(item)}, once the office's tools are linked)`] };
 }

@@ -15,10 +15,9 @@ import { toolPins } from "../../mise-integration/mise-toml.ts";
 import { loadOffice } from "../../../office.ts";
 import { verifyCopy } from "../../../loader/sources/copies.ts";
 import { resolvePackages } from "../../../loader/sources/selection.ts";
-import { parseManifest } from "../../../loader/sources/manifest-schema.ts";
 import { fragmentNotes, machineBelowFloors, machineFiles, orphanFragments, packageLines, packagesFileProblems, strayFragments } from "../../mise-integration/delivery.ts";
-import { compareToolVersions } from "../../tooling/requirements.ts";
-import { definitionText, pluginDefinition, sharedToolsLock, writePackage } from "../../../../test/support/test-package.ts";
+import { compareToolVersions } from "../versions.ts";
+import { definitionText, pluginDefinition, settingsSchema, sharedToolsLock, writePackage } from "../../../../test/support/test-package.ts";
 import { projectionPath } from "../applied.ts";
 import { admitTools } from "../admission.ts";
 
@@ -43,13 +42,18 @@ function write(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
-/** A local package `name` declaring `tools`. */
-function pkg(name: string, tools: string): void {
-  writePackage(join(office, `packages/${name}/package.yaml`), tools || "{}\n");
+function pkg(name: string, tools: Record<string, string>): void {
+  const required = Object.entries(tools).map(([name, minimum]) => ({ name, minimum, bin: name.split(":").at(-1) }));
+
+  writePackage(join(office, `packages/${name}/office.ts`), definitionText(`{
+    setup(ctx) {
+      for (const requirement of ${JSON.stringify(required)}) ctx.add(requirements, requirement);
+    },
+  }`, 'const requirements = { id: "tools.requirements", parse: value => value };'));
 }
 
 /** A local package `demo` declaring `tools`, listed in office.yaml. */
-function demo(tools: string): void {
+function demo(tools: Record<string, string>): void {
   pkg("demo", tools);
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n");
 }
@@ -112,7 +116,7 @@ test("upgrade-tools' line edit keeps a line's package comment", () => {
 });
 
 test("sync writes a package's tools to machine.packages.toml at the package's versions, naming the package, and no fragment", async () => {
-  demo('tools:\n  "npm:agent-browser": "0.43.0"\n  jq: "1.7.1"\n');
+  demo({ "npm:agent-browser": "0.43.0", jq: "1.7.1" });
 
   const changes = await sync(loadOffice(office));
 
@@ -132,9 +136,9 @@ test("sync writes a package's tools to machine.packages.toml at the package's ve
 });
 
 test("a package that now needs a newer version raises the office's line, and sync says so", async () => {
-  demo('tools:\n  jq: "1.7.1"\n');
+  demo({ jq: "1.7.1" });
   await sync(loadOffice(office));
-  demo('tools:\n  jq: "1.8.0"\n');
+  demo({ jq: "1.8.0" });
 
   expect(await notes()).toEqual({ ok: false, notes: ["tools jq in machine.packages.toml", "machine.packages.toml holds jq 1.7.1, below the 1.8.0 this package needs; office sync raises it"] });
   expect(await sync(loadOffice(office))).toEqual(["raised jq from 1.7.1 to 1.8.0 in machine.packages.toml: package demo needs at least 1.8.0"]);
@@ -143,8 +147,8 @@ test("a package that now needs a newer version raises the office's line, and syn
 });
 
 test("two packages declaring one tool get one line at the higher version, naming both; the office's newer version stays", async () => {
-  pkg("demo", 'tools:\n  bun: "1.4.4"\n');
-  pkg("other", 'tools:\n  bun: "1.4.5"\n');
+  pkg("demo", { bun: "1.4.4" });
+  pkg("other", { bun: "1.4.5" });
   write(join(office, "office.yaml"), "name: t\npackages:\n  - name: demo\n  - name: other\n");
 
   expect(await sync(loadOffice(office))).toEqual(expect.arrayContaining([expect.stringMatching(/, bun 1\.4\.5$/)]));
@@ -152,7 +156,7 @@ test("two packages declaring one tool get one line at the higher version, naming
   expect((await notes("demo")).ok).toBe(true);
 
   setVersion("bun", "1.5.0");
-  pkg("other", 'tools:\n  bun: "1.4.9"\n');
+  pkg("other", { bun: "1.4.9" });
 
   expect(await sync(loadOffice(office))).toEqual([]);
   expect(lines()).toEqual(['"bun" = "1.5.0" # demo, other']);
@@ -165,10 +169,10 @@ test("two packages declaring one tool get one line at the higher version, naming
 });
 
 test("a tool no package declares any more goes; one a package adds comes at its version, and check names both first", async () => {
-  demo('tools:\n  "npm:agent-browser": "0.43.0"\n  jq: "1.7.1"\n');
+  demo({ "npm:agent-browser": "0.43.0", jq: "1.7.1" });
   await sync(loadOffice(office));
   setVersion("jq", "1.8.0");
-  demo('tools:\n  jq: "1.7.1"\n  "npm:oxlint": "1.93.0"\n');
+  demo({ jq: "1.7.1", "npm:oxlint": "1.93.0" });
 
   expect(await notes()).toEqual({ ok: false, notes: ["tools jq in machine.packages.toml", "machine.packages.toml lacks npm:oxlint; office sync adds it"] });
   expect(await problems()).toEqual(["machine.packages.toml holds npm:agent-browser, which no package declares here; office sync removes it"]);
@@ -182,7 +186,7 @@ test("a tool no package declares any more goes; one a package adds comes at its 
 });
 
 test("a version office can't order stays as the office wrote it, and check says why", async () => {
-  demo('tools:\n  jq: "1.7.1"\n');
+  demo({ jq: "1.7.1" });
   await sync(loadOffice(office));
   setVersion("jq", "latest");
 
@@ -191,21 +195,19 @@ test("a version office can't order stays as the office wrote it, and check says 
   expect(await notes()).toEqual({ ok: true, notes: ["tools jq in machine.packages.toml", "machine.packages.toml holds jq latest, which office can't order against the 1.7.1 this package declares, so office sync leaves it"] });
 });
 
-test("a package that doesn't read, as package.yaml's tools take exact versions only, keeps its lines until it reads again", async () => {
-  demo('tools:\n  jq: "1.7.1"\n');
+test("a package with an invalid tool requirement leaves the machine file as it was", async () => {
+  demo({ jq: "1.7.1" });
   await sync(loadOffice(office));
   setVersion("jq", "1.8.0");
-  pkg("demo", 'tools:\n  jq: latest\n  node: "26"\n');
+  pkg("demo", { jq: "latest" });
 
-  expect(await sync(loadOffice(office))).toEqual(
-    expect.arrayContaining(["FAILED package demo: packages/demo/package.yaml: tools.jq: must be an exact version such as 0.43.0", "FAILED package demo: packages/demo/package.yaml: tools.node: must be an exact version such as 0.43.0"]),
-  );
+  expect((await sync(loadOffice(office))).join("\n")).toContain("tool requirement jq: minimum must be the exact version");
   expect(lines()).toEqual(['"jq" = "1.8.0" # demo']);
   expect(await problems()).toEqual([]);
 });
 
 test("check reports a declared tool missing from machine.packages.toml, or the file itself, and comments that differ from what sync writes", async () => {
-  demo('tools:\n  "npm:agent-browser": "0.43.0"\n');
+  demo({ "npm:agent-browser": "0.43.0" });
   // A synced office (nothing loads before the first sync), whose machine.packages.toml was then removed.
   await sync(loadOffice(office));
   rmSync(join(office, "machine.packages.toml"));
@@ -224,7 +226,7 @@ test("check reports a declared tool missing from machine.packages.toml, or the f
 });
 
 test("machine.toml pinning a tool below a package's version is a warning naming both; at or above, nothing", async () => {
-  demo('tools:\n  jq: "1.7.1"\n');
+  demo({ jq: "1.7.1" });
   await sync(loadOffice(office));
   write(join(office, "machine.toml"), '[tools]\njq = "1.6.0"\n');
 
@@ -242,13 +244,13 @@ test("machine.toml pinning a tool below a package's version is a warning naming 
 });
 
 test("sync deletes the fragment of a package office.yaml no longer lists, and leaves a file it didn't write, which check reports", async () => {
-  demo(hostManifest);
   mode("host");
+  installDemo();
   write(join(office, ".office/mise/own.toml"), '[tools]\njq = "1.7.1"\n');
   write(join(office, "machine.toml"), '[tools]\njq = "1.7.1"\n');
   await sync(loadOffice(office));
 
-  expect(machineFiles(loadOffice(office)).map((path) => path.slice(office.length + 1))).toEqual(["machine.packages.toml", ".office/mise/demo.toml", "machine.toml"]);
+  expect(machineFiles(loadOffice(office)).map((path) => path.slice(office.length + 1))).toEqual([".office/mise/demo.toml", "machine.toml"]);
   expect(strayFragments(loadOffice(office))).toEqual([".office/mise/own.toml isn't a fragment office sync wrote, and .office/ is the tool's, so nothing links it; move its tools to machine.toml"]);
 
   write(join(office, "office.yaml"), "name: t\nopencode:\n  mode: host\n  url: http://127.0.0.1:49999\n");
@@ -258,32 +260,30 @@ test("sync deletes the fragment of a package office.yaml no longer lists, and le
   const changes = await sync(loadOffice(office));
 
   expect(changes).toContain("deleted .office/mise/demo.toml, the mise setup of package demo, which office.yaml no longer lists");
-  expect(changes).toContain("deleted machine.packages.toml, as no package declares a tool here");
   expect(existsSync(fragment())).toBe(false);
   expect(existsSync(join(office, ".office/mise/own.toml"))).toBe(true);
 });
 
 test("sync refuses to write a package's setup over a fragment it didn't write", async () => {
-  demo(hostManifest);
   mode("host");
+  installDemo();
   write(fragment(), '[hooks]\npostinstall = "true"\n');
 
   expect(await sync(loadOffice(office))).toContain("FAILED package demo: .office/mise/demo.toml is not the fragment office sync writes for it, so its mise setup isn't written; rename that file");
   expect(readFileSync(fragment(), "utf8")).toBe('[hooks]\npostinstall = "true"\n');
 });
 
-const hostManifest = `settings: {type: object, additionalProperties: false, properties: {extra: {type: boolean, default: true}}}
-tools:
-  jq: "1.7.1"
-host:
-  setting: extra
-  tools:
-    bun: "1.4.4"
-  install:
-    description: Demo
-    creates: ~/.local/bin/demo
-    script: scripts/install.ts
-`;
+function installDemo({ executable = true, ready = "~/.local/bin/demo" } = {}) {
+  const install = { name: "install", description: "Demo", destination: ready, ready, script: "scripts/install.ts", executable };
+
+  writePackage(join(office, "packages/demo/office.ts"), definitionText(`{
+    settings: ${settingsSchema({ extra: true })},
+    setup(ctx) {
+      if (ctx.settings.extra) ctx.add(installs, ${JSON.stringify(install)});
+    },
+  }`, 'const installs = { id: "mise-integration.installs", parse: value => value };'));
+  write(join(office, "packages/demo/scripts/install.ts"), "");
+}
 
 /** office.yaml for an office in `mode`, listing demo with `settings`. */
 function mode(which: "host" | "container", settings = ""): void {
@@ -308,14 +308,14 @@ run = "${first}bun \\"$OFFICE_ROOT/packages/demo/scripts/install.ts\\""
 };
 
 const setupHeader = `# The mise setup of package demo. office sync writes this file and rewrites it on every sync, so
-# change nothing here; the package's tools are in machine.packages.toml at the office root. mise
-# doesn't load this file where it is: in a host-mode office, office sync links it into mise's global
-# conf.d, and the container links it inside itself, so it applies in every folder.
+# change nothing here. mise loads it through a global conf.d link: office sync places the link
+# on the host in host mode, and the container places it inside itself in container mode,
+# so it applies in every folder.
 `;
 
-test("a host-mode office with the switch on gets the host tools, and a fragment with only the install hook and its task; check looks for what it creates", async () => {
-  demo(hostManifest);
+test("a host install writes the hook and its task; check looks for what it creates", async () => {
   mode("host");
+  installDemo();
 
   const home = process.env.HOME;
 
@@ -328,26 +328,25 @@ test("a host-mode office with the switch on gets the host tools, and a fragment 
     expect(changes).toContain("wrote package demo's install of Demo to .office/mise/demo.toml: mise install installs it once, through the link (or mise run demo:install)");
     expect(readFileSync(fragment(), "utf8")).toBe(`${setupHeader}\n${section()}`);
     expect(toolPins(readFileSync(fragment(), "utf8"))).toEqual([]);
-    expect(lines()).toEqual(['"jq" = "1.7.1" # demo', '"bun" = "1.4.4" # demo']);
-    expect(await notes()).toEqual({ ok: false, notes: ["tools jq, bun in machine.packages.toml", "mise setup in .office/mise/demo.toml", "Demo is missing from ~/.local/bin/demo; office up installs it (or mise install, or mise run demo:install, once the office's tools are linked)"] });
+    expect(await notes()).toEqual({ ok: false, notes: ["mise setup in .office/mise/demo.toml", "Demo is missing from ~/.local/bin/demo; office up installs it (or mise install, or mise run demo:install, once the office's tools are linked)"] });
 
     write(join(dir, "home/.local/bin/demo"), "");
 
     // The hook's test -x would run the script again, so check doesn't call it installed either.
-    expect((await notes()).notes[2]).toBe("Demo is not an executable file in ~/.local/bin/demo; office up installs it (or mise install, or mise run demo:install, once the office's tools are linked)");
+    expect((await notes()).notes[1]).toBe("Demo is not an executable file in ~/.local/bin/demo; office up installs it (or mise install, or mise run demo:install, once the office's tools are linked)");
 
     chmodSync(join(dir, "home/.local/bin/demo"), 0o755);
 
-    expect(await notes()).toEqual({ ok: true, notes: ["tools jq, bun in machine.packages.toml", "mise setup in .office/mise/demo.toml", "Demo installed in ~/.local/bin/demo; it updates itself"] });
-    expect(await sync(loadOffice(office))).toEqual([expect.stringMatching(/^not linking machine.toml, machine.packages.toml and .office\/mise\//)]);
+    expect(await notes()).toEqual({ ok: true, notes: ["mise setup in .office/mise/demo.toml", "Demo installed in ~/.local/bin/demo; it updates itself"] });
+    expect(await sync(loadOffice(office))).toEqual([expect.stringMatching(/^not linking /)]);
   } finally {
     process.env.HOME = home;
   }
 });
 
 test("an install with executable: false creates a regular file: the hook tests -f, and check accepts a file that isn't executable", async () => {
-  demo(hostManifest.replace("    script: scripts/install.ts\n", "    script: scripts/install.ts\n    executable: false\n").replace("~/.local/bin/demo", "~/.local/share/demo/init.zsh"));
   mode("host");
+  installDemo({ executable: false, ready: "~/.local/share/demo/init.zsh" });
 
   const home = process.env.HOME;
 
@@ -370,30 +369,16 @@ test("an install with executable: false creates a regular file: the hook tests -
     rmSync(join(dir, "home/.local/share/demo/init.zsh"), { recursive: true });
     write(join(dir, "home/.local/share/demo/init.zsh"), "");
 
-    expect(await notes()).toEqual({ ok: true, notes: ["tools jq, bun in machine.packages.toml", "mise setup in .office/mise/demo.toml", "Demo installed in ~/.local/share/demo/init.zsh; mise run demo:install repairs or updates it"] });
+    expect(await notes()).toEqual({ ok: true, notes: ["mise setup in .office/mise/demo.toml", "Demo installed in ~/.local/share/demo/init.zsh; mise run demo:install repairs or updates it"] });
   } finally {
     process.env.HOME = home;
   }
 });
 
-/** What package.yaml's schema says of a demo manifest. */
-function manifestErrors(manifest: string): string[] {
-  const result = parseManifest("demo", Bun.YAML.parse(manifest));
-
-  return result.ok ? [] : result.errors;
-}
-
-test("host.install.executable must be true or false, and host.setting must name a true/false setting", () => {
-  expect(manifestErrors(hostManifest)).toEqual([]);
-  expect(manifestErrors(hostManifest.replace("    script: scripts/install.ts\n", "    script: scripts/install.ts\n    executable: maybe\n"))).toEqual(["host.install.executable: must be true or false"]);
-  expect(manifestErrors(hostManifest.replace("setting: extra", "setting: missing"))).toEqual(["host.setting: must name one of the package's settings declared type: boolean"]);
-});
-
-test("switching to container mode or turning the setting off removes the host tools and the fragment, and keeps the office's versions", async () => {
-  demo(hostManifest);
+test("switching to container mode or turning the install off removes its fragment", async () => {
   mode("host");
+  installDemo();
   await sync(loadOffice(office));
-  setVersion("jq", "1.8.0");
 
   // Only the note that the office may not write outside its folder yet: nothing changed.
   expect(await sync(loadOffice(office))).toEqual([expect.stringMatching(/^not linking /)]);
@@ -402,30 +387,27 @@ test("switching to container mode or turning the setting off removes the host to
 
   const changes = await sync(loadOffice(office));
 
-  expect(changes).toContain("removed bun from machine.packages.toml, as no package declares it here any more");
   expect(changes).toContain("removed package demo's install of Demo from .office/mise/demo.toml: the office runs OpenCode in its container (opencode: container)");
   expect(changes).toContain("deleted .office/mise/demo.toml, as package demo has no mise setup here");
   // Sync removes the folder it emptied, too.
   expect(existsSync(join(office, ".office/mise"))).toBe(false);
-  expect(lines()).toEqual(['"jq" = "1.8.0" # demo']);
-  expect(await notes()).toEqual({ ok: true, notes: ["tools jq in machine.packages.toml", "Demo is host-mode only, so this container-mode office doesn't have it"] });
+  expect(await notes()).toEqual({ ok: true, notes: ["Demo is host-mode only, so this container-mode office doesn't have it"] });
 
   mode("host");
   await sync(loadOffice(office));
 
   expect(readFileSync(fragment(), "utf8")).toBe(`${setupHeader}\n${section()}`);
-  expect(lines()).toEqual(['"jq" = "1.8.0" # demo', '"bun" = "1.4.4" # demo']);
 
   mode("host", "    settings:\n      extra: false\n");
 
-  expect(await sync(loadOffice(office))).toContain("removed package demo's install of Demo from .office/mise/demo.toml: its extra setting is off");
+  expect(await sync(loadOffice(office))).toContain("deleted .office/mise/demo.toml, as package demo has no mise setup here");
   expect(existsSync(fragment())).toBe(false);
-  expect(await notes()).toEqual({ ok: true, notes: ["tools jq in machine.packages.toml"] });
+  expect(await notes()).toEqual({ ok: true, notes: [] });
 });
 
 test("check reports a fragment sync would rewrite", async () => {
-  demo(hostManifest);
   mode("host");
+  installDemo();
   await sync(loadOffice(office));
   writeFileSync(fragment(), readFileSync(fragment(), "utf8").replace("scripts/install.ts", "scripts/other.ts"));
 
@@ -473,28 +455,6 @@ test("the built-ins' shared tools stay in a container's machine.packages.toml, h
   write(join(office, "office.yaml"), "name: t\nopencode: {mode: host, url: 'http://127.0.0.1:49999'}\npackages: [{name: browser, settings: {browse: false}}]\n");
   await sync(loadOffice(office), { scope: "packages" });
   expect(admitTools(loadOffice(office), (await gatherPackages(loadOffice(office), { machine: true })).packages).demands.has("core:bun")).toBe(false);
-});
-
-test("setup requirements share a floor with external manifests; failed collection retains machine outputs", async () => {
-  pkg("external", 'tools: {bun: "1.5.0"}');
-  const author = join(office, "packages/author/office.ts");
-
-  const code = definitionText(`{ settings:{type:"object",additionalProperties:false,properties:{floor:{type:"string",default:"1.4.4"}}}, setup(ctx) {
-    ctx.add(requirements, {name:"bun", minimumVersion:ctx.settings.floor});
-  }}`, `import { requirements } from "@office/tooling/requirements";`);
-
-  const run = () => sync(loadOffice(office), { scope: "packages" });
-  // From source, a local package resolves its @office imports through the published set.
-  write(join(office, "office.yaml"), "name: t\npackages: [{name: external}]\n");
-  await run();
-  writePackage(author, code, { dependencies: ["tooling"] });
-  write(join(office, "office.yaml"), "name: t\npackages: [{name: external}, {name: author}]\n");
-  expect((await run()).join("\n")).not.toContain("FAILED");
-  expect(lines()).toEqual(['"bun" = "1.5.0" # author, external']);
-  const good = packages();
-  write(join(office, "office.yaml"), "name: t\npackages: [{name: external}, {name: author, settings: {floor: not-a-floor}}]\n");
-  expect((await run()).join("\n")).toContain("invalid exact tool requirement");
-  expect(packages()).toBe(good);
 });
 
 test("exclusive install roots are independent of task and readiness names", async () => {

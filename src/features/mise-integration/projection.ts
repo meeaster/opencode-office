@@ -4,7 +4,6 @@ import { join, resolve, relative } from "node:path";
 import * as v from "valibot";
 import { installs, recipes, tasks, type Install, type Recipe, type Task } from "../../../packages/mise-integration/claims.ts";
 import type { RegistryEntry } from "../../../sdk/index.ts";
-import { requirements, type Requirement } from "../../../packages/tooling/requirements.ts";
 import { tools, type Provision, type Requirement as ToolRequirement } from "../../../packages/tools/handles.ts";
 import type { Office } from "../../office.ts";
 import type { InstalledPackage } from "../../loader/definitions/inventory.ts";
@@ -14,17 +13,15 @@ import { settingValue, type SettingValue } from "../../schema.ts";
 
 /** Whether a registry holds machine claims: tools, tasks, host installs or system recipes. */
 export function machineCollection(id: string) {
-  return [requirements.id, tools.requirements.id, tools.providers.id, installs.id, recipes.id, tasks.id].includes(id);
+  return [tools.requirements.id, tools.providers.id, installs.id, recipes.id, tasks.id].includes(id);
 }
 
 /**
- * What a package claims on the machine in this run, as their parsers returned them: tools by
- * `@office/tooling` (`tools`) and by `@office/tools` (`required`, `provided`), tasks, a host install
- * and a system recipe.
+ * What a package claims on the machine in this run, as their parsers returned them.
  */
-export type MachineClaims = { tools: Requirement[]; required: ToolRequirement[]; provided: Provision[]; tasks: Task[]; install?: Install; recipe?: Recipe };
+export type MachineClaims = { required: ToolRequirement[]; provided: Provision[]; tasks: Task[]; install?: Install; recipe?: Recipe };
 
-/** A package's claims and its effective system block: its own, or the recipe it contributed. */
+/** A package's claims and the effective system setup of its recipe. */
 export type Projection = { claims: MachineClaims; system: SystemBlock | undefined };
 
 /** An installed package with the machine claims from its parsed entries. */
@@ -36,32 +33,31 @@ function asset(item: InstalledPackage, file: string) {
   if (!statSync(path, { throwIfNoEntry: false })?.isFile() || relative(realpathSync(item.dir), realpathSync(path)).startsWith("..")) throw new Error(`${file} must be a file inside package ${item.entry.name}`);
 }
 
-/** A contributed recipe's system block without its ready paths, which its bootstrap file adds to. */
+/** A recipe without its ready paths, which its bootstrap file adds to. */
 const recipeBlock = v.object(v.omit(systemBlock, ["ready"]).entries);
 
 /**
  * Decode one package's parsed machine entries without reading a file; throws naming what is wrong.
- * A contributed recipe's block holds only the ready paths it names: `recipeSystem` adds its
+ * A recipe holds only the ready paths it names: `recipeSystem` adds its
  * bootstrap file's. The manifest is not changed.
  */
 export function project(item: InstalledPackage, rows: readonly { id: string; value: RegistryEntry }[]): Projection {
-  const claims: MachineClaims = { tools: [], required: [], provided: [], tasks: [] };
+  const claims: MachineClaims = { required: [], provided: [], tasks: [] };
   const names = new Set<string>();
-  let system = item.manifest.system;
+  let system: SystemBlock | undefined;
 
   for (const { id, value } of rows) {
-    if (id === requirements.id) claims.tools.push(requirements.parse(value));
-    else if (id === tools.requirements.id) claims.required.push(tools.requirements.parse(value));
+    if (id === tools.requirements.id) claims.required.push(tools.requirements.parse(value));
     else if (id === tools.providers.id) claims.provided.push(tools.providers.parse(value));
     else if (id === tasks.id || id === installs.id) {
       const task = tasks.parse(value);
 
-      if (names.has(task.name) || (item.manifest.host?.install && task.name === "install")) throw new Error(`duplicate task ${item.entry.name}:${task.name}`);
+      if (names.has(task.name)) throw new Error(`duplicate task ${item.entry.name}:${task.name}`);
       names.add(task.name);
 
       if (id === tasks.id) claims.tasks.push(task);
       else {
-        if (claims.install || item.manifest.host?.install) throw new Error(`duplicate host install of ${item.entry.name}`);
+        if (claims.install) throw new Error(`duplicate host install of ${item.entry.name}`);
         claims.install = installs.parse(value);
       }
     } else if (id === recipes.id) {
@@ -82,7 +78,7 @@ export function project(item: InstalledPackage, rows: readonly { id: string; val
 }
 
 /**
- * A contributed recipe's effective system block, for what applies or checks the machine: its ready
+ * A recipe's effective setup, for what applies or checks the machine: its ready
  * paths and each file its bootstrap file makes present. Reads that file; throws naming what is wrong.
  */
 export function recipeSystem(item: InstalledPackage, { name, ...block }: Recipe): SystemBlock {
@@ -168,14 +164,9 @@ export function destinationProblems(office: Office, items: ProjectedPackage[], c
   }
 
   for (const item of items) {
-    const host = item.manifest.host;
     const owner = item.entry.name;
 
-    if (office.opencode.mode === "host") {
-      if (item.claims.install) claim(item.claims.install.destination, owner);
-
-      if (host?.install && (!host.setting || String(item.settings[host.setting]) === "true")) claim(host.install.creates, owner);
-    }
+    if (office.opencode.mode === "host" && item.claims.install) claim(item.claims.install.destination, owner);
 
     if (item.system && systemApplies(office, item)) {
       try {

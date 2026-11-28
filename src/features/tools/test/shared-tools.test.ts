@@ -250,7 +250,6 @@ test("a conflicting package claim is refused before publication, naming both par
     // A consumer of a provided tool can only get what its provider stages.
     [() => { provides("theta", "widget", "1.0.0", "widget"); requires("iota", "widget", "1.0.0", "widgetctl"); }, ["alpha", "theta", "iota"], "package iota requires executable widgetctl of tool widget, which package theta provides without it (it stages widget)"],
     // The older route would install the same bun a second way, through machine.packages.toml.
-    [() => writePackage(join(office, "packages/kappa/office.ts"), definitionText('{setup(ctx){ctx.add(requirements,{name:"bun",minimumVersion:"1.4.4"})}}', 'import { requirements } from "@office/tooling/requirements";'), { dependencies: ["tooling"] }), ["alpha", "kappa"], "package kappa declares tool bun through @office/tooling, which machine.packages.toml installs, and package alpha requires it as core:bun through @office/tools: declare it one way, with tools.require"],
   ]);
 });
 

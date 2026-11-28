@@ -22,11 +22,11 @@ function pkg(name: string, kind: ResolvedPackage["kind"], folder: string): Resol
 
 test("a package set links each package it loads to its folder, relative, and a rejected one not at all", () => {
   const set = join(dir, ".office");
-  const packages = [pkg("tooling", "built-in", join(set, "packages/tooling")), pkg("shared", "remote", join(set, "packages/shared")), pkg("notes", "local", join(dir, "packages/notes")), pkg("broken", "remote", join(set, "packages/broken"))];
+  const packages = [pkg("tools", "built-in", join(set, "packages/tools")), pkg("shared", "remote", join(set, "packages/shared")), pkg("notes", "local", join(dir, "packages/notes")), pkg("broken", "remote", join(set, "packages/broken"))];
   writePackageLinks(set, packages, ["broken"]);
   const link = (name: string) => join(set, "node_modules/@office", name);
 
-  expect(readlinkSync(link("tooling"))).toBe("../../packages/tooling");
+  expect(readlinkSync(link("tools"))).toBe("../../packages/tools");
   expect(readlinkSync(link("shared"))).toBe("../../packages/shared");
   expect(readlinkSync(link("notes"))).toBe("../../../packages/notes");
   expect(realpathSync(link("notes"))).toBe(join(dir, "packages/notes"));

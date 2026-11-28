@@ -53,7 +53,14 @@ test("a broken package in check: a failed line naming it, one line for the skipp
   const { dir, cli, select } = fixture("broken-check");
   const repo = upstream("check-origin");
   const pkg = join(dir, "packages/broken");
-  writePackage(join(pkg, "office.ts"), definitionText('{setup(c){c.add(requirements,{name:"jq",minimumVersion:"1.7.1"}); seeds.add(c,{destination:"notes/broken.md",source:"seed/notes/broken.md"})}}', 'import {requirements} from "@office/tooling/requirements"; import {seeds} from "@office/seeds";'), { dependencies: ["tooling", "seeds"] });
+
+  const define = (extra = "") => writePackage(join(pkg, "office.ts"), definitionText(`{setup(c){
+    tools.require(c,{name:"jq",minimum:"1.7.1",bin:["jq"]});
+    ${extra}
+    seeds.add(c,{destination:"notes/broken.md",source:"seed/notes/broken.md"});
+  }}`, 'import {tools} from "@office/tools"; import {seeds} from "@office/seeds";'), { dependencies: ["tools", "seeds"] });
+
+  define();
   write(join(pkg, "seed/notes/broken.md"), "seed\n");
   select("  - name: broken\n");
   write(join(dir, "office.yaml"), read(join(dir, "office.yaml")).replace("references: []", `references: [{name: docs, url: ${repo}}]`));
@@ -61,7 +68,7 @@ test("a broken package in check: a failed line naming it, one line for the skipp
   cli(0, "check");
 
   // A requirement added since the last sync shows in check, which says to sync.
-  writePackage(join(pkg, "office.ts"), definitionText('{setup(c){c.add(requirements,{name:"jq",minimumVersion:"1.7.1"});c.add(requirements,{name:"yq",minimumVersion:"4.44.1"}); seeds.add(c,{destination:"notes/broken.md",source:"seed/notes/broken.md"})}}', 'import {requirements} from "@office/tooling/requirements"; import {seeds} from "@office/seeds";'), { dependencies: ["tooling", "seeds"] });
+  define('tools.require(c,{name:"yq",minimum:"4.44.1",bin:["yq"]});');
   expect(cli(1, "check")).toMatch(/FAIL package broken: .*machine\.packages\.toml lacks yq; office sync adds it/);
 
   writePackage(join(pkg, "office.ts"), definitionText('{setup(){throw Error("broken setup")}}'));

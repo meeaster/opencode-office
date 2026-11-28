@@ -1,5 +1,5 @@
-// A system recipe (or a definition's `system` declaration): what it sets up in a host-mode office's
-// machine with the operating system's package manager, such as the browser package's Google Chrome.
+// A system recipe sets up software on a host-mode office's machine through the operating system's
+// package manager, such as the browser package's Google Chrome.
 // It applies only while the package's own setting for it is on (it defaults to off: the office opts
 // in), the office runs OpenCode on the host, and the machine is one of the platforms the block names.
 //
@@ -20,7 +20,7 @@ import type { Parsed } from "../../parse.ts";
 import type { SettingValue } from "../../schema.ts";
 import type { SystemBlock } from "../../loader/sources/manifest-schema.ts";
 
-/** A package with its effective system block: its own, or a recipe it contributed in this run (src/gather.ts). */
+/** A package with its effective system recipe for this run (src/gather.ts). */
 export type WithSystem = ResolvedPackage & { readonly system: SystemBlock | undefined };
 
 /** Overrides the machine's platform, for tests and scratch offices; empty for a machine no block supports. */
@@ -48,7 +48,7 @@ function readText(path: string): string {
 }
 
 /**
- * This machine as a system block names platforms: `<ID>-<VERSION_ID>-<dpkg architecture>` from
+ * This machine as a system recipe names platforms: `<ID>-<VERSION_ID>-<dpkg architecture>` from
  * /etc/os-release, with `-wsl` under WSL (its kernel names Microsoft), such as
  * `ubuntu-24.04-amd64-wsl`. Undefined where it can't tell.
  */
@@ -76,7 +76,7 @@ function covers(platform: string, machine: string): boolean {
   return platform === machine || `${platform}-wsl` === machine;
 }
 
-/** Whether a package's system block applies here, and why not when it doesn't. */
+/** Whether a package's system recipe applies here, and why not when it doesn't. */
 export type SystemState = { applies: true } | { applies: false; reason: string; opted: boolean };
 
 /**
@@ -126,7 +126,7 @@ export function systemMarker(item: { entry: Pick<PackageEntry, "name"> }): strin
 function bootstrapText(item: Pick<ResolvedPackage, "dir">, file: string): Parsed<string> {
   const path = join(item.dir, file);
 
-  if (!existsSync(path)) return { ok: false, errors: [`${file}, the system block's bootstrap file, is missing from the package`] };
+  if (!existsSync(path)) return { ok: false, errors: [`${file}, the system recipe's bootstrap file, is missing from the package`] };
 
   const lines = readFileSync(path, "utf8").replace(/\s+$/, "").split("\n");
   const first = lines.findIndex((line) => /^\s*\[/.test(line));
@@ -141,7 +141,7 @@ function bootstrapText(item: Pick<ResolvedPackage, "dir">, file: string): Parsed
     if (table === undefined) continue;
 
     if (!table.startsWith("bootstrap.")) errors.push(`${file}: [${table}] isn't a [bootstrap.…] table`);
-    else if (/^bootstrap\.hooks(?:\.|$)/.test(table)) errors.push(`${file}: [${table}]: hooks are sync's, from the system block's prepare script`);
+    else if (/^bootstrap\.hooks(?:\.|$)/.test(table)) errors.push(`${file}: [${table}]: hooks are sync's, from the system recipe's prepare script`);
   }
 
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: lines.join("\n") };
@@ -196,7 +196,7 @@ export function systemVariables(office: Office, item: WithSystem): [string, stri
   return system === undefined || !systemApplies(office, item) ? [] : Object.entries(system.env);
 }
 
-/** What `office check` says of a package's system block, and whether it is set up where it applies. */
+/** What `office check` says of a package's system recipe, and whether it is set up where it applies. */
 export type SystemReport = { ok: boolean; notes: string[] };
 
 export function systemNotes(office: Office, item: WithSystem): SystemReport {

@@ -4,13 +4,14 @@ import { join } from "node:path";
 
 import { machineFixture, makeEnvironmentOffice as makeOffice, write } from "../../../../test/support/machine.fixture.ts";
 import { syncLines as sync } from "../../../../test/support/sync.fixture.ts";
-import { writePackage } from "../../../../test/support/test-package.ts";
+import { definitionText, writePackage } from "../../../../test/support/test-package.ts";
+import { gatherPackages } from "../../../gather.ts";
 import { loadOffice } from "../../../office.ts";
 import { parseManifest } from "../../../loader/sources/manifest-schema.ts";
 import { globalConfD } from "../../mise-integration/machine-files.ts";
 import { projectionPath } from "../../tools/applied.ts";
 import { hostWrappers } from "../../tools/sfw.ts";
-import { sourcedBy, sourceLine } from "../host-env.ts";
+import { hostEnvironment, sourcedBy, sourceLine } from "../host-env.ts";
 import { envFilePath } from "../paths.ts";
 import { grantConsent } from "../record.ts";
 import { configureStartup } from "../shell-startup.ts";
@@ -65,10 +66,10 @@ test("the environment file carries the office's minimum release age, and sync re
   expect(variables()).toBe("3|4320|3 days|P3D|3d");
 });
 
-test("a package's host block adds folders and variables to the environment file; two packages setting one variable fail", async () => {
+test("a package's host PATH entries add package-relative, home-relative and absolute folders", async () => {
   const { dir, office } = fixture;
 
-  makeOffice(office, { host: "host:\n  path: [bin, ~/.local/bin, /opt/demo/bin]\n  env:\n    DEMO_MODE: \"it's on\"\n    DEMO_PORT: 8080\n" });
+  makeOffice(office, { path: ["bin", "~/.local/bin", "/opt/demo/bin"] });
   grantConsent(loadOffice(office), "");
   await sync(loadOffice(office));
 
@@ -76,11 +77,10 @@ test("a package's host block adds folders and variables to the environment file;
 
   expect(env).toContain(`__office_path '${join(office, "packages/demo/bin")}'`);
   expect(env).toContain(`__office_path '${join(dir, "home/.local/bin")}'`);
-  expect(env).toContain("export DEMO_MODE='it'\\''s on'\nexport DEMO_PORT='8080'\n");
 
-  const sourced = Bun.spawnSync(["sh", "-c", `. '${envFilePath()}'; printf '%s|%s' "$PATH" "$DEMO_MODE"`], { env: { PATH: "/usr/bin:/bin" } }).stdout.toString();
+  const sourced = Bun.spawnSync(["sh", "-c", `. '${envFilePath()}'; printf '%s' "$PATH"`], { env: { PATH: "/usr/bin:/bin" } }).stdout.toString();
 
-  expect(sourced).toBe(`${hostWrappers()}:${projectionPath(loadOffice(office))}:${join(process.env.MISE_DATA_DIR || join(dir, "home/.local/share/mise"), "shims")}:${join(dir, "home/.opencode/bin")}:${join(office, "packages/demo/bin")}:${join(dir, "home/.local/bin")}:/opt/demo/bin:/usr/bin:/bin|it's on`);
+  expect(sourced).toBe(`${hostWrappers()}:${projectionPath(loadOffice(office))}:${join(process.env.MISE_DATA_DIR || join(dir, "home/.local/share/mise"), "shims")}:${join(dir, "home/.opencode/bin")}:${join(office, "packages/demo/bin")}:${join(dir, "home/.local/bin")}:/opt/demo/bin:/usr/bin:/bin`);
 
   const manifest = join(office, "packages/demo/package.json");
   const json = readFileSync(manifest, "utf8");
@@ -88,34 +88,53 @@ test("a package's host block adds folders and variables to the environment file;
   expect((await sync(loadOffice(office))).join("\n")).toContain("FAILED package demo: package.json: JSON Parse error");
   expect(readFileSync(envFilePath(), "utf8")).toBe(env);
   write(manifest, json);
+});
 
-  write(join(office, "office.yaml"), `${readFileSync(join(office, "office.yaml"), "utf8")}  - name: other\n`);
-  writePackage(join(office, "packages/other/package.yaml"), "host:\n  env:\n    DEMO_MODE: off\n");
+test("a required package can contribute a host PATH entry without a settings entry in office.yaml", async () => {
+  const { office: dir } = fixture;
 
-  expect(await sync(loadOffice(office))).toContain(`FAILED packages demo and other both set DEMO_MODE in their host or system block, so ${envFilePath()} sets neither; remove it from one`);
-  expect(readFileSync(envFilePath(), "utf8")).not.toContain("DEMO_MODE");
+  makeOffice(dir);
+  const office = loadOffice(dir);
+  await sync(office);
+
+  const { packages } = await gatherPackages(office);
+  const tools = packages.find(item => item.entry.name === "tools");
+
+  if (!tools) throw new Error("required tools package did not load");
+  tools.manifest.host = { path: ["bin"] };
+
+  expect(hostEnvironment(office, packages).environment.path).toContain(join(tools.dir, "bin"));
 });
 
 test("a package that fails to read stops sync: a deselected package's machine inputs stay with everyone else's", async () => {
   const { office } = fixture;
 
-  const host = (name: string) => `host:\n  path: [${name}-bin]\n  env: { ${name.toUpperCase()}_MODE: ok }\n  install: {description: Install, creates: ~/.local/bin/${name}, script: install.ts}\n`;
-  makeOffice(office, { firewall: false, host: host("demo") });
+  const host = (name: string) => definitionText(`{
+    host: { path: ["${name}-bin"] },
+    setup(ctx) {
+      ctx.add(installs, { name: "install", description: "Install", destination: "~/.local/bin/${name}", ready: "~/.local/bin/${name}", script: "install.ts", executable: true });
+    },
+  }`, 'const installs = { id: "mise-integration.installs", parse: value => value };');
+
+  makeOffice(office, { firewall: false });
   const config = join(office, "office.yaml");
   const initial = readFileSync(config, "utf8");
   write(config, `${initial}  - name: other\n`);
-  writePackage(join(office, "packages/other/package.yaml"), `${host("other")}`);
 
-  for (const name of ["demo", "other"]) write(join(office, `packages/${name}/install.ts`), "");
+  for (const name of ["demo", "other"]) {
+    writePackage(join(office, `packages/${name}/office.ts`), host(name));
+    write(join(office, `packages/${name}/install.ts`), "");
+  }
+
   grantConsent(loadOffice(office), "");
   const run = () => sync(loadOffice(office), { scope: "packages" });
   expect((await run()).join("\n")).not.toContain("FAILED");
   const link = (name: string) => join(globalConfD(), `office-t-1-${name}.toml`);
   const before = readFileSync(link("demo"), "utf8");
   expect(readFileSync(link("other"), "utf8")).toContain("other:install");
-  expect(readFileSync(envFilePath(), "utf8")).toContain("OTHER_MODE");
+  expect(readFileSync(envFilePath(), "utf8")).toContain("/other/other-bin");
   write(config, initial);
-  writePackage(join(office, "packages/demo/package.yaml"), "[bad");
+  writePackage(join(office, "packages/demo/office.ts"), "[bad");
   const env = readFileSync(envFilePath(), "utf8");
   expect((await run()).join("\n")).toContain("FAILED package demo");
   expect(readFileSync(link("demo"), "utf8")).toBe(before);
@@ -123,29 +142,24 @@ test("a package that fails to read stops sync: a deselected package's machine in
   expect(existsSync(join(office, ".office/mise/other.toml"))).toBe(true);
   expect(readFileSync(envFilePath(), "utf8")).toBe(env);
   // Fixed, the next sync withdraws the deselected package's inputs.
-  writePackage(join(office, "packages/demo/package.yaml"), host("demo"));
+  writePackage(join(office, "packages/demo/office.ts"), host("demo"));
   expect((await run()).join("\n")).not.toContain("FAILED");
   expect(lstatSync(link("other"), { throwIfNoEntry: false })).toBeUndefined();
-  expect(readFileSync(envFilePath(), "utf8")).not.toContain("OTHER_MODE");
-  expect(readFileSync(envFilePath(), "utf8")).toContain("export DEMO_MODE='ok'");
+  expect(readFileSync(envFilePath(), "utf8")).not.toContain("/other/other-bin");
+  expect(readFileSync(envFilePath(), "utf8")).toContain("/demo/demo-bin");
 });
 
-test("a host block's folders and variables are plain: no shell code, PATH separators or variables office sets", () => {
-  const errors = (host: string) => {
-    const result = parseManifest("bad", Bun.YAML.parse(`host:\n${host}`));
+test("host PATH entries cannot contain shell code, PATH separators or parent traversal", () => {
+  const errors = (path: string[]) => {
+    const result = parseManifest("bad", { host: { path } });
 
     return result.ok ? [] : result.errors;
   };
 
-  expect(errors("  path: [\"$HOME/bin\"]\n")).toEqual([expect.stringContaining("host.path[0]: must be a folder such as ~/.local/bin")]);
-  expect(errors("  path: [\"a:b\"]\n")).toHaveLength(1);
-  expect(errors("  path: [../elsewhere]\n")).toEqual(["host.path[0]: must not climb out with .."]);
-  expect(errors("  env:\n    PATH: /bin\n")).toEqual([expect.stringContaining("is set by office itself")]);
-  expect(errors("  env:\n    MISE_MINIMUM_RELEASE_AGE: 1h\n")).toEqual([expect.stringContaining("is set by office itself")]);
-  expect(errors("  env:\n    OFFICE_X: y\n")).toHaveLength(1);
-  expect(errors("  env:\n    \"A B\": y\n")).toEqual([expect.stringContaining("must be an environment variable name")]);
-  expect(errors("  env:\n    MULTI: \"a\\nb\"\n")).toEqual([expect.stringContaining("must be one line of plain text")]);
-  expect(errors("  path: [bin, ~/x, /opt/y]\n  env:\n    OK: \"$not expanded`\"\n")).toEqual([]);
+  expect(errors(["$HOME/bin"])).toEqual([expect.stringContaining("host.path[0]: must be a folder such as ~/.local/bin")]);
+  expect(errors(["a:b"])).toHaveLength(1);
+  expect(errors(["../elsewhere"])).toEqual(["host.path[0]: must not climb out with .."]);
+  expect(errors(["bin", "~/x", "/opt/y"])).toEqual([]);
 });
 
 test("check finds the line that sources the environment file through a linked startup file, or a file it sources, or the shell's own variable", () => {

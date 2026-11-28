@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compile } from "../../../build.ts";
-import { applyOfficeTools, fakeRegistry, sharedToolsLock, writePackage } from "../../../../test/support/test-package.ts";
+import { applyOfficeTools, definitionText, fakeRegistry, settingsSchema, sharedToolsLock, writePackage } from "../../../../test/support/test-package.ts";
 
 // An end-to-end test spawns the compiled office many times; under a parallel run it gets 30s, not Bun's 5s.
 setDefaultTimeout(30_000);
@@ -35,9 +35,10 @@ test("the installed unit keeps its installer identity and no-install policy acro
     OFFICE_MISE_CONFIG_DIR: join(home, "mise"), OFFICE_SYSTEMD_USER_DIR: join(home, "units"),
     OFFICE_APP_CONFIG_DIR: join(home, "app"), OFFICE_APP_PANELS_DIR: join(home, "panels"),
     DBUS_SESSION_BUS_ADDRESS: `unix:path=${home}/no-bus`, DOCKER_HOST: `unix://${home}/no-docker`,
+    OFFICE_SYSTEM_PLATFORM: "ubuntu-24.04-amd64",
   };
 
-  const configure = (name: string) => writeFileSync(config, JSON.stringify({ name, state, opencode: { mode: "host", url: "http://127.0.0.1:1" }, tools: { sfw: { enabled: false } }, packages: [{ name: "probe" }] }));
+  const configure = (name: string) => writeFileSync(config, JSON.stringify({ name, state, opencode: { mode: "host", url: "http://127.0.0.1:1" }, tools: { sfw: { enabled: false } }, packages: [{ name: "systemd" }, { name: "probe", settings: { recipe: true } }] }));
   const run = (...args: string[]) => Bun.spawnSync([exe, "--office", dir, ...args], { env, cwd: root });
 
   const cli = (...args: string[]) => {
@@ -50,12 +51,39 @@ test("the installed unit keeps its installer identity and no-install policy acro
     for (const path of [bin, home, state, pkg]) mkdirSync(path, { recursive: true });
     await compile(exe);
 
-    for (const tool of ["docker", "systemctl", "mise"]) writeFileSync(join(bin, tool), `#!/bin/sh\n${tool === "mise" ? fakeRegistry : ""}[ "$1" != --version ] || echo 2026.11.7\n`, { mode: 0o700 });
+    for (const tool of ["docker", "mise"]) writeFileSync(join(bin, tool), `#!/bin/sh\n${tool === "mise" ? fakeRegistry : ""}[ "$1" != --version ] || echo 2026.11.7\n`, { mode: 0o700 });
+    writeFileSync(join(bin, "systemctl"), `#!/bin/sh
+case "$2" in
+  show)
+    [ -f "$OFFICE_SYSTEMD_USER_DIR/$4" ] || exit 0
+    echo "FragmentPath=$OFFICE_SYSTEMD_USER_DIR/$4"
+    if [ -f "$HOME/started" ]; then
+      printf 'ActiveState=active\\nUnitFileState=enabled\\nMainPID=123\\nInvocationID=started\\n'
+    fi
+    ;;
+  start) : > "$HOME/started";;
+esac
+`, { mode: 0o700 });
     // The office package's shared tools recorded, so sync asks mise for no release, and applied, so up installs none.
     writeFileSync(join(dir, "office.lock"), sharedToolsLock());
     applyOfficeTools(state);
     writeFileSync(join(state, "secrets.env"), "OPENCODE_PASSWORD=fixture-only\n", { mode: 0o600 });
-    writePackage(join(pkg, "package.yaml"), "# test\nhost:\n  services: {observe: {description: Observe, script: start.sh}}\n  env: { FROM_CLAIM: visible, MISE_AUTO_INSTALL: '1', MISE_NOT_FOUND_AUTO_INSTALL: '1' }\n");
+
+    const profile = (value: string, extra = "") => definitionText(`{
+      settings: ${settingsSchema({ recipe: false })},
+      setup(ctx) {
+        ctx.add(recipes, {
+          name: "profile", setting: "recipe", description: "Profile", platforms: ["ubuntu-24.04-amd64"],
+          bootstrap: "bootstrap.toml", ready: [${JSON.stringify(exe)}], env: { FROM_CLAIM: ${JSON.stringify(value)} },
+        });
+        ${extra}
+      },
+    }`, 'import { recipes } from "@office/mise-integration/claims";' + (extra ? '\nimport { systemd } from "@office/systemd";' : ""));
+
+    writePackage(join(pkg, "office.ts"), profile("visible", `
+      systemd.userUnits.add(ctx, { id: "observe", render: facts => "[Service]\\n" + facts.launch("start.sh") + "\\n[Install]\\nWantedBy=default.target\\n" });
+    `), { dependencies: ["mise-integration", "systemd"] });
+    writeFileSync(join(pkg, "bootstrap.toml"), "[bootstrap.packages]\n");
     writeFileSync(join(pkg, "start.sh"), 'printf "%s\\n" "${FROM_CLAIM-none}:$MISE_AUTO_INSTALL/$MISE_NOT_FOUND_AUTO_INSTALL:$CODEX_HOME"');
     configure("original");
     cli("sync", "--packages");
@@ -104,8 +132,9 @@ test("the installed unit keeps its installer identity and no-install policy acro
 
     rmSync(config);
     mkdirSync(join(root, "packages/parent-profile"), { recursive: true });
-    writePackage(join(root, "packages/parent-profile/package.yaml"), "# parent marker\nhost: {env: {FROM_CLAIM: ancestor}}\n");
-    writeFileSync(join(root, "office.yaml"), "name: ancestor\nopencode: {mode: host, url: 'http://localhost:1'}\ntools: {sfw: {enabled: false}}\npackages: [{name: parent-profile}]\n");
+    writePackage(join(root, "packages/parent-profile/office.ts"), profile("ancestor"), { dependencies: ["mise-integration"] });
+    writeFileSync(join(root, "packages/parent-profile/bootstrap.toml"), "[bootstrap.packages]\n");
+    writeFileSync(join(root, "office.yaml"), "name: ancestor\nopencode: {mode: host, url: 'http://localhost:1'}\ntools: {sfw: {enabled: false}}\npackages: [{name: parent-profile, settings: {recipe: true}}]\n");
     writeFileSync(join(root, "office.lock"), sharedToolsLock());
     rmSync(join(env.OFFICE_MACHINE_DIR, "env.sh"));
     writeFileSync(record, JSON.stringify({ office: { name: "ancestor", dir: root }, consented: "fixture", files: [] }));

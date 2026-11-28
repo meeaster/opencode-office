@@ -38,7 +38,6 @@ import { machineFiles } from "../features/mise-integration/delivery.ts";
 import { appliedSpawns, packageComposeFile, serviceFiles, serviceSettings, type UpgradedServices } from "../features/compose/services.ts";
 import { preparePackageServices } from "../features/compose/package-services.ts";
 import { sweepSpawned } from "../features/compose/package-spawns.ts";
-import { reconcileHostServices } from "../features/systemd/package-host-services.ts";
 import { precheckUnits, reconcileUnits, removeUnits } from "../features/systemd/units.ts";
 import type { Lock } from "../lock-schema.ts";
 import { prepareSecrets } from "../features/secrets/secrets.ts";
@@ -586,7 +585,6 @@ export async function up(office: Office, { upgrade = false, refresh = false, gat
     writeExecutorFiles(office);
   }
 
-  reconcileHostServices(office, upgrade ? "upgrade" : "up", inventory);
   // The containers run these pins now, whatever the packages' units do next.
   writeApplied(office, pins, office.opencode.mode === "container" ? refreshed : applied?.refreshed);
   const units = await reconcileUnits(office, packages, { upgrade });
@@ -646,7 +644,6 @@ export function releaseMachine(office: Office) {
  * attached to the office's network keeps Compose from removing it, then its networks.
  */
 export function down(office: Office): void {
-  reconcileHostServices(office, "down");
   let refused: unknown;
 
   try {

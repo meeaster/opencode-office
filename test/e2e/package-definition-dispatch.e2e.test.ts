@@ -114,9 +114,9 @@ test("a symlinked office resolves public imports after it moves, and a definitio
   const { dir, run, select } = fixture("alias-seed");
   select("  - name: consumer\n  - name: provider\n");
 
-  const definition = definitionText(`{commands:{"consumer show":{summary:"show",run(){console.log(requirements.id,token)}}}}`, `import {requirements} from "@office/tooling/requirements"; import {token} from "@office/provider/token";`);
+  const definition = definitionText(`{commands:{"consumer show":{summary:"show",run(){console.log(tools.requirements.id,token)}}}}`, `import {tools} from "@office/tools"; import {token} from "@office/provider/token";`);
 
-  writePackage(join(dir, "packages/consumer/office.ts"), definition, { dependencies: ["provider", "tooling"] });
+  writePackage(join(dir, "packages/consumer/office.ts"), definition, { dependencies: ["provider", "tools"] });
   writePackage(join(dir, "packages/provider/office.ts"), definitionText('{}'), { exports: { "./token": "./lib/token.ts" } });
   write(join(dir, "packages/provider/lib/token.ts"), 'import {readFileSync} from "node:fs"; export const token=readFileSync(new URL("../asset",import.meta.url),"utf8");');
   write(join(dir, "packages/provider/asset"), "source-relative");
@@ -126,19 +126,19 @@ test("a symlinked office resolves public imports after it moves, and a definitio
   symlinkSync(nested, dir);
   run(exe, 0, "--office", dir, "sync", "--packages");
   const show = (path: string, status = 0) => run(exe, status, "--office", path, "consumer", "show");
-  expect(show(dir)).toContain("tooling.requirements source-relative");
+  expect(show(dir)).toContain("tools.requirements source-relative");
   // Help runs in the reader too, so a package that imports another's public export is listed.
   expect(run(exe, 0, "--office", dir, "--help")).toContain("consumer show    show");
   expect(run(exe, 0, "--office", dir)).toContain("consumer show    show");
   // A consumer that fails to load is named in help, and its command is unknown.
   const source = join(dir, "packages/consumer/office.ts");
-  write(source, definition.replace("@office/tooling/requirements", "@office/tooling/private"));
+  write(source, definition.replace('"@office/tools"', '"@office/tools/private"'));
   expect(show(dir, 2)).toContain("package consumer: ");
-  expect(run(exe, 0, "--office", dir, "--help")).toMatch(/package consumer: .*@office\/tooling/);
+  expect(run(exe, 0, "--office", dir, "--help")).toMatch(/package consumer: .*@office\/tools/);
   write(source, definition);
   rmSync(dir);
   renameSync(nested, dir);
-  expect(show(dir)).toContain("tooling.requirements source-relative");
+  expect(show(dir)).toContain("tools.requirements source-relative");
 });
 
 test("a new CLI runs a set whose built-in copies another executable wrote, until its own sync replaces them", () => {

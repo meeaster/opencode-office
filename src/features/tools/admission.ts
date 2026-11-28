@@ -16,7 +16,7 @@ import type { PackageProblem } from "../../loader/sources/selection.ts";
 import type { Office } from "../../office.ts";
 import { machineFile, withoutTools } from "../mise-integration/delivery.ts";
 import type { ProjectedPackage } from "../mise-integration/projection.ts";
-import { compareToolVersions, wantedTools } from "../tooling/requirements.ts";
+import { compareToolVersions } from "./versions.ts";
 import { canonicalTool, officeRegistry, type ToolRegistry } from "./registry.ts";
 
 /** A package that requires a tool, the name it requires it by, and the minimum it requires. */
@@ -223,22 +223,6 @@ export function admitTools(office: Office, packages: readonly ProjectedPackage[]
     problems.push({ packages: managed.flatMap(demand => demand.consumers.map(consumer => consumer.package)), named: true, message: `${machineFile} holds tool ${[...holds.values()].map(hold => hold.key).join(", ")} in a form office can't leave out of what mise loads; write each as key = "version" under [tools]` });
   }
 
-  // A tool a package still declares the older way would be installed a second way, through machine.packages.toml.
-  if (office.opencode.mode === "host") {
-    for (const item of byName(packages)) {
-      for (const name of Object.keys(wantedTools(office, item))) {
-        const tool = lookup(name);
-
-        if (tool === undefined || tool instanceof Error) continue;
-        const demand = demands.get(tool);
-        const provider = provided.find(entry => entry.name === tool);
-        const owners = demand !== undefined ? consumersThat(demand, "requires", "require") : provider !== undefined ? `package ${provider.package} provides` : undefined;
-
-        if (owners !== undefined) problems.push({ packages: [item.entry.name, ...(demand?.consumers.map(consumer => consumer.package) ?? []), ...(provider === undefined ? [] : [provider.package])], named: true, message: `package ${item.entry.name} declares tool ${name} through @office/tooling, which machine.packages.toml installs, and ${owners} it as ${tool} through @office/tools: declare it one way, with tools.require` });
-      }
-    }
-  }
-
   const exposed = new Map<string, { tool: string; packages: string[] }>();
 
   const claimants = [
@@ -265,8 +249,7 @@ export function heldKeys(office: Office, packages: readonly ProjectedPackage[]):
 
 /**
  * Every problem across the packages' `@office/tools` claims, each naming everyone involved; none in
- * a container-mode office, whose container keeps them in machine.packages.toml as it does every
- * package tool (src/features/tooling/requirements.ts).
+ * a container-mode office, whose container uses machine.packages.toml for its package tools.
  */
 export function toolProblems(office: Office, packages: readonly ProjectedPackage[], registry: () => ToolRegistry = () => officeRegistry(office)): ToolProblem[] {
   if (office.opencode.mode !== "host") return [];

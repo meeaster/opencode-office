@@ -2,7 +2,7 @@
 // manages its machine: the system setup the office's own files declare, and the managed OpenCode
 // server running with older settings.
 //
-// System setup. The packages' system blocks (src/features/mise-integration/system.ts) and the office's machine.toml
+// System setup. The packages' system recipes (src/features/mise-integration/system.ts) and the office's machine.toml
 // declare mise `[bootstrap]` packages and files, such as Chrome from apt or the headers a tool
 // builds against. Setup asks mise what they would change, with mise reading only the office's own
 // files: a scratch MISE_CONFIG_DIR whose conf.d links the office's fragments and machine.toml, an
@@ -103,7 +103,7 @@ type SystemStatus =
   | { kind: "pending"; pending: string[] }
   | { kind: "failed"; problems: string[] };
 
-/** The packages whose system block applies here. */
+/** The packages whose system recipe applies here. */
 function applying(office: Office, installed: GatheredPackage[]): GatheredPackage[] {
   return installed.filter((item) => systemApplies(office, item));
 }

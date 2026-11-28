@@ -68,7 +68,7 @@ test("an office never synced loads no package: the required built-ins aren't the
   const output = result.stdout.toString() + result.stderr.toString();
 
   expect(result.exitCode, output).toBe(1);
-  expect(output).toContain("package tooling: not synced yet; run office sync");
+  expect(output).toContain("package tools: not synced yet; run office sync");
   expect(existsSync(env.PROBE)).toBe(false);
 });
 

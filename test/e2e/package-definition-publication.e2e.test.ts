@@ -188,24 +188,33 @@ test.skipIf(process.getuid?.() === 0)("an inaccessible applied file fails its re
   expect(read(join(dir, "references/legacy/document"))).toBe("legacy");
 }, 60_000);
 
-test("the executable syncs mixed definitions and keeps applied state when a selected definition cannot be read", () => {
-  const { dir, cli, select } = fixture("mixed");
+test("the executable keeps applied state when a selected definition cannot be read", () => {
+  const { dir, cli, select } = fixture("keep-applied");
   const pkg = join(dir, "packages/notes");
   const link = join(dir, ".opencode/plugins/notes");
   const pins = join(dir, "machine.packages.toml");
-  const module = definitionText('{ settings: { type: "object", additionalProperties: false, properties: { count: { type: "integer", default: count } } }, tools: { jq: "1.7.1" }, setup(c) { opencode.plugins.add(c, { directory: "plugin" }) }, sync({ office }) { mkdirSync(join(office.dir, "notes"), { recursive: true }); appendFileSync(join(office.dir, "notes/example"), "ran\\n"); } }', 'import { count } from "./defaults.ts"; import { opencode } from "@office/opencode"; import { appendFileSync, mkdirSync } from "node:fs"; import { join } from "node:path";');
 
-  select("  - name: legacy\n  - name: notes\n");
-  writePackage(join(dir, "packages/legacy/package.yaml"), "# Legacy\nsettings: { type: object, additionalProperties: false, properties: { label: { type: string, default: old } } }\n");
-  writePackage(join(pkg, "office.ts"), module, { dependencies: ["opencode"] });
+  const module = definitionText(`{
+    settings: { type: "object", additionalProperties: false, properties: { count: { type: "integer", default: count } } },
+    setup(ctx) {
+      tools.require(ctx, { name: "jq", minimum: "1.7.1", bin: ["jq"] });
+      opencode.plugins.add(ctx, { directory: "plugin" });
+    },
+    sync({ office }) {
+      mkdirSync(join(office.dir, "notes"), { recursive: true });
+      appendFileSync(join(office.dir, "notes/example"), "ran\\n");
+    },
+  }`, 'import { count } from "./defaults.ts"; import { opencode } from "@office/opencode"; import { tools } from "@office/tools"; import { appendFileSync, mkdirSync } from "node:fs"; import { join } from "node:path";');
+
+  select("  - name: notes\n");
+  writePackage(join(pkg, "office.ts"), module, { dependencies: ["opencode", "tools"] });
   write(join(pkg, "defaults.ts"), "export const count: number = 3;");
   write(join(pkg, "plugin/index.ts"), 'export default { id: "notes", setup() {} }');
   write(join(pkg, "compose.yaml"), "services:\n  notes:\n    image: example/notes\n");
   cli(0, "sync");
   expect(read(join(dir, "notes/example"))).toBe("ran\n");
-  expect(readAppliedSettings(dir, "legacy")).toEqual({ label: "old" });
   expect(readAppliedSettings(dir, "notes")).toEqual({ count: 3 });
-  expect(existsSync(join(pkg, ".settings.json")) || existsSync(join(dir, "packages/legacy/.settings.json"))).toBe(false);
+  expect(existsSync(join(pkg, ".settings.json"))).toBe(false);
   expect(cli(0, "check")).toMatch(/ok   package notes: .*compose.yaml contributes services notes/);
   write(join(pkg, "defaults.ts"), "export const count: number = 7;");
   cli(0, "sync", "--packages");
@@ -226,7 +235,7 @@ test("the executable syncs mixed definitions and keeps applied state when a sele
   expect(readAppliedSettings(dir, "notes")).toEqual({ count: 7 });
   expect(read(join(dir, "notes/example"))).toBe(marked);
 
-  select("  - name: legacy\n");
+  select("");
   cli(0, "sync", "--packages");
   expect(existsSync(link)).toBe(false);
   expect(read(pins)).not.toContain('"jq"');

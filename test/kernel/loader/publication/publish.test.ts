@@ -62,11 +62,13 @@ async function publish() {
 
 test("publication uses a matching lock over a moved ref and replaces stale lock entries with the staged commit", async () => {
   const repo = repository();
-  const file = join(repo, "pkg/package.yaml");
+  const file = join(repo, "pkg/office.ts");
+  const firstDefinition = definitionText("{}", "// first");
+  const secondDefinition = definitionText("{}", "// second");
 
-  writePackage(file, "# first\n{}\n", { name: "notes" });
+  writePackage(file, firstDefinition, { name: "notes" });
   const first = commit(repo);
-  writePackage(file, "# second\n{}\n", { name: "notes" });
+  writePackage(file, secondDefinition, { name: "notes" });
   const second = commit(repo);
   const source = { repo, path: "pkg", ref: "main" };
 
@@ -75,14 +77,14 @@ test("publication uses a matching lock over a moved ref and replaces stale lock 
   await publish();
   const copy = join(dir, ".office/packages/notes");
 
-  expect(readFileSync(join(copy, "package.yaml"), "utf8")).toStartWith("# first");
+  expect(readFileSync(join(copy, "office.ts"), "utf8")).toBe(firstDefinition);
   expect(lockEntries()).toEqual({ notes: { ...source, commit: first } });
 
   for (const stale of [{ ref: "other" }, { path: "old-path" }, { repo: join(dir, "old-repo") }]) {
     rmSync(copy, { recursive: true });
     setPackages({ notes: { ...source, ...stale, commit: first } });
     await publish();
-    expect(readFileSync(join(copy, "package.yaml"), "utf8")).toStartWith("# second");
+    expect(readFileSync(join(copy, "office.ts"), "utf8")).toBe(secondDefinition);
     expect(lockEntries()).toEqual({ notes: { ...source, commit: second } });
   }
 
@@ -98,7 +100,7 @@ test("publication uses a matching lock over a moved ref and replaces stale lock 
 test("publication adopts a matching copy offline, preserves a failed package's lock and drops deselected entries", async () => {
   const repo = repository();
 
-  writePackage(join(repo, "pkg/package.yaml"), "{}\n", { name: "notes" });
+  writePackage(join(repo, "pkg/office.ts"), definitionText("{}"), { name: "notes" });
   const revision = commit(repo);
   const source = { repo, path: "pkg", ref: "main" };
   const notes = { ...source, commit: revision };
@@ -115,7 +117,7 @@ test("publication adopts a matching copy offline, preserves a failed package's l
 
   expect(partial).toMatchObject({ published: true, lines: expect.arrayContaining([expect.objectContaining({ failure: expect.stringContaining("FAILED .office/packages/notes") })]) });
   expect(lockEntries()).toEqual({ notes });
-  expect(readFileSync(join(dir, ".office/packages/notes/package.yaml"), "utf8")).toBe("{}\n");
+  expect(readFileSync(join(dir, ".office/packages/notes/office.ts"), "utf8")).toBe(definitionText("{}"));
 
   select();
   await publish();

@@ -36,11 +36,10 @@ function definition(name: string, files: Record<string, string>) {
   });
 }
 
-test("a definition loads from the path package.json names, as Package.define's result or a package.yaml; a plain module object doesn't", () => {
+test("a definition loads from the path package.json names and must be the result of Package.define", () => {
   // Reading a definition registers the executable's SDK itself. Neither
   // package.json has a description.
   expect(definition("module", { "package.json": packageJsonText("module", "src/definition.ts"), "src/definition.ts": valid })).toMatchObject({ ok: true, value: { file: "packages/module/src/definition.ts", manifest: { namespace: "module" } } });
-  expect(definition("yaml", { "package.json": packageJsonText("yaml", "package.yaml"), "package.yaml": "namespace: notes\n", "office.ts": 'throw new Error("not the definition")' })).toMatchObject({ ok: true, value: { file: "packages/yaml/package.yaml", manifest: { namespace: "notes" } } });
   expect(definition("plain", { "package.json": packageJsonText("plain"), "office.ts": 'export default {}' })).toEqual({
     ok: false, errors: ["packages/plain/office.ts: the definition must be the result of Package.define from @office/sdk"],
   });
@@ -51,13 +50,22 @@ test("a definition that cannot be read names its file and reason, whatever went 
     ["thrown", { "package.json": packageJsonText("thrown"), "office.ts": 'throw new Error("bad notes import")' }, "packages/thrown/office.ts: bad notes import"],
     ["shape", { "package.json": packageJsonText("shape"), "office.ts": definitionText('{ setup: "handler.ts" }') }, "packages/shape/office.ts: setup:"],
     ["named", { "package.json": packageJsonText("named"), "office.ts": definitionText('{ name: "named" }') }, "packages/named/office.ts: name: must be a mapping of"],
-    ["described", { "package.json": packageJsonText("described", "package.yaml"), "package.yaml": "description: Notes\n" }, "packages/described/package.yaml: description: must be a mapping of"],
+    ["described", { "package.json": packageJsonText("described"), "office.ts": definitionText('{ description: "Notes" }') }, "packages/described/office.ts: description: must be a mapping of"],
     ["none", { "office.ts": valid }, "packages/none: no package.json; add a package.json with \"name\": \"@office/none\""],
   ] as const) {
     const read = definition(name, files);
 
     expect(read.ok).toBe(false);
     expect(read.ok ? "" : read.errors.join("\n")).toContain(reason);
+  }
+});
+
+test("a YAML definition fails naming the definition file", () => {
+  for (const file of ["package.yaml", "package.yml"]) {
+    const name = file.endsWith("yaml") ? "yaml" : "yml";
+    const read = definition(name, { "package.json": packageJsonText(name, file), [file]: "namespace: notes\n" });
+
+    expect(read).toMatchObject({ ok: false, errors: [expect.stringContaining(`packages/${name}/${file}:`)] });
   }
 });
 
@@ -77,6 +85,6 @@ test("loading a definition lists the providers package.json maps without importi
     ["by-default", '{ integrations: { "@office/skills": { enabledByDefault: true } } }', "integrations"],
     ["executor-app", "{ executor_app: {} }", "executor_app"],
   ] as const) {
-    expect(definition(name, files(name, body))).toEqual({ ok: false, errors: [`packages/${name}/office.ts: ${key}: must be a mapping of namespace, settings, commands, setup, sync, fullSync, session, check, up, down, committed, secrets, tools, host, system and spawns`] });
+    expect(definition(name, files(name, body))).toMatchObject({ ok: false, errors: [expect.stringContaining(`packages/${name}/office.ts: ${key}: must be a mapping of`)] });
   }
 });

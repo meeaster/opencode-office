@@ -11,7 +11,7 @@ import { preparePackageServices } from "../package-services.ts";
 import { planSweep, type Spawned } from "../package-spawns.ts";
 import { parseManifest } from "../../../loader/sources/manifest-schema.ts";
 import { recordRequiredBuiltins } from "../../../../test/support/test-builtin-record.ts";
-import { writePackage } from "../../../../test/support/test-package.ts";
+import { definitionText, writePackage } from "../../../../test/support/test-package.ts";
 
 let dir: string;
 
@@ -87,9 +87,9 @@ test("office up keeps a package's spawns label beside its applied copy and hands
   const label = join(office, "state/packages/tool/spawns.label");
 
   write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: tool\n  - name: plain\n");
-  writePackage(join(office, "packages/tool/package.yaml"), 'spawns:\n  label: "tool_ns=office-${OFFICE_NAME}-tool"\n');
+  writePackage(join(office, "packages/tool/office.ts"), definitionText('{ spawns: { label: "tool_ns=office-${OFFICE_NAME}-tool" } }'));
   write(join(office, "packages/tool/compose.yaml"), "services:\n  tool:\n    image: busybox\n");
-  writePackage(join(office, "packages/plain/package.yaml"), "{}\n");
+  writePackage(join(office, "packages/plain/office.ts"), definitionText("{}"));
   write(join(office, "packages/plain/compose.yaml"), "services:\n  plain:\n    image: busybox\n");
 
   expect((await preparePackageServices(loadOffice(office), false)).apply()).toEqual([]);
@@ -97,7 +97,7 @@ test("office up keeps a package's spawns label beside its applied copy and hands
   expect(appliedSpawns(loadOffice(office))).toEqual(new Map([["tool", "tool_ns=office-t-tool"]]));
 
   // A changed label waits with its compose file for --upgrade: it describes what the applied copy runs.
-  writePackage(join(office, "packages/tool/package.yaml"), 'spawns:\n  label: "tool_ns=${OFFICE_NAME}.tool"\n');
+  writePackage(join(office, "packages/tool/revised.ts"), definitionText('{ spawns: { label: "tool_ns=${OFFICE_NAME}.tool" } }'));
   write(join(office, "packages/tool/compose.yaml"), "services:\n  tool:\n    image: busybox:1\n");
   (await preparePackageServices(loadOffice(office), false)).apply();
   expect(readFileSync(label, "utf8")).toBe("tool_ns=office-t-tool\n");

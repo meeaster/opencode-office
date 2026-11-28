@@ -92,15 +92,23 @@ export async function dispatchCommand({ dir }: Reader, words: string[]): Promise
 
   const inputs = { office: officeInfo(office), entries: load.entries, settings: structuredClone(settings), args: match.args, executor: executorAccess(office), replaceSetting, updateExcluded: (change: { add?: readonly string[]; remove?: readonly string[] }) => updateExcludedOrThrow(office, change) };
 
+  if (command.run) restore();
+
+  let result: string | void;
+
+  try {
+    result = command.result ? await command.result(inputs) : await command.run?.(inputs);
+  } catch (error) {
+    if (error instanceof Error && !(error instanceof OfficeError)) throw new OfficeError(error.message.replace(/(?:\r\n?|\n)+/g, "; "));
+    throw error;
+  }
+
   if (command.result) {
     // An untyped definition's handler can return anything.
-    const text = v.safeParse(v.string(), await command.result(inputs));
+    const text = v.safeParse(v.string(), result);
 
     if (!text.success) throw new OfficeError(`${match.name}: its result must be text: ${text.issues[0].message}`);
     writeResult(text.output);
-  } else if (command.run) {
-    restore();
-    await command.run(inputs);
   }
 
   return { found: true };

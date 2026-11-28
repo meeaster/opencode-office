@@ -10,7 +10,7 @@ import { grantConsent, readMachine } from "../../machine/record.ts";
 const fixture = machineFixture();
 const links = () => (existsSync(fixture.confD) ? readdirSync(fixture.confD).sort() : []);
 
-test("with consent, sync links machine.packages.toml first, each fragment, machine.toml last, records them, and a second sync changes nothing", async () => {
+test("with consent, sync links the package fragment before the owner's machine.toml, records them, and a second sync changes nothing", async () => {
   const { office, dir, confD } = fixture;
 
   makeOffice(office);
@@ -20,9 +20,7 @@ test("with consent, sync links machine.packages.toml first, each fragment, machi
 
   expect(changes).toContain(`linked ${confD}/office-t-1-demo.toml to .office/mise/demo.toml (package demo), so its setup applies in every folder on this machine`);
   expect(changes).toContain(`linked ${confD}/office-t-2-machine.toml to machine.toml (the office's own), so its tools apply in every folder on this machine`);
-  // mise loads conf.d by name and the last wins: the packages' tools first, then their setup, and machine.toml last, so it wins over the packages' versions.
-  expect(changes).toContain(`linked ${confD}/office-t-0-packages.toml to machine.packages.toml (the packages' tools), so its tools apply in every folder on this machine`);
-  expect(links()).toEqual(["office-t-0-packages.toml", "office-t-1-demo.toml", "office-t-2-machine.toml"]);
+  expect(links()).toEqual(["office-t-1-demo.toml", "office-t-2-machine.toml"]);
   expect(readlinkSync(join(confD, "office-t-2-machine.toml"))).toBe(join(office, "machine.toml"));
   // The office package has tools only, so no fragment of its own.
   expect(existsSync(join(office, ".office/mise/office.toml"))).toBe(false);
@@ -30,14 +28,13 @@ test("with consent, sync links machine.packages.toml first, each fragment, machi
     office: { name: "t", dir: office },
     consented: expect.any(String),
     files: [
-      { kind: "link", path: join(confD, "office-t-0-packages.toml"), package: null, target: join(office, "machine.packages.toml") },
       { kind: "link", path: join(confD, "office-t-1-demo.toml"), package: "demo", target: join(office, ".office/mise/demo.toml") },
       { kind: "link", path: join(confD, "office-t-2-machine.toml"), package: null, target: join(office, "machine.toml") },
       { kind: "file", path: join(dir, "data/env.sh"), package: null, sha256: expect.stringMatching(/^[0-9a-f]{64}$/), contributions: [] },
     ],
   });
   expect(await sync(loadOffice(office))).toEqual([]);
-  expect((await report(office)).map((line) => line.ok)).toEqual([true, true, true, true, true]);
+  expect((await report(office)).map((line) => line.ok)).toEqual([true, true, true, true]);
 });
 
 test("removing a package removes its link; leaving host mode removes them all and the record", async () => {

@@ -20,7 +20,7 @@ import { jsonObject, registerPackages } from "./loader/definitions/registration.
 import type { PackageProblem } from "./loader/sources/selection.ts";
 import type { PackageManifest } from "./loader/sources/manifest-schema.ts";
 
-/** A package whose setup ran in this run: what it read as, with the claims its entries made and its effective system block. */
+/** A loaded package with the claims from its setup, including its effective system recipe. */
 export type GatheredPackage = ProjectedPackage;
 
 /** A command a definition declares, with its package and that package's settings in this run (undefined when they are invalid). */
@@ -104,7 +104,7 @@ const message = (error: unknown) => error instanceof Error ? error.message : Str
  * Gathers every package office.yaml selects. `skip` is for sync's admission only: the packages this
  * sync failed to fetch, which stay selected and unread and are not reported here. `machine` is for
  * what applies or checks the machine: a contributed recipe's bootstrap file is read for its
- * effective system block, and a recipe whose file doesn't read is its package's problem.
+ * effective system setup, and a recipe whose file doesn't read is its package's problem.
  */
 export async function gatherPackages(office: Office, { skip = new Set<string>(), machine = false }: { skip?: ReadonlySet<string>; machine?: boolean } = {}): Promise<Gathered> {
   const inventory = installedPackages(office, skip, true);

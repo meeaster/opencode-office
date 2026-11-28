@@ -208,19 +208,17 @@ test("settings that aren't a JSON mapping (null included) stop every setup; each
   }
 });
 
-test("a package that fails a check after its definition loaded keeps its commands, and fails alone", async () => {
+test("a package command runs even when an unregistered skills path is a file", async () => {
   office({
-    service: { body: '{host:{services:{svc:{description:"Service",script:"missing.sh"}}},commands:{"service show":{summary:"Show service",run(){}}}}' },
     skilled: { body: '{commands:{"skilled show":{summary:"Show skilled",run(){}}}}' },
-    ink: { body: '{setup(){},commands:{"ink show":{summary:"Show ink",run(){console.log("ink shown")}}}}' },
   });
   // No folder is read by its name: a skills/ that isn't a folder is no problem.
   write(join(dir, "packages/skilled/skills"), "");
 
   const help = await commandHelp({ dir });
 
-  expect(help).toEqual(["  service show    Show service", "  skilled show    Show skilled", "  ink show    Show ink", "  package service: service: host.services.svc: missing.sh must be a file inside the package"]);
-  await expect(dispatchCommand({ dir }, ["service", "show"])).rejects.toThrow("service show: package service: service: host.services.svc");
+  expect(help).toEqual(["  skilled show    Show skilled"]);
+  expect(await dispatchCommand({ dir }, ["skilled", "show"])).toEqual({ found: true });
 });
 
 test("a selected package named sdk loads nothing, and is named once", async () => {

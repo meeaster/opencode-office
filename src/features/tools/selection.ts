@@ -30,7 +30,7 @@ import type { ToolLock } from "../../lock-schema.ts";
 import { ageHours } from "./sfw.ts";
 import { editLock, lockFile, lockSections, readLockText } from "../../versions.ts";
 import { machineFile } from "../mise-integration/delivery.ts";
-import { compareToolVersions } from "../tooling/requirements.ts";
+import { compareToolVersions } from "./versions.ts";
 import { type Admission, admitTools, type Consumer, consumersOf, consumersThat, type Demand } from "./admission.ts";
 import { officeRegistry, type ToolRegistry } from "./registry.ts";
 

@@ -10,8 +10,8 @@ import { definitionText, pluginDefinition, writePackage } from "../support/test-
 
 const { root, write, read, commit, fixture } = definitionFixture({ second: false });
 
-const imports = 'import {opencode} from "@office/opencode"; import {repositories} from "@office/references/repositories"; import {requirements} from "@office/tooling/requirements"; import {tasks} from "@office/mise-integration/claims"; import {mkdirSync, writeFileSync} from "node:fs"; import {join} from "node:path";';
-const dependencies = ["opencode", "references", "tooling", "mise-integration"];
+const imports = 'import {opencode} from "@office/opencode"; import {repositories} from "@office/references/repositories"; import {tools} from "@office/tools"; import {tasks} from "@office/mise-integration/claims"; import {mkdirSync, writeFileSync} from "node:fs"; import {join} from "node:path";';
+const dependencies = ["opencode", "references", "tools", "mise-integration"];
 
 /**
  * A definition that requires `tool`, adds the task `task` and the reference `reference`, and whose
@@ -22,7 +22,7 @@ function claims({ tool, task, reference, extra = "", file, mark }: { tool: strin
   const sync = file === undefined ? "" : `, sync({office}){mkdirSync(join(office.dir, "notes"), {recursive: true}); writeFileSync(join(office.dir, "notes/${file}"), ${JSON.stringify(mark)})}`;
 
   return definitionText(`{setup(c){
-    c.add(requirements,{name:"${name}",minimumVersion:"${version}"});
+    tools.require(c,{name:"${name}",minimum:"${version}",bin:["${name}"]});
     c.add(tasks,{name:"hello",script:"hello.sh",description:"${task}"});
     c.add(repositories,{name:"${reference}",url:"https://example.invalid/${reference}.git"});
     ${extra}
@@ -31,6 +31,7 @@ function claims({ tool, task, reference, extra = "", file, mark }: { tool: strin
 
 /** office.yaml for a host-mode office selecting `packages`. */
 const host = (packages: string) => `name: applied\nopencode: {mode: host, url: 'http://127.0.0.1:1'}\ntools: {sfw: {enabled: false}}\npackages:\n${packages}`;
+const container = (packages: string) => `name: applied\nopencode: container\npackages:\n${packages}`;
 
 test("a setup that throws stops package sync and changes nothing it applies; fixed, the next sync applies every edit", () => {
   const { dir, cli } = fixture("setup-throws");
@@ -44,7 +45,7 @@ test("a setup that throws stops package sync and changes nothing it applies; fix
   writePackage(second, definitionText("{setup(){}}"));
   writePackage(join(third, "office.ts"), pluginDefinition(), { dependencies: ["opencode"] });
   write(join(third, "plugin/index.ts"), "export default { id: \"third\", async setup() {} };\n");
-  write(yaml, host("  - name: first\n  - name: second\n  - name: third\n"));
+  write(yaml, container("  - name: first\n  - name: second\n  - name: third\n"));
   cli(0, "sync", "--packages");
 
   const outputs = {
@@ -67,7 +68,7 @@ test("a setup that throws stops package sync and changes nothing it applies; fix
   writePackage(second, definitionText('{setup(){throw Error("second is broken")}}'));
   writePackage(join(first, "office.ts"), claims({ tool: "jq@1.8.0", task: "Say goodbye", reference: "first-guide", file: "first.md", mark: "edited\n" }), { dependencies });
   rmSync(join(first, "plugin"), { recursive: true });
-  write(yaml, host("  - name: first\n  - name: second\n"));
+  write(yaml, container("  - name: first\n  - name: second\n"));
   expect(cli(1, "sync", "--packages")).toContain("FAILED package second: second is broken");
   expect(snapshot()).toEqual(before);
 
@@ -85,8 +86,7 @@ test("a setup that throws stops package sync and changes nothing it applies; fix
   // Still selected, first stops requiring its tool and drops its task: both outputs follow.
   writePackage(join(first, "office.ts"), definitionText('{setup(c){c.add(repositories,{name:"first-guide",url:"https://example.invalid/first-guide.git"})}}', imports), { dependencies });
   cli(0, "sync", "--packages");
-  // No package declares a tool there any more: the office package's are shared tools.
-  expect(existsSync(join(dir, "machine.packages.toml"))).toBe(false);
+  expect(outputs.tools()).not.toContain('"jq"');
   expect(existsSync(join(dir, ".office/mise/first.toml"))).toBe(false);
 }, 60_000);
 
@@ -104,7 +104,7 @@ test("a Git package that can't be fetched doesn't stop the others, but no packag
   write(join(local, "hello.sh"), "echo hello\n");
   writePackage(join(dir, "packages/leaving/office.ts"), pluginDefinition(), { dependencies: ["opencode"] });
   write(join(dir, "packages/leaving/plugin/index.ts"), "export default { id: \"leaving\", async setup() {} };\n");
-  write(yaml, host(`  - {name: remote, repo: ${repo}, path: remote, ref: ${pinned}}\n  - name: local\n  - name: leaving\n`));
+  write(yaml, container(`  - {name: remote, repo: ${repo}, path: remote, ref: ${pinned}}\n  - name: local\n  - name: leaving\n`));
   cli(0, "sync", "--packages");
   expect(readlinkSync(join(dir, ".opencode/plugins/leaving"))).toBe("../../packages/leaving/plugin");
   const installed = () => lstatSync(join(dir, ".office/packages/office")).ino;
@@ -120,7 +120,7 @@ test("a Git package that can't be fetched doesn't stop the others, but no packag
   rmSync(join(dir, ".office/packages/remote"), { recursive: true });
   writePackage(join(local, "office.ts"), claims({ tool: "jq@1.7.1", task: "Local hello", reference: "local-docs", extra: `
     c.add(repositories,{name:"local-guide",url:"https://example.invalid/guide.git"});
-    c.add(requirements,{name:"yq",minimumVersion:"4.44.1"});
+    tools.require(c,{name:"yq",minimum:"4.44.1",bin:["yq"]});
     c.add(tasks,{name:"more",script:"hello.sh",description:"Local more"});
     opencode.plugins.add(c, {directory: "plugin"});`, file: "local.md", mark: "v2\n" }), { dependencies });
   write(join(local, "plugin/index.ts"), "export default { id: \"local\", async setup() {} };\n");

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { dirname, join, relative } from "node:path";
 import { sourceFile } from "../../src/loader/sources/copies.ts";
 import { requiredPackages } from "../../src/loader/sources/selection.ts";
-import { writePackage } from "./test-package.ts";
+import { definitionText, writePackage } from "./test-package.ts";
 
 export function fixtureFileHashes(dir: string) {
   const files: Record<string, string> = {};
@@ -25,7 +25,7 @@ export function recordRequiredFixtures(officePackage: string) {
     const dir = join(dirname(officePackage), name);
     mkdirSync(dir, { recursive: true });
 
-    if (dir !== officePackage && !existsSync(join(dir, "package.json"))) writePackage(join(dir, "package.yaml"), `# fixture\n{}\n`);
+    if (dir !== officePackage && !existsSync(join(dir, "package.json"))) writePackage(join(dir, "office.ts"), definitionText("{}"));
     writeFileSync(join(dir, sourceFile), JSON.stringify({ office: "fixture", commit: "fixture", files: fixtureFileHashes(dir) }));
   }
 }
@@ -34,6 +34,6 @@ export function recordRequiredFixtures(officePackage: string) {
 export function recordRequiredBuiltins(office: string) {
   const officePackage = join(office, ".office/packages/office");
 
-  if (!existsSync(join(officePackage, "package.json"))) writePackage(join(officePackage, "package.yaml"), "# fixture\n{}\n");
+  if (!existsSync(join(officePackage, "package.json"))) writePackage(join(officePackage, "office.ts"), definitionText("{}"));
   recordRequiredFixtures(officePackage);
 }

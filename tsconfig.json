@@ -14,7 +14,6 @@
       "@office/skills": ["./packages/skills/handles.ts"],
       "@office/systemd": ["./packages/systemd/handles.ts"],
       "@office/executor/apps": ["./packages/executor/apps.ts"],
-      "@office/tooling/requirements": ["./packages/tooling/requirements.ts"],
       "@office/tools": ["./packages/tools/handles.ts"],
       "@office/tools/applied": ["./packages/tools/applied.ts"],
       "@office/mise-integration/claims": ["./packages/mise-integration/claims.ts"]

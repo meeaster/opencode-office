@@ -28,16 +28,6 @@ function required(executor: ExecutorAccess | undefined): ExecutorAccess {
   return executor;
 }
 
-/** Runs a command's work; a failure is one plain line on standard error and exit status 1. */
-async function plainly(work: () => Promise<void>): Promise<void> {
-  try {
-    await work();
-  } catch (error) {
-    console.error(`office: ${error instanceof Error ? error.message : String(error)}`);
-    process.exitCode = 1;
-  }
-}
-
 type Settings = { readonly catalog_apps: readonly string[] };
 
 /** Every app source of the office, checked from files alone before any request. */
@@ -45,14 +35,12 @@ const inventory = ({ office, settings, entries }: { office: { dir: string }; set
 
 const terminal = (verbose: boolean): Reporting => ({ line: text => console.log(text), progress: text => verbose && console.error(text), verbose });
 
-function deployCommand(inputs: CommandInputs<Settings>) {
+async function deployCommand(inputs: CommandInputs<Settings>) {
   const { settings, args, executor } = inputs;
 
-  return plainly(async () => {
-    if (args.length > 1 || (args.length === 1 && args[0] !== "--verbose")) throw new Error("usage: office apps deploy [--verbose]");
+  if (args.length > 1 || (args.length === 1 && args[0] !== "--verbose")) throw new Error("usage: office apps deploy [--verbose]");
 
-    console.log(await deploy(required(executor), inventory(inputs), settings.catalog_apps, terminal(args[0] === "--verbose")));
-  });
+  console.log(await deploy(required(executor), inventory(inputs), settings.catalog_apps, terminal(args[0] === "--verbose")));
 }
 
 export default Package.define({
@@ -66,13 +54,13 @@ export default Package.define({
     "apps adopt": {
       summary: "Copy an installed catalog app's source into executor-apps/<catalog-id>",
       usage: "<catalog-id>",
-      run: inputs => plainly(async () => {
+      async run(inputs) {
         const { office, settings, args, executor } = inputs;
 
         if (args.length !== 1) throw new Error("usage: office apps adopt <catalog-id>");
 
         console.log(await adoptCatalog(office.dir, settings.catalog_apps, args[0], required(executor), inventory(inputs)));
-      }),
+      },
     },
   },
   setup(ctx) {

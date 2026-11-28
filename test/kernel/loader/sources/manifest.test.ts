@@ -34,9 +34,9 @@ const json = (name: string, definition: string, extra: Json = {}) => JSON.string
 
 test("package.json names the definition, the declared dependencies, what the package shares and, optionally, its description", () => {
   const exports = { "./token": "./lib/token.ts" };
-  const dir = folder("case", { "package.json": json("case", "./src/definition.ts", { exports, private: true, description: "Notes for the office", office: { definition: "./src/definition.ts", dependencies: ["@office/tooling"] } }), "src/definition.ts": valid });
+  const dir = folder("case", { "package.json": json("case", "./src/definition.ts", { exports, private: true, description: "Notes for the office", office: { definition: "./src/definition.ts", dependencies: ["@office/tools"] } }), "src/definition.ts": valid });
 
-  expect(readPackageJson(dir, "case")).toEqual({ ok: true, value: { description: "Notes for the office", definition: "src/definition.ts", dependencies: ["tooling"], integrations: new Map(), exports } });
+  expect(readPackageJson(dir, "case")).toEqual({ ok: true, value: { description: "Notes for the office", definition: "src/definition.ts", dependencies: ["tools"], integrations: new Map(), exports } });
 });
 
 test("a package.json that can't name the definition says what is wrong, naming the path or the names", () => {
@@ -49,7 +49,7 @@ test("a package.json that can't name the definition says what is wrong, naming t
     ["undefined", { "package.json": JSON.stringify({ name: "@office/undefined", office: {} }) }, "package.json: office.definition: must give the definition's path inside the package"],
     ["parent", { "package.json": json("parent", "../outside/office.ts") }, "office.definition ../outside/office.ts is outside the package"],
     ["absent", { "package.json": json("absent", "./office.ts") }, "office.definition ./office.ts is not a file in the package"],
-    ["dependency", { "package.json": json("dependency", "./office.ts", { office: { definition: "./office.ts", dependencies: ["tooling"] } }), "office.ts": valid }, "package.json: office.dependencies[0]: must be an @office/<name> string"],
+    ["dependency", { "package.json": json("dependency", "./office.ts", { office: { definition: "./office.ts", dependencies: ["tools"] } }), "office.ts": valid }, "package.json: office.dependencies[0]: must be an @office/<name> string"],
   ] as const) {
     expect(readPackageJson(folder(name, files), name)).toEqual({ ok: false, errors: [reason] });
   }

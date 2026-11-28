@@ -254,6 +254,7 @@ export type CommandInputs<Settings = Readonly<Record<string, SettingValue>>> = L
 /**
  * A command a package declares under its name: `office <name>` runs it. It has one handler:
  * `result` returns the text `office` prints on standard output, or `run` acts with the terminal.
+ * Throw an Error to report its message on standard error and exit 1.
  */
 export type Command<Settings = Readonly<Record<string, SettingValue>>> = {
   /** One line for `office --help`. */
@@ -348,26 +349,6 @@ type DefinitionSettings<Parent> = Parent extends { readonly settings?: infer Sch
 
 type Secret = { generate: "hex" | "base64"; bytes: number; prefix?: string };
 
-type HostBlock = {
-  setting?: string;
-  services?: { readonly [id: string]: { description: string; script: string; setting?: string } };
-  tools?: { readonly [tool: string]: string };
-  install?: { description: string; creates: string; script: string; executable?: boolean };
-  path?: readonly string[];
-  env?: { readonly [variable: string]: string | number | boolean };
-};
-
-type SystemBlock = {
-  setting: string;
-  description: string;
-  platforms: readonly string[];
-  prepare?: string;
-  verify?: string;
-  bootstrap: string;
-  ready: readonly string[];
-  env?: { readonly [variable: string]: string | number | boolean };
-};
-
 /** A package definition. Its name and description are in its package.json. */
 export type Definition<Schema extends SettingsSchema = NoSettings> = {
   /** The settings it accepts, as one JSON Schema. Without it, it accepts none. */
@@ -410,9 +391,8 @@ export type Definition<Schema extends SettingsSchema = NoSettings> = {
   /** What its services, volumes and variables are named after, when that isn't its name. */
   namespace?: string;
   secrets?: { readonly [variable: string]: Secret };
-  tools?: { readonly [tool: string]: string };
-  host?: HostBlock;
-  system?: SystemBlock;
+  /** Folders to put on PATH in host mode: absolute, home-relative or relative to the package. */
+  host?: { path?: readonly string[] };
   spawns?: { label: string };
 };
 

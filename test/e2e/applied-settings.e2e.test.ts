@@ -30,7 +30,7 @@ test("sync publishes every selected package's settings, defaults included, befor
   expect(git(["check-ignore", "-v", snapshotPath], dir)).toStartWith(".gitignore:");
   expect(applied().office).toEqual({ ignore_claude_synced_skills: true, ignore_skill_folders: [] });
   // A package without settings has an entry too.
-  expect(applied().tooling).toEqual({});
+  expect(applied().tools).toEqual({});
 
   writePackage(join(dir, "packages/notes/office.ts"), notes);
   write(join(dir, "packages/notes/README.md"), "notes\n");

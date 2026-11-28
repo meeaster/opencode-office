@@ -29,7 +29,7 @@ import { check } from "../../parse.ts";
 import { ageHours } from "./sfw.ts";
 import { lockFile, lockSections, readLockText } from "../../versions.ts";
 import { machineFile } from "../mise-integration/delivery.ts";
-import { compareToolVersions } from "../tooling/requirements.ts";
+import { compareToolVersions } from "./versions.ts";
 import { admitTools, consumersThat, type Demand } from "./admission.ts";
 import { driftMessage, driftOf } from "../../../packages/tools/applied.ts";
 import { activate, type Applied, type AppliedTool, readApplied, toolsState } from "./applied.ts";

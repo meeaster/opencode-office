@@ -11,7 +11,7 @@ packages:
   - name: aws-emulator
 ```
 
-Then run `office sync` and commit what it wrote: the package in `.office/packages/aws-emulator/`, which updates with `office` and is read-only there, and `aws-cli` in `machine.packages.toml`. Run `office up`, which starts Floci and its console.
+Run `office sync`, then commit the AWS CLI pin in `office.lock` (host mode) or `machine.packages.toml` (container mode). Sync manages the read-only copy in `.office/packages/aws-emulator/`. Run `office up` to start Floci and its console.
 
 | Setting | |
 |---|---|

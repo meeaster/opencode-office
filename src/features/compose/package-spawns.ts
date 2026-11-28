@@ -1,6 +1,6 @@
 // Docker resources a package's services create themselves through the Docker socket, which
-// `docker compose down` knows nothing of. A package declares the label they carry (`spawns:` in
-// package.yaml); `office up` keeps it, interpolated, beside the applied copy of the package's
+// `docker compose down` knows nothing of. A package declares the label they carry as `spawns`;
+// `office up` keeps it, interpolated, beside the applied copy of the package's
 // compose file (src/features/compose/package-services.ts), so it is still known once the package leaves office.yaml.
 //
 // A sweep removes the labelled containers before Compose stops the package's services, since a

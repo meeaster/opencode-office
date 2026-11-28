@@ -23,7 +23,7 @@ packages:
   - name: browser
 ```
 
-Then run `office sync` and commit what it wrote: the package in `.office/packages/browser/`, which updates with `office` and is read-only there, `machine.packages.toml`, where sync keeps every package's mise tools, and in a host-mode office `.office/mise/browser.toml`, the package's mise setup.
+Run `office sync`, then commit the changed `office.lock` (host mode) or `machine.packages.toml` (container mode). Sync also manages the package copy in `.office/packages/browser/` and, on a host, the package's mise setup in `.office/mise/browser.toml`.
 
 | Setting | |
 |---|---|
@@ -35,13 +35,13 @@ A change reaches sessions when `office sync` writes the resolved settings, witho
 
 ## agent-browser
 
-`office.ts` registers its tool requirement, `npm:agent-browser`, at the version the package was tested with. The office's `machine.packages.toml` pins it from then on: `office upgrade-tools` bumps it with the office's other pins, and sync changes it only to raise it to a newer version a package update declares. To pin another version, change it there, or, to stay below the package's version, set `"npm:agent-browser"` in the office's `machine.toml`, which wins over `machine.packages.toml` everywhere (`office check` warns), or its `mise.toml`, which wins in the office's folders. It needs Node to run: the template's `mise.toml` pins it for the office's folders, so for `agent-browser` in other folders too, pin `node` in `machine.toml`.
+`office.ts` registers `npm:agent-browser` at the version the package was tested with. In host mode, `office.lock` holds the desired release and `office up` installs it. Use `office bump` to select a release or pin an exact version at or above the minimum in `machine.toml`. In container mode, `machine.packages.toml` holds the pin and the container installs it at start. `office upgrade-tools` can update the pin in either mode. Agent-browser needs Node: a project `mise.toml` supplies it in that project's folders; `machine.toml` can supply it everywhere.
 
-The container installs it at start, and in host mode `office up` does. The plugin registers `agent-browser mcp --tools <profiles>` when `agent-browser` is on the OpenCode server's PATH: mise's shims put it there in the container; a host server needs mise's shims or activation on its PATH.
+The plugin uses the applied executable on the host and the container's `agent-browser` on PATH in container mode.
 
 ## Browse
 
-In a host-mode office with `browse` on, sync adds `bun` (which runs the install script) to `machine.packages.toml`, and writes `.office/mise/browser.toml`, the package's fragment, with a `[hooks]` `postinstall` and a `browser:install` task:
+In a host-mode office with `browse` on, Browser requires Bun to run the install script. Sync writes `.office/mise/browser.toml` with a `[hooks]` `postinstall` and a `browser:install` task. Both put the office's applied tools on PATH, as in this example with the PATH prefix omitted:
 
 ```toml
 [hooks]
@@ -62,13 +62,13 @@ mise reads the fragment only through the link sync makes in its global conf.d, a
 
 The plugin registers `~/.local/bin/browse mcp` (or under `$XDG_BIN_HOME`, or `$OPENCODE_BROWSER_HOME/bin`) when the office is in host mode, `browse` is on and the file exists. It never looks on the PATH, where xdg-utils' unrelated `/usr/bin/browse` can come first. `office check` fails the package's line in host mode while Browse is missing, naming `mise install` and the task, and notes, without failing, that `browse` has no effect in a container-mode office.
 
-When the office moves to container mode, or `browse` is turned off, sync removes `bun` from `machine.packages.toml` (unless another package declares it) and the hook and the task from the fragment. The installed binary, its relay and the pairing stay with the machine: `~/.local/bin/browse uninstall` removes them.
+When the office moves to container mode or `browse` is turned off, sync removes the hook and the task from the fragment. Browser no longer requires Bun. The installed binary, its relay and the pairing stay with the machine: `~/.local/bin/browse uninstall` removes them.
 
 ## System Chrome
 
 By default agent-browser on a host launches the Chrome for Testing it downloads itself (`agent-browser install`) into `~/.agent-browser/browsers/`, which nothing updates. With `system_chrome: true`, in a host-mode office on Ubuntu 24.04 or 26.04 amd64 under WSL, it launches `/usr/bin/google-chrome-stable` instead: Google Chrome Stable from Google's apt repository, the same binary WSLg runs when the user opens Chrome, patched by apt with the distribution's updates. Each agent-browser launch is headless, with a temporary profile of its own, so it never shares the user's Chrome profile, logins or windows. Browse, a separate setting, keeps driving the user's everyday Windows Chrome. The container is unchanged: Debian's Chromium, refreshed with the image (`office up --refresh`).
 
-It is the package's `system` block (see the office README's "Tools"). `office sync` writes the setup to `.office/mise/browser.toml` and `AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable` to the office's environment file, which terminals and the managed OpenCode server source. To turn it on, set `system_chrome: true` and run `office setup`, on a new machine or one whose office already runs. Setup lists what the machine lacks and, on your yes in a terminal, has mise install it from that terminal, asking for your sudo password; with everything in place it asks nothing. Without a terminal it installs nothing and says to rerun it in one.
+Browser registers a system recipe for it (see the office README's "Tools"). `office sync` writes the setup to `.office/mise/browser.toml` and `AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable` to the office's environment file, which terminals and the managed OpenCode server source. To turn it on, set `system_chrome: true` and run `office setup`, on a new machine or one whose office already runs. Setup lists what the machine lacks and, on your yes in a terminal, has mise install it from that terminal, asking for your sudo password; with everything in place it asks nothing. Without a terminal it installs nothing and says to rerun it in one.
 
 - **The repository.** `scripts/google-chrome-apt-source.sh` runs first, as the setup's `pre-packages` hook. When the source is missing it installs `ca-certificates`, `curl` and `gnupg` from the distribution, fetches Google's signing key over HTTPS checked against the distribution's CA certificates, accepts it only when its primary key is `EB4C 1BFD 4F04 2F6D DDCC EC91 7721 F63B D38B 4796` (Google's Linux package signing key), and writes the source exactly where and as Chrome's package does: `/etc/apt/sources.list.d/google-chrome.sources` (`https://dl.google.com/linux/chrome-stable/deb/ stable main`, amd64), `Signed-By: /usr/share/keyrings/google-chrome.gpg`. Chrome's postinst and its daily cron job take both over and keep Google's keys current, so there is one source and no second keyring. A `google-chrome.list` for Google's older address (Chrome's own from earlier releases, or one added by hand) is retired as Chrome's postinst retires it, with an `/etc/apt/keyrings/google-chrome.gpg` no source names any more. With the source in place it changes nothing and asks for no sudo; `--check` only says what a run would change, which is how setup asks.
 - **The packages.** apt installs `google-chrome-stable` with its own dependencies, and `system/google-chrome.toml` adds what agent-browser 0.43.0's `install --with-deps` list has that they don't bring on either release: `libnss3-tools` (certutil, for `--ca-cert`), `fonts-noto-color-emoji` and `fonts-noto-cjk`. agent-browser itself needs nothing installed: no `agent-browser install`, and never `--with-deps`.

@@ -62,7 +62,6 @@ export function definitionFixture({ second = true } = {}) {
 
     for (const path of ["src", "packages", "sdk", "template", "image", "compose.yaml", "LICENSE", "package.json", "tsconfig.json"]) cpSync(join(checkout, path), join(dist, path), { recursive: true });
     writePackage(join(dist, "packages/arrival/office.ts"), definitionText(`{}`, `${marker}`));
-    writePackage(join(dist, "packages/legacy/package.yaml"), "{}\n");
     const aws = join(dist, "packages/aws-emulator/office.ts");
     write(aws, read(aws).replace("if (!ctx.settings.source_reference) return;", 'throw Error("changed built-in collector");'));
     const commands = join(dist, "packages/references/office.ts");

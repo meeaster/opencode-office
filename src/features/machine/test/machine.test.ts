@@ -1,14 +1,15 @@
 import { expect, test } from "bun:test";
-import { existsSync, readdirSync, readlinkSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { machineFixture, makeOffice, reportMachine as report } from "../../../../test/support/machine.fixture.ts";
+import { machineFixture, makeOffice, reportMachine as report, write } from "../../../../test/support/machine.fixture.ts";
 import { syncLines as sync } from "../../../../test/support/sync.fixture.ts";
 import { changeText } from "../../../lib/change.ts";
 import { loadOffice, OfficeError } from "../../../office.ts";
 import { releaseMachine, syncMachine } from "../owned-files.ts";
 import { machineReconciliation } from "../plan.ts";
-import { claim, grantConsent, readMachine } from "../record.ts";
+import { envFilePath, machineRecordPath } from "../paths.ts";
+import { claim, grantConsent, readMachine, serviceEnvironment } from "../record.ts";
 
 const fixture = machineFixture();
 const links = () => (existsSync(fixture.confD) ? readdirSync(fixture.confD).sort() : []);
@@ -64,7 +65,7 @@ test("a second host-mode office is refused, naming the one that manages the mach
   expect(() => grantConsent(loadOffice(other), "")).toThrow(OfficeError);
   expect(await sync(loadOffice(other))).toEqual(expect.arrayContaining([expect.stringContaining(`FAILED to link this office's tools on the machine: this machine is managed by office t in ${office}`)]));
   expect(await report(other)).toEqual([{ ok: false, name: "machine", detail: expect.stringContaining("managed by office t") }]);
-  expect(links()).toEqual(["office-t-0-packages.toml", "office-t-1-demo.toml", "office-t-2-machine.toml"]);
+  expect(links()).toEqual(["office-t-1-demo.toml", "office-t-2-machine.toml"]);
 
   // A copy of the same office beside it is another office too.
   const copy = join(dir, "copy");
@@ -87,7 +88,6 @@ test("an office that moved takes its record along and relinks its tools", async 
 
   expect((await report(moved)).map((line) => [line.ok, line.detail.split(";")[0]])).toEqual([
     [false, `the record names ${office}, where this office was`],
-    [false, `dangling: ${join(office, "machine.packages.toml")} is gone, so mise skips it silently`],
     [false, `dangling: ${join(office, ".office/mise/demo.toml")} is gone, so mise skips it silently`],
     [false, `dangling: ${join(office, "machine.toml")} is gone, so mise skips it silently`],
     [true, "written: the office's environment file"],
@@ -109,4 +109,43 @@ test("syncMachine does nothing for a container-mode office that doesn't manage t
 
   expect(syncMachine(loadOffice(office), machineReconciliation)).toEqual([]);
   expect(await report(office)).toEqual([]);
+});
+
+test("a service can load only the verified environment of the office that installed it", () => {
+  const { office: dir } = fixture;
+
+  makeOffice(dir);
+  const office = loadOffice(dir);
+  const record = machineRecordPath();
+  const file = envFilePath();
+
+  write(file, "echo foreign");
+  expect(serviceEnvironment(office)).toBe("");
+  grantConsent(office, "");
+  expect(statSync(record).mode & 0o777).toBe(0o600);
+  expect(() => serviceEnvironment(office)).toThrow("unrecorded");
+  rmSync(file);
+  syncMachine(office, machineReconciliation, { unread: new Set(), packages: [] });
+  expect(serviceEnvironment(office)).toContain("export MISE_MINIMUM_RELEASE_AGE=");
+  expect(serviceEnvironment({ ...office, dir: join(dir, "other") })).toBe("");
+
+  for (const path of [record, file]) {
+    chmodSync(path, 0o660);
+    expect(() => serviceEnvironment(office)).toThrow("permission");
+    chmodSync(path, 0o600);
+    renameSync(path, `${path}.saved`);
+    symlinkSync(`${path}.saved`, path);
+    expect(() => serviceEnvironment(office)).toThrow("symlinks");
+    renameSync(`${path}.saved`, path);
+  }
+
+  const original = readFileSync(record, "utf8");
+
+  writeFileSync(record, "broken record");
+  expect(() => serviceEnvironment(office)).toThrow("not JSON");
+  writeFileSync(record, original.replace(/"sha256": "[a-f0-9]{64}"/g, `"sha256": "${"0".repeat(64)}"`));
+  expect(() => serviceEnvironment(office)).toThrow("changed");
+  writeFileSync(record, original);
+  writeFileSync(file, "echo replaced");
+  expect(() => serviceEnvironment(office)).toThrow("changed");
 });

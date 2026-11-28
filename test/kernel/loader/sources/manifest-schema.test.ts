@@ -2,32 +2,19 @@ import { expect, test } from "bun:test";
 
 import { schemaSettings } from "../../../../src/loader/definitions/settings.ts";
 import { MalformedSettings, parseManifest } from "../../../../src/loader/sources/manifest-schema.ts";
-import type { SettingValue } from "../../../../src/schema.ts";
 
-test("a setting that gates a host block or a host service is a boolean; one that gates a system setup also defaults to off", () => {
-  const settings = { type: "object", properties: { on: { type: "boolean", default: true }, off: { type: "boolean", default: false }, text: { type: "string", default: "x" } } };
-  const system = (setting: string) => ({ setting, description: "D", platforms: ["ubuntu-24.04-amd64-wsl"], bootstrap: "system/b.toml", ready: ["/usr/bin/d"] });
-
-  const gates = {
-    "host.setting": (setting: string) => ({ host: { setting } }),
-    "host.services": (setting: string) => ({ host: { services: { watch: { description: "Watch", script: "watch.sh", setting } } } }),
-  };
-
-  const problems = (definition: Record<string, SettingValue>) => {
-    const read = parseManifest("demo", { settings, ...definition });
-
-    return read.ok ? [] : read.errors;
-  };
-
-  for (const [path, gate] of Object.entries(gates)) {
-    expect(problems(gate("on"))).toEqual([]);
-    expect(problems(gate("text"))).toEqual([expect.stringMatching(new RegExp(`^${path.replace(".", "\\.")}: .*declared type: boolean`))]);
-    expect(problems(gate("missing"))).toHaveLength(1);
+test("removed definition fields fail with the usual unknown-key error", () => {
+  for (const key of ["tools", "system"]) {
+    expect(parseManifest("demo", { [key]: {} })).toMatchObject({
+      ok: false, errors: [expect.stringContaining(`${key}: must be a mapping of`)],
+    });
   }
 
-  expect(problems({ system: system("off") })).toEqual([]);
-  expect(problems({ system: system("on") })).toEqual(["system.setting: must name one of the package's settings declared type: boolean with default: false: an office opts in"]);
-  expect(problems({ system: system("text") })).toHaveLength(1);
+  for (const key of ["tools", "install", "services", "env", "setting"]) {
+    expect(parseManifest("demo", { host: { path: ["bin"], [key]: {} } })).toEqual({
+      ok: false, errors: [`host.${key}: must be a mapping of the fields this schema knows`],
+    });
+  }
 });
 
 test("a secret can't share a variable with a setting the schema declares, set in office.yaml or not", () => {

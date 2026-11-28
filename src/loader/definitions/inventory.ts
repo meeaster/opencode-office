@@ -1,8 +1,7 @@
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { boundUnavailable, definitionRoot, linkProblem } from "../../bound-paths.ts";
 import { composeProblems, packageComposeFile, settingsEnv } from "../../features/compose/services.ts";
-import { gateDefaultProblem, systemSection } from "../../features/mise-integration/system.ts";
 import type { Office } from "../../office.ts";
 import { type PackageManifest, settingVariable } from "../sources/manifest-schema.ts";
 import type { SettingValue } from "../../schema.ts";
@@ -113,7 +112,7 @@ export function problemLine(problem: PackageProblem) {
  * The package's settings in office.yaml checked against its schema, with the schema's defaults
  * applied: one problem per invalid setting, each naming its path in office.yaml, or the problem
  * with the schema itself. A setting that reaches the package's compose file must hold no single
- * quote or line feed, and a system setup's setting must stay off unless office.yaml turns it on.
+ * quote or line feed.
  */
 function resolveSettings(resolved: ResolvedPackage, manifest: PackageManifest, file: string): Parsed<Record<string, SettingValue>> {
   const { entry, dir } = resolved;
@@ -123,9 +122,6 @@ function resolveSettings(resolved: ResolvedPackage, manifest: PackageManifest, f
   const settings = schema.value;
   const path = `packages.${entry.name}.settings`;
   const errors = Object.keys(settings).flatMap(key => manifest.secrets[settingVariable(manifest.namespace, key)] ? [`${path}.${key}: conflicts with a package secret`] : []);
-  const gate = manifest.system && gateDefaultProblem(entry, settings, manifest.system.setting);
-
-  if (gate) errors.push(gate);
 
   if (errors.length) return { ok: false, errors };
 
@@ -148,34 +144,16 @@ type ReadFailure = { ok: false; errors: string[]; manifest?: PackageManifest; se
 
 /** Validate this office's current entry settings against the installed definition. */
 function readPackage(office: Office, resolved: ResolvedPackage): { ok: true; value: InstalledPackage } | ReadFailure {
-  const { entry, dir } = resolved;
   const read = installedDefinition(office, resolved);
 
   if (!read.ok) return read;
 
   const { manifest, file, integrations } = read.value;
-  const errors: string[] = [];
   const settings = resolveSettings(resolved, manifest, file);
 
-  // Before the checks below that read the package's folder, so a failing one can't hide it.
-  if (!settings.ok) return { ok: false, errors: [...errors, ...settings.errors], manifest, settings: settings.errors };
+  if (!settings.ok) return { ok: false, errors: settings.errors, manifest, settings: settings.errors };
 
-  try {
-    for (const [id, service] of Object.entries(manifest.host?.services ?? {})) {
-      const script = join(dir, service.script);
-
-      if (!statSync(script, { throwIfNoEntry: false })?.isFile() || relative(realpathSync(dir), realpathSync(script)).startsWith("..")) {
-        errors.push(`${entry.name}: host.services.${id}: ${service.script} must be a file inside the package`);
-      }
-    }
-
-    if (errors.length > 0) return { ok: false, errors, manifest };
-
-    return { ok: true, value: { ...resolved, manifest, settings: settings.value, integrations } };
-  } catch (error) {
-    // A file the package's folder can't give (an unreadable script) fails this package alone.
-    return { ok: false, errors: [`${file}: ${error instanceof Error ? error.message : String(error)}`], manifest };
-  }
+  return { ok: true, value: { ...resolved, manifest, settings: settings.value, integrations } };
 }
 
 /**
@@ -208,7 +186,7 @@ function candidateProblems(office: Pick<Office, "dir" | "packages">, candidate: 
 
 /**
  * Sync's admission checks a changed copy against the consuming entry before any live path points
- * at its files: its selection, settings, system setup and compose file. Its setup runs
+ * at its files: its selection, settings and compose file. Its setup runs
  * with every other package's, in the admission's gathering.
  */
 export function validateReplacement(office: Office, resolved: ResolvedPackage) {
@@ -220,20 +198,6 @@ export function validateReplacement(office: Office, resolved: ResolvedPackage) {
   if (!read.ok) throw new Error(read.errors.join("; "));
 
   const item = read.value;
-  const { host, system } = item.manifest;
-
-  for (const file of [host?.install?.script, system?.bootstrap, system?.prepare, system?.verify]) {
-    if (file === undefined) continue;
-    const path = join(item.dir, file);
-
-    if (!statSync(path, { throwIfNoEntry: false })?.isFile() || relative(realpathSync(item.dir), realpathSync(path)).startsWith("..")) throw new Error(`${file} must be a file inside the package`);
-  }
-
-  // Its own system block: a recipe it contributes is checked when admission gathers it.
-  const section = systemSection(office, { ...item, system: item.manifest.system });
-
-  if (!section.ok) throw new Error(section.errors.join("; "));
-
   const compose = join(item.dir, packageComposeFile);
 
   if (existsSync(compose)) {

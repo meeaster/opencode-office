@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 
 import { configDirVariable, installPanel, locate, panelsDirVariable } from "../desktop.ts";
 import { inspect } from "../inspect.ts";
-import { packageJsonText, writePackage } from "../../../../test/support/test-package.ts";
+import { definitionText, packageJsonText, writePackage } from "../../../../test/support/test-package.ts";
 
 let root: string;
 const saved = { config: process.env[configDirVariable], panels: process.env[panelsDirVariable] };
@@ -34,7 +34,7 @@ test("inspect lists a desktop panel only by this office's own record, and a bund
   const office = join(root, "office");
   const bundle = join(office, "packages/common/gui/dist/gui-experimental.cjs");
   write(join(office, "office.yaml"), "name: sample\npackages: [{name: common}]\n");
-  writePackage(join(office, "packages/common/package.yaml"), "# Inspect fixture\n{}\n");
+  writePackage(join(office, "packages/common/office.ts"), definitionText("{}"));
   write(bundle, "module.exports = {}");
   const where = locate();
 

@@ -1,13 +1,12 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import type { Entries, Registry, RegistryEntry, SetupContext } from "@office/sdk";
 
 import { type Office, loadOffice } from "../../../src/office.ts";
-import { reconcileHostServices } from "../../../src/features/systemd/package-host-services.ts";
 import { unitDir } from "../../../src/features/systemd/systemd.ts";
 import { fakeManager } from "../../../test/support/user-units.fixture.ts";
 import type { UnitManager, UnitState } from "../../../src/features/systemd/user-units.ts";
@@ -50,7 +49,7 @@ function inputs(root: string, declared: Record<string, UserUnitOptions[]>, packa
   const entries: Entries = <Value extends RegistryEntry>(registry: Registry<Value>) => added.flatMap(({ owner, id, value }) => id === registry.id ? [{ value: registry.parse(value), owner, namespace: owner, settings: {}, folder: join(root, "packages", owner), root: join(root, "packages", owner) }] : []);
   const names = new Set([...Object.keys(declared), ...Object.keys(packages)]);
 
-  return { entries, packages: [...names].map(name => ({ entry: { name }, dir: join(root, "packages", name), manifest: {}, claims: { required: [], provided: [] }, ...packages[name] })) };
+  return { entries, packages: [...names].map(name => ({ entry: { name }, dir: join(root, "packages", name), claims: { required: [], provided: [] }, ...packages[name] })) };
 }
 
 const greeter = { name: "npm:greeter", minimum: "1.0.0", bin: ["greeter"] } as const;
@@ -291,13 +290,11 @@ test("a destination office doesn't own is refused before anything changes", asyn
     write(join(root, "packages/demo/units/greeter.service"), shipped);
     const declared = inputs(root, { demo: [{ id: "greeter", file: "units/greeter.service" }] });
 
-    // The user's own file, or one the legacy host.services reconciler wrote, at the destination.
-    for (const foreign of ["[Service]\nExecStart=/bin/true\n", `# office package services: ${office.dir}\n[Service]\nExecStart=/bin/true\n`]) {
-      write(path, foreign);
-      expect(() => precheckUnits(office, declared, { manager: fake.manager })).toThrow(`${path} exists and office didn't write it`);
-      expect((await reconcileUnits(office, declared, { upgrade: true, manager: fake.manager }).catch((error: Error) => error)).toString()).toContain("office leaves it alone");
-      expect(readFileSync(path, "utf8")).toBe(foreign);
-    }
+    const foreign = "[Service]\nExecStart=/bin/true\n";
+    write(path, foreign);
+    expect(() => precheckUnits(office, declared, { manager: fake.manager })).toThrow(`${path} exists and office didn't write it`);
+    expect((await reconcileUnits(office, declared, { upgrade: true, manager: fake.manager }).catch((error: Error) => error)).toString()).toContain("office leaves it alone");
+    expect(readFileSync(path, "utf8")).toBe(foreign);
 
     rmSync(path);
     await reconcileUnits(office, declared, { upgrade: false, manager: fake.manager, patience: quick });
@@ -326,9 +323,8 @@ test("declarations office can't use are named", () => {
   const fake = fakeManager();
 
   try {
-    const declared = inputs(root, { demo: [{ id: "bridge", file: "units/bridge.service", restartWhenChanged: greeter }] }, { demo: { manifest: { host: { services: { bridge: { script: "start.sh" } } } } } });
+    const declared = inputs(root, { demo: [{ id: "bridge", file: "units/bridge.service", restartWhenChanged: greeter }] });
 
-    expect(() => precheckUnits(office, declared, { manager: fake.manager })).toThrow("user unit bridge and host.services.bridge both want office-test-pkg-demo.bridge.service; keep one");
     expect(() => precheckUnits(office, declared, { manager: fake.manager })).toThrow("restarts with tool npm:greeter, which the package doesn't require or provide");
     expect(() => inputs(root, { demo: [{ id: "Bad", file: "x.service" }] }).entries(systemd.userUnits)).toThrow("id must be lowercase");
     expect(() => inputs(root, { demo: [{ id: "up", file: "../x.service" }] }).entries(systemd.userUnits)).toThrow("must be a relative path to a file in the package");
@@ -337,27 +333,17 @@ test("declarations office can't use are named", () => {
   }
 });
 
-test("units go when no package wants them and on down, and the legacy host.services sweep leaves them alone", async () => {
+test("units go when no package wants them and on down", async () => {
   const { root, office, done } = scratchOffice();
   const fake = fakeManager();
   const name = "office-test-pkg-demo.greeter.service";
   const path = join(unitDir(), name);
-  const previous = process.env.PATH;
 
   try {
     write(join(root, "packages/demo/units/greeter.service"), shipped);
     const declared = inputs(root, { demo: [{ id: "greeter", file: "units/greeter.service" }] });
 
     await reconcileUnits(office, declared, { upgrade: false, manager: fake.manager, patience: quick });
-
-    // The former reconciler's sweep finds no unit of its own here: it neither stops nor deletes this one.
-    write(join(root, "bin/systemctl"), `#!/bin/sh\necho "$*" >> '${root}/legacy-calls'\n`);
-    chmodSync(join(root, "bin/systemctl"), 0o755);
-    process.env.PATH = `${join(root, "bin")}:${previous}`;
-    reconcileHostServices(office, "down");
-    expect(readFileSync(path, "utf8")).toBe(shipped);
-    expect(existsSync(join(root, "legacy-calls"))).toBe(false);
-    process.env.PATH = previous;
 
     fake.reset();
     expect((await reconcileUnits(office, inputs(root, {}), { upgrade: false, manager: fake.manager })).lines).toEqual([`${name}: removed, as no package wants it`]);
@@ -372,7 +358,6 @@ test("units go when no package wants them and on down, and the legacy host.servi
     expect(existsSync(path)).toBe(false);
     expect(removeUnits(office, { manager: fake.manager })).toEqual([]);
   } finally {
-    process.env.PATH = previous;
     done();
   }
 });

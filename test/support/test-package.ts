@@ -30,8 +30,8 @@ export function packageJsonText(name: string, definition = "office.ts", { depend
 type SettingType = "string" | "integer" | "number" | "boolean";
 
 /**
- * A settings schema as JSON, which reads the same in a definition module and a package.yaml: each
- * of `defaults` typed by its value, and each of `required` with its type and no default.
+ * A settings schema as JSON: each of `defaults` typed by its value, and each of `required`
+ * with its type and no default.
  */
 export function settingsSchema(defaults: Record<string, string | number | boolean>, required: Record<string, SettingType> = {}) {
   const type = (value: string | number | boolean): SettingType => typeof value === "number" ? Number.isInteger(value) ? "integer" : "number" : typeof value === "string" ? "string" : "boolean";
@@ -55,9 +55,8 @@ export function definitionText(body: string, prelude = "") {
 }
 
 /**
- * Writes the definition `file` (office.ts, package.yaml, …) with `text`, and its package's
- * package.json. A module definition's `text` is usually `definitionText(...)`; raw text is for a
- * YAML definition, a broken one, or another filename.
+ * Writes the definition `file` with `text` (usually from `definitionText`) and the package.json
+ * that names it.
  */
 export function writePackage(file: string, text: string, options: PackageOptions = {}) {
   const dir = dirname(file);

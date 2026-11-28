@@ -178,20 +178,6 @@ export function settleSeed(dir: string, declarations: readonly Entry<Seed>[], pa
   return `${recorded}; the file is unchanged. ${commit}`;
 }
 
-/** Prints a seeds command's output, or its error on stderr with exit status 1. */
-function report(work: () => string): void {
-  try {
-    console.log(work());
-  } catch (error) {
-    fail(message(error));
-  }
-}
-
-function fail(text: string): void {
-  console.error(`office: ${text}`);
-  process.exitCode = 1;
-}
-
 /** A seeds command's words, without the `--` a printed command puts before a path that starts with a dash (`seedsCommand`). */
 const pathWords = (args: readonly string[]) => (args[0] === "--" ? args.slice(1) : args);
 
@@ -199,16 +185,16 @@ const pathWords = (args: readonly string[]) => (args[0] === "--" ? args.slice(1)
 export function diffCommand({ office, entries, args }: CommandInputs): void {
   const words = pathWords(args);
 
-  if (words.length > 1) return fail(`usage: office seeds diff [<path>]: one path at most, not ${words.length}`);
+  if (words.length > 1) throw new Error(`usage: office seeds diff [<path>]: one path at most, not ${words.length}`);
 
-  report(() => seedsDiff(office.dir, entries(seeds), words[0]));
+  console.log(seedsDiff(office.dir, entries(seeds), words[0]));
 }
 
 /** `office seeds settle <path>`. */
 export function settleCommand({ office, entries, args }: CommandInputs): void {
   const words = pathWords(args);
 
-  if (words.length !== 1) return fail(`usage: office seeds settle <path>: exactly one path, not ${words.length}`);
+  if (words.length !== 1) throw new Error(`usage: office seeds settle <path>: exactly one path, not ${words.length}`);
 
-  report(() => settleSeed(office.dir, entries(seeds), words[0]));
+  console.log(settleSeed(office.dir, entries(seeds), words[0]));
 }

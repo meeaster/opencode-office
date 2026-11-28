@@ -11,7 +11,7 @@ import { composeProblems, planServices, settingsEnv as composeVariables } from "
 import { ensureSecrets, packageSecret, preparePackageServices, secretsPath } from "../package-services.ts";
 import { parseManifest } from "../../../loader/sources/manifest-schema.ts";
 import { recordRequiredBuiltins } from "../../../../test/support/test-builtin-record.ts";
-import { writePackage } from "../../../../test/support/test-package.ts";
+import { definitionText, settingsSchema, writePackage } from "../../../../test/support/test-package.ts";
 
 let dir: string;
 let cache: string | undefined;
@@ -98,7 +98,7 @@ test("a namespaced package's services and settings follow its namespace, and two
   const office = join(dir, "office");
 
   write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: canvas\n    settings:\n      url: https://example.com\n");
-  writePackage(join(office, "packages/canvas/package.yaml"), "namespace: doop\nsettings: {type: object, additionalProperties: false, properties: {url: {type: string}}, required: [url]}\n");
+  writePackage(join(office, "packages/canvas/office.ts"), definitionText(`{ namespace: "doop", settings: ${settingsSchema({}, { url: "string" })} }`));
   write(join(office, "packages/canvas/compose.yaml"), "services:\n  design:\n    image: busybox\n");
   await expect(preparePackageServices(loadOffice(office), false)).rejects.toThrow("package canvas: compose.yaml: services.design: must be named doop or doop-*");
 
@@ -107,14 +107,14 @@ test("a namespaced package's services and settings follow its namespace, and two
   expect(readFileSync(join(office, "state/packages/canvas/settings.env"), "utf8")).toBe("DOOP_URL='https://example.com'\n");
 
   write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: canvas\n    settings:\n      url: https://example.com\n  - name: doop\n");
-  writePackage(join(office, "packages/doop/package.yaml"), "{}\n");
+  writePackage(join(office, "packages/doop/office.ts"), definitionText("{}"));
   await expect(preparePackageServices(loadOffice(office), false)).rejects.toThrow("packages canvas and doop claim the same namespace, doop");
 });
 
 test("a package without services gets declared secrets on up, and get reveals only current declarations", async () => {
   write(join(dir, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: notes\n  - name: plain\n");
-  writePackage(join(dir, "packages/notes/package.yaml"), "secrets:\n  NOTES_KEY:\n    generate: hex\n    bytes: 32\n");
-  writePackage(join(dir, "packages/plain/package.yaml"), "{}\n");
+  writePackage(join(dir, "packages/notes/office.ts"), definitionText('{ secrets: { NOTES_KEY: { generate: "hex", bytes: 32 } } }'));
+  writePackage(join(dir, "packages/plain/office.ts"), definitionText("{}"));
   const office = loadOffice(dir);
 
   expect(() => packageSecret(office, "notes", "NOTES_KEY")).toThrow("run office up");
@@ -126,7 +126,7 @@ test("a package without services gets declared secrets on up, and get reveals on
   expect(existsSync(join(office.state, "packages/notes/include.yaml"))).toBe(false);
   (await preparePackageServices(office, false)).apply();
   expect(packageSecret(office, "notes", "NOTES_KEY")).toBe(key);
-  writePackage(join(dir, "packages/notes/package.yaml"), "{}\n");
+  writePackage(join(dir, "packages/notes/revised.ts"), definitionText("{}"));
   expect(() => packageSecret(office, "notes", "NOTES_KEY")).toThrow("declares");
 });
 
@@ -154,7 +154,7 @@ test.skipIf(Bun.which("docker") === null)("Compose uses applied package settings
   const before = process.env.CANVAS_PORT;
 
   write(join(office, "office.yaml"), "name: precedence\nstate: state\npackages:\n  - name: canvas\n    settings:\n      port: 43219\n      title: Cost = lunch\n");
-  writePackage(join(office, "packages/canvas/package.yaml"), "settings: {type: object, additionalProperties: false, properties: {port: {type: integer, default: 3000}, title: {type: string, default: x}}}\n");
+  writePackage(join(office, "packages/canvas/office.ts"), definitionText(`{ settings: ${settingsSchema({ port: 3000, title: "x" })} }`));
   write(join(office, "packages/canvas/compose.yaml"), 'services:\n  canvas:\n    image: busybox\n    environment:\n      TITLE: ${CANVAS_TITLE}\n    ports: ["127.0.0.1:${CANVAS_PORT}:${CANVAS_PORT}"]\n');
   write(join(office, "packages/canvas/.env"), "CANVAS_PORT=11111\n");
   write(join(office, "state/secrets.env"), "OPENCODE_PASSWORD=test\n");
@@ -214,8 +214,8 @@ test("office up runs the applied copy through an include in the package's folder
 
   for (const name of ["demo", "zeta"]) write(join(office, `packages/${name}/compose.yaml`), services.replaceAll("demo", name));
 
-  writePackage(join(office, "packages/demo/package.yaml"), "settings: {type: object, additionalProperties: false, properties: {url: {type: string}}, required: [url]}\nsecrets:\n  DEMO_KEY:\n    generate: hex\n    bytes: 16\n");
-  writePackage(join(office, "packages/zeta/package.yaml"), "{}\n");
+  writePackage(join(office, "packages/demo/office.ts"), definitionText(`{ settings: ${settingsSchema({}, { url: "string" })}, secrets: { DEMO_KEY: { generate: "hex", bytes: 16 } } }`));
+  writePackage(join(office, "packages/zeta/office.ts"), definitionText("{}"));
 
   const loaded = loadOffice(office);
   const first = await preparePackageServices(loaded, false);
@@ -245,9 +245,8 @@ test("office up runs the applied copy through an include in the package's folder
   upgrade.apply();
   expect(readFileSync(join(state, "demo/compose.yaml"), "utf8")).toBe(`${services}# changed\n`);
 
-  // Converting a still-selected package to a broken TS definition isn't a service removal.
-  rmSync(join(office, "packages/demo/package.yaml"));
-  writePackage(join(office, "packages/demo/office.ts"), 'throw new Error("cannot load demo");');
+  // A still-selected package with an unreadable definition is not a service removal.
+  writePackage(join(office, "packages/demo/revised.ts"), 'throw new Error("cannot load demo");');
   rmSync(join(office, "packages/demo/compose.yaml"));
   (await preparePackageServices(loaded, true)).apply();
   expect(readFileSync(join(state, "demo/compose.yaml"), "utf8")).toBe(`${services}# changed\n`);
@@ -274,7 +273,7 @@ test("a schema's top-level text, numbers and booleans reach the compose file as 
   } };
 
   write(join(office, "office.yaml"), "name: t\nstate: state\npackages:\n  - name: floci-box\n    settings: {port: 4600}\n");
-  writePackage(join(office, "packages/floci-box/package.yaml"), `settings: ${JSON.stringify(schema)}\n`);
+  writePackage(join(office, "packages/floci-box/office.ts"), definitionText(`{ settings: ${JSON.stringify(schema)} }`));
   write(join(office, "packages/floci-box/compose.yaml"), 'services:\n  floci-box:\n    image: busybox\n    ports: ["127.0.0.1:${FLOCI_BOX_PORT}:${FLOCI_BOX_PORT}"]\n');
   (await preparePackageServices(loadOffice(office), false)).apply();
   // Compose reads the package's variables from this file: office.yaml's port, not the default.

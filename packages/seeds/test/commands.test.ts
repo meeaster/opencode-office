@@ -253,48 +253,41 @@ function inputs(args: string[], list: Entry<Seed>[]) {
   return { office: { dir, name: "test", mode: "container" as const, launcher: "office" }, entries, settings: {}, args, replaceSetting: () => { throw new Error("not in these tests"); }, updateExcluded: () => { throw new Error("not in these tests"); } };
 }
 
-test("the commands print their output, and fail with exit status 1 and one line, changing nothing, for a wrong number of words, an invalid receipts file, or one of the wrong shape", () => {
+test("the commands print their output or throw the expected error message, changing nothing on failure", () => {
   office();
   const out = spyOn(console, "log").mockImplementation(() => undefined);
-  const err = spyOn(console, "error").mockImplementation(() => undefined);
 
   const run = (command: typeof diffCommand, args: string[]) => {
     out.mockClear();
-    err.mockClear();
-    process.exitCode = 0;
     command(inputs(args, declared()));
 
-    return { code: process.exitCode, out: out.mock.calls.map(call => call.join(" ")), err: err.mock.calls.map(call => call.join(" ")) };
+    return out.mock.calls.map(call => call.join(" "));
   };
 
   try {
-    expect(run(diffCommand, [])).toEqual({ code: 0, out: ["No seeds are pending."], err: [] });
-    expect(run(diffCommand, ["a", "b"])).toEqual({ code: 1, out: [], err: ["office: usage: office seeds diff [<path>]: one path at most, not 2"] });
-    expect(run(settleCommand, [])).toEqual({ code: 1, out: [], err: ["office: usage: office seeds settle <path>: exactly one path, not 0"] });
-    expect(run(settleCommand, ["notes/other.md"]).err).toEqual([`office: no package seeded notes/other.md: ${receiptsFile} has no receipt for it (give the path relative to the office's folder)`]);
+    expect(run(diffCommand, [])).toEqual(["No seeds are pending."]);
+    expect(() => run(diffCommand, ["a", "b"])).toThrow("usage: office seeds diff [<path>]: one path at most, not 2");
+    expect(() => run(settleCommand, [])).toThrow("usage: office seeds settle <path>: exactly one path, not 0");
+    expect(() => run(settleCommand, ["notes/other.md"])).toThrow(`no package seeded notes/other.md: ${receiptsFile} has no receipt for it (give the path relative to the office's folder)`);
     // One leading -- is dropped, as printed before a path that starts with a dash; a second is the path.
-    expect(run(diffCommand, ["--"])).toEqual({ code: 0, out: ["No seeds are pending."], err: [] });
-    expect(run(diffCommand, ["--", "a", "b"]).err).toEqual(["office: usage: office seeds diff [<path>]: one path at most, not 2"]);
-    expect(run(settleCommand, ["--"]).err).toEqual(["office: usage: office seeds settle <path>: exactly one path, not 0"]);
-    expect(run(settleCommand, ["--", "--"]).err).toEqual([`office: no package seeded --: ${receiptsFile} has no receipt for it (give the path relative to the office's folder)`]);
-    expect(run(diffCommand, ["--", "--help"]).err).toEqual([`office: no package seeded --help: ${receiptsFile} has no receipt for it (give the path relative to the office's folder)`]);
+    expect(run(diffCommand, ["--"])).toEqual(["No seeds are pending."]);
+    expect(() => run(diffCommand, ["--", "a", "b"])).toThrow("usage: office seeds diff [<path>]: one path at most, not 2");
+    expect(() => run(settleCommand, ["--"])).toThrow("usage: office seeds settle <path>: exactly one path, not 0");
+    expect(() => run(settleCommand, ["--", "--"])).toThrow(`no package seeded --: ${receiptsFile} has no receipt for it (give the path relative to the office's folder)`);
+    expect(() => run(diffCommand, ["--", "--help"])).toThrow(`no package seeded --help: ${receiptsFile} has no receipt for it (give the path relative to the office's folder)`);
 
     for (const text of ["not json", '{ "receipts": [] }']) {
       write(join(dir, receiptsFile), text);
       const before = files();
 
       for (const [command, args] of [[diffCommand, []], [diffCommand, ["mine.md"]], [settleCommand, ["mine.md"]]] as const) {
-        const result = run(command, [...args]);
-
-        expect(result.code).toBe(1);
-        expect(result.err).toEqual([expect.stringMatching(/^office: \.office\/seeds\/receipts\.json is not valid/)]);
+        expect(() => run(command, [...args])).toThrow(/^\.office\/seeds\/receipts\.json is not valid/);
+        expect(out).not.toHaveBeenCalled();
       }
 
       expect(files()).toEqual(before);
     }
   } finally {
-    process.exitCode = 0;
     out.mockRestore();
-    err.mockRestore();
   }
 });

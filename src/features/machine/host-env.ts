@@ -8,12 +8,11 @@ import type { Office } from "../../office.ts";
 import { managedAgentEnvironment } from "../../schema.ts";
 import { projectionPath } from "../tools/applied.ts";
 import { systemVariables } from "../mise-integration/system.ts";
-import { hostApplies } from "../tooling/requirements.ts";
 import { dropFromPath, type Environment, hostWrappers, marker, releaseAgeVariables, shellQuote } from "../tools/sfw.ts";
 import type { PlanContext, WantedFile } from "./owned-files.ts";
 import { envFilePath, home, machineDirVariable, miseShims, opencodeBin } from "./paths.ts";
 
-/** What a package's host block adds to the environment file, with absolute folders. */
+/** What a package adds to the environment file, with absolute folders. */
 export type PackageEnvironment = { name: string; path: string[]; variables: [string, string][] };
 
 /** A declared folder as an absolute path: `~/…` in the home folder, `/…` as it is, anything else in the package. */
@@ -23,14 +22,11 @@ function folder(item: InstalledPackage, entry: string): string {
   return entry.startsWith("/") ? entry : resolve(item.dir, entry);
 }
 
-/** A package's host block's folders and variables where it applies, then its system block's variables where that applies. */
+/** A package's PATH folders in host mode and the variables of its applied system recipe. */
 function packageEnvironment(office: Office, item: GatheredPackage): PackageEnvironment {
-  const host = item.manifest.host;
-  const system = systemVariables(office, item);
+  const folders = office.opencode.mode === "host" ? item.manifest.host?.path ?? [] : [];
 
-  if (host === undefined || !hostApplies(office, item)) return { name: item.entry.name, path: [], variables: system };
-
-  return { name: item.entry.name, path: host.path.map((entry) => folder(item, entry)), variables: [...Object.entries(host.env), ...system] };
+  return { name: item.entry.name, path: folders.map(entry => folder(item, entry)), variables: systemVariables(office, item) };
 }
 
 /** The environment file's content, and a problem per variable two packages both set. */
@@ -45,14 +41,15 @@ export type HostEnvironment = { environment: Environment; problems: string[]; co
 export function hostEnvironment(office: Office, installed: GatheredPackage[], retained: PackageEnvironment[] = []): HostEnvironment {
   const current = new Map(installed.map(item => [item.entry.name, packageEnvironment(office, item)]));
   const prior = new Map(retained.map(item => [item.name, item]));
-  const declared = [...new Set(["office", ...office.packages.map(item => item.name)])].flatMap(name => current.get(name) ?? prior.get(name) ?? []);
+  const ordered = new Set(["office", ...office.packages.map(item => item.name), ...current.keys()]);
+  const declared = [...ordered].flatMap(name => current.get(name) ?? prior.get(name) ?? []);
   const setters = new Map<string, string[]>();
 
   for (const item of declared) {
     for (const [name] of item.variables) setters.set(name, [...(setters.get(name) ?? []), item.name]);
   }
 
-  const problems = [...setters].flatMap(([name, names]) => (names.length > 1 ? [`packages ${names.join(" and ")} both set ${name} in their host or system block, so ${envFilePath()} sets neither; remove it from one`] : []));
+  const problems = [...setters].flatMap(([name, names]) => (names.length > 1 ? [`packages ${names.join(" and ")} both set ${name} in their system recipes, so ${envFilePath()} sets neither; remove it from one`] : []));
   const variables: [string, string][] = releaseAgeVariables(office.tools.minimumReleaseAge);
   // The shared tools applied on this machine come before mise's shims, so a desired pin is never what runs.
   const path = [...(office.socketFirewall ? [hostWrappers()] : []), projectionPath(office), miseShims(), opencodeBin()];

@@ -33,7 +33,7 @@ import type { Entries } from "../../../sdk/index.ts";
 import type { MachineClaims } from "../mise-integration/projection.ts";
 import { officeInfo } from "../../lifecycle-inputs.ts";
 import { type Office, OfficeError } from "../../office.ts";
-import { packageLaunch } from "./package-host-services.ts";
+import { packageLaunch } from "./package-launch.ts";
 import { check } from "../../parse.ts";
 import { atomicWrite } from "../../lib/atomic-write.ts";
 import { unitDir } from "./systemd.ts";
@@ -54,11 +54,10 @@ const patience: Patience = { attempts: 60, interval: 500 };
 /** What the lifecycle runs against; tests give a fake manager and short patience. */
 export type UnitsRun = { manager?: UnitManager; patience?: Patience };
 
-/** What the units read of a gathered package: its name, folder, legacy host services and tool claims. */
+/** What the units read of a gathered package: its name, folder and tool claims. */
 export type UnitPackage = {
   readonly entry: { readonly name: string };
   readonly dir: string;
-  readonly manifest: { readonly host?: { readonly services?: Readonly<Record<string, { readonly script: string }>> } };
   readonly claims: Pick<MachineClaims, "required" | "provided">;
 };
 
@@ -172,8 +171,6 @@ function declaredUnits(office: Office, gathered: UnitInputs): Declarations {
     const name = unitName(office, owner, value.id);
 
     if (item === undefined) continue;
-
-    if (item.manifest.host?.services?.[value.id] !== undefined) problems.push(`package ${owner}: user unit ${value.id} and host.services.${value.id} both want ${name}; keep one`);
 
     for (const tool of value.tools) {
       if (!declaresTool(item, tool)) problems.push(`package ${owner}: user unit ${value.id} restarts with tool ${tool.name}, which the package doesn't require or provide with that handle; pass the handle its tools.require or tools.provide returned`);

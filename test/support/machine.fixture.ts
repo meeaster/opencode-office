@@ -9,7 +9,7 @@ import { machineDirVariable, machineRecordVariable } from "../../src/features/ma
 import { machineReconciliation } from "../../src/features/machine/plan.ts";
 import { miseConfigVariable } from "../../src/features/mise-integration/machine-files.ts";
 import { loadOffice } from "../../src/office.ts";
-import { sharedToolsLock, writePackage } from "./test-package.ts";
+import { definitionText, sharedToolsLock, writePackage } from "./test-package.ts";
 
 export function machineFixture({ scratchHome = false } = {}) {
   const fixture = { dir: "", office: "", confD: "" };
@@ -64,14 +64,19 @@ export const host = "opencode:\n  mode: host\n  url: http://127.0.0.1:49999\n";
 /** A local package demo with a mise fragment, and an owner machine.toml. */
 export function makeOffice(at: string, { name = "t", opencode = host, packages = "packages:\n  - name: demo\n", firewall = false } = {}): void {
   write(join(at, "office.yaml"), `name: ${name}\n${opencode}${firewall ? "" : "tools:\n  sfw: { enabled: false }\n"}${packages}`);
-  writePackage(join(at, "packages/demo/package.yaml"), '# A demo package.\ntools:\n  jq: "1.7.1"\nhost:\n  install:\n    description: Demo\n    creates: ~/.local/bin/demo\n    script: scripts/install.ts\n');
+  writePackage(join(at, "packages/demo/office.ts"), definitionText(`{
+    setup(ctx) {
+      ctx.add(installs, { name: "install", description: "Demo", destination: "~/.local/bin/demo", ready: "~/.local/bin/demo", script: "scripts/install.ts", executable: true });
+    },
+  }`, 'const installs = { id: "mise-integration.installs", parse: value => value };'));
+  write(join(at, "packages/demo/scripts/install.ts"), "");
   write(join(at, "machine.toml"), '# The office\'s own.\n[tools]\njq = "1.8.0"\n');
   write(join(at, "office.lock"), sharedToolsLock());
 }
 
 /** A host-mode office with an optional demo host block and no demo tools. */
-export function makeEnvironmentOffice(office: string, { firewall = true, host = "", tools = "" } = {}): void {
+export function makeEnvironmentOffice(office: string, { firewall = true, path = [], tools = "" }: { firewall?: boolean; path?: string[]; tools?: string } = {}): void {
   write(join(office, "office.yaml"), `name: t\nopencode:\n  mode: host\n  url: http://127.0.0.1:49999\n${firewall ? tools : `tools:\n${tools.replace(/^tools:\n/, "")}  sfw: { enabled: false }\n`}packages:\n  - name: demo\n`);
-  writePackage(join(office, "packages/demo/package.yaml"), host || "{}\n");
+  writePackage(join(office, "packages/demo/office.ts"), definitionText(JSON.stringify({ host: { path } })));
   write(join(office, "office.lock"), sharedToolsLock());
 }

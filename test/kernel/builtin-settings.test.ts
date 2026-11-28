@@ -62,7 +62,6 @@ test("browser: tool profiles, Browse off and system Chrome on; its recipe's sett
   // The contributed recipe passes the default-off rule as sync projects it.
   expect(project(item, added).system?.setting).toBe("system_chrome");
   // Projection reads claims without changing the definition.
-  expect(item.manifest.system).toBeUndefined();
 });
 
 test("office: more ignored skill folders, and the Claude app's synced skills loaded", () => {
@@ -81,8 +80,8 @@ test("artifact-share: the site's address is required; a title and theme replace 
   expect(() => read("artifact-share", {})).toThrow("packages.artifact-share.settings.url: is required");
 });
 
-test("knowledge, references, tooling and mise-integration accept no settings", () => {
-  for (const name of ["knowledge", "references", "tooling", "mise-integration"]) {
+test("knowledge, references, tools and mise-integration accept no settings", () => {
+  for (const name of ["knowledge", "references", "tools", "mise-integration"]) {
     expect(read(name, {}).settings).toEqual({});
     expect(() => read(name, { extra: true })).toThrow(`packages.${name}.settings.extra: the package declares no such setting`);
   }

@@ -4,15 +4,6 @@ import type { CheckInputs, CommandInputs, DownInputs, FullSyncInputs, JsonValue,
 import { check } from "../../parse.ts";
 import { jsonValue, managedAgentEnvironment, mapping, name, type SettingValue, text } from "../../schema.ts";
 
-// The bound leaves room for the office's and package's names in a systemd unit filename.
-const unitPart = v.pipe(name, v.maxLength(48, "must be at most 48 characters"));
-
-/** A script a package runs: a relative .sh path inside its folder, with nothing a shell would read. */
-const packageScript = v.pipe(
-  text,
-  v.regex(/^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)*\.sh$/, "must be a relative .sh path, such as scripts/serve.sh"),
-);
-
 /**
  * How `office up` generates one of a package's secrets, once: `bytes` random bytes as `hex` or
  * `base64`, after an optional fixed `prefix`. The prefix is kept to characters an env file holds unquoted.
@@ -35,32 +26,6 @@ function packageVariablePrefix(namespace: string): string {
 export function settingVariable(namespace: string, setting: string): string {
   return `${packageVariablePrefix(namespace)}${setting.toUpperCase().replaceAll(/[^A-Z0-9]/g, "_")}`;
 }
-
-/** A mise tool, as a mise.toml's [tools] table names it, such as `node` or `npm:agent-browser`. */
-const miseTool = v.pipe(v.string(), v.regex(/^[A-Za-z0-9_.:@/-]+$/, "must be a mise tool name such as node or npm:agent-browser"));
-
-/** An exact version to start a mise tool at, such as 0.43.0: never a range, a prefix or `latest`. */
-const miseVersion = v.pipe(v.string("must be an exact version such as 0.43.0"), v.regex(/^v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?$/, "must be an exact version such as 0.43.0"));
-
-const miseTools = v.nullish(v.record(miseTool, miseVersion, "must map mise tool names to exact versions"), {});
-
-/**
- * Something a package installs once on the machine of a host-mode office, outside the office:
- * `script` (a Bun script in the package) creates `creates` (a path in the home folder) when it is
- * missing. It runs as the postinstall hook of the package's mise fragment, so `mise install` in
- * the office runs it, and as the task `<package>:install`. After that the file is its own: office
- * neither pins nor updates it. `creates` is an executable unless `executable: false` makes it a
- * regular file, such as a script a shell sources; the hook's test and `office check` follow it.
- */
-const hostInstall = v.strictObject(
-  {
-    description: text,
-    creates: v.pipe(v.string(), v.regex(/^~\/[A-Za-z0-9._/-]+$/, "must be a path in the home folder such as ~/.local/bin/tool")),
-    script: v.pipe(v.string(), v.regex(/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*\.ts$/, "must be a .ts script in the package, such as scripts/install.ts")),
-    executable: v.optional(v.boolean("must be true or false"), true),
-  },
-  mapping,
-);
 
 /**
  * A folder a package puts on PATH in the office's environment file: `~/…` in the home folder, an
@@ -89,35 +54,13 @@ const hostValue = v.pipe(
   v.regex(/^[^\u0000-\u001f\u007f]*$/, "must be one line of plain text"),
 );
 
-/**
- * What a package gives only an office in host mode, where OpenCode runs on the machine itself,
- * and, with `setting`, only while that boolean setting is true: more mise tools, a host install,
- * and folders and variables for the office's environment file (src/features/machine/host-env.ts). No shell code.
- */
-const hostBlock = v.strictObject(
-  {
-    setting: v.optional(v.string()),
-    // Units office generates around a script; a package that supplies its own unit uses systemd.userUnits from @office/systemd.
-    services: v.optional(v.record(unitPart, v.strictObject({
-      description: v.pipe(text, v.regex(/^[^\r\n\0]+$/, "must be one line")),
-      script: packageScript,
-      setting: v.optional(v.string()),
-    }, mapping))),
-    tools: miseTools,
-    install: v.optional(hostInstall),
-    path: v.nullish(v.array(hostPathEntry, "must be a list of folders"), []),
-    env: v.nullish(v.record(hostVariable, hostValue, "must map variable names to values"), {}),
-  },
-  mapping,
-);
-
 /** A file in the package, by a relative path without `..`. */
 function packageFile(extension: string, example: string) {
   return v.pipe(v.string(), v.regex(new RegExp(`^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\\.${extension}$`), `must be a .${extension} file in the package, such as ${example}`), v.check((path) => !path.split("/").includes(".."), "must not climb out with .."));
 }
 
 /**
- * A machine a system block supports, as `<os-release ID>-<VERSION_ID>-<dpkg architecture>`, with
+ * A machine a system recipe supports, as `<os-release ID>-<VERSION_ID>-<dpkg architecture>`, with
  * `-wsl` when it must be WSL: `ubuntu-24.04-amd64-wsl`.
  */
 const systemPlatform = v.pipe(v.string(), v.regex(/^[a-z0-9]+-[0-9.]+-[a-z0-9]+(?:-wsl)?$/, "must be a platform such as ubuntu-24.04-amd64-wsl"));
@@ -214,11 +157,6 @@ function booleanProperty(schema: DeclaredSettings, name: string): SchemaSource |
   return isMapping(property) && property.type === "boolean" ? property : undefined;
 }
 
-/** Whether `name` is a top-level setting the schema declares `type: "boolean"`; a malformed schema is reported when the settings are read, not here. */
-function booleanSetting(schema: DeclaredSettings, name: string): boolean {
-  return schema instanceof MalformedSettings || booleanProperty(schema, name) !== undefined;
-}
-
 /** Whether `name` is a top-level boolean setting whose default is false: what gates a machine's system setup, so an office opts in. */
 export function defaultOffSetting(schema: DeclaredSettings, name: string): boolean {
   return booleanProperty(schema, name)?.default === false;
@@ -272,8 +210,6 @@ function shadowedSettings(manifest: { namespace: string; settings: DeclaredSetti
   return Object.keys(settingProperties(manifest.settings)).filter((setting) => manifest.secrets[settingVariable(manifest.namespace, setting)] !== undefined);
 }
 
-const booleanGate = "must name one of the package's settings declared type: boolean";
-
 // Its shape, its root's type and its validity are settings problems, checked when the settings are
 // read (loader/definitions/settings.ts), so the rest of the definition, its commands included, still reads. An absent
 // `settings` is the package declaring none; an explicit null is malformed.
@@ -303,35 +239,15 @@ export function packageManifestSchema(packageName: string) {
         down: v.optional(v.custom<(inputs: DownInputs) => readonly string[] | void | Promise<readonly string[] | void>>(value => v.is(v.function(), value), "must be a function in office.ts")),
         committed: v.optional(v.pipe(v.array(committedFolder, "must be a list of folders under .office/"), v.check(list => new Set(list).size === list.length, "lists a folder twice")), []),
         secrets: v.nullish(v.record(v.pipe(v.string(), v.regex(/^[A-Z][A-Z0-9_]*$/, "must be an environment variable name in capitals")), packageSecret, "must map variable names to how each is generated"), {}),
-        // mise tools the package needs, each at the version it was tested with: `office sync` writes
-        // them to the office's machine.packages.toml at that version, whose versions are the office's
-        // from then on, and raises one only to keep it at or above what a package declares.
-        tools: miseTools,
-        host: v.optional(hostBlock),
-        system: v.optional(systemBlock),
+        host: v.optional(v.strictObject({
+          path: v.nullish(v.array(hostPathEntry, "must be a list of folders"), []),
+        }, mapping)),
         // The label on Docker resources its services create themselves, which `office down` removes.
         spawns: v.optional(spawnsBlock),
       },
-      "must be a mapping of namespace, settings, commands, setup, sync, fullSync, session, check, up, down, committed, secrets, tools, host, system and spawns",
+      "must be a mapping of namespace, settings, commands, setup, sync, fullSync, session, check, up, down, committed, secrets, host and spawns",
     ),
     v.transform((manifest) => ({ ...manifest, settings: manifest.settings ?? noSettings, namespace: manifest.namespace ?? packageName })),
-    v.forward(
-      v.check((manifest) => manifest.host?.setting === undefined || booleanSetting(manifest.settings, manifest.host.setting), booleanGate),
-      ["host", "setting"],
-    ),
-    v.forward(
-      v.check((manifest) => Object.values(manifest.host?.services ?? {}).every((service) => service.setting === undefined || booleanSetting(manifest.settings, service.setting)), `each service's setting ${booleanGate}`),
-      ["host", "services"],
-    ),
-    // A system setup runs as root on the user's machine, so a package offers it and the office opts in.
-    v.forward(
-      v.check((manifest) => manifest.system === undefined || manifest.settings instanceof MalformedSettings || defaultOffSetting(manifest.settings, manifest.system.setting), "must name one of the package's settings declared type: boolean with default: false: an office opts in"),
-      ["system", "setting"],
-    ),
-    v.forward(
-      v.check((manifest) => manifest.system === undefined || manifest.host === undefined || Object.keys(manifest.system.env).every((name) => !Object.hasOwn(manifest.host?.env ?? {}, name)), "sets a variable the host block also sets"),
-      ["system", "env"],
-    ),
     // Every compose file of the office is interpolated with the same process environment, which wins
     // over a package's own values, so a package's secrets carry its namespace.
     v.forward(

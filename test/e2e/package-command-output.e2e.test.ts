@@ -150,8 +150,7 @@ for (const launcher of ["compiled", "source"] as const) {
       const failed = f.streams(launcher, ["probe", "text", kind]);
 
       expect({ status: failed.status, stdout: failed.stdout }).toEqual({ status: 1, stdout: "" });
-      expect(failed.stderr.startsWith(`${noise}handler log\n`)).toBe(true);
-      expect(failed.stderr).toContain(message);
+      expect(failed.stderr).toBe(`${noise}handler log\noffice: ${message}\n`);
       expect(f.setups()).toBe(++count);
     }
 
