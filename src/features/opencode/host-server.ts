@@ -9,7 +9,8 @@ import { isAbsolute, join, resolve } from "node:path";
 import * as v from "valibot";
 
 import { hasSystemd, unitDirVariable } from "../systemd/systemd.ts";
-import { envFilePath, miseShims, opencodeBin } from "../machine/host-env.ts";
+import { envFilePath } from "../machine/paths.ts";
+import { miseShims, opencodeBin } from "../machine/host-env.ts";
 import { officeTool, requireOfficeTool } from "../tools/host-tools.ts";
 import { type Office, OfficeError, readEnvFile } from "../../office.ts";
 import { check, type Parsed, version as releaseVersion } from "../../schema.ts";

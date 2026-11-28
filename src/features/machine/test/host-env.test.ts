@@ -6,8 +6,11 @@ import { dirname, join } from "node:path";
 
 
 import { syncLines as sync } from "../../../../test/support/sync.fixture.ts";
-import { envFilePath, hostWrappers, machineDirVariable, sourcedBy, sourceLine } from "../host-env.ts";
-import { globalConfD, grantConsent, installSfw, machineRecordVariable, machineReport, miseConfigVariable, readMachine, releaseMachine } from "../machine.ts";
+import { envFilePath, machineDirVariable } from "../paths.ts";
+import { hostWrappers, sourcedBy, sourceLine } from "../host-env.ts";
+import { globalConfD, installSfw, machineReport, miseConfigVariable, releaseMachine } from "../machine.ts";
+import { grantConsent, readMachine } from "../record.ts";
+import { machineRecordVariable } from "../paths.ts";
 import { gatherPackages } from "../../../gather.ts";
 import { loadOffice } from "../../../office.ts";
 import { parseManifest } from "../../../schema.ts";

@@ -6,12 +6,15 @@ import { join } from "node:path";
 import { git } from "../git.ts";
 import { githubStep, planGithub, unreachableSources } from "../github.ts";
 import { installHook } from "../features/machine/hook.ts";
-import { envFilePath, sourceLine } from "../features/machine/host-env.ts";
-import { planServer, queueStaleRestart, restartStaleServer, staleServer } from "../features/opencode/host-server.ts";
+import { envFilePath, machineRecordPath } from "../features/machine/paths.ts";
+import { hostLayout, sourceLine } from "../features/machine/host-env.ts";
+import { globalConfD } from "../features/machine/machine.ts";
+import { planServer, queueStaleRestart, restartStaleServer, serverUnit, staleServer } from "../features/opencode/host-server.ts";
 import { hostTool, onboardHostTools, requireOfficeTool } from "../features/tools/host-tools.ts";
 import { appliedReferences } from "../features/references/applied-references.ts";
 import { gatherPackages, problemText } from "../gather.ts";
-import { claim, consentCommand, consentQuestion, grantConsent, ownedElsewhere, writeServerUnit } from "../features/machine/machine.ts";
+import { claim, consentCommand, grantConsent, ownedElsewhere } from "../features/machine/record.ts";
+import { writeServerUnit } from "../features/opencode/server-units.ts";
 import { executorEnvFile, type Office, OfficeError, readEnvFile, updateConfig } from "../office.ts";
 import { last, type NextStep, type Reporter, say, terminalAsk } from "../report/index.ts";
 import { decrypt, encrypt, initializeIdentity, prepareSecrets, requireTool } from "../features/secrets/secrets.ts";
@@ -285,6 +288,13 @@ function nextSteps(office: Office, shell: boolean): NextStep[] {
   return steps;
 }
 
+function consentQuestion(office: Office): string {
+  const firewall = office.socketFirewall ? `, Socket Firewall (sfw) and its wrappers for npm, pnpm, pip, uv, cargo and mise in ${hostLayout("").root}` : "";
+  const server = office.opencode.managed === undefined ? "" : ` It also enables ${serverUnit(office)} for OpenCode.`;
+
+  return `Office ${office.name} runs OpenCode on this machine (host mode), so it manages the machine: it links its machine.toml, the packages' tools in machine.packages.toml and their setup in .office/mise/ into ${globalConfD()} as office-${office.name}-…toml, so its tools apply in every folder (without the links they apply nowhere), and writes ${envFilePath()}, the environment your shell and agents share${firewall}.${server} It lists each file it writes in ${machineRecordPath()}, changes no file it didn't write, and never edits your shell's startup files; office sync --release-machine removes them all. Allow it? [yes/no]`;
+}
+
 /**
  * A host-mode office manages its machine, writing files outside its folder (links in mise's global
  * conf.d), only once the user says yes: here, or with --manage-machine unattended. The yes is the
@@ -301,8 +311,10 @@ async function machineConsent(office: Office, granted: boolean, ask: Ask | undef
     return false;
   }
 
+  const message = `office ${office.name} now manages this machine; office sync links its tools into ${globalConfD()} and records them in ${machineRecordPath()}`;
+
   if (current.kind === "ours" || granted) {
-    say(grantConsent(office), "Machine: ");
+    say(grantConsent(office, message), "Machine: ");
 
     return true;
   }
@@ -310,7 +322,7 @@ async function machineConsent(office: Office, granted: boolean, ask: Ask | undef
   const answer = ask === undefined ? "unattended" : await ask(consentQuestion(office));
 
   if (answer === "yes") {
-    say(grantConsent(office), "Machine: ");
+    say(grantConsent(office, message), "Machine: ");
 
     return true;
   }

@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileS
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 
-import { envFilePath, sourceLine } from "./host-env.ts";
+import { envFilePath } from "./paths.ts";
+import { sourceLine } from "./host-env.ts";
 import { shellQuote } from "../tools/sfw.ts";
 
 type Shell = "bash" | "zsh";

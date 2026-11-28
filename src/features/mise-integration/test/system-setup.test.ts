@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { sync } from "../../../commands/sync.ts";
-import { envFilePath } from "../../machine/host-env.ts";
+import { envFilePath } from "../../machine/paths.ts";
 import { gatherPackages } from "../../../gather.ts";
-import { grantConsent } from "../../machine/machine.ts";
+import { grantConsent } from "../../machine/record.ts";
 import { loadOffice } from "../../../office.ts";
 import { systemPlatformVariable } from "../system.ts";
 import { offerRestart, type Run, type RunResult, systemStep, verifySystems } from "../system-setup.ts";

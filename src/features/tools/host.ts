@@ -20,7 +20,8 @@ import { dirname } from "node:path";
 
 import type { Gathered, GatheredPackage } from "../../gather.ts";
 import { hostLayout, hostWrappers, miseShims } from "../machine/host-env.ts";
-import { claim, fileState } from "../machine/machine.ts";
+import { claim } from "../machine/record.ts";
+import { fileState } from "../machine/owned-files.ts";
 import type { Office } from "../../office.ts";
 import { containerLayout } from "./sfw.ts";
 import { lockFile } from "../../versions.ts";

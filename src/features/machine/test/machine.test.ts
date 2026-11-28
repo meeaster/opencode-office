@@ -7,10 +7,13 @@ import { dirname, join } from "node:path";
 
 import { syncLines as sync } from "../../../../test/support/sync.fixture.ts";
 import { down } from "../../../commands/compose.ts";
-import { machineDirVariable } from "../host-env.ts";
+import { machineDirVariable } from "../paths.ts";
 import { serverUnit, serverUnitPath, updatePeer } from "../../opencode/host-server.ts";
 import { unitDir } from "../../systemd/systemd.ts";
-import { claim, grantConsent, machineRecordVariable, machineReport, matchesServerUnit, miseConfigVariable, readMachine, releaseMachine, syncMachine, writeServerUnit } from "../machine.ts";
+import { claim, grantConsent, readMachine } from "../record.ts";
+import { machineRecordVariable } from "../paths.ts";
+import { machineReport, miseConfigVariable, releaseMachine, syncMachine } from "../machine.ts";
+import { matchesServerUnit, writeServerUnit } from "../../opencode/server-units.ts";
 import { gatherPackages } from "../../../gather.ts";
 import { loadOffice, OfficeError, readConfig } from "../../../office.ts";
 import { sharedToolsLock, writePackage } from "../../../../test/support/test-package.ts";

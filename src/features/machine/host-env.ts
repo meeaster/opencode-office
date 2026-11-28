@@ -14,7 +14,6 @@
 //
 // OFFICE_MACHINE_DIR replaces the folder for tests and scratch offices.
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { hostToolsRoot } from "../tools/host-tools.ts";
@@ -26,23 +25,7 @@ import type { GatheredPackage } from "../../gather.ts";
 import type { InstalledPackage } from "../../loader/definitions/inventory.ts";
 import { managedAgentEnvironment } from "../../schema.ts";
 import { type Environment, releaseAgeVariables, type SfwLayout, sfwLayout, shellQuote } from "../tools/sfw.ts";
-
-export const machineDirVariable = "OFFICE_MACHINE_DIR";
-
-/** The home folder: `$HOME` first, as the shells that source the environment file read it. */
-function home(): string {
-  return process.env.HOME || homedir();
-}
-
-/** The office tool's data folder on this machine: `$OFFICE_MACHINE_DIR`, else `$XDG_DATA_HOME/office`. */
-export function machineDir(): string {
-  return process.env[machineDirVariable] || join(process.env.XDG_DATA_HOME || join(home(), ".local/share"), "office");
-}
-
-/** The environment file the user's shell (and, later, the server's unit) sources. */
-export function envFilePath(): string {
-  return join(machineDir(), "env.sh");
-}
+import { envFilePath, home, machineDir, machineDirVariable } from "./paths.ts";
 
 /** The host's sfw layout, its mise wrapper running the real mise at `mise`. */
 export function hostLayout(mise: string): SfwLayout {

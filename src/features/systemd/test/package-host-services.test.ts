@@ -3,8 +3,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadOffice } from "../../../office.ts";
-import { grantConsent, serviceEnvironment, syncMachine } from "../../machine/machine.ts";
-import { envFilePath } from "../../machine/host-env.ts";
+import { grantConsent, serviceEnvironment } from "../../machine/record.ts";
+import { syncMachine } from "../../machine/machine.ts";
+import { envFilePath } from "../../machine/paths.ts";
 import { recordRequiredFixtures } from "../../../../test/support/test-builtin-record.ts";
 import { reconcileHostServices } from "../package-host-services.ts";
 import { writePackage } from "../../../../test/support/test-package.ts";

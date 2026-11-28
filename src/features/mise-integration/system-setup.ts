@@ -31,8 +31,8 @@ import { basename, join } from "node:path";
 import * as v from "valibot";
 
 import type { StaleServer } from "../opencode/host-server.ts";
-import { envFilePath } from "../machine/host-env.ts";
-import { claim } from "../machine/machine.ts";
+import { envFilePath } from "../machine/paths.ts";
+import { claim } from "../machine/record.ts";
 import { type Office, OfficeError } from "../../office.ts";
 import { systemApplies } from "./system.ts";
 import { destinationProblems } from "./projection.ts";

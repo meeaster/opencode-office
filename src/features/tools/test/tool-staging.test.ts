@@ -11,7 +11,7 @@ import { activeRecord, currentLink, readRecord, resolveIn, resolveTool } from ".
 import { projectionPath, toolsState } from "../applied.ts";
 import type { Run } from "../selection.ts";
 import { gatherPackages } from "../../../gather.ts";
-import { grantConsent } from "../../machine/machine.ts";
+import { grantConsent } from "../../machine/record.ts";
 import { loadOffice } from "../../../office.ts";
 import type { LockedTool } from "../../../schema.ts";
 import { syncLines as sync } from "../../../../test/support/sync.fixture.ts";

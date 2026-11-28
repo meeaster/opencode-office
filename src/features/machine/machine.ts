@@ -25,39 +25,29 @@
 // folder whose conf.d gets the links, and OFFICE_MACHINE_DIR the office tool's data folder, so
 // tests and scratch offices never touch the real ones. A scratch office that runs mise sets
 // MISE_CONFIG_DIR to the same folder, so mise reads the links.
-import { changeText, failure, isFailure, type Change } from "../../lib/change.ts";
+import { failure, isFailure, type Change } from "../../lib/change.ts";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 
-import * as v from "valibot";
-
 import { fetchBytes } from "../../lib/download.ts";
-import { envFilePath, hostEnvironment, hostLayout, hostWrappers, realMise } from "./host-env.ts";
-import { type ServerPlan, serverUnit, serverUnitPath, userSystemd } from "../opencode/host-server.ts";
+import { sha256 } from "../../lib/hash.ts";
 import type { GatheredPackage } from "../../gather.ts";
-import { type Office, OfficeError, readConfig } from "../../office.ts";
+import { type Office, OfficeError } from "../../office.ts";
+import type { Lock } from "../../schema.ts";
+import { defaultPins, hostPlatform, readApplied, wantedPins } from "../../versions.ts";
 import { fragmentOwner, machineFile, machineFiles, ownerProjection, packagesFile } from "../mise-integration/delivery.ts";
+import { isCurrentServerUnit, removeServerFile, serverRemovalReason } from "../opencode/server-units.ts";
 import { heldKeys } from "../tools/admission.ts";
 import { platformAsset } from "../tools/releases.ts";
-import { check, hostVariable, type Lock } from "../../schema.ts";
-import { atomicWrite } from "../../lib/atomic-write.ts";
 import { envScript, wrapperFiles } from "../tools/sfw.ts";
-import { defaultPins, hostPlatform, readApplied, wantedPins } from "../../versions.ts";
-import { say } from "../../report/index.ts";
-import { ownershipProblem, removeUnit, running, type UnitManager, userManager, writeUnit } from "../systemd/user-units.ts";
-
-/** Replace the machine record's path and the global mise config folder, for tests and scratch offices. */
-export const machineRecordVariable = "OFFICE_MACHINE_RECORD";
+import { hostEnvironment, hostLayout, hostWrappers, realMise } from "./host-env.ts";
+import { fileState, type FileState, occupied, removeFile } from "./owned-files.ts";
+import { envFilePath, machineRecordPath } from "./paths.ts";
+import { claim, consentCommand, type LinkFile, type MachineFile, type MachineRecord, ownedElsewhere, replaceReceipt, writeMachine } from "./record.ts";
 
 export const miseConfigVariable = "OFFICE_MISE_CONFIG_DIR";
-
-/** The machine record: `$OFFICE_MACHINE_RECORD`, else `$XDG_DATA_HOME/office/machine.json`. */
-export function machineRecordPath(): string {
-  return process.env[machineRecordVariable] || join(process.env.XDG_DATA_HOME || join(homedir(), ".local/share"), "office/machine.json");
-}
 
 /** mise's global config folder: `$OFFICE_MISE_CONFIG_DIR`, else as mise finds it, `$MISE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/mise`, else `~/.config/mise`. */
 function miseConfigDir(): string {
@@ -67,168 +57,6 @@ function miseConfigDir(): string {
 /** Where the office's machine-wide files are linked: the global conf.d, which mise loads in every folder. */
 export function globalConfD(): string {
   return join(miseConfigDir(), "conf.d");
-}
-
-const absolute = v.pipe(v.string(), v.check((path) => path.startsWith("/"), "must be an absolute path"));
-
-const owned = { path: absolute, package: v.nullable(v.string()) };
-
-const fileSchema = v.variant("kind", [
-  // A symbolic link to a file in the office.
-  v.strictObject({ kind: v.literal("link"), ...owned, target: absolute }),
-  // A real file the office wrote, starting with its marker line.
-  v.strictObject({ kind: v.literal("file"), ...owned, sha256: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/)), service: v.optional(v.literal("opencode")), program: v.optional(absolute),
-    contributions: v.optional(v.array(v.object({ name: v.string(), path: v.array(absolute), variables: v.array(v.tuple([hostVariable, v.string()])) }))),
-  }),
-]);
-
-const recordSchema = v.strictObject({
-  office: v.strictObject({ name: v.string(), dir: absolute }),
-  /** When the user agreed to this office managing the machine. */
-  consented: v.string(),
-  files: v.array(fileSchema),
-});
-
-export type MachineFile = v.InferOutput<typeof fileSchema>;
-
-export type MachineRecord = v.InferOutput<typeof recordSchema>;
-
-/** The machine record, or undefined when no office manages this machine. */
-export function readMachine(): MachineRecord | undefined {
-  const path = machineRecordPath();
-
-  if (!existsSync(path)) return undefined;
-
-  return parseRecord(readFileSync(path, "utf8"), path);
-}
-
-function parseRecord(text: string, path: string): MachineRecord {
-  let data;
-
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new OfficeError(`${path} is not JSON; fix or delete it`);
-  }
-
-  const result = check(v.safeParse(recordSchema, data));
-
-  if (!result.ok) throw new OfficeError(`${path} is not a machine record office can read: ${result.errors.join("; ")}; fix or delete it`);
-
-  return result.value;
-}
-
-// These bytes authorize a shell at unit startup. Check the open file, not a prior stat
-// of its pathname. O_NONBLOCK lets us refuse a FIFO without hanging the unit.
-function readLaunchFile(path: string): Buffer | undefined {
-  let fd: number;
-
-  try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
-
-    throw new OfficeError(`cannot open ${path} as a regular host service file (symlinks are not followed); check ownership and permissions`);
-  }
-
-  try {
-    const stat = fstatSync(fd);
-
-    if (!stat.isFile() || stat.uid !== process.geteuid?.() || !(stat.mode & 0o400) || (stat.mode & 0o022)) {
-      throw new OfficeError(`unsafe host service file ${path}: expected a user-owned readable regular file without group or other write permission`);
-    }
-
-    return readFileSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-}
-
-/** Compare the installed identity, even after a rename or release. Never discover an office here. */
-export function serviceEnvironment(office: MachineRecord["office"]): string {
-  const recordPath = machineRecordPath();
-  const text = readLaunchFile(recordPath);
-
-  if (!text) return "";
-  const record = parseRecord(text.toString("utf8"), recordPath);
-
-  if (record.office.dir !== office.dir || record.office.name !== office.name) return "";
-  const path = envFilePath();
-  const matches = record.files.filter(entry => entry.path === path);
-  const [file] = matches;
-
-  if (matches.length === 1 && file?.kind === "file" && file.package === null && file.service === undefined) {
-    const bytes = readLaunchFile(path);
-
-    if (bytes && sha256(bytes) === file.sha256) return bytes.toString("utf8");
-  }
-
-  throw new OfficeError(`the claimed host environment ${path} is missing, changed or unrecorded; check machine ownership and run office sync`);
-}
-
-/** This record authorizes host launches; don't make it group-writable even under umask 002. */
-function writeMachine(record: MachineRecord): void {
-  atomicWrite(machineRecordPath(), `${JSON.stringify(record, null, 2)}\n`);
-}
-
-/**
- * Whose machine this is, for `office`: no office's yet, this office's (possibly from the folder it
- * moved from), or another office's.
- */
-export type Claim = { kind: "free" } | { kind: "ours"; record: MachineRecord; movedFrom: string | undefined } | { kind: "other"; record: MachineRecord };
-
-/** Whether `dir` holds an office named `name`. */
-function officeAt(dir: string, name: string): boolean {
-  try {
-    return readConfig(dir).name === name;
-  } catch {
-    return false;
-  }
-}
-
-export function claim(office: Office): Claim {
-  const record = readMachine();
-
-  if (record === undefined) return { kind: "free" };
-
-  if (record.office.dir === office.dir) return { kind: "ours", record, movedFrom: undefined };
-
-  // The same office in a new folder, when the old folder no longer holds it; a copy beside it is another office.
-  if (record.office.name === office.name && !officeAt(record.office.dir, office.name)) return { kind: "ours", record, movedFrom: record.office.dir };
-
-  return { kind: "other", record };
-}
-
-/** Why another office's machine refuses this one, for messages. */
-export function ownedElsewhere(record: MachineRecord): string {
-  return `this machine is managed by office ${record.office.name} in ${record.office.dir} (${machineRecordPath()}), and a machine has one host-mode office; switch one of them to opencode: container, or run office sync --release-machine in that one`;
-}
-
-/** The command that gives consent, for messages. */
-export const consentCommand = "office setup (unattended: office setup --manage-machine)";
-
-/** What the office will do on the machine once allowed, for the consent question. */
-export function consentQuestion(office: Office): string {
-  const firewall = office.socketFirewall ? `, Socket Firewall (sfw) and its wrappers for npm, pnpm, pip, uv, cargo and mise in ${hostLayout("").root}` : "";
-  const server = office.opencode.managed === undefined ? "" : ` It also enables ${serverUnit(office)} for OpenCode.`;
-
-  return `Office ${office.name} runs OpenCode on this machine (host mode), so it manages the machine: it links its machine.toml, the packages' tools in machine.packages.toml and their setup in .office/mise/ into ${globalConfD()} as office-${office.name}-…toml, so its tools apply in every folder (without the links they apply nowhere), and writes ${envFilePath()}, the environment your shell and agents share${firewall}.${server} It lists each file it writes in ${machineRecordPath()}, changes no file it didn't write, and never edits your shell's startup files; office sync --release-machine removes them all. Allow it? [yes/no]`;
-}
-
-/**
- * Records the user's yes: this office now manages the machine. Refuses when another office does;
- * a moved office keeps its entries, which the next sync relinks.
- */
-export function grantConsent(office: Office): string {
-  const current = claim(office);
-
-  if (current.kind === "other") throw new OfficeError(ownedElsewhere(current.record));
-
-  if (current.kind === "ours") return `office ${office.name} already manages this machine (${machineRecordPath()})`;
-
-  writeMachine({ office: { name: office.name, dir: office.dir }, consented: new Date().toISOString(), files: [] });
-
-  return `office ${office.name} now manages this machine; office sync links its tools into ${globalConfD()} and records them in ${machineRecordPath()}`;
 }
 
 /**
@@ -245,19 +73,11 @@ export function linkName(office: Office, file: string): string {
   return `office-${office.name}-1-${basename(file, ".toml")}.toml`;
 }
 
-type LinkFile = Extract<MachineFile, { kind: "link" }>;
-
-type RealFile = Extract<MachineFile, { kind: "file" }>;
-
 /**
  * A file the office wants on the machine, with what to call it in messages and what to add when it
  * is made: a link, a file sync writes (`text`), or sfw, which `office up` installs (no text).
  */
-type Wanted = { file: LinkFile; what: string; made: string } | { file: RealFile; what: string; made: string; text: string | undefined };
-
-function sha256(content: string | Uint8Array): string {
-  return createHash("sha256").update(content).digest("hex");
-}
+type Wanted = { file: LinkFile; what: string; made: string } | { file: Extract<MachineFile, { kind: "file" }>; what: string; made: string; text: string | undefined };
 
 /** The links the office wants in the global conf.d: one per machine-wide file, machine.packages.toml, each package's fragment and machine.toml. */
 function wantedLinks(office: Office): Wanted[] {
@@ -346,64 +166,6 @@ function isSfw(file: MachineFile): boolean {
   return file.path === hostLayout("").sfw;
 }
 
-/** A recorded file against what is on disk. */
-export type FileState = "present" | "changed" | "missing" | "dangling";
-
-export function fileState(file: MachineFile): FileState {
-  let stats;
-
-  try {
-    stats = lstatSync(file.path);
-  } catch {
-    return "missing";
-  }
-
-  if (file.kind === "link") {
-    if (!stats.isSymbolicLink() || readlinkSync(file.path) !== file.target) return "changed";
-
-    return existsSync(file.path) ? "present" : "dangling";
-  }
-
-  return stats.isFile() && createHash("sha256").update(readFileSync(file.path)).digest("hex") === file.sha256 ? "present" : "changed";
-}
-
-/** Whether anything, a dangling link included, is at `path`. */
-function occupied(path: string): boolean {
-  try {
-    lstatSync(path);
-
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Whether a recorded file is gone, and what to say about it. */
-type Removal = { removed: boolean; line: Change | undefined };
-
-/** Removes a recorded file that is still as the office wrote it. A changed one stays, reported. */
-function removeFile(file: MachineFile, why: string): Removal {
-  const state = fileState(file);
-
-  if (state === "changed") return { removed: false, line: failure(`FAILED to remove ${file.path}: it changed since office wrote it, so it stays; delete it yourself`) };
-
-  if (file.kind === "file" && file.service === "opencode") {
-    try {
-      removeServerFile(file, state === "missing");
-
-      return { removed: true, line: `removed ${file.path}, ${why}` };
-    } catch (error) {
-      return { removed: false, line: failure(`FAILED to remove ${file.path}: ${error instanceof Error ? error.message : String(error)}`) };
-    }
-  }
-
-  if (state === "missing") return { removed: true, line: undefined };
-
-  unlinkSync(file.path);
-
-  return { removed: true, line: `removed ${file.path}, ${why}` };
-}
-
 /** What a file is, for messages. */
 function owner(file: MachineFile): string {
   return file.package === null ? "the office's own" : `package ${file.package}`;
@@ -411,7 +173,9 @@ function owner(file: MachineFile): string {
 
 /** Why sync removes a recorded file the office no longer wants, for messages. */
 function removalReason(office: Office, file: MachineFile): string {
-  if (file.kind === "file" && file.service === "opencode") return "as office no longer manages this OpenCode unit";
+  const server = serverRemovalReason(file);
+
+  if (server !== undefined) return server;
 
   if (file.package !== null) return `as ${owner(file)} no longer has a fragment`;
 
@@ -435,7 +199,7 @@ function release(record: MachineRecord, why: string): Change[] {
   const kept: MachineFile[] = [];
 
   for (const file of record.files) {
-    const result = removeFile(file, why);
+    const result = removeFile(file, why, removeServerFile);
 
     if (result.line !== undefined) lines.push(result.line);
 
@@ -527,152 +291,6 @@ function place(wanted: Wanted, recorded: MachineFile | undefined): Placement {
   return { line: file.kind === "link" ? `${again} ${file.path} to ${what}` : `${again} ${file.path}, ${what}`, file };
 }
 
-function managedFile(file: MachineFile): file is RealFile & { service: "opencode" } {
-  return file.kind === "file" && file.service === "opencode";
-}
-
-/** `down`'s stop of the recorded server unit, which keeps its file and enablement. */
-function stopServerFile(file: RealFile): void {
-  const unit = basename(file.path);
-  const fragment = userSystemd(["show", "--property=FragmentPath", "--value", unit]);
-
-  if (fileState(file) === "changed") throw new OfficeError(`${file.path} changed since office wrote it; office leaves it alone`);
-
-  if (fragment !== "" && fragment !== file.path) throw new OfficeError(`${unit} is loaded from ${fragment}, not the office's file`);
-
-  if (fragment === file.path) userSystemd(["stop", unit]);
-}
-
-export function requireServerConsent(office: Office): MachineRecord {
-  const current = claim(office);
-
-  if (current.kind === "other") throw new OfficeError(ownedElsewhere(current.record));
-
-  if (current.kind === "free") throw new OfficeError(`managed OpenCode requires consent to manage the machine; run ${consentCommand}`);
-
-  return current.record;
-}
-
-/** How the recorded unit compares with `plan`: the same, still the recorded bytes but different (held while it runs), or missing or changed on disk. */
-export type ServerUnitMatch = "current" | "pending" | "different";
-
-export function matchesServerUnit(office: Office, plan: ServerPlan): ServerUnitMatch {
-  const current = claim(office);
-  const file = current.kind === "ours" ? current.record.files.find((entry) => managedFile(entry) && entry.path === plan.path) : undefined;
-
-  if (file?.kind !== "file" || fileState(file) !== "present") return "different";
-
-  return file.sha256 === sha256(plan.text) ? "current" : "pending";
-}
-
-/** The recorded launch paths, unchanged on disk. The updater does not plan or rewrite the unit. */
-export function recordedAgentUpdate(office: Office) {
-  const { files } = requireServerConsent(office);
-  const server = files.find((file) => managedFile(file) && file.path === serverUnitPath(office));
-  const env = files.find((file) => file.path === envFilePath() && file.kind === "file");
-  const sfw = files.find((file) => file.path === hostLayout("").sfw && file.kind === "file");
-
-  if (server?.kind !== "file" || server.program === undefined || fileState(server) !== "present") throw new OfficeError("the managed OpenCode unit needs to match the machine record; run office up first");
-
-  if (env === undefined || fileState(env) !== "present") throw new OfficeError("the host environment needs to match the machine record; run office sync first");
-
-  let screened: string | undefined;
-
-  try {
-    if (office.socketFirewall && sfw !== undefined && fileState(sfw) === "present") screened = sfw.path;
-  } catch {
-    // Clause applies to OpenCode only; an unreadable firewall must not prevent Claude's update.
-  }
-
-  return { program: server.program, env: env.path, sfw: screened };
-}
-
-/** What `writeServerUnit` did: nothing to write, wrote and reloaded, or held a changed definition while the unit runs. */
-export type ServerUnitWrite = "unchanged" | "written" | "held";
-
-/**
- * Brings the managed server's unit file to `plan` through the one unit writer, its hash recorded in
- * the machine record. A running unit keeps its definition until `upgrade`; a written one is reloaded.
- */
-export function writeServerUnit(office: Office, plan: ServerPlan, { upgrade, manager = userManager }: { upgrade: boolean; manager?: UnitManager }): ServerUnitWrite {
-  const record = requireServerConsent(office);
-  const env = record.files.find((file) => file.path === envFilePath());
-
-  if (env === undefined || fileState(env) !== "present") throw new OfficeError(`managed OpenCode needs the recorded environment file at ${envFilePath()}; run office sync`);
-  const previous = record.files.find((entry) => entry.path === plan.path);
-
-  if (previous !== undefined && !managedFile(previous)) throw new OfficeError(`${plan.path} isn't recorded as the managed OpenCode service`);
-  const state = manager.state(plan.unit);
-  const problem = ownershipProblem(dirname(plan.path), basename(plan.path), previous?.sha256, state);
-
-  if (problem !== undefined) throw new OfficeError(problem);
-  const present = previous !== undefined && fileState(previous) === "present";
-  const file: RealFile = { kind: "file", path: plan.path, package: null, service: "opencode", program: plan.program, sha256: sha256(plan.text) };
-  const recordFile = () => writeMachine({ ...record, files: [...record.files.filter((entry) => entry !== previous), file] });
-
-  if (present && previous.sha256 === file.sha256) {
-    if (previous.program !== file.program) recordFile();
-
-    return "unchanged";
-  }
-
-  if (present && running(state) && !upgrade) return "held";
-  writeUnit(manager, dirname(plan.path), basename(plan.path), plan.text, { record: recordFile });
-  say(`${previous === undefined ? "wrote" : "updated"} ${file.path}`, "office: ");
-
-  return "written";
-}
-
-/** Removes the recorded server unit through the writer: stopped, disabled and deleted while it is the recorded bytes. */
-function removeServerFile(file: RealFile, missing: boolean): void {
-  const name = basename(file.path);
-  const state = userManager.state(name);
-  const problem = ownershipProblem(dirname(file.path), name, file.sha256, state);
-
-  if (problem !== undefined) throw new OfficeError(problem);
-
-  if (!missing) {
-    removeUnit(userManager, dirname(file.path), name);
-
-    return;
-  }
-
-  if (state.fragment === file.path) userManager.run(["stop", name]);
-  userManager.run(["daemon-reload"]);
-}
-
-export function stopRecordedServer(office: Office): void {
-  const current = claim(office);
-
-  if (current.kind !== "ours") return;
-
-  for (const file of current.record.files) {
-    if (managedFile(file)) stopServerFile(file);
-  }
-}
-
-/** `up` reconciles an installed server even when the option has just been removed. */
-export function removeUnwantedServer(office: Office): void {
-  const current = claim(office);
-
-  if (current.kind !== "ours") return;
-
-  let files = current.record.files;
-
-  for (const file of current.record.files) {
-    if (!managedFile(file) || (office.opencode.managed !== undefined && file.path === serverUnitPath(office))) continue;
-
-    const result = removeFile(file, removalReason(office, file));
-
-    if (!result.removed) throw new OfficeError(result.line === undefined ? undefined : changeText(result.line));
-
-    files = files.filter((entry) => entry !== file);
-    writeMachine({ ...current.record, files });
-
-    if (result.line !== undefined) say(changeText(result.line));
-  }
-}
-
 /**
  * `office sync`'s part on the machine. In host mode, with consent, it makes the global conf.d hold
  * a link to each of the office's machine-wide files, removes links whose file is gone, and repairs links
@@ -699,7 +317,7 @@ export function syncMachine(office: Office, packages?: MachinePackages): Change[
   const files: MachineFile[] = [];
 
   for (const file of record.files) {
-    if (managedFile(file) && office.opencode.managed !== undefined && file.path === serverUnitPath(office)) {
+    if (isCurrentServerUnit(office, file)) {
       files.push(file);
 
       continue;
@@ -707,7 +325,7 @@ export function syncMachine(office: Office, packages?: MachinePackages): Change[
 
     if (wanted.some((entry) => entry.file.path === file.path)) continue;
 
-    const result = removeFile(file, removalReason(office, file));
+    const result = removeFile(file, removalReason(office, file), removeServerFile);
 
     if (result.line !== undefined) lines.push(result.line);
 
@@ -777,7 +395,7 @@ export function machineReport(office: Office, packages?: MachinePackages): Machi
   // against office.lock): nothing says which files the office wants now.
   if (packages === undefined) {
     for (const file of record.files) {
-      if (managedFile(file) && office.opencode.managed !== undefined && file.path === serverUnitPath(office)) continue;
+      if (isCurrentServerUnit(office, file)) continue;
 
       lines.push(isSfw(file) && office.socketFirewall ? sfwLine(office, file) : recordedLine(file));
     }
@@ -790,7 +408,7 @@ export function machineReport(office: Office, packages?: MachinePackages): Machi
   lines.push(...problems.map((problem) => ({ ok: false, name: "machine", detail: problem })));
 
   for (const file of record.files) {
-    if (managedFile(file) && office.opencode.managed !== undefined && file.path === serverUnitPath(office)) continue;
+    if (isCurrentServerUnit(office, file)) continue;
 
     const want = wanted.find((entry) => entry.file.path === file.path);
 
@@ -921,7 +539,7 @@ export async function installSfw(office: Office, pin: Lock["sfw"], download: (ur
 
   const file: MachineFile = { kind: "file", path, package: null, sha256: digest };
 
-  writeMachine({ ...record, files: [...record.files.filter((entry) => entry.path !== path), file] });
+  replaceReceipt(record, file);
 
   return [`office: installed Socket Firewall ${pin.version} in ${path}, checked against office.lock`];
 }
