@@ -5,9 +5,9 @@ import { dirname, join } from "node:path";
 
 
 import { syncLines as sync } from "../../../../test/support/sync.fixture.ts";
-import { envFilePath } from "../../host/host-env.ts";
+import { envFilePath } from "../../machine/host-env.ts";
 import { gatherPackages } from "../../../gather.ts";
-import { grantConsent } from "../../host/machine.ts";
+import { grantConsent } from "../../machine/machine.ts";
 import { loadOffice } from "../../../office.ts";
 import { machinePlatform, systemApplies, systemPlatformVariable } from "../system.ts";
 import { installedPackages } from "../../../loader/definitions/inventory.ts";

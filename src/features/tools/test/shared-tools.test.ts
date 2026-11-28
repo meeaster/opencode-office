@@ -15,8 +15,8 @@ import { effectiveAge, type PlanningEnvironment, planningToml, type Run } from "
 import { reservedWord } from "../../../command-table.ts";
 import { bump } from "../../../commands/bump.ts";
 import { gatherPackages } from "../../../gather.ts";
-import { miseShims } from "../../host/host-env.ts";
-import { globalConfD, grantConsent, machineRecordPath } from "../../host/machine.ts";
+import { miseShims } from "../../machine/host-env.ts";
+import { globalConfD, grantConsent, machineRecordPath } from "../../machine/machine.ts";
 import { loadOffice } from "../../../office.ts";
 import { syncLines as sync } from "../../../../test/support/sync.fixture.ts";
 import { applyOfficeTools, definitionText, isOfficeTool, officePlan, officeTools, sharedToolsLock, writePackage } from "../../../../test/support/test-package.ts";

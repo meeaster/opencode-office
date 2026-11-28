@@ -19,10 +19,10 @@ import { execFileSync } from "node:child_process";
 import { dirname } from "node:path";
 
 import type { Gathered, GatheredPackage } from "../../gather.ts";
-import { hostLayout, hostWrappers, miseShims } from "../host/host-env.ts";
-import { claim, fileState } from "../host/machine.ts";
+import { hostLayout, hostWrappers, miseShims } from "../machine/host-env.ts";
+import { claim, fileState } from "../machine/machine.ts";
 import type { Office } from "../../office.ts";
-import { containerLayout } from "../host/sfw.ts";
+import { containerLayout } from "./sfw.ts";
 import { lockFile } from "../../versions.ts";
 import { type Application, applyTools, checkTools, liveReleases, stagingNeeded } from "./apply.ts";
 import { type AttestedMise, miseRegistry, officeMise } from "./registry.ts";

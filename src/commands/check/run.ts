@@ -1,4 +1,4 @@
-import { machineReport, matchesServerUnit, requireServerConsent } from "../../features/host/machine.ts";
+import { machineReport, matchesServerUnit, requireServerConsent } from "../../features/machine/machine.ts";
 import { planServer, serverReport } from "../../features/opencode/host-server.ts";
 import { unitStatus } from "../../features/systemd/units.ts";
 import { type Gathered, gatherPackages } from "../../gather.ts";

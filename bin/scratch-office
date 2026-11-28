@@ -169,7 +169,7 @@ PY
     cd -- "$repo"
     # Host-mode tool sync requires the exact template pin even when the host runs a newer mise.
     bun --no-env-file -e '
-      import { installMise } from "./src/features/host/host-tools.ts";
+      import { installMise } from "./src/features/tools/host-tools.ts";
       import { releaseByTag } from "./src/features/tools/releases.ts";
       import { defaultPins } from "./src/versions.ts";
       const { version } = defaultPins.mise;

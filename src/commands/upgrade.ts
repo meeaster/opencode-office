@@ -18,7 +18,7 @@ import * as v from "valibot";
 
 import { git } from "../git.ts";
 import { entryPattern, toolPins } from "../features/mise-integration/mise-toml.ts";
-import { installedTool } from "../features/host/host-tools.ts";
+import { installedTool } from "../features/tools/host-tools.ts";
 import { machineFile, pinnedMachineFiles } from "../features/mise-integration/delivery.ts";
 import { type Document, isMap, isNode, isScalar, parseDocument } from "yaml";
 

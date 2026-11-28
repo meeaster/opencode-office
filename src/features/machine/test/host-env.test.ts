@@ -11,7 +11,7 @@ import { globalConfD, grantConsent, installSfw, machineRecordVariable, machineRe
 import { gatherPackages } from "../../../gather.ts";
 import { loadOffice } from "../../../office.ts";
 import { parseManifest } from "../../../schema.ts";
-import { wrappedCommands } from "../sfw.ts";
+import { wrappedCommands } from "../../tools/sfw.ts";
 import { configureStartup } from "../shell-startup.ts";
 import { defaultPins, hostPlatform } from "../../../versions.ts";
 import { definitionText, sharedToolsLock, writePackage } from "../../../../test/support/test-package.ts";

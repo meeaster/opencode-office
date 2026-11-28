@@ -2,13 +2,13 @@
 // holds the machine record and host-tools) for Socket Firewall and the shared environment:
 //
 // - `sfw/sfw`, the pinned Socket Firewall, which `office up` downloads and checks against office.lock;
-// - `sfw/package-manager.sh` and `sfw/bin/`, the wrappers (src/features/host/sfw.ts), which `office sync` writes;
+// - `sfw/package-manager.sh` and `sfw/bin/`, the wrappers (src/features/tools/sfw.ts), which `office sync` writes;
 // - `env.sh`, the environment agents and the user's terminal share: PATH entries (the wrappers, mise's
 //   shims, OpenCode's bin, then what packages declare) and plain variables (the release ages for
 //   package managers and mise, from `minimum_release_age`, then what packages declare). The user sources it from their shell's startup file; the OpenCode
 //   server's unit will source it once the office owns that unit.
 //
-// Each is a file in the machine record (src/features/host/machine.ts), written only with the user's consent. The
+// Each is a file in the machine record (src/features/machine/machine.ts), written only with the user's consent. The
 // folder is the office tool's own, so these names carry no office name: a machine has one host-mode
 // office, and the user's startup file names one stable path.
 //
@@ -17,7 +17,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } fro
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { hostToolsRoot } from "./host-tools.ts";
+import { hostToolsRoot } from "../tools/host-tools.ts";
 import { projectionPath } from "../tools/applied.ts";
 import type { Office } from "../../office.ts";
 import { systemVariables } from "../mise-integration/system.ts";
@@ -25,7 +25,7 @@ import { hostApplies } from "../tooling/requirements.ts";
 import type { GatheredPackage } from "../../gather.ts";
 import type { InstalledPackage } from "../../loader/definitions/inventory.ts";
 import { managedAgentEnvironment } from "../../schema.ts";
-import { type Environment, releaseAgeVariables, type SfwLayout, sfwLayout, shellQuote } from "./sfw.ts";
+import { type Environment, releaseAgeVariables, type SfwLayout, sfwLayout, shellQuote } from "../tools/sfw.ts";
 
 export const machineDirVariable = "OFFICE_MACHINE_DIR";
 

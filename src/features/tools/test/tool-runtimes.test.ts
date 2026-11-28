@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runtimeFolders } from "../host.ts";
-import { miseShims } from "../../host/host-env.ts";
+import { miseShims } from "../../machine/host-env.ts";
 import { upRuntimes } from "../../../lifecycle-inputs.ts";
 import type { Office } from "../../../office.ts";
 

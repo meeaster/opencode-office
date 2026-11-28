@@ -2,7 +2,7 @@
 // global conf.d to each of the office's machine-wide mise files, its `machine.toml`, the packages'
 // tools in `machine.packages.toml` and their setup in `.office/mise/`, which mise loads nowhere else,
 // so the office's tools apply in every folder; and, in the office tool's data folder
-// (src/features/host/host-env.ts), the environment file agents and the user's terminal share, Socket Firewall's
+// (src/features/machine/host-env.ts), the environment file agents and the user's terminal share, Socket Firewall's
 // wrappers and sfw itself. The rules, for every such file:
 //
 // - Whole files only, each named `office-<office name>-…` in a folder others share (a real file also
@@ -44,7 +44,7 @@ import { heldKeys } from "../tools/admission.ts";
 import { platformAsset } from "../tools/releases.ts";
 import { check, hostVariable, type Lock } from "../../schema.ts";
 import { atomicWrite } from "../../lib/atomic-write.ts";
-import { envScript, wrapperFiles } from "./sfw.ts";
+import { envScript, wrapperFiles } from "../tools/sfw.ts";
 import { defaultPins, hostPlatform, readApplied, wantedPins } from "../../versions.ts";
 import { say } from "../../report/index.ts";
 import { ownershipProblem, removeUnit, running, type UnitManager, userManager, writeUnit } from "../systemd/user-units.ts";

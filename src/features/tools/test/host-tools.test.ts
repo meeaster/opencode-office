@@ -7,8 +7,8 @@ import { dirname, join } from "node:path";
 import { ghLink, hostToolsRoot, installedTool, installMise, miseAsset, needsInstall, officePins, officeTool, officeToolNamed, onboardHostTools, requireOfficeTool, startingVersions, verifyDigest } from "../host-tools.ts";
 import { loadOffice, type Office } from "../../../office.ts";
 import { toolPath } from "../../../tool.ts";
-import { type Candidate, type Release, selectToolRelease } from "../../tools/releases.ts";
-import { activate } from "../../tools/applied.ts";
+import { type Candidate, type Release, selectToolRelease } from "../releases.ts";
+import { activate } from "../applied.ts";
 
 let dir: string;
 const previous = { PATH: process.env.PATH, XDG_DATA_HOME: process.env.XDG_DATA_HOME };
@@ -156,7 +156,7 @@ test("the CLI runs the version the office pins, as mise installed it, over newer
   expect(requests().at(-1)).toEqual({ args: ["which", "sops", "--tool=sops@3.13.3"], cwd: "/", noConfig: "1" });
 
   // No shims, PATH entry or session-local selection: a new process from another folder finds it too.
-  const child = Bun.spawnSync([process.execPath, "-e", `import {requireOfficeTool} from ${JSON.stringify(toolPath("src/features/host/host-tools.ts"))}; import {loadOffice} from ${JSON.stringify(toolPath("src/office.ts"))}; console.log(requireOfficeTool(loadOffice(${JSON.stringify(join(dir, "office"))}), "sops"));`], { env: process.env, cwd: tmpdir() });
+  const child = Bun.spawnSync([process.execPath, "-e", `import {requireOfficeTool} from ${JSON.stringify(toolPath("src/features/tools/host-tools.ts"))}; import {loadOffice} from ${JSON.stringify(toolPath("src/office.ts"))}; console.log(requireOfficeTool(loadOffice(${JSON.stringify(join(dir, "office"))}), "sops"));`], { env: process.env, cwd: tmpdir() });
 
   expect(new TextDecoder().decode(child.stdout).trim()).toBe(pinned);
 });

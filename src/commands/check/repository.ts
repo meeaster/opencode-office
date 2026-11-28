@@ -2,8 +2,8 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { describeIgnoredSkills, ignoredFolders, ignoredSkills } from "../../../packages/office/plugin/ignored-skills.ts";
-import { hookNote, hookState } from "../../features/host/hook.ts";
-import { officePins, officeTool, type OfficeTool } from "../../features/host/host-tools.ts";
+import { hookNote, hookState } from "../../features/machine/hook.ts";
+import { officePins, officeTool, type OfficeTool } from "../../features/tools/host-tools.ts";
 import { packagesFile } from "../../features/mise-integration/delivery.ts";
 import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces, shadowing, withLoaded } from "../../features/opencode/outside.ts";
 import { ghConfigDir, ghLogin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../../github.ts";

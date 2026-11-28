@@ -5,8 +5,8 @@
 //
 // Sync writes it to the package's mise fragment as mise `[bootstrap]` tables, with the package's
 // `prepare` script as their `pre-packages` hook, and its variables to the office's environment file
-// (src/features/host/host-env.ts). Only `office setup` applies it, when the user says yes in their terminal
-// (src/features/host/system-setup.ts), through mise, which asks for sudo itself; `office up`, `office sync` and
+// (src/features/machine/host-env.ts). Only `office setup` applies it, when the user says yes in their terminal
+// (src/features/mise-integration/system-setup.ts), through mise, which asks for sudo itself; `office up`, `office sync` and
 // the cron jobs never do, and office never runs sudo. `office check` looks for the paths the block
 // lists as `ready`. Turning it off removes it from the fragment
 // and the environment file; what it installed stays on the machine, as mise removes no packages.

@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import * as v from "valibot";
 
 import { atomicWrite } from "../../lib/atomic-write.ts";
-import { requireOfficeTool } from "../host/host-tools.ts";
+import { requireOfficeTool } from "../tools/host-tools.ts";
 import { type Office, OfficeError } from "../../office.ts";
 import { check, serverVariable } from "../../schema.ts";
 import { say } from "../../report/index.ts";

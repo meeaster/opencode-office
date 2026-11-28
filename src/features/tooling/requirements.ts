@@ -5,7 +5,7 @@ import { compareToolVersions } from "../../../packages/tools/versions.ts";
 
 export { compareToolVersions };
 
-/** The package whose tools are the ones the office CLI itself runs: SOPS, age, gh and pre-commit (src/features/host/host-tools.ts). */
+/** The package whose tools are the ones the office CLI itself runs: SOPS, age, gh and pre-commit (src/features/tools/host-tools.ts). */
 const cliToolsPackage = "office";
 
 /** Whether the package's own switch for its host block, if it names one, is on. */

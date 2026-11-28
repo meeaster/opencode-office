@@ -4,7 +4,7 @@ import { linkForEditors } from "../generation/links.ts";
 import type { Gathered } from "../../gather.ts";
 import { runPackageHooks } from "../../lifecycle-inputs.ts";
 import { installPanel, locate, panelId, removalNote } from "../../features/opencode/desktop.ts";
-import { syncMachine } from "../../features/host/machine.ts";
+import { syncMachine } from "../../features/machine/machine.ts";
 import { linkPlugins, withPluginPlan } from "../../features/opencode/delivery.ts";
 import { type Declaration, readDeclarations } from "../../features/opencode/declarations.ts";
 import { syncTools } from "../../features/mise-integration/delivery.ts";

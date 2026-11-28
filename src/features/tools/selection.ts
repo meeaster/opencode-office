@@ -24,10 +24,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { GatheredPackage } from "../../gather.ts";
-import { miseShims } from "../host/host-env.ts";
+import { miseShims } from "../machine/host-env.ts";
 import type { Office } from "../../office.ts";
 import type { LockedTool, ToolLock } from "../../schema.ts";
-import { ageHours } from "../host/sfw.ts";
+import { ageHours } from "./sfw.ts";
 import { editLock, lockFile, lockSections, readLockText } from "../../versions.ts";
 import { machineFile } from "../mise-integration/delivery.ts";
 import { compareToolVersions } from "../tooling/requirements.ts";

@@ -102,7 +102,7 @@ const opencode = v.nullish(
 
 /**
  * The tools whose versions an office pins in office.yaml. sfw is Socket Firewall, which every
- * package download goes through (src/features/host/sfw.ts).
+ * package download goes through (src/features/tools/sfw.ts).
  */
 export const pinnedTools = ["opencode", "claude", "codex", "executor", "mise", "sfw"] as const;
 
@@ -376,7 +376,7 @@ const hostValue = v.pipe(
 /**
  * What a package gives only an office in host mode, where OpenCode runs on the machine itself,
  * and, with `setting`, only while that boolean setting is true: more mise tools, a host install,
- * and folders and variables for the office's environment file (src/features/host/host-env.ts). No shell code.
+ * and folders and variables for the office's environment file (src/features/machine/host-env.ts). No shell code.
  */
 const hostBlock = v.strictObject(
   {
@@ -412,7 +412,7 @@ const systemPlatform = v.pipe(v.string(), v.regex(/^[a-z0-9]+-[0-9.]+-[a-z0-9]+(
  * `platforms`: mise `[bootstrap]` tables (`bootstrap`, a TOML file in the package) and a `prepare`
  * script that runs as their `pre-packages` hook, both written to the package's mise fragment; and
  * variables for the office's environment file. `office setup` offers to apply it from the user's
- * terminal (src/features/host/system-setup.ts); nothing else does. `prepare --check` must only say whether a run
+ * terminal (src/features/mise-integration/system-setup.ts); nothing else does. `prepare --check` must only say whether a run
  * would change anything (exit 0 for nothing, 100 with a line per change). `ready` lists the
  * absolute paths whose presence shows it was applied, for `office check`, and `verify`, a bash
  * script setup runs once the tools are installed, proves it works from the environment file.

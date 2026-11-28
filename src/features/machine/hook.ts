@@ -8,7 +8,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
 import { git } from "../../git.ts";
-import { officeTool } from "./host-tools.ts";
+import { officeTool } from "../tools/host-tools.ts";
 import type { Office } from "../../office.ts";
 
 const config = ".pre-commit-config.yaml";

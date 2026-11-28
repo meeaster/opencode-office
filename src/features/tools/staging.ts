@@ -26,7 +26,7 @@ import { dirname, join, relative, sep } from "node:path";
 import * as v from "valibot";
 
 import type { Release } from "../../../packages/tools/handles.ts";
-import { releaseAgeVariables } from "../host/sfw.ts";
+import { releaseAgeVariables } from "./sfw.ts";
 import { type AppliedExecutable, ownedFolder, projectionPath, toolsState } from "./applied.ts";
 import { isolatedEnvironment, type Run, type SelectionInputs } from "./selection.ts";
 

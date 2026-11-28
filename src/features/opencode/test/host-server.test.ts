@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 
 import { restartStaleServer, type ServerPlan, serverReport, staleServer, startServer } from "../host-server.ts";
 import { loadOffice } from "../../../office.ts";
-import { shellQuote } from "../../host/sfw.ts";
+import { shellQuote } from "../../tools/sfw.ts";
 
 let root: string;
 

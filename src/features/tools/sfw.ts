@@ -7,7 +7,7 @@
 //
 // This module is the one list of what is wrapped and of the variables, and writes the wrappers and
 // the environment file both for the container (its image and entrypoint) and for a host-mode
-// office's machine (src/features/host/machine.ts).
+// office's machine (src/features/machine/machine.ts).
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 

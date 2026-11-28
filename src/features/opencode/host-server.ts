@@ -9,12 +9,12 @@ import { isAbsolute, join, resolve } from "node:path";
 import * as v from "valibot";
 
 import { hasSystemd, unitDirVariable } from "../systemd/systemd.ts";
-import { envFilePath, miseShims, opencodeBin } from "../host/host-env.ts";
-import { officeTool, requireOfficeTool } from "../host/host-tools.ts";
+import { envFilePath, miseShims, opencodeBin } from "../machine/host-env.ts";
+import { officeTool, requireOfficeTool } from "../tools/host-tools.ts";
 import { type Office, OfficeError, readEnvFile } from "../../office.ts";
 import { check, type Parsed, version as releaseVersion } from "../../schema.ts";
 import { requireHostIdentity, source, validateServerSecrets } from "../secrets/secrets.ts";
-import { shellQuote } from "../host/sfw.ts";
+import { shellQuote } from "../tools/sfw.ts";
 import { compareVersions } from "../../versions.ts";
 import { say } from "../../report/index.ts";
 

@@ -6,7 +6,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
 import { git } from "../git.ts";
-import { installHook } from "../features/host/hook.ts";
+import { installHook } from "../features/machine/hook.ts";
 import { loadOffice, OfficeError } from "../office.ts";
 import { defaultPins, writeLock } from "../versions.ts";
 import { copyTemplate, sync } from "./sync.ts";

@@ -31,12 +31,12 @@ import { basename, join } from "node:path";
 import * as v from "valibot";
 
 import type { StaleServer } from "../opencode/host-server.ts";
-import { envFilePath } from "./host-env.ts";
-import { claim } from "./machine.ts";
+import { envFilePath } from "../machine/host-env.ts";
+import { claim } from "../machine/machine.ts";
 import { type Office, OfficeError } from "../../office.ts";
-import { systemApplies } from "../mise-integration/system.ts";
-import { destinationProblems } from "../mise-integration/projection.ts";
-import { machineFiles } from "../mise-integration/delivery.ts";
+import { systemApplies } from "./system.ts";
+import { destinationProblems } from "./projection.ts";
+import { machineFiles } from "./delivery.ts";
 import type { GatheredPackage } from "../../gather.ts";
 import { check } from "../../schema.ts";
 import { inherit, progress, say, warn } from "../../report/index.ts";

@@ -26,7 +26,7 @@ import { type Provision, tools } from "../../../packages/tools/handles.ts";
 import type { Gathered, GatheredPackage } from "../../gather.ts";
 import type { Office } from "../../office.ts";
 import { check } from "../../schema.ts";
-import { ageHours } from "../host/sfw.ts";
+import { ageHours } from "./sfw.ts";
 import { lockFile, lockSections, readLockText } from "../../versions.ts";
 import { machineFile } from "../mise-integration/delivery.ts";
 import { compareToolVersions } from "../tooling/requirements.ts";
