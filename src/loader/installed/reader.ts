@@ -4,26 +4,22 @@ import * as v from "valibot";
 import { bindPaths } from "../../bound-paths.ts";
 import type { Office } from "../../office.ts";
 import { startReader } from "../worker.ts";
-import { managedDirectory, pinActive } from "./storage.ts";
+import { checkInstalled, hasPublishedSet, installedRoot } from "./paths.ts";
 
 /**
  * Runs `args` in a reader bound to the published package set, and prints a package command's
  * result once the reader exits 0; undefined when the office has none.
  */
 export async function runReader(dir: string, args: string[]) {
-  using active = pinActive(dir);
+  checkInstalled(dir);
 
-  if (!active) return;
-  const folder = managedDirectory(dir, active.name);
-
-  // An office's first generation holds no selection until the first candidate publishes.
-  if (!existsSync(join(folder, "selection.json"))) return;
+  if (!hasPublishedSet(dir)) return;
   let status: number;
   let bytes: Uint8Array;
 
   {
     // A process started by the reader can hold the pipe open past the reader's exit.
-    using child = startReader(dir, active, args);
+    using child = startReader(dir, args);
     const { pipe, exited } = child;
     const result = new Response(Bun.file(pipe).stream()).bytes().finally(() => closeSync(pipe));
     status = await exited;
@@ -35,15 +31,14 @@ export async function runReader(dir: string, args: string[]) {
   return status;
 }
 
-/** Binds this process to the supplied generation, whose rejected copies don't load. */
-export function bindReader(dir: string, name: string) {
-  const folder = managedDirectory(dir, name);
+/** Binds this process to the installed or staged set, whose rejected copies don't load. */
+export function bindReader(dir: string, folder = installedRoot(dir)) {
   const file = join(folder, "unavailable.json");
   const unavailable = new Set(existsSync(file) ? v.parse(v.array(v.string()), JSON.parse(readFileSync(file, "utf8"))) : []);
-  bindPaths(dir, folder, unavailable);
+  bindPaths(dir, folder, unavailable, !Bun.isStandaloneExecutable && folder !== installedRoot(dir));
 }
 
-/** The selection a generation is published with, as its selection.json holds it. */
+/** The selection a set is published with, as its selection.json holds it. */
 export function selectionText(office: Pick<Office, "packages">) {
   return JSON.stringify(office.packages.map(({ name, settings, source }) => ({ name, settings, ...source })));
 }

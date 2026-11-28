@@ -106,7 +106,7 @@ test("two packages may declare a name and a longer one starting with it; two dec
 });
 
 test("a committed folder that isn't one plain folder under .office/, or is one office keeps, fails its package's load naming it", async () => {
-  const paths = ["notes/", ".office/generations/", ".office/Packages/", ".office/a/b/", ".office/*/", ".office/notes"];
+  const paths = ["notes/", ".office/withdrawals/", ".office/Packages/", ".office/a/b/", ".office/*/", ".office/notes"];
 
   office(Object.fromEntries(paths.map((path, index) => [`p${index}`, { body: `{committed:[${JSON.stringify(path)}]}` }])));
   const { problems } = await gatherPackages(loadOffice(dir));

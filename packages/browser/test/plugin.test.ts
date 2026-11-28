@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import type { AppliedSettings } from "../../../sdk/applied-settings.ts";
 import { writeAppliedSnapshot } from "../../../src/applied-settings.ts";
-import { officePlugin, settle, switchPackageSet } from "../../../test/support/plugin-office.fixture.ts";
+import { officePlugin, replacePackage, settle } from "../../../test/support/plugin-office.fixture.ts";
 import type browserPlugin from "../plugin/index.ts";
 
 type Skill = { id: string; content: string };
@@ -75,7 +75,7 @@ test("a published mode or this package's applied settings reload the skill", asy
     await settle(() => session.reloads() > 0);
     expect(session.reloads()).toBe(0);
 
-    switchPackageSet(office, packages => writeFileSync(join(packages, "browser/.office.json"), JSON.stringify({ opencode: "container" })));
+    replacePackage(office, "browser", folder => writeFileSync(join(folder, ".office.json"), JSON.stringify({ opencode: "container" })));
     await settle(() => session.reloads() > 0);
     expect(session.reloads()).toBe(1);
     expect(session.skill()).toContain("`browse`: not in this office");
@@ -93,7 +93,7 @@ test("a new package set reloads changed skill text with the same mode, settings 
   const session = await started(office, { browser: { agent_browser_tools: "core", browse: true, system_chrome: false } });
 
   try {
-    switchPackageSet(office, packages => appendFileSync(join(packages, "browser/skills/browser-automation/SKILL.md"), "\nNew browser guidance.\n"));
+    replacePackage(office, "browser", folder => appendFileSync(join(folder, "skills/browser-automation/SKILL.md"), "\nNew browser guidance.\n"));
     await settle(() => session.reloads() > 0);
     expect(session.reloads()).toBe(1);
     expect(session.skill()).toContain("New browser guidance.");

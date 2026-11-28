@@ -22,7 +22,7 @@ const provider = "  - name: mock-executor\n";
 test("a consumer works alone, with its provider selected adding nothing, adding, adding both routes, withdrawn, broken and removed, before and after sync; nothing runs from a stale link", () => {
   const f = fixture("integrations");
   const link = join(f.dir, ".agents/skills/review-checklist");
-  const stale = join(f.dir, ".office/current/node_modules/@office/mock-executor");
+  const stale = join(f.dir, ".office/node_modules/@office/mock-executor");
 
   copyExample(f);
 

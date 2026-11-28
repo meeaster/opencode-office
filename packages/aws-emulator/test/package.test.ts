@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 
 import { writeAppliedSnapshot } from "../../../src/applied-settings.ts";
-import { officePlugin, settle, switchPackageSet } from "../../../test/support/plugin-office.fixture.ts";
+import { officePlugin, replacePackage, settle } from "../../../test/support/plugin-office.fixture.ts";
 import { composeProblems, spawnsLabel } from "../../../src/features/compose/services.ts";
 import { parseManifest, settingProperties, settingVariable } from "../../../src/loader/sources/manifest-schema.ts";
 import definition from "../office.ts";
@@ -157,8 +157,8 @@ test("a plugin linked before its settings are applied registers the skill once a
     expect(skill()).toContain("- Endpoint: http://localhost.floci.io:4600\n");
 
     // Only the skill's text changes, as in a new release of the package.
-    switchPackageSet(office, (packages) => {
-      const file = join(packages, "aws-emulator/skills/floci/SKILL.md");
+    replacePackage(office, "aws-emulator", folder => {
+      const file = join(folder, "skills/floci/SKILL.md");
 
       writeFileSync(file, `${readFileSync(file, "utf8")}\nNew guidance.\n`);
     });

@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Entries, JsonValue, Settings, SyncInputs } from "@office/sdk";
 import { tools } from "@office/tools";
-import { currentLink, generationFolder, generationRecord, generatorKey, nextGeneration } from "../generation.ts";
+import { generatorKey, nextGeneration, outputFolder, outputRecord } from "../generated.ts";
 import { skills } from "../handles.ts";
 import { generate as publishGeneration } from "../publication.ts";
 import { upRuntimes } from "../../../src/lifecycle-inputs.ts";
@@ -67,13 +67,10 @@ async function list(settings: Given, entries: Entries) {
   }
 }
 
-const g1 = "aaaaaaaaaaaa-00000001";
-
-/** What office up's publication leaves: a generation holding `ids` and its record, and `current` naming it. */
+/** What office up's publication leaves: output holding `ids` and its record. */
 function publish(ids: string[]) {
-  for (const id of ids) write(join(office, generationFolder("openspec", g1), id, "SKILL.md"));
-  write(join(office, generationFolder("openspec", g1), generationRecord), JSON.stringify({ key: "sha256:x", skills: ids }));
-  symlinkSync(`generations/${g1}`, join(office, currentLink("openspec")));
+  for (const id of ids) write(join(office, outputFolder("openspec"), id, "SKILL.md"));
+  write(join(office, outputFolder("openspec"), outputRecord), JSON.stringify({ key: "sha256:x", skills: ids }));
 }
 
 test("a registered source's generator is one this process registered, and its revision a nonempty string", () => {
@@ -226,7 +223,7 @@ test("in a container-mode office, inside the container, the generator gets the n
     const published = await publishGeneration(office, { owner: "openspec", source, label: "generated source openspec (package openspec)" }, next.ready, () => upRuntimes(container, { PATH: bin }));
 
     expect(published.skills).toEqual(["openspec-propose"]);
-    expect(readFileSync(join(office, generationFolder("openspec", published.generation), "openspec-propose/SKILL.md"), "utf8")).toContain("description: from node");
+    expect(readFileSync(join(office, published.folder, "openspec-propose/SKILL.md"), "utf8")).toContain("description: from node");
   } finally {
     process.env.PATH = path;
     rmSync(bin, { recursive: true, force: true });

@@ -3,12 +3,12 @@ import { join } from "node:path";
 import { type Entries, type ExclusionUpdate, type OfficeInfo, Package, type Problem } from "@office/sdk";
 import { copyExcludePath } from "@office/sdk/copy-tree";
 import { bundleProblem, catalog, linkFolder, linkTarget, type Pending, selection } from "./catalog.ts";
-import { type Declared, declaredSources, nextGeneration, publish, type Published, readPublished, type Runner } from "./generation.ts";
+import { type Declared, declaredSources, nextGeneration, type Published, readPublished, type Runner } from "./generated.ts";
 import { checkoutFolder, checkoutProblem, comparison, ensureCheckout, resolveTrack, short } from "./git.ts";
 import { skills } from "./handles.ts";
 import { generatedSources } from "./sources.ts";
 import { applyDelivery, type Delivery, deliveryProblems, lostLinks, ownedPaths, planDelivery, readReceipt } from "./links.ts";
-import { cleanup, discard, exclusively, generate } from "./publication.ts";
+import { discard, exclusively, generate, publish } from "./publication.ts";
 import { isGit, readSettings, type SkillSettings, settingsSchema } from "./settings.ts";
 
 /** Fetches each Git source's pinned commit that isn't here yet; one that is here is used offline. */
@@ -22,7 +22,7 @@ function fetchSources(office: string, settings: SkillSettings): string[] {
 
 /**
  * Checks even disabled Git offers so a pin stands only at a commit holding every named skill.
- * Up can plan against candidate generations before publishing them.
+ * Up can plan against staged output before publishing it.
  */
 function wantedSkills(office: string, settings: SkillSettings, entries: Entries, runner: Runner, candidates?: ReadonlyMap<string, Published>) {
   const final = candidates !== undefined;
@@ -96,7 +96,8 @@ function reporting<T>(released: readonly string[], act: () => T): T {
 function prepare(office: string, settings: SkillSettings, entries: Entries, runner: Runner, candidates?: ReadonlyMap<string, Published>) {
   const { wanted, notes, problems, pending, deferred } = wantedSkills(office, settings, entries, runner, candidates);
   const receipt = readReceipt(office);
-  const plan = planDelivery(office, wanted, receipt);
+  const deferredPaths = new Set(deferred.map(id => `${linkFolder}/${id}`));
+  const plan = planDelivery(office, wanted, receipt, deferredPaths);
 
   problems.push(...plan.problems);
 
@@ -104,14 +105,15 @@ function prepare(office: string, settings: SkillSettings, entries: Entries, runn
   const ids = deferredLine(pending, deferred);
   const copying = new Map(plan.changes.flatMap(change => change.kind === "copy" ? [[change.path, copyExcludePath(office, change.path)] as const] : []));
 
-  return { notes: [...notes, ...pending.map(pendingLine), ...(ids === undefined ? [] : [ids])], receipt, changes: plan.changes, owned: [...wanted.keys()].sort(), copying };
+  const owned = [...wanted.keys(), ...[...deferredPaths].filter(path => receipt.copies.has(path))].sort();
+
+  return { notes: [...notes, ...pending.map(pendingLine), ...(ids === undefined ? [] : [ids])], receipt, changes: plan.changes, owned, copying };
 }
 
 /**
- * `up`: generates each generated source whose key changed into a new generation, checks the whole
- * selection (no deferral), then excludes deliveries, switches `current`, applies deliveries, and
- * removes earlier generations while holding the generated-skills lock. A generator failure or any
- * failed check, a failed exclusion included, leaves the published generations and deliveries as they
+ * `up`: stages output for each source whose key changed, checks the whole selection (no deferral),
+ * excludes new deliveries, installs the output and copies the skills under the generated-skills
+ * lock. A generator failure or a failed check leaves the published output and deliveries as they
  * were. With no generated source declared it does nothing: sync and `skills update` deliver the rest.
  */
 async function deliver(office: string, settings: SkillSettings, entries: Entries, runner: Runner, runtimes: () => readonly string[], updateExcluded: UpdateExcluded): Promise<string[]> {
@@ -165,32 +167,31 @@ async function publishSources(office: string, settings: SkillSettings, entries: 
     excluded = new Set(adding.map(path => prepared.copying.get(path) ?? path));
     lines.push(...updateExcluded({ add: [...excluded] }));
   } catch (error) {
-    for (const [id, { generation }] of candidates) discard(office, id, generation);
+    for (const { folder } of candidates.values()) discard(office, folder);
 
     throw new Error(`${error instanceof Error ? error.message : String(error)}; published generated skills and their deliveries stay as they were`, { cause: error });
   }
 
-  const { notes, receipt, changes, owned } = prepared;
+  const { notes, receipt, owned } = prepared;
 
   try {
-    for (const [id, { generation }] of candidates) publish(office, id, generation);
-    lines.push(...applyDelivery(office, changes, receipt, path => excluded.has(path) ? [] : updateExcluded({ add: [path] })));
+    for (const [id, { folder }] of candidates) publish(office, id, folder);
+    // The preflight plans read from staging. Replan from the newly installed output.
+    const delivery = candidates.size ? prepare(office, settings, entries, runner, new Map()) : prepared;
+
+    lines.push(...applyDelivery(office, delivery.changes, delivery.receipt, path => excluded.has(path) ? [] : updateExcluded({ add: [path] })));
   } catch (error) {
     const held = new Set(ownedPaths(readReceipt(office)));
 
     updateExcluded({ remove: adding.filter(path => !held.has(path)) });
     throw error;
+  } finally {
+    for (const { folder } of candidates.values()) discard(office, folder);
   }
 
   const gone = ownedPaths(receipt).filter(path => !owned.includes(path));
 
   lines.push(...updateExcluded({ remove: gone }));
-
-  for (const { source } of sources) {
-    const published = readPublished(office, source.id);
-
-    if (published !== undefined) lines.push(...cleanup(office, source.id, published.generation));
-  }
 
   return [...lines, ...notes];
 }
@@ -351,7 +352,7 @@ export default Package.define({
     const problems: Problem[] = [];
     const { wanted, problems: selected, pending, deferred } = wantedSkills(office.dir, read, entries, runnerOf(office));
     const ids = deferredLine(pending, deferred);
-    const plan = planDelivery(office.dir, wanted, readReceipt(office.dir));
+    const plan = planDelivery(office.dir, wanted, readReceipt(office.dir), new Set(deferred.map(id => `${linkFolder}/${id}`)));
 
     for (const source of read.sources) {
       const message = isGit(source) ? checkoutProblem(office.dir, source.repo, source.ref) : undefined;

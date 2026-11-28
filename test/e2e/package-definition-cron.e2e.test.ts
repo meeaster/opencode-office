@@ -2,14 +2,14 @@
 // cron package's settings, its commands, where each kind of mistake is caught, a broken package
 // stopping a named run, and catch-up in fresh processes.
 import { expect, test } from "bun:test";
-import { existsSync, readlinkSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "../../src/git.ts";
 import { definitionFixture } from "../support/package-definition.fixture.ts";
 import { definitionText, writePackage } from "../support/test-package.ts";
 
 const { root, exe, marker, write, read, commit, fixture, collector } = definitionFixture({ second: false });
-const activeGeneration = (dir: string) => readlinkSync(join(dir, ".office/current"));
+const installed = (dir: string) => lstatSync(join(dir, ".office/packages/office")).ino;
 
 /** A definition declaring `jobs` to the cron registry (handles match by id, so it needs no import). */
 const declaring = (jobs: object[], extra = "") => definitionText(`{setup(c){for (const job of ${JSON.stringify(jobs)}) c.add({id:"cron.jobs",parse:v=>v},job); ${extra}}}`);
@@ -99,27 +99,26 @@ test("a job's mistakes: the parser's and the settings schema's before the switch
   writePackage(join(report, "office.ts"), declaring([]));
   cli(0, "sync", "--packages");
   const synced = read(config);
-  let pointer = activeGeneration(dir);
+  const before = installed(dir);
 
   writePackage(join(report, "office.ts"), declaring([{ name: "digest", schedule: "every tuesday", script: "scripts/digest.sh" }]));
   expect(cli(1, "sync", "--packages")).toContain("cron job digest: schedule must be five UTC cron fields");
-  expect(activeGeneration(dir)).toBe(pointer);
+  expect(installed(dir)).toBe(before);
 
   write(join(dir, "outside.sh"), "true");
   writePackage(join(report, "office.ts"), declaring([{ name: "digest", schedule: "@daily", script: "../outside.sh" }]));
   expect(cli(1, "sync", "--packages")).toContain("cron job digest: script must be a relative .sh path");
-  expect(activeGeneration(dir)).toBe(pointer);
+  expect(installed(dir)).toBe(before);
 
   writePackage(join(report, "office.ts"), declaring([]));
   write(config, synced.replace("{overrides:", "{jobs: {heartbeat: {schedule: '@hourly'}}, overrides:"));
   expect(cli(1, "sync", "--packages")).toContain("packages.cron.settings.jobs.heartbeat.script: is required");
-  expect(activeGeneration(dir)).toBe(pointer);
+  expect(installed(dir)).toBe(before);
 
   write(config, synced);
   writePackage(join(report, "office.ts"), declaring([{ name: "digest", schedule: "@daily", script: "scripts/absent.sh" }]));
   expect(cli(1, "sync", "--packages")).toContain("cron package.report.digest: scripts/absent.sh must be an existing regular script inside package report's folder");
-  expect(activeGeneration(dir)).not.toBe(pointer);
-  pointer = activeGeneration(dir);
+  expect(installed(dir)).not.toBe(before);
 
   // An override naming a job no selected package declares, or one of a deselected package.
   writePackage(join(report, "office.ts"), declaring([]));
@@ -241,19 +240,15 @@ packages:
   // The first job moves the package to the later commit and publishes that set.
   write(join(dir, "first.sh"), `set -eu\nprintf '%s' '${config(after)}' > office.yaml\n"$OFFICE_CRON_COMMAND" sync --packages\n`);
   cli(0, "sync", "--packages");
-  const started = activeGeneration(dir);
 
   const out = cli(0, "cron", "catch-up");
   expect(out).toContain("office cron: office.first exited 0");
   expect(out).toContain(`catching up ${id}`);
   expect(read(join(dir, "ran"))).toBe("new\n");
   expect(existsSync(join(home, ".local/state/office/cron", name, `${id}.stamp`))).toBe(true);
-  // The set catch-up started in is still there, and declares the job with a script it holds.
-  expect(activeGeneration(dir)).not.toBe(started);
-  const old = join(dir, ".office", started, "packages/later");
-  expect(read(join(old, "office.ts"))).toContain('"script":"old.sh"');
-  expect(existsSync(join(old, "old.sh"))).toBe(true);
-  expect(existsSync(join(old, "new.sh"))).toBe(false);
+  const pkg = join(dir, ".office/packages/later");
+  expect(read(join(pkg, "office.ts"))).toContain('"script":"new.sh"');
+  expect(existsSync(join(pkg, "new.sh"))).toBe(true);
 }, 60_000);
 
 test("the scheduled reference refresh catches up once at its overridden due time using the named run's stamp", () => {

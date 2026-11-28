@@ -32,7 +32,7 @@ export function restoreCallerEnv() {
 }
 
 /** Forwards Ctrl+C until disposed; the caller owns any pipes it asks for. */
-export function spawnWorker(command: string[], env: NodeJS.ProcessEnv, descriptors: (number | "pipe")[] = []) {
+export function spawnWorker(command: string[], env: NodeJS.ProcessEnv, descriptors: (number | "ignore" | "pipe")[] = []) {
   const child = Bun.spawn(command, { env, stdio: ["inherit", "inherit", "inherit", ...descriptors] });
   const stop = () => child.kill("SIGINT");
   process.once("SIGINT", stop);
@@ -41,15 +41,15 @@ export function spawnWorker(command: string[], env: NodeJS.ProcessEnv, descripto
 }
 
 /** Runs an evaluator to completion with no result pipe. */
-export async function runEvaluator(args: string[], descriptors: number[] = []) {
-  using child = spawnWorker([...program(), ...args], evaluatorEnv(), descriptors);
+export async function runEvaluator(args: string[]) {
+  using child = spawnWorker([...program(), ...args], evaluatorEnv());
 
   return await child.exited;
 }
 
-/** Starts a reader with the supplied generation lease on fd 3 and a pipe on fd 4. */
-export function startReader(dir: string, active: { name: string; fd: number }, args: string[]) {
-  const child = spawnWorker([...program(), "--package-reader", dir, active.name, ...args], evaluatorEnv(), [active.fd, "pipe"]);
+/** Starts a reader with a result pipe on fd 4. */
+export function startReader(dir: string, args: string[]) {
+  const child = spawnWorker([...program(), "--package-reader", dir, ...args], evaluatorEnv(), ["ignore", "pipe"]);
   const pipe = child.stdio[resultDescriptor];
 
   if (pipe === undefined || pipe === null) {

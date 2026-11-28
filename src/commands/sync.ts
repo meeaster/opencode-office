@@ -336,7 +336,7 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
   if (scope !== "references") requirePackageOwnership(office);
 
   if (scope === "packages") {
-    await syncPackages(office, changes, stage);
+    await syncPackages(office, changes);
 
     return reported;
   }
@@ -349,7 +349,7 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
   // info/exclude is written once, after the clones, and only from a package set that was applied
   // whole. References are cloned only once this sync recorded the ones it resolved. A package's
   // sync function that threw stops the sync here.
-  const applied = await syncPackages(office, changes, stage, false);
+  const applied = await syncPackages(office, changes, false);
 
   if (applied.stopped) {
     if (applied.stopped === "plugins" && applied.recorded) reported.push(...(await syncClones(office, "references", stage, verbose)).changes);
@@ -362,7 +362,7 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
   reported.push(...cloned.changes);
 
   // Only after this sync's own admission and application succeeded, every package loaded and no step failed.
-  if (applied.generation !== undefined) reported.push(...await fullSyncStep(office, applied.generation, stage, cloned.parts, verbose));
+  if (applied.selection !== undefined) reported.push(...await fullSyncStep(office, applied.selection, stage, cloned.parts, verbose));
   else stage.note("no package's full-sync work ran: this sync didn't apply the package set whole without a failure");
   changes.push(...claudeFiles(office.dir, true));
 
@@ -376,20 +376,16 @@ export async function sync(loaded: Office, { scope = "all", stage = silentStage,
  * applies them: settings, packages' sync functions, their mise tools (linked machine-wide where the
  * office manages the machine), plugins and desktop panels. `office sync` and `office packages
  * update` both apply packages this way. A rejected candidate applies nothing. Each change goes to
- * `changes`. Returns whether the switch recorded the references it resolved, whether a package's
+ * `changes`. Returns whether sync recorded the references it resolved, whether a package's
  * sync function stopped the sync, and, when the set was applied whole, the committed folders.
  */
-async function syncPackages(office: Office, changes: { push: (...lines: Change[]) => void }, stage: Stage = silentStage, exclude = true) {
+async function syncPackages(office: Office, changes: { push: (...lines: Change[]) => void }, exclude = true) {
   requirePluginDestination(office);
   const result = await publishPackages(office, exclude);
 
-  if (result.generation) stage.detail(`active package generation: ${result.generation}`);
   changes.push(...result.lines);
 
-  // The generation this sync published and applied whole (so with committed folders) without a
-  // failed step, for full-sync work; undefined otherwise. The references and exclusions keep
-  // their own conditions, `recorded` and `committed`.
-  const generation = result.committed === undefined || result.lines.some(isFailure) ? undefined : result.generation;
+  const selection = result.lines.some(isFailure) ? undefined : result.applied;
 
-  return { recorded: result.recorded === true, stopped: result.stopped, committed: result.committed, excluded: result.excluded ?? [], generation };
+  return { recorded: result.recorded === true, stopped: result.stopped, committed: result.committed, excluded: result.excluded ?? [], selection };
 }

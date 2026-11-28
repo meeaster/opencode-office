@@ -61,6 +61,7 @@ export async function prepareSources(office: Office, selection: ReturnType<typeo
           if (record && "repo" in record && record.commit === bound) {
             const repair = join(folder, `repair-${item.entry.name}`);
             cpSync(dir, repair, { recursive: true, verbatimSymlinks: true });
+            mkdirSync(join(previous, "packages"), { recursive: true });
             renameNoReplace(repair, old);
           }
         }
@@ -75,8 +76,7 @@ export async function prepareSources(office: Office, selection: ReturnType<typeo
     item.dir = dir;
   }
 
-  // Keep outstanding withdrawals with the candidate. After a crash or a deferred apply, the
-  // previous generation need not stay pinned just to finish removing a package's panel.
+  // A deferred or incomplete application still needs removed packages' panel files.
   const withdrawals = join(folder, "withdrawals");
   mkdirSync(withdrawals);
   const selected = new Set(selection.packages.map(pkg => pkg.entry.name));
@@ -88,7 +88,10 @@ export async function prepareSources(office: Office, selection: ReturnType<typeo
 
     for (const entry of readdirSync(parent, { withFileTypes: true })) {
       if (!entry.isDirectory() || selected.has(entry.name)) continue;
-      cpSync(join(parent, entry.name), join(withdrawals, entry.name), { recursive: true, verbatimSymlinks: true });
+      const old = join(parent, entry.name);
+
+      if (source === "packages" && readRecord(old) === undefined) continue;
+      cpSync(old, join(withdrawals, entry.name), { recursive: true, verbatimSymlinks: true });
     }
   }
 

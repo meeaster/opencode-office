@@ -2,11 +2,11 @@
 //
 // The office bundles it with the applied settings reader into the one index.js an office holds,
 // so it runs with nothing installed.
-import { readFileSync, watch } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { type AppliedSettings, officeRootOf, watchAppliedSettings } from "@office/sdk/applied-settings";
+import { type AppliedSettings, officeRootOf, watchAppliedSettings, watchPackageFolder } from "@office/sdk/applied-settings";
 
 type Skill = { id: string; name: string; description: string; path: string; content: string };
 
@@ -81,9 +81,7 @@ export default {
 
     let applied = watcher.settings;
 
-    const generations = watch(join(office, ".office"), (_event, file) => {
-      if (file === "current") reload();
-    });
+    const packageWatcher = watchPackageFolder(office, "aws-emulator", reload, console.error);
 
     // Without applied settings there is no address to give yet: the skill is registered once a
     // sync applies them.
@@ -93,7 +91,7 @@ export default {
 
     return () => {
       watcher.close();
-      generations.close();
+      packageWatcher.close();
     };
   },
 };

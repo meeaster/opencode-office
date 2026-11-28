@@ -1,7 +1,7 @@
 // A package's `sync` and `check` functions in the compiled office: when they run, in what order,
 // what their lines and problems do, and what a throw stops.
 import { expect, test } from "bun:test";
-import { existsSync, readlinkSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "../../src/git.ts";
 import { definitionFixture } from "../support/package-definition.fixture.ts";
@@ -76,14 +76,15 @@ test("a sync function that throws stops the sync there: earlier lines print, lat
 
   for (const args of [["sync", "--packages"], ["sync"]]) {
     rmSync(path);
-    const current = readlinkSync(join(dir, ".office/current"));
+    const installed = join(dir, ".office/packages/office");
+    const before = lstatSync(installed).ino;
     const output = cli(1, ...args);
 
     expect(output).toContain("package first: first line");
     expect(output).toContain("package thrower: its sync failed: sync boom");
     expect(output).toContain("run office sync again");
     expect(probe(path)).toEqual(["first"]);
-    expect(readlinkSync(join(dir, ".office/current"))).not.toBe(current);
+    expect(lstatSync(installed).ino).not.toBe(before);
     expect(existsSync(join(dir, ".opencode/plugins/linked"))).toBe(false);
     expect(existsSync(join(dir, "references/work"))).toBe(false);
     expect(read(join(dir, ".git/info/exclude"))).toBe(exclude);
@@ -112,10 +113,11 @@ test("no sync function runs on a rejected candidate or with a package unfetched,
   // An unfetched package: the healthy set is published and sync says why no sync function ran.
   rmSync(join(dir, ".office/packages/remote"), { recursive: true });
   rmSync(repo, { recursive: true });
-  const current = readlinkSync(join(dir, ".office/current"));
+  const installed = join(dir, ".office/packages/office");
+  const before = lstatSync(installed).ino;
   const unfetched = cli(1, "sync");
   expect(unfetched).toContain("not running any package's sync function: what package remote registers is unknown until a sync loads it");
-  expect(readlinkSync(join(dir, ".office/current"))).not.toBe(current);
+  expect(lstatSync(installed).ino).not.toBe(before);
   expect(probe(path)).toEqual([]);
 
   // A rejected candidate: one package's setup throws.

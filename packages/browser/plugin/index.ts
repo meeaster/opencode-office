@@ -18,12 +18,12 @@
 // A missing command registers nothing, and nothing here fails a session. The office bundles it
 // with the applied settings reader into the one index.js an office holds, so it runs with nothing
 // installed.
-import { accessSync, constants, readFileSync, watch } from "node:fs";
+import { accessSync, constants, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { officeRootOf, readAppliedSettings, watchAppliedSettings } from "@office/sdk/applied-settings";
+import { officeRootOf, readAppliedSettings, watchAppliedSettings, watchPackageFolder } from "@office/sdk/applied-settings";
 
 type Skill = { id: string; name: string; description: string; path: string; content: string };
 
@@ -201,9 +201,7 @@ export default {
     };
 
     // A new package set can bring new skill text or a new mode.
-    const modeWatcher = watch(join(office, ".office"), (_event, file) => {
-      if (file === "current") reload();
-    });
+    const packageWatcher = watchPackageFolder(office, "browser", reload, console.error);
 
     // Only a change to this package's settings reloads, not another package's. Until a sync
     // applies them, the session has the defaults.
@@ -216,7 +214,7 @@ export default {
     }
 
     return () => {
-      modeWatcher.close();
+      packageWatcher.close();
       settingsWatcher?.close();
     };
   },

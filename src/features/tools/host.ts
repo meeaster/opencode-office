@@ -28,7 +28,7 @@ import { containerLayout } from "./sfw.ts";
 import { lockFile } from "../../versions.ts";
 import { type Application, applyTools, checkTools, liveReleases, stagingNeeded } from "./apply.ts";
 import { type AttestedMise, miseRegistry, officeMise } from "./registry.ts";
-import { type Run, type SelectionInputs, selectTools, unmetTools } from "./selection.ts";
+import { planTools, type Run, type SelectionInputs, selectTools, type ToolSelection, unmetTools } from "./selection.ts";
 
 /** Runs a command and returns its status and output. */
 export function spawnRun(): Run {
@@ -121,11 +121,8 @@ function counted(run: Run): Counted {
   return { run: (argv, options) => (calls++, run(argv, options)), used: () => calls > 0 };
 }
 
-/** What recording desired releases at sync said; `ok` false stops the publication. */
-export type Recorded = { ok: boolean; lines: string[] };
-
-/** Records a desired release for each tool whose recorded one no longer serves it; see the module comment. */
-export function recordUnmet(office: Office, packages: readonly GatheredPackage[], { run = spawnRun(), env = process.env }: { run?: Run; env?: Readonly<Record<string, string | undefined>> } = {}): Recorded {
+/** Plans a desired release for each tool whose recorded one no longer serves it. */
+export function planUnmet(office: Office, packages: readonly GatheredPackage[], { run = spawnRun(), env = process.env }: { run?: Run; env?: Readonly<Record<string, string | undefined>> } = {}): ToolSelection {
   if (office.opencode.mode !== "host") return { ok: true, lines: [] };
   let attested: AttestedMise | undefined;
   const mise = () => (attested ??= officeMise(office));
@@ -142,9 +139,11 @@ export function recordUnmet(office: Office, packages: readonly GatheredPackage[]
     return { ok: true, lines: [`not selecting releases of tool ${unmet.map(tool => tool.name).join(", ")} yet: ${firewalled.reason}`] };
   }
 
-  const selection = selectTools(office, packages, { ...firewalled.tools.inputs, run, env, unmet: true });
+  const selection = planTools(office, packages, { ...firewalled.tools.inputs, run, env, unmet: true });
 
-  return { ok: selection.ok, lines: [attestation(firewalled.tools), ...selection.lines] };
+  selection.lines.unshift(attestation(firewalled.tools));
+
+  return selection;
 }
 
 /** Up's checks before any service starts: what applying would refuse from this machine's files alone (checkTools). */

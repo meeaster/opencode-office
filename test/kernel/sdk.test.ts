@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { writeSdk } from "../../src/loader/generation/links.ts";
+import { writeSdk } from "../../src/loader/installed/links.ts";
 import { toolPath } from "../../src/tool.ts";
 
 let office: string;

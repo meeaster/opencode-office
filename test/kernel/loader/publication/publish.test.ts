@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -51,7 +51,7 @@ function setPackages(entries: Record<string, LockedPackage>) {
 }
 
 const lockEntries = () => Object.fromEntries(readLockSection(dir, "packages"));
-const active = () => readlinkSync(join(dir, ".office/current"));
+const active = () => lstatSync(join(dir, ".office/packages/office")).ino;
 
 async function publish() {
   const result = await publishPackages(loadOffice(dir), false);
@@ -177,7 +177,7 @@ test("a selected optional provider couples an update even if the provider has no
 
   expect(rejected.published).toBe(false);
   expect(rejected.rejected?.sort()).toEqual(["consumer", "provider"]);
-  expect(existsSync(join(dir, ".office/current/selection.json"))).toBe(false);
+  expect(existsSync(join(dir, ".office/selection.json"))).toBe(false);
 
   select(consumer, peer);
   writeFileSync(join(repo, "consumer/office.ts"), definitionText('{ setup() { throw Error("rejected consumer"); } }'));
@@ -241,5 +241,5 @@ test("a package application lock that can't be opened or is held fails the sync 
   rmSync(file);
   symlinkSync(join(dir, "elsewhere"), file);
   expect(await sync(loadOffice(dir), { scope: "packages" })).toEqual([expect.stringMatching(/^FAILED cannot take the package application lock: ELOOP/)]);
-  expect(existsSync(join(dir, ".office/current/selection.json"))).toBe(false);
+  expect(existsSync(join(dir, ".office/selection.json"))).toBe(false);
 });

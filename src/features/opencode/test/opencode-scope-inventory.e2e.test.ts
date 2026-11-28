@@ -187,7 +187,7 @@ test("changing a package between managed and local switches its plugin between a
   f.select("packages: [{name: press}]\n");
   // The published set still links press to its pulled-in copy, so nothing loads until sync.
   expect(await f.run(["check"], 1)).toContain("FAIL package press: the package set links it to a different folder; run office sync");
-  rmSync(join(f.dir, ".office/current/node_modules/@office/press"));
+  rmSync(join(f.dir, ".office/node_modules/@office/press"));
   expect(await f.run(["check"], 1)).toContain("FAIL package press: selected since the last sync; run office sync");
   expect(await f.run(["sync", "--packages"])).toContain("removed plugin copy .opencode/plugins/press; restart OpenCode to pick up press if it loaded the previous delivery");
   expect(readlinkSync(link)).toBe("../../packages/press/plugin");

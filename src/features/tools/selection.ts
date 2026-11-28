@@ -26,7 +26,7 @@ import { join } from "node:path";
 import type { GatheredPackage } from "../../gather.ts";
 import { miseShims } from "../machine/paths.ts";
 import type { Office } from "../../office.ts";
-import type { LockedTool, ToolLock } from "../../lock-schema.ts";
+import type { ToolLock } from "../../lock-schema.ts";
 import { ageHours } from "./sfw.ts";
 import { editLock, lockFile, lockSections, readLockText } from "../../versions.ts";
 import { machineFile } from "../mise-integration/delivery.ts";
@@ -50,6 +50,8 @@ export type SelectionInputs = { mise: readonly string[]; run: Run; env: Readonly
 
 /** What a selection said, one line each; with `ok` false, office.lock is left as it was. */
 export type Selection = { ok: boolean; lines: string[] };
+
+export type ToolSelection = Selection & { edit?: (previous: ToolLock) => ToolLock };
 
 /** A tool the batch asks mise for, with its effective age. */
 type Planned = { demand: Demand; age: string };
@@ -221,16 +223,16 @@ function plannedReleases(planned: readonly Planned[], blanket: string, runs: Mis
 }
 
 /** One tool's selection: the version to record, and the older one mise selected when office.lock's is kept instead. */
-type Chosen = { demand: Demand; version: string; kept?: string };
+type Chosen = { demand: Demand; version: string };
 
 /**
- * Selects one exact desired release for each mise-managed tool the packages require and records them
- * in office.lock's `tools:` section, keyed by backend. Refuses, recording nothing, while admission
+ * Plans one exact desired release for each mise-managed tool the packages require, keyed by
+ * backend. Refuses, recording nothing, while admission
  * finds a problem. With `unmet`, it selects only the tools whose recorded release no longer serves
  * them (none, one below a raised minimum, or not the owner's hold), asks mise nothing when there
  * are none, and leaves every other entry as it is.
  */
-export function selectTools(office: Office, packages: readonly GatheredPackage[], { mise, run, env, registry = () => officeRegistry(office), runtimes = [], unmet = false }: SelectionInputs & { unmet?: boolean }): Selection {
+export function planTools(office: Office, packages: readonly GatheredPackage[], { mise, run, env, registry = () => officeRegistry(office), runtimes = [], unmet = false }: SelectionInputs & { unmet?: boolean }): ToolSelection {
   const lines: string[] = [];
   const failed = (line: string): Selection => ({ ok: false, lines: [...lines, `FAILED ${line}; ${lockFile} is left as it was`] });
   const admission = admitTools(office, packages, registry);
@@ -262,39 +264,48 @@ export function selectTools(office: Office, packages: readonly GatheredPackage[]
 
     if (!batch.ok) return failed(batch.failure);
 
-    // A selection never lowers what office.lock records, unless the owner holds the tool.
     const chosen = demands.map((demand): Chosen => {
-      const before = read.value.get(demand.name);
       const version = held.value.get(demand.name) ?? batch.value.get(demand.name) ?? demand.floor;
-
-      if (!admission.holds.has(demand.name) && before !== undefined && (compareToolVersions(before.version, version) ?? 0) > 0) return { demand, version: before.version, kept: version };
 
       return { demand, version };
     });
 
-    return editLock(office.dir, sections => {
-      const tools = new Map<string, LockedTool>(unmet ? sections.tools : []);
+    const edit = (previous: ToolLock): ToolLock => {
+      const tools: ToolLock = new Map(unmet ? previous : []);
 
-      for (const { demand, version, kept } of chosen) {
-        const before = sections.tools.get(demand.name);
+      for (const { demand, version } of chosen) {
+        const before = previous.get(demand.name);
         const hold = admission.holds.get(demand.name);
 
+        if (hold === undefined && before !== undefined && (compareToolVersions(before.version, version) ?? 0) > 0) {
+          lines.push(`kept tool ${demand.name} at ${before.version} in ${lockFile}: mise selected the older ${version}`);
+          tools.set(demand.name, before);
+          continue;
+        }
+
         if (hold !== undefined) lines.push(`${machineFile} holds tool ${hold.key} at ${hold.version}`);
-        else if (kept !== undefined) lines.push(`kept tool ${demand.name} at ${version} in ${lockFile}: mise selected the older ${kept}`);
 
         if (before?.version !== version) lines.push(`${lockFile}: selected tool ${demand.name} ${version}${before === undefined ? "" : ` (was ${before.version})`} for ${consumersOf(demand)}`);
         tools.set(demand.name, { version });
       }
 
-      for (const backend of sections.tools.keys()) {
+      for (const backend of previous.keys()) {
         if (!unmet && !tools.has(backend)) lines.push(`${lockFile}: removed tool ${backend}, which no package requires here any more`);
       }
 
-      sections.tools = tools;
+      return tools;
+    };
 
-      return { ok: true, lines };
-    });
+    return { ok: true, lines, edit };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+export function selectTools(office: Office, packages: readonly GatheredPackage[], inputs: SelectionInputs & { unmet?: boolean }): Selection {
+  const { ok, lines, edit } = planTools(office, packages, inputs);
+
+  if (edit) editLock(office.dir, sections => { sections.tools = edit(sections.tools); });
+
+  return { ok, lines };
 }

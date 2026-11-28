@@ -1,13 +1,6 @@
-// Generated sources as sync, check, list and up see them: declared by a package in this run, and
-// either published, with the skills of the generation office up last published, or pending until
-// their first publication. Each source keeps everything under its own folder,
-// `.office/skills/generated/<id>/`: its generations in `generations/<name>/`, each holding its key
-// and skill IDs in `generation.json`, the names of those it made in `generations.json`, and the
-// link `current` to the published one. Switching `current` is the publication: every reader takes
-// the published generation from it, and the source's skill links go through it.
-import { createHash, randomUUID } from "node:crypto";
-import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, posix } from "node:path";
+import { createHash } from "node:crypto";
+import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import type { Entries, JsonValue } from "@office/sdk";
 import { tools } from "@office/tools";
 import { readLocation, resolveTool } from "@office/tools/applied";
@@ -18,42 +11,23 @@ import { type Generate, type GeneratedSource, generatedSources } from "./sources
 /** A source a package declared in this run, with the label messages name it by. */
 export type Declared = { owner: string; source: GeneratedSource; label: string };
 
-/** A source's published generation: its generator key, its folder's name and the skill IDs in it. */
-export type Published = { key: string; generation: string; skills: string[] };
+type OutputRecord = { key: string; skills: string[] };
+
+export type Published = OutputRecord & { folder: string };
 
 /** The office-relative folder holding every generated source's folder. */
 export const generatedFolder = `${stateFolder}/generated`;
 
-/** The office-relative folder holding one source's generations and its records. */
+/** The office-relative folder holding one source's output and any staging for it. */
 export function sourceFolder(id: string): string {
   return `${generatedFolder}/${id}`;
 }
 
-/** A generation's name: unique, and never a dot file. */
-const generationName = /^[0-9a-f]{12}-[0-9a-f]{8}$/;
-
-/** The office-relative folder of a source's generations. */
-export function generationsFolder(id: string): string {
-  return `${sourceFolder(id)}/generations`;
+export function outputFolder(id: string): string {
+  return `${sourceFolder(id)}/output`;
 }
 
-/** The office-relative folder of one of a source's generations. */
-export function generationFolder(id: string, generation: string): string {
-  return posix.join(generationsFolder(id), generation);
-}
-
-/** The file in each generation recording its key and skill IDs, written before it can be published. */
-export const generationRecord = "generation.json";
-
-/** The office-relative link to the published generation, which the source's skill links go through. */
-export function currentLink(id: string): string {
-  return `${sourceFolder(id)}/current`;
-}
-
-/** The office-relative record of the generations the source made, which cleanup may remove. */
-export function inventoryFile(id: string): string {
-  return `${sourceFolder(id)}/generations.json`;
-}
+export const outputRecord = "skills.json";
 
 /**
  * Checks that each folder from the office down to the office-relative `folder` is a real folder,
@@ -78,104 +52,28 @@ export function ownedFolder(office: string, folder: string, create = false): boo
   return true;
 }
 
-/** Writes `text` to the office-relative `file`, in a folder `ownedFolder` checked, through a temporary file renamed into place. */
-function replaceFile(office: string, file: string, text: string): void {
-  const path = join(office, file);
-  const temporary = `${path}.${randomUUID()}`;
-
-  writeFileSync(temporary, text, { flag: "wx" });
-  renameSync(temporary, path);
+function isOutputRecord(value: unknown): value is OutputRecord {
+  return typeof value === "object" && value !== null && "key" in value && typeof value.key === "string"
+    && "skills" in value && Array.isArray(value.skills) && value.skills.every(skill => typeof skill === "string" && skillId.test(skill));
 }
 
-function regularFile(office: string, file: string, invalid: Error): string | undefined {
-  const info = lstatSync(join(office, file), { throwIfNoEntry: false });
-
-  if (info === undefined) return undefined;
-
-  if (!info.isFile()) throw invalid;
-
-  return readFileSync(join(office, file), "utf8");
-}
-
-function parseJson(text: string, invalid: Error): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw invalid;
-  }
-}
-
-/** The names of the generations source `id` made; empty before its first. Throws naming the record when it isn't a regular file holding one. */
-export function readInventory(office: string, id: string): string[] {
-  const file = inventoryFile(id);
-  const invalid = new Error(`${file} isn't a record of generated skill source ${id}'s generations; move it aside and run office up`);
-  const text = regularFile(office, file, invalid);
-
-  if (text === undefined) return [];
-  const parsed = parseJson(text, invalid);
-  const names = typeof parsed === "object" && parsed !== null && "generations" in parsed ? parsed.generations : undefined;
-
-  if (!Array.isArray(names) || !names.every(name => typeof name === "string" && generationName.test(name))) throw invalid;
-
-  return names;
-}
-
-/** Records `names` as the generations source `id` made, in its folder `ownedFolder` checked. */
-export function writeInventory(office: string, id: string, names: readonly string[]): void {
-  replaceFile(office, inventoryFile(id), `${JSON.stringify({ generations: [...new Set(names)] }, null, 2)}\n`);
-}
-
-/**
- * The source's published generation, read through `current`, or undefined before its first
- * publication. Throws naming `current` when it isn't a link to a generation holding its record.
- */
 export function readPublished(office: string, id: string): Published | undefined {
-  const link = currentLink(id);
-  const info = lstatSync(join(office, link), { throwIfNoEntry: false });
+  const folder = outputFolder(id);
 
-  if (info === undefined) return undefined;
-
-  if (!info.isSymbolicLink()) throw new Error(`${link} isn't the link office keeps to the published generation; move it aside and run office up`);
-  const target = readlinkSync(join(office, link));
-  const generation = target.startsWith("generations/") ? target.slice("generations/".length) : "";
-  const invalid = new Error(`${link} points at ${target}, which isn't a generation office published; move it aside and run office up`);
-
-  if (!generationName.test(generation)) throw invalid;
-  const text = regularFile(office, posix.join(generationFolder(id, generation), generationRecord), invalid);
-
-  if (text === undefined) throw invalid;
-  const parsed = parseJson(text, invalid);
-
-  if (typeof parsed !== "object" || parsed === null) throw invalid;
-  const { key, skills } = parsed as Record<string, unknown>;
-
-  if (typeof key !== "string" || !Array.isArray(skills) || !skills.every(each => typeof each === "string" && skillId.test(each))) throw invalid;
-
-  return { key, generation, skills };
-}
-
-/** Records a generation's key and skill IDs inside it, the folder generate made. */
-export function writeGenerationRecord(office: string, id: string, { key, generation, skills }: Published): void {
-  replaceFile(office, posix.join(generationFolder(id, generation), generationRecord), `${JSON.stringify({ key, skills }, null, 2)}\n`);
-}
-
-/** Publishes `generation` of source `id`: points `current` at it in one rename. Throws when something else is there. */
-export function publish(office: string, id: string, generation: string): void {
-  if (readPublished(office, id)?.generation === generation) return;
-  const staged = join(office, sourceFolder(id), `.current-${randomUUID()}`);
-
-  symlinkSync(`generations/${generation}`, staged);
+  if (!ownedFolder(office, folder)) return;
+  const record = join(office, folder, outputRecord);
 
   try {
-    renameSync(staged, join(office, currentLink(id)));
-  } finally {
-    rmSync(staged, { force: true });
-  }
-}
+    if (lstatSync(record).isFile()) {
+      const value = JSON.parse(readFileSync(record, "utf8"));
 
-/** A fresh generation name for `key`. */
-export function newGenerationName(key: string): string {
-  return `${key.replace(/^sha256:/, "").slice(0, 12)}-${randomUUID().slice(0, 8)}`;
+      if (isOutputRecord(value)) return { key: value.key, skills: value.skills, folder };
+    }
+  } catch (error) {
+    throw new Error(`${folder}/${outputRecord} isn't a record of published skills; move ${folder} aside and run office up`, { cause: error });
+  }
+
+  throw new Error(`${folder}/${outputRecord} isn't a record of published skills; move ${folder} aside and run office up`);
 }
 
 /**
@@ -207,7 +105,7 @@ function canonical(value: JsonValue): JsonValue {
   return value;
 }
 
-/** What makes two generations of a source the same: the applied tool's version and identity, the generator's revision and its inputs. */
+/** What identifies a source's output: the applied tool's version and identity, the generator's revision and its inputs. */
 export type KeyParts = { version: string; identity: string; revision: string; inputs: JsonValue };
 
 /** The generator key, `sha256:<hex>`: equal parts give equal keys, whatever order the inputs' fields are in. */

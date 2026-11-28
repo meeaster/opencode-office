@@ -157,7 +157,7 @@ test("up reconciles without a write or a type-check when nothing changed; withou
 /** The MCP servers the office's installed design plugin registers, with a Doop agent key saved. */
 async function doopServers(f: DefinitionFixture): Promise<string[]> {
   write(join(f.dir, ".opencode/doop/agent-key"), "doop_fixture_key\n");
-  // Each sync publishes a new generation: import the one the link names now.
+  // Sync replaces the installed package, so import the current files.
   const plugin = (await import(join(realpathSync(join(f.dir, ".opencode/plugins/design")), "index.js"))).default;
   const servers: string[] = [];
   const registration = { dispose: async () => {} };

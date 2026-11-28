@@ -2,7 +2,7 @@
 // `sync` lays them down after the switch, and its commands are package commands. What happens to
 // receipts when a package goes, comes back or can't be read, and when declarations are refused.
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { join, relative } from "node:path";
 import { sha256 } from "../../packages/seeds/store.ts";
 import { git } from "../../src/git.ts";
@@ -41,7 +41,7 @@ test("deselecting a pulled-in and a local package leaves their files and drops t
   const { dir, cli, select } = fixture("deselect");
   const repo = join(root, "deselect-remote");
   const local = join(dir, "packages/local");
-  const current = () => readlinkSync(join(dir, ".office/current"));
+  const installed = () => lstatSync(join(dir, ".office/packages/office")).ino;
   const paths = ["notes/r.md", "notes/l.md", "notes/gone.md"];
 
   writePackage(join(repo, "remote/office.ts"), seeding('seeds.add(c,{destination:"notes/r.md",source:"r.md"})'), { name: "remote", ...uses });
@@ -90,7 +90,7 @@ test("deselecting a pulled-in and a local package leaves their files and drops t
 
   // The remote can't be fetched while the local seed changes: the set is published, no seed output changes.
   const before = outputs(dir, paths);
-  const pointer = current();
+  const previousCopy = installed();
 
   writePackage(join(local, "office.ts"), seeding('seeds.add(c,{destination:"notes/l.md",source:"l.md"}); seeds.add(c,{destination:"notes/gone.md",text:"gone v2\\n"})'), uses);
   renameSync(repo, `${repo}-gone`);
@@ -98,7 +98,7 @@ test("deselecting a pulled-in and a local package leaves their files and drops t
   const unread = cli(1, "sync", "--packages");
 
   expect(unread).toContain("not running any package's sync function: what package remote registers is unknown until a sync loads it");
-  expect(current()).not.toBe(pointer);
+  expect(installed()).not.toBe(previousCopy);
   expect(outputs(dir, paths)).toEqual(before);
 
   // The next sync that loads every package applies it.
@@ -111,7 +111,7 @@ test("a wrong shape is refused before the package set switches; a missing source
   const { dir, cli, select } = fixture("refused");
   const pkg = join(dir, "packages/bad");
   const other = join(dir, "packages/other");
-  const current = () => readlinkSync(join(dir, ".office/current"));
+  const installed = () => lstatSync(join(dir, ".office/packages/office")).ino;
   const paths = ["notes/a.md", "notes/o.md", "notes/new.md"];
 
   writePackage(join(pkg, "office.ts"), seeding('seeds.add(c,{destination:"notes/a.md",source:"a.md"})'), uses);
@@ -126,11 +126,11 @@ test("a wrong shape is refused before the package set switches; a missing source
 
   // Plain JavaScript can give both, neither or an unknown key: the registry's parser refuses each, naming the destination.
   for (const [entry, reason] of [['{destination:"x.md",source:"a.md",text:"b"}', "give exactly one of source and text"], ['{destination:"x.md"}', "give exactly one of source and text"], ['{destination:"x.md",source:"a.md",mode:1}', "unknown key mode"]]) {
-    const pointer = current();
+    const previousCopy = installed();
 
     writePackage(join(pkg, "office.ts"), seeding(`c.add(seeds, ${entry})`), uses);
     expect(cli(1, "sync")).toContain(`FAILED package bad: seed x.md: ${reason}`);
-    expect(current()).toBe(pointer);
+    expect(installed()).toBe(previousCopy);
     expect(outputs(dir, paths)).toEqual(before);
   }
 
@@ -142,14 +142,14 @@ test("a wrong shape is refused before the package set switches; a missing source
     ['seeds.add(c,{destination:".office/x",source:"empty"})', "package bad's seed .office/x: .office/x: in .office/, which office manages"],
     ['seeds.add(c,{destination:"notes/z\\u0000.md",text:""})', "package bad's seed notes/z\u0000.md: notes/z\u0000.md: not a plain path relative to the office"],
   ]) {
-    const pointer = current();
+    const previousCopy = installed();
 
     writePackage(join(pkg, "office.ts"), seeding(`seeds.add(c,{destination:"notes/a.md",source:"a.md"}); ${adds}`), uses);
     const output = cli(1, "sync");
 
     expect(output).toContain(`FAILED package seeds: its sync failed: no seed was written: ${reason}`);
     expect(output).toContain("the new package set is active and the rest of this sync did not run: fix the package, then run office sync again");
-    expect(current()).not.toBe(pointer);
+    expect(installed()).not.toBe(previousCopy);
     expect(outputs(dir, paths)).toEqual(before);
   }
 }, 60_000);

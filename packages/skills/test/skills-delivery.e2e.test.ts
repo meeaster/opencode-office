@@ -139,9 +139,9 @@ test("an occupied destination, a lost receipt or an enabled ID nobody offers sto
 }, 60_000);
 
 test("a managed package skill replaces its recorded legacy link and ignores unchanged files when a later sync updates it", () => {
-  const f = fixture("generations");
+  const f = fixture("managed-copy");
   git(["init", "-q", f.dir]);
-  const { repo, ref } = repository("generations-offer", { "pkg/skills/guide/SKILL.md": skill("guide"), "pkg/skills/guide/notes.md": "one\n" });
+  const { repo, ref } = repository("managed-copy-offer", { "pkg/skills/guide/SKILL.md": skill("guide"), "pkg/skills/guide/notes.md": "one\n" });
   writePackage(join(repo, "pkg/office.ts"), definitionText('{setup(ctx){skills.add(ctx, {directory: "skills/guide"})}}', 'import {skills} from "@office/skills";'), { name: "guides", dependencies: ["skills"] });
   const first = commit(repo);
   const entry = (pin: string) => `${skillsEntry("[]", "[guide]")}  - {name: guides, repo: ${repo}, path: pkg, ref: ${pin}}\n`;
@@ -150,7 +150,6 @@ test("a managed package skill replaces its recorded legacy link and ignores unch
   f.select(entry(first));
   f.cli(0, "sync");
   const copy = join(f.dir, ".agents/skills/guide");
-  const generation = readlinkSync(join(f.dir, ".office/current"));
   const receipt = join(f.dir, ".office/skills/links.json");
   const legacy = "../../.office/packages/guides/skills/guide";
 
@@ -172,8 +171,6 @@ test("a managed package skill replaces its recorded legacy link and ignores unch
   f.select(entry(next));
   f.cli(0, "sync");
   f.cli(0, "sync");
-  expect(readlinkSync(join(f.dir, ".office/current"))).not.toBe(generation);
-  expect(existsSync(join(f.dir, ".office", generation))).toBe(false);
   expect(lstatSync(marker).ino).toBe(unchanged.ino);
   expect(lstatSync(marker).mtimeMs).toBe(unchanged.mtimeMs);
   expect(readFileSync(join(copy, "notes.md"), "utf8")).toBe("two\n");

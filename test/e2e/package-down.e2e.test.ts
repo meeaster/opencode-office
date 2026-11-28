@@ -201,43 +201,41 @@ test("a selected optional provider left out of resolution for an ownership confl
   shutdown();
 }, 60_000);
 
-test("with no published package set no package takes part, and a shutdown reader that can't start, or a redirected generations folder, doesn't keep the office's own shutdown from completing", () => {
+test("a missing or unreadable package set doesn't prevent the office's own shutdown", () => {
   const f = fixture("unread");
   const shutdown = rig(f);
   writePackage(join(f.dir, "packages/keeper/office.ts"), removing("keeper"));
   f.select("  - name: keeper\n");
   f.cli(0, "sync", "--packages");
-  const pointer = join(f.dir, ".office/current");
+  const selection = join(f.dir, ".office/selection.json");
 
-  // A pointer that names no generation: the reader can't be started.
+  // A redirected selection: the reader can't be started.
   markers(f, "keeper");
-  rmSync(pointer);
-  symlinkSync("generations/../elsewhere", pointer);
+  rmSync(selection);
+  symlinkSync("elsewhere", selection);
   const unstarted = f.cli(1, "down");
-  expect(unstarted).toContain("office: the packages' shutdown couldn't start: invalid managed package pointer");
+  expect(unstarted).toContain(`office: the packages' shutdown couldn't start: cannot use ${selection}: expected a real file`);
   expect(unstarted).toContain("office: the office's own shutdown completed, but not every package's (above)");
   expect(exists(f, "keeper")).toBe(true);
   shutdown();
 
-  // A redirected generations folder: the pointer still resolves through it, but nothing is pinned or
-  // imported there, and the office's own shutdown still completes.
-  rmSync(pointer);
+  // A redirected packages folder is never loaded, and Office still does its own shutdown.
+  rmSync(selection);
   f.cli(0, "sync", "--packages");
-  const generations = join(f.dir, ".office/generations");
-  renameSync(generations, join(f.home, "redirected"));
-  symlinkSync(join(f.home, "redirected"), generations);
+  const packages = join(f.dir, ".office/packages");
+  renameSync(packages, join(f.home, "redirected"));
+  symlinkSync(join(f.home, "redirected"), packages);
   write(join(f.dir, "packages/keeper/office.ts"), `${marker}\n${read(join(f.dir, "packages/keeper/office.ts"))}`);
   const redirected = f.cli(1, "down");
-  expect(redirected).toContain(`office: the packages' shutdown couldn't start: cannot use redirected or non-directory ${generations}`);
+  expect(redirected).toContain(`office: the packages' shutdown couldn't start: cannot use ${packages}: expected a real folder`);
   expect(redirected).toContain("office: the office's own shutdown completed, but not every package's (above)");
   expect(existsSync(f.probe)).toBe(false);
   expect(exists(f, "keeper")).toBe(true);
   shutdown();
-  rmSync(generations);
-  renameSync(join(f.home, "redirected"), generations);
+  rmSync(packages);
+  renameSync(join(f.home, "redirected"), packages);
 
-  // No pointer at all: as in an office that never synced.
-  rmSync(pointer);
+  rmSync(selection);
   expect(f.cli(0, "down")).toContain("office: no package set is published, so no package took part in the shutdown");
   expect(exists(f, "keeper")).toBe(true);
   shutdown();

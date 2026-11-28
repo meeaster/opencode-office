@@ -33,13 +33,13 @@ test("a fresh office syncs and checks without the repos package and can use refe
   expect(checked).toMatch(/^ok\s+package references\b/m);
 });
 
-test("an unknown office.yaml key is reported before a check can repair discovery links", () => {
+test("an unknown office.yaml key is reported even when installed package folders are missing", () => {
   const { dir, cli } = fixture("invalid-config");
   const yaml = join(dir, "office.yaml");
   const packages = join(dir, ".office/packages");
 
   writeFileSync(yaml, readFileSync(yaml, "utf8") + "\nunknown_key: []\n");
-  rmSync(packages);
+  rmSync(packages, { recursive: true });
 
   expect(cli(1, "check")).toContain("office.yaml is not valid:\n  unknown_key:");
   expect(existsSync(packages)).toBe(false);

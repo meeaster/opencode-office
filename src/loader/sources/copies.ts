@@ -97,7 +97,7 @@ async function fetchPackage(office: Office, entry: PackageEntry, source: NonNull
   const revision = boundCommit ?? (known ? record.commit : source.ref);
 
   try {
-    if (boundCommit && !verifiedCommit(source.ref, boundCommit)) throw new Error(`invalid reference generation binding ${boundCommit} for ${source.ref}`);
+    if (boundCommit && !verifiedCommit(source.ref, boundCommit)) throw new Error(`invalid locked commit ${boundCommit} for ${source.ref}`);
 
     if (known && edits.length === 0) return [];
 

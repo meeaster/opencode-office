@@ -6,7 +6,7 @@
 import { dlopen } from "bun:ffi";
 import { fstatSync, readdirSync, writeFileSync } from "node:fs";
 
-/** The reader's descriptor for a result's text, after the generation lease on 3. */
+/** The reader's descriptor for a result's text; descriptor 3 is unused. */
 export const resultDescriptor = 4;
 
 function sameFile(fd: number, other: number) {

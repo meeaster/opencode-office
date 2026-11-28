@@ -1,7 +1,7 @@
 // The check before loading, in the compiled office: with any problem in the selection, no
 // package's code runs, and a command, help and sync each name it.
 import { expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "../../src/git.ts";
 import { definitionFixture } from "../support/package-definition.fixture.ts";
@@ -41,9 +41,8 @@ test("a consumer earlier in the selection never runs a pulled-in provider's edit
 
 test("a declared dependency that isn't selected stops sync and commands before any package loads", () => {
   const { dir, probe, cli, select } = fixture("absent-dependency");
-  const current = join(dir, ".office/current");
-  const before = readlinkSync(current);
-  const generations = readdirSync(join(dir, ".office/generations")).length;
+  const installed = join(dir, ".office/packages/office");
+  const before = lstatSync(installed).ino;
   // A valid package earlier in the selection doesn't load either.
   select("  - name: early\n  - name: needy\n");
   writePackage(join(dir, "packages/early/office.ts"), definitionText('{}', 'import {appendFileSync} from "node:fs"; appendFileSync(process.env.PROBE + "-early", "imported\\n");'));
@@ -51,8 +50,8 @@ test("a declared dependency that isn't selected stops sync and commands before a
   const problem = "package needy: depends on @office/absent, which isn't selected; add it to office.yaml";
 
   expect(cli(1, "sync", "--packages")).toContain(problem);
-  expect(readlinkSync(current)).toBe(before);
-  expect(readdirSync(join(dir, ".office/generations")).length).toBe(generations);
+  expect(lstatSync(installed).ino).toBe(before);
+  expect(readdirSync(join(dir, ".office/tmp"))).toEqual([]);
   const blocked = cli(1, "needy", "run");
   expect(blocked).toContain(problem);
   expect(blocked).toContain("needy run: unknown command, or a package command that can't run");

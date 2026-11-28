@@ -15,7 +15,7 @@ import { existsSync, readFileSync, watch } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { type AppliedSettings, officeRootOf, watchAppliedSettings } from "@office/sdk/applied-settings";
+import { type AppliedSettings, officeRootOf, watchAppliedSettings, watchPackageFolder } from "@office/sdk/applied-settings";
 
 type Skill = { id: string; name: string; description: string; path: string; content: string };
 
@@ -117,14 +117,12 @@ export default {
 
     let applied = appliedWatcher.settings;
 
-    const generations = watch(join(packageOffice, ".office"), (_event, file) => {
-      if (file === "current") reload();
-    });
+    const packageWatcher = watchPackageFolder(packageOffice, "design", reload, console.error);
 
     const settingsWatcher = {
       close() {
         appliedWatcher.close();
-        generations.close();
+        packageWatcher.close();
       },
     };
 

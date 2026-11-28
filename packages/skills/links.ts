@@ -114,7 +114,7 @@ type Change =
   | { kind: "remove copy"; path: string }
   | { kind: "release"; path: string; why: string };
 
-export function planDelivery(office: string, wanted: ReadonlyMap<string, Delivery>, receipt: Receipt) {
+export function planDelivery(office: string, wanted: ReadonlyMap<string, Delivery>, receipt: Receipt, deferred = new Set<string>()) {
   const changes: Change[] = [];
   const problems: string[] = [];
 
@@ -168,7 +168,7 @@ export function planDelivery(office: string, wanted: ReadonlyMap<string, Deliver
   }
 
   for (const path of receipt.copies) {
-    if (!wanted.has(path)) changes.push({ kind: "remove copy", path });
+    if (!wanted.has(path) && !deferred.has(path)) changes.push({ kind: "remove copy", path });
   }
 
   return { changes, problems };

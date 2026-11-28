@@ -3,7 +3,7 @@
 // prints while gathering (child processes with inherited output included) and after; a `run`
 // handler's streaming output, terminal and exit status; help; and one gathering per command.
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { definitionFixture } from "../support/package-definition.fixture.ts";
 import { definitionText, writePackage } from "../support/test-package.ts";
@@ -37,7 +37,6 @@ const probe = definitionText(`{
       summary: "Returns text",
       usage: "<kind>",
       async result({ args, office }) {
-        writeFileSync(join(office.dir, "lease"), readlinkSync("/proc/self/fd/3"));
         await Promise.resolve();
         console.log("handler log");
         if (args[0] === "fail") throw Error("result failed");
@@ -63,7 +62,7 @@ const probe = definitionText(`{
       },
     },
   },
-}`, 'import { spawnSync } from "node:child_process";\nimport { readlinkSync, writeFileSync } from "node:fs";\nimport { join } from "node:path";\nconst large = "x".repeat(1 << 20);');
+}`, 'import { spawnSync } from "node:child_process";\nimport { writeFileSync } from "node:fs";\nimport { join } from "node:path";\nconst large = "x".repeat(1 << 20);');
 
 const noise = "module log\nsetup log\nsetup write\nsetup fd\nhelper stdout\n";
 
@@ -146,9 +145,6 @@ for (const launcher of ["compiled", "source"] as const) {
 
     expect(f.streams(launcher, ["probe", "text", "large"], missing)).toEqual({ status: 0, stdout: large, stderr: `${noise}handler log\n` });
     expect(f.setups()).toBe(++count);
-
-    // The handler ran in the reader holding the generation it pinned.
-    expect(readFileSync(join(f.dir, "lease"), "utf8")).toBe(join(f.dir, ".office", readlinkSync(join(f.dir, ".office/current"))));
 
     for (const [kind, message] of [["fail", "result failed"], ["number", "probe text: its result must be text: Invalid type: Expected string but received 7"]]) {
       const failed = f.streams(launcher, ["probe", "text", kind]);

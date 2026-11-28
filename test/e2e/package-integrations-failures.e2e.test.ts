@@ -3,13 +3,13 @@
 // one, even when the consumer's settings would add nothing, and settings are checked against the
 // consumer's one schema before any integration module is evaluated, its provider selected or not.
 import { expect, test } from "bun:test";
-import { readlinkSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import { definitionFixture } from "../support/package-definition.fixture.ts";
 import { copyExample, evaluated, json } from "../support/package-integrations.fixture.ts";
 
 const { exe, write, read, fixture } = definitionFixture({ second: false });
-const activeGeneration = (dir: string) => readlinkSync(join(dir, ".office/current"));
+const installed = (dir: string) => lstatSync(join(dir, ".office/packages/office")).ino;
 
 const routing = (settings = "") => `  - name: chatgpt-routing\n${settings}`;
 
@@ -22,7 +22,7 @@ test("a selected provider whose public export breaks fails the command and admis
   copyExample(f);
   f.select(routing("    settings: { executor: { app: true } }\n") + provider);
   f.cli(0, "sync", "--packages");
-  const published = activeGeneration(f.dir);
+  const published = installed(f.dir);
 
   write(manifest, read(manifest).replace('"exports": { "./apps": "./apps.ts" }', '"exports": {}'));
   evaluated(f);
@@ -33,7 +33,7 @@ test("a selected provider whose public export breaks fails the command and admis
 
   expect(sync).toContain(`FAILED ${failure}`);
   expect(sync).not.toContain("doesn't select");
-  expect(activeGeneration(f.dir)).toBe(published);
+  expect(installed(f.dir)).toBe(published);
 
   // Settings that add nothing don't skip the adapter: it still runs, and still fails.
   f.select(routing() + provider);
@@ -53,7 +53,7 @@ test("a dormant integration's invalid setting and a conflicting route fail the c
   copyExample(f);
   f.select(routing() + provider);
   f.cli(0, "sync", "--packages");
-  const published = activeGeneration(f.dir);
+  const published = installed(f.dir);
 
   evaluated(f);
 
@@ -66,7 +66,7 @@ test("a dormant integration's invalid setting and a conflicting route fail the c
       expect(f.cli(1, "chatgpt-routing", "direct")).toContain(problem);
       expect(f.cli(1, "sync", "--packages")).toContain(`FAILED package chatgpt-routing: ${problem}`);
       expect(evaluated(f)).toEqual([]);
-      expect(activeGeneration(f.dir)).toBe(published);
+      expect(installed(f.dir)).toBe(published);
     }
   }
 });

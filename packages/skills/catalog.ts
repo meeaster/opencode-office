@@ -1,12 +1,12 @@
 // The catalog: every skill the sources offer, enabled or not, read without fetching anything.
-// Packages offer folders with skills.add, and generated sources the skills of the generation office
-// up last published; a { folder } source offers each child folder holding a SKILL.md; a Git source
+// Packages offer folders with skills.add, and generated sources offer what office up last
+// published; a { folder } source offers each child folder holding a SKILL.md; a Git source
 // offers the folders it names, at its pinned commit's checkout. Nothing is found by scanning a
 // folder the settings or a publication record don't name.
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, posix, relative, sep } from "node:path";
 import type { Entries } from "@office/sdk";
-import { declaredSources, generationFolder, type Published, pendingReason, readPublished, type Runner } from "./generation.ts";
+import { declaredSources, type Published, pendingReason, readPublished, type Runner } from "./generated.ts";
 import { checkoutFolder, short } from "./git.ts";
 import { skills } from "./handles.ts";
 import { isGit, type SkillSettings, skillId } from "./settings.ts";
@@ -29,7 +29,7 @@ const portable = (path: string) => path.split(sep).join("/");
  * The offers of every source, in the settings' order after the packages' and the generated
  * sources', notes on what offers nothing, the generated sources still waiting for their first
  * publication, and problems with a generated source's declaration. A generated source in
- * `candidates` offers that generation instead of its published one, for checking it before up
+ * `candidates` offers staged output for checking it before up
  * publishes it.
  */
 export function catalog(office: string, settings: SkillSettings, entries: Entries, runner: Runner, candidates: ReadonlyMap<string, Published> = new Map()) {
@@ -53,7 +53,7 @@ export function catalog(office: string, settings: SkillSettings, entries: Entrie
       continue;
     }
 
-    const within = generationFolder(source.id, published.generation);
+    const within = published.folder;
 
     for (const id of published.skills) offers.push({ id, source: label, bundle: posix.join(within, id), within, git: false, copy: true });
   }

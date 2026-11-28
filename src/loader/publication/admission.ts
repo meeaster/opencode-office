@@ -3,18 +3,19 @@ import { join, relative } from "node:path";
 import { claimAssetProblems, destinationProblems } from "../../features/mise-integration/projection.ts";
 import { validateAssets } from "../../features/opencode/assets.ts";
 import { writeAppliedReferences } from "../../features/references/applied-references.ts";
-import { recordUnmet } from "../../features/tools/host.ts";
+import { planUnmet } from "../../features/tools/host.ts";
 import { publishedView, type GatheredPackage, type GatherProblem, gatherPackages, problemLines } from "../../gather.ts";
 import { failure, isFailure, type Change } from "../../lib/change.ts";
 import { type Office, OfficeError } from "../../office.ts";
 import { parsePackageLock } from "../../lock-schema.ts";
 import { lockFile } from "../../versions.ts";
 import { validateReplacement } from "../definitions/inventory.ts";
-import { bindReader } from "../generation/reader.ts";
-import { managedDirectory, publishGeneration } from "../generation/storage.ts";
+import { bindReader } from "../installed/reader.ts";
+import { installedRoot, installedSelection } from "../installed/paths.ts";
 import { writeOfficeDeclaration } from "../sources/copies.ts";
 import { resolvePackages } from "../sources/selection.ts";
 import { applyPackages, SyncStopped } from "./application.ts";
+import { installPackages } from "./install.ts";
 import { applicationLease } from "./lease.ts";
 import type { Admission, Outcome } from "./protocol.ts";
 
@@ -43,9 +44,10 @@ export async function evaluateAdmission(temporary: string) {
   const packages = parsePackageLock(input.packages);
 
   if (!packages.ok) throw new OfficeError(`invalid candidate ${lockFile}: ${packages.errors.join("; ")}`);
-  const folder = managedDirectory(office.dir, transaction.name);
+  const folder = transaction.folder;
   let published = false;
   let recorded = false;
+  let appliedSelection: string | undefined;
   let stopped: SyncStopped["step"] | undefined;
   let committed: string[] | undefined;
   let excluded: string[] | undefined;
@@ -53,7 +55,7 @@ export async function evaluateAdmission(temporary: string) {
   const lines: Change[] = [];
 
   try {
-    bindReader(office.dir, transaction.name);
+    bindReader(office.dir, folder);
     const selection = resolvePackages(office);
     // This sync's fetch failures are already FAILED lines: they stay selected and unread.
     const gathered = await gatherPackages(office, { skip: new Set(input.rejected), machine: true });
@@ -101,21 +103,22 @@ export async function evaluateAdmission(temporary: string) {
 
     if (problems.length) throw refuse(problems, "no package set was published; fix or deselect the packages above and sync again");
 
-    // A shared tool whose recorded release no longer serves the candidate gets one before it is published.
-    const desired = recordUnmet(office, gathered.packages);
+    const tools = planUnmet(office, gathered.packages);
 
-    lines.push(...desired.lines.map(line => line.startsWith("FAILED") ? failure(line) : line));
+    if (!tools.ok) {
+      lines.push(...tools.lines.map(line => line.startsWith("FAILED") ? failure(line) : line));
+      throw new OfficeError("no package set was published, and office.lock's shared tools are as they were");
+    }
 
-    if (!desired.ok) throw new OfficeError("no package set was published, and office.lock's shared tools are as they were");
-
-    // Held through the switch, the applied references and the application, apply: false included.
+    // Held through install, reference recording and application, apply: false included.
     using application = applicationLease(office.dir);
 
     for (const item of gathered.packages) {
       if (item.kind !== "local") lines.push(...writeOfficeDeclaration(office, item).map(line => line.replace(relative(office.dir, folder) + "/packages", ".office/packages")));
     }
 
-    publishGeneration(transaction, yaml, packages.value);
+    installPackages(transaction, yaml, packages.value, tools.edit);
+    lines.push(...tools.lines);
     published = true;
 
     try {
@@ -130,14 +133,18 @@ export async function evaluateAdmission(temporary: string) {
       const applied: Change[] = [];
 
       try {
-        excluded = await applyPackages(office, publishedView(office, gathered), applied, input.exclude, join(folder, "withdrawals"));
+        excluded = await applyPackages(office, publishedView(office, gathered), applied, input.exclude, join(installedRoot(office.dir), "withdrawals"));
       } finally {
         lines.push(...applied);
       }
 
-      if (!gathered.unread.size) committed = gathered.committed;
+      if (!gathered.unread.size) {
+        committed = gathered.committed;
 
-      if (applied.some(isFailure)) lines.push(`generation ${transaction.name} is active; retry the incomplete application with office sync --packages`);
+        if (!lines.some(isFailure)) appliedSelection = installedSelection(office.dir);
+      }
+
+      if (applied.some(isFailure)) lines.push("the new package set is installed; retry the incomplete application with office sync --packages");
     }
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
@@ -146,8 +153,8 @@ export async function evaluateAdmission(temporary: string) {
 
     if (stopped === "hook") lines.push(failure(`FAILED ${text}; the new package set is active and the rest of this sync did not run: fix the package, then run office sync again`));
     else if (stopped === "plugins") lines.push(failure(`FAILED plugin delivery: ${text}; the new package set is active, but no later plugin delivery ran; fix the problem and run office sync again`));
-    else lines.push(failure(`FAILED ${published ? `generation ${transaction.name} is active; retry application with office sync --packages: ` : ""}${text}`));
+    else lines.push(failure(`FAILED ${text}; ${published ? "the new package set is installed; retry application with office sync --packages" : "run office sync again"}`));
   }
 
-  writeFileSync(join(temporary, "output"), JSON.stringify({ published, recorded, stopped, committed, excluded, lines, rejected: rejectedOwners, generation: published ? transaction.name : undefined } satisfies Outcome));
+  writeFileSync(join(temporary, "output"), JSON.stringify({ published, recorded, applied: appliedSelection, stopped, committed, excluded, lines, rejected: rejectedOwners } satisfies Outcome));
 }

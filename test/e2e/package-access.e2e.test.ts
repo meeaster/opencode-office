@@ -59,7 +59,7 @@ packages:
   // As a fresh clone of the office has it: no package set, applied settings or pulled-in packages.
   rmSync(join(f.dir, ".office"), { recursive: true });
   expect(existsSync(join(f.dir, ".office/runtime/settings.json"))).toBe(false);
-  expect(existsSync(join(f.dir, ".office/current"))).toBe(false);
+  expect(existsSync(join(f.dir, ".office/selection.json"))).toBe(false);
 
   const result = Bun.spawnSync([join(bin, "office"), "--office", f.dir, "setup"], { cwd: root, env: f.env });
   const output = result.stdout.toString() + result.stderr.toString();

@@ -87,7 +87,7 @@ test("an overlapping or interrupted collector cannot republish an explicitly wit
   writePackage(module, collector(repo, "main", 'console.log("collection-paused"); await Bun.stdin.text();'));
 
   const pause = async () => {
-    // Its own process group: the collector runs in a child `office` that holds the publication lease.
+    // Its own process group: the collector runs in a child `office`.
     const child = Bun.spawn([exe, "--office", dir, "sync", "--packages"], { env, cwd: root, stdin: "pipe", stdout: "pipe", stderr: "pipe", detached: true });
     const reader = child.stdout.getReader();
     let output = "";

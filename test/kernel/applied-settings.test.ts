@@ -129,7 +129,7 @@ test("a snapshot reached through a link is neither read nor written, whichever o
 
 test("the office of a package is found from its real folder, not the working folder", () => {
   const office = join(dir, "office");
-  const pkg = join(office, ".office/generations/g1/packages/demo");
+  const pkg = join(office, ".office/packages/demo");
 
   mkdirSync(pkg, { recursive: true });
   writeFileSync(join(office, "office.yaml"), "name: [never parsed\n");

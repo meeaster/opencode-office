@@ -125,7 +125,7 @@ test("office settings get reads one package's applied settings from --office alo
   // No package is loaded, office.yaml isn't parsed and discovery isn't repaired.
   writePackage(join(dir, "packages/notes/office.ts"), `${marker}\nthrow new Error("unloadable");\n`);
   write(join(dir, "office.yaml"), "name: [unclosed\n");
-  rmSync(join(dir, ".office/packages"));
+  rmSync(join(dir, ".office/packages"), { recursive: true });
   expect(get(root, "notes", `--office=${dir}`)).toMatchObject({ status: 0, stderr: "" });
   expect(existsSync(probe)).toBe(false);
   expect(lstatSync(join(dir, ".office/packages"), { throwIfNoEntry: false })).toBeUndefined();
@@ -329,9 +329,7 @@ test("an office in a repository's folder or a linked worktree publishes nothing 
       const { status, output } = withoutGit(dir);
 
       expect(status, output).toBe(1);
-      expect(output).toContain(`couldn't ask Git whether it ignores ${snapshotPath}`);
-      expect(output).toContain(`${join(realpathSync(top), ".git")} may make the office part of a Git worktree`);
-      expect(output).toContain("not publishing the applied settings");
+      expect(output).toContain(`cannot inspect Git's index for installed package files at ${join(realpathSync(top), ".git")}`);
       expect(owner()).toEqual(before);
     };
 

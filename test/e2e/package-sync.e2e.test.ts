@@ -48,7 +48,7 @@ test("a setup that throws stops package sync and changes nothing it applies; fix
   cli(0, "sync", "--packages");
 
   const outputs = {
-    current: () => readlinkSync(join(dir, ".office/current")),
+    installed: () => lstatSync(join(dir, ".office/packages/office")).ino,
     tools: () => read(join(dir, "machine.packages.toml")),
     fragment: () => read(join(dir, ".office/mise/first.toml")),
     plugin: () => readlinkSync(join(dir, ".opencode/plugins/first")),
@@ -73,7 +73,7 @@ test("a setup that throws stops package sync and changes nothing it applies; fix
 
   writePackage(second, definitionText("{setup(){}}"));
   cli(0, "sync", "--packages");
-  expect(outputs.current()).not.toBe(before.current);
+  expect(outputs.installed()).not.toBe(before.installed);
   expect(outputs.tools()).toContain('"jq" = "1.8.0" # first');
   expect(outputs.fragment()).toContain("Say goodbye");
   expect(outputs.applied()).toContain("first-guide");
@@ -107,7 +107,8 @@ test("a Git package that can't be fetched doesn't stop the others, but no packag
   write(yaml, host(`  - {name: remote, repo: ${repo}, path: remote, ref: ${pinned}}\n  - name: local\n  - name: leaving\n`));
   cli(0, "sync", "--packages");
   expect(readlinkSync(join(dir, ".opencode/plugins/leaving"))).toBe("../../packages/leaving/plugin");
-  const current = readlinkSync(join(dir, ".office/current"));
+  const installed = () => lstatSync(join(dir, ".office/packages/office")).ino;
+  const before = installed();
   const tools = read(join(dir, "machine.packages.toml"));
   const fragments = ["remote", "local"].map(name => read(join(dir, `.office/mise/${name}.toml`)));
   const lock = read(join(dir, "office.lock"));
@@ -132,7 +133,7 @@ test("a Git package that can't be fetched doesn't stop the others, but no packag
   // OpenCode delivery of the packages that read goes on: a new link, a withdrawn one, remote's kept.
   expect(readlinkSync(join(dir, ".opencode/plugins/local"))).toBe("../../packages/local/plugin");
   expect(lstatSync(join(dir, ".opencode/plugins/leaving"), { throwIfNoEntry: false })).toBeUndefined();
-  expect(readlinkSync(join(dir, ".office/current"))).not.toBe(current);
+  expect(installed()).not.toBe(before);
   expect(read(join(dir, ".office/resolved/references.json"))).toContain("local-guide");
   expect(read(join(dir, "machine.packages.toml"))).toBe(tools);
   expect(["remote", "local"].map(name => read(join(dir, `.office/mise/${name}.toml`)))).toEqual(fragments);
@@ -144,10 +145,10 @@ test("a Git package that can't be fetched doesn't stop the others, but no packag
   expect(cli(1, "references", "list")).toContain("package remote: rejected by the last sync; run office sync");
 
   // The unfetched package is the only provider of a registry the local one adds to: nothing publishes.
-  const published = readlinkSync(join(dir, ".office/current"));
+  const published = installed();
   writePackage(join(local, "office.ts"), definitionText('{setup(c){c.add({id:"remote.items"},{name:"entry"})}}'));
   expect(cli(1, "sync", "--packages")).toContain("FAILED package local: no provider registered remote.items");
-  expect(readlinkSync(join(dir, ".office/current"))).toBe(published);
+  expect(installed()).toBe(published);
   expect(existsSync(join(dir, ".office/mise/local.toml"))).toBe(true);
 }, 60_000);
 
@@ -171,11 +172,12 @@ test("while a Git package can't be fetched, another's changed copy is still admi
   rmSync(join(dir, ".office/packages/gone"), { recursive: true });
   writePackage(join(moving, "moving/office.ts"), pluginDefinition("missing"), { name: "moving", dependencies: ["opencode"] });
   select(commit(moving));
-  const current = readlinkSync(join(dir, ".office/current"));
+  const installed = () => lstatSync(join(dir, ".office/packages/office")).ino;
+  const before = installed();
 
   const output = cli(1, "sync", "--packages");
   expect(output).toContain("FAILED package moving: OpenCode registration: OpenCode server asset must be an existing directory inside the package");
   expect(output).toContain("no package set was published");
-  expect(readlinkSync(join(dir, ".office/current"))).toBe(current);
+  expect(installed()).toBe(before);
   expect(read(plugin)).toBe(bytes);
 }, 60_000);

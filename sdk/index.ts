@@ -47,10 +47,10 @@ export type Entry<Value> = {
   namespace: string;
   /** The adding package's settings in this run, defaults applied; empty for the office's own entries. */
   settings: Readonly<Record<string, SettingValue>>;
-  /** The folder the adding package was loaded from in this run: read its files here. It can belong to one package generation. */
+  /** The folder the adding package was loaded from in this run: read its files here. It may be staged during sync. */
   folder: string;
   /**
-   * The adding package's delivery folder, which outlives package generations: `packages/<name>/`
+   * The adding package's stable delivery folder: `packages/<name>/`
    * for a package of the office's own, `.office/packages/<name>/` for one sync pulls in; the
    * office's folder for office.yaml's entries. Build a link that must outlast this run from it.
    */

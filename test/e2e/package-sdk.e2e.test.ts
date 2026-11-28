@@ -1,6 +1,6 @@
 // What a package gets from @office/sdk in the compiled office: the executable's own SDK.
 import { expect, test } from "bun:test";
-import { existsSync, lstatSync, readFileSync, readlinkSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { definitionFixture } from "../support/package-definition.fixture.ts";
 import { definitionText, settingsSchema, writePackage } from "../support/test-package.ts";
@@ -9,7 +9,7 @@ const { exe, write, fixture } = definitionFixture({ second: false });
 
 test("a package gets the executable's SDK, not a working stand-in on disk", () => {
   const { dir, env, probe, cli, select } = fixture("sdk-stand-in");
-  const sdk = join(dir, ".office/current/node_modules/@office/sdk");
+  const sdk = join(dir, ".office/node_modules/@office/sdk");
 
   select("  - name: notes\n");
   writePackage(join(dir, "packages/notes/office.ts"), definitionText('{commands:{"notes show":{summary:"Show notes",run(){console.log("notes shown")}}}}'));
@@ -37,7 +37,7 @@ test("a package gets the executable's SDK, not a working stand-in on disk", () =
 test("with one package's setting made invalid after a sync, no setup runs: its command and sync fail, nothing is published, help lists the commands", () => {
   const { dir, env, select } = fixture("sdk-settings");
   const marker = join(dir, "first-setup");
-  const current = join(dir, ".office/current");
+  const installed = join(dir, ".office/packages/office");
 
   writePackage(join(dir, "packages/first/office.ts"), definitionText('{setup(){appendFileSync(process.env.FIRST_MARKER,"set up\\n")},commands:{"first show":{summary:"Show first",run(){console.log("first shown")}}}}', 'import {appendFileSync} from "node:fs";'));
   writePackage(join(dir, "packages/second/office.ts"), definitionText(`{settings:${settingsSchema({ port: 4566 })}}`));
@@ -55,7 +55,7 @@ test("with one package's setting made invalid after a sync, no setup runs: its c
   run(0, "sync");
   expect(existsSync(marker)).toBe(true);
   rmSync(marker);
-  const generation = readlinkSync(current);
+  const before = lstatSync(installed).ino;
 
   select("  - name: first\n  - name: second\n    settings: {port: \"4600\"}\n");
   const problem = "packages.second.settings.port: must be integer";
@@ -66,7 +66,7 @@ test("with one package's setting made invalid after a sync, no setup runs: its c
   expect(synced).toContain(`FAILED package second: ${problem}`);
   // Stopped at the settings check, before any setup or collection.
   expect(synced).toContain("no package was set up and no package set was published");
-  expect(readlinkSync(current)).toBe(generation);
+  expect(lstatSync(installed).ino).toBe(before);
   const help = run(0, "--help").split("\n");
 
   expect(help).toContainEqual(expect.stringMatching(/^\s+first show\s+Show first$/));
@@ -81,7 +81,7 @@ test("with one package's setting made invalid after a sync, no setup runs: its c
 
   expect(failed).toContain(`FAILED package second: ${malformed}`);
   expect(failed).toContain("no package was set up and no package set was published");
-  expect(readlinkSync(current)).toBe(generation);
+  expect(lstatSync(installed).ino).toBe(before);
   const listed = run(0, "--help").split("\n");
 
   expect(listed).toContainEqual(expect.stringMatching(/^\s+second show\s+Show second$/));
@@ -101,23 +101,21 @@ test("an entry comes with its owner's name and the folder its definition was loa
 
   // A bound reader loads each definition through its package set's link.
   const [owner, folder, exists] = cli(0, "provider", "show").trim().split("|");
-  const generation = readlinkSync(join(dir, ".office/current"));
 
   expect(owner).toBe("consumer");
-  expect(folder).toBe(join(dir, ".office", generation, "node_modules/@office/consumer"));
+  expect(folder).toBe(join(dir, ".office/node_modules/@office/consumer"));
   expect(exists).toBe("true");
 });
 
 test("a package called sdk fails sync, and the set's @office/sdk stays the SDK", () => {
   const { dir, cli, select } = fixture("sdk-name");
-  const current = join(dir, ".office/current");
-  const sdk = join(current, "node_modules/@office/sdk");
-  const before = { generation: readlinkSync(current), index: readFileSync(join(sdk, "index.ts"), "utf8") };
+  const sdk = join(dir, ".office/node_modules/@office/sdk");
+  const before = { inode: lstatSync(sdk).ino, index: readFileSync(join(sdk, "index.ts"), "utf8") };
 
   writePackage(join(dir, "packages/sdk/office.ts"), definitionText("{}"));
   select("  - name: sdk\n");
   expect(cli(1, "sync")).toContain("the name sdk is reserved for @office/sdk; rename the package");
-  expect(readlinkSync(current)).toBe(before.generation);
+  expect(lstatSync(sdk).ino).toBe(before.inode);
   expect(lstatSync(sdk).isDirectory()).toBe(true);
   expect(readFileSync(join(sdk, "index.ts"), "utf8")).toBe(before.index);
 });

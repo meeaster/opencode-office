@@ -1,6 +1,6 @@
 import { readdirSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { linkForEditors } from "../generation/links.ts";
+import { linkForEditors } from "../installed/links.ts";
 import type { Gathered } from "../../gather.ts";
 import { runPackageHooks } from "../../lifecycle-inputs.ts";
 import { installPanel, locate, panelId, removalNote } from "../../features/opencode/desktop.ts";

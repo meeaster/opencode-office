@@ -374,8 +374,8 @@ const loaderEntries = new Map<string, readonly string[]>([
   ["definitions", ["definitions/inventory.ts", "definitions/settings.ts", "definitions/registration.ts", "definitions/sdk.ts"]],
   ["access", ["access.ts"]],
   ["worker", ["worker.ts"]],
-  ["generation", ["generation/storage.ts", "generation/reader.ts", "generation/links.ts"]],
-  ["publication", ["publication/publish.ts", "publication/admission.ts"]],
+  ["installed", ["installed/paths.ts", "installed/reader.ts", "installed/links.ts"]],
+  ["publication", ["publication/publish.ts", "publication/admission.ts", "publication/install.ts"]],
   ["lifecycle", ["lifecycle/full-sync.ts", "lifecycle/session.ts", "lifecycle/shutdown.ts"]],
 ]);
 
@@ -395,7 +395,7 @@ function privateLoaderImport(from: string, to: string): boolean {
 function workerImportsHandler(from: string, to: string): boolean {
   const module = loaderModule(to);
 
-  return from === "src/loader/worker.ts" && (module === "access" || module === "generation" || module === "publication" || module === "lifecycle");
+  return from === "src/loader/worker.ts" && (module === "access" || module === "installed" || module === "publication" || module === "lifecycle");
 }
 
 const machineCore = new Set([
@@ -582,7 +582,7 @@ test("only loader entry files can be imported from outside their module", () => 
   expect(privateLoaderImport("src/gather.ts", "src/loader/definitions/registration.ts")).toBe(false);
   expect(privateLoaderImport("src/gather.ts", "src/loader/unlisted/entry.ts")).toBe(true);
   expect(privateLoaderImport("src/gather.ts", "src/loader/unlisted.ts")).toBe(true);
-  expect(privateLoaderImport("src/loader/definitions/inventory.ts", "src/loader/generation/storage.ts")).toBe(false);
+  expect(privateLoaderImport("src/loader/definitions/inventory.ts", "src/loader/installed/paths.ts")).toBe(false);
   expect(privateLoaderImport("src/loader/lifecycle/session.ts", "src/loader/publication/stage.ts")).toBe(true);
   expect(privateLoaderImport("src/loader/lifecycle/session.ts", "src/loader/publication/publish.ts")).toBe(false);
   expect(privateLoaderImport("src/loader/publication/publish.ts", "src/loader/publication/stage.ts")).toBe(false);
@@ -594,7 +594,7 @@ test("worker transport cannot import handlers even through their entry files", (
   expect(loaderModule(from)).toBe("worker");
   expect(loaderModule("src/loader/access.ts")).toBe("access");
 
-  for (const entry of ["access.ts", "generation/reader.ts", "publication/admission.ts", "lifecycle/shutdown.ts"]) {
+  for (const entry of ["access.ts", "installed/reader.ts", "publication/admission.ts", "lifecycle/shutdown.ts"]) {
     const to = `src/loader/${entry}`;
 
     expect(privateLoaderImport(from, to)).toBe(false);

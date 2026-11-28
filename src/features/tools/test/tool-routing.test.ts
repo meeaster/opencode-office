@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -128,7 +128,7 @@ function locked() {
   return Object.fromEntries([...read.value].flatMap(([tool, entry]) => isOfficeTool(tool) ? [] : [[tool, entry.version]]));
 }
 
-const current = () => readlinkSync(join(office, ".office/current"));
+const installed = () => lstatSync(join(office, ".office/packages/office")).ino;
 
 test("sync records a release for a new or raised requirement before it publishes, installs nothing, and asks mise nothing when every tool is served", async () => {
   await published();
@@ -163,7 +163,7 @@ test("sync records a release for a new or raised requirement before it publishes
   expect(readFileSync(activeRecord(toolsState(loadOffice(office))), "utf8")).toBe(applied);
 
   // No eligible release meets a newer minimum: nothing is published and office.lock is as it was.
-  const before = { current: current(), lock: readLockText(office) };
+  const before = { installed: installed(), lock: readLockText(office) };
 
   requires("delta", "core:bun", "1.4.9", "bun");
   select("alpha", "beta", "gamma", "delta");
@@ -171,7 +171,7 @@ test("sync records a release for a new or raised requirement before it publishes
   const refused = await run();
 
   expect(refused).toContain("FAILED mise selected tool core:bun 1.4.6, below the 1.4.9 package alpha and package delta and package gamma need; office.lock is left as it was");
-  expect({ current: current(), lock: readLockText(office) }).toEqual(before);
+  expect({ installed: installed(), lock: readLockText(office) }).toEqual(before);
 });
 
 test("while Socket Firewall can't run, sync leaves a new tool unselected and refuses to publish against a recorded release that no longer serves; bump and upgrade-tools ask mise nothing", async () => {
@@ -215,13 +215,13 @@ test("while Socket Firewall can't run, sync leaves a new tool unselected and ref
   answers({ "core:bun": "1.4.4" });
   await run();
   rmSync(hostLayout("").sfw);
-  const before = { current: current(), lock: readLockText(office) };
+  const before = { installed: installed(), lock: readLockText(office) };
 
   requires("beta", "core:bun", "1.4.5", "bun");
   select("alpha", "beta");
 
   expect(await run()).toContain(`FAILED office.lock records tool core:bun 1.4.4, which no longer serves its packages, and no other is selected: ${notInstalled}, then office sync`);
-  expect({ current: current(), lock: readLockText(office) }).toEqual(before);
+  expect({ installed: installed(), lock: readLockText(office) }).toEqual(before);
 });
 
 test("the CLI's lookups, the environment file and native tasks take the applied shared tools; machine.toml's holds of them never reach mise's global config", async () => {

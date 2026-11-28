@@ -1,15 +1,9 @@
-// What office up does with a generated source beyond what sync does: generates a new generation
-// when the key changed, and removes the source's earlier generations once one is published. Only
-// generations the source recorded in its inventory are ever removed, and only inside its own
-// `generations/` folder, each folder on the way checked to be a real one: an unowned folder beside
-// them, another source's folder, a folder a link leads to, or anything else stays as it is. One up
-// at a time does this in an office.
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { type Declared, type Generation, generatedFolder, generationFolder, generationsFolder, newGenerationName, ownedFolder, type Published, readInventory, sourceFolder, writeGenerationRecord, writeInventory } from "./generation.ts";
+import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join, relative } from "node:path";
+import { type Declared, type Generation, generatedFolder, outputFolder, outputRecord, ownedFolder, type Published, readPublished, sourceFolder } from "./generated.ts";
 import { skillId } from "./settings.ts";
 
-/** The skill folders a generation holds: a real folder named by a skill ID holding a regular SKILL.md. Anything else in it isn't offered. */
+/** The skill folders a generator wrote, each named by a skill ID and holding a regular SKILL.md. */
 function admitted(folder: string): string[] {
   return readdirSync(folder).sort().filter(name => {
     if (!skillId.test(name) || !lstatSync(join(folder, name)).isDirectory()) return false;
@@ -18,69 +12,41 @@ function admitted(folder: string): string[] {
   });
 }
 
-/** Removes the recorded generations `remove` of source `id`, each a real folder in its own `generations/`, and their inventory lines. */
-function removeRecorded(office: string, id: string, remove: readonly string[]): void {
-  if (!ownedFolder(office, sourceFolder(id))) return;
-  const recorded = readInventory(office, id);
-  const there = ownedFolder(office, generationsFolder(id));
-
-  for (const name of remove) {
-    const folder = join(office, generationFolder(id, name));
-
-    if (there && recorded.includes(name) && lstatSync(folder, { throwIfNoEntry: false })?.isDirectory()) rmSync(folder, { recursive: true });
-  }
-
-  writeInventory(office, id, recorded.filter(name => !remove.includes(name)));
+export function discard(office: string, folder: string): void {
+  if (ownedFolder(office, folder)) rmSync(join(office, folder), { recursive: true });
 }
 
-/** Removes an unpublished generation of source `id` and its inventory line. */
-export function discard(office: string, id: string, generation: string): void {
-  removeRecorded(office, id, [generation]);
-}
-
-/**
- * Runs the source's generator into a fresh generation, recorded in the inventory before it is
- * created and created only where nothing was, then records its key and skill IDs in it and returns
- * what publishing it would publish. A failing generator leaves nothing and throws naming the source.
- */
 export async function generate(office: string, { source, label }: Declared, next: Generation, runtimes: () => readonly string[]): Promise<Published> {
-  const generation = newGenerationName(next.key);
-  const output = join(office, generationFolder(source.id, generation));
+  const parent = sourceFolder(source.id);
 
-  ownedFolder(office, generationsFolder(source.id), true);
-  const recorded = readInventory(office, source.id);
-
-  writeInventory(office, source.id, [...recorded, generation]);
-
-  try {
-    mkdirSync(output);
-  } catch (error) {
-    writeInventory(office, source.id, recorded);
-    throw error;
-  }
+  ownedFolder(office, parent, true);
+  const output = mkdtempSync(join(office, parent, ".stage-"));
+  const folder = relative(office, output);
 
   try {
     await next.generate({ office, executable: next.executable, output, inputs: next.inputs, runtimes: runtimes() });
-    const published = { key: next.key, generation, skills: admitted(output) };
+    ownedFolder(office, folder);
+    const record = { key: next.key, skills: admitted(output) };
 
-    writeGenerationRecord(office, source.id, published);
+    writeFileSync(join(output, outputRecord), `${JSON.stringify(record, null, 2)}\n`, { flag: "wx" });
 
-    return published;
+    return { ...record, folder };
   } catch (error) {
-    discard(office, source.id, generation);
+    discard(office, folder);
 
     throw new Error(`${label}: its generator failed with ${source.tool.name} ${next.version}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
 }
 
-/** Removes source `id`'s recorded generations other than `published`; returns what it said. */
-export function cleanup(office: string, id: string, published: string): string[] {
-  const earlier = readInventory(office, id).filter(name => name !== published);
+export function publish(office: string, id: string, folder: string): void {
+  const target = join(office, outputFolder(id));
+  const aside = join(office, sourceFolder(id), `.old-${basename(folder)}`);
+  const previous = readPublished(office, id);
 
-  if (earlier.length === 0) return [];
-  removeRecorded(office, id, earlier);
+  if (previous) renameSync(target, aside);
+  renameSync(join(office, folder), target);
 
-  return [`generated source ${id}: removed ${earlier.length} earlier ${earlier.length === 1 ? "generation" : "generations"}`];
+  if (previous) rmSync(aside, { recursive: true });
 }
 
 /** The office-relative lock one up holds while it generates, publishes and cleans up. */

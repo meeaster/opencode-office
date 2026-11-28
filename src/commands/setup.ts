@@ -26,7 +26,7 @@ import { installingMise, startExecutor, up } from "./compose.ts";
 import { ports } from "../lib/ports.ts";
 import { bootstrapExecutor } from "./executor.ts";
 import { summarize, sync } from "./sync.ts";
-import { runReader } from "../loader/generation/reader.ts";
+import { runReader } from "../loader/installed/reader.ts";
 import { declaredAccess } from "../loader/access.ts";
 
 type SetupOptions = {
@@ -169,7 +169,7 @@ export async function setup(initial: Office, options: SetupOptions, reporter: Re
 
   const status = await runReader(office.dir, ["--finish-setup", office.dir, shell ? "shell" : "", options.ownerEmail ?? "", options.verbose ? "verbose" : ""]);
 
-  if (status !== 0) throw new OfficeError("setup did not complete with the published package generation");
+  if (status !== 0) throw new OfficeError("setup did not complete with the installed package set");
 }
 
 /** The repositories selected packages declare; a declaration that fails stops setup before anything is cloned. */

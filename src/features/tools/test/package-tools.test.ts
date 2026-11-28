@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -551,11 +551,12 @@ test("a rejected candidate applies nothing: switching to container mode keeps th
   const before = readFileSync(generation);
   expect(readFileSync(link, "utf8")).toContain("postinstall =");
   expect(existsSync(plugin)).toBe(true);
-  const current = readlinkSync(join(office, ".office/current"));
+  const installed = () => lstatSync(join(office, ".office/packages/office")).ino;
+  const previousCopy = installed();
   const record = readFileSync(machineRecordPath());
   writeConfig("container", "second");
   expect((await run()).join("\n")).toContain("claimed by both");
-  expect(readlinkSync(join(office, ".office/current"))).toBe(current);
+  expect(installed()).toBe(previousCopy);
   expect(readFileSync(generation)).toEqual(before);
   expect(readFileSync(machineRecordPath())).toEqual(record);
   expect(readFileSync(link, "utf8")).toContain("postinstall =");
@@ -568,7 +569,7 @@ test("a rejected candidate applies nothing: switching to container mode keeps th
   const partial = (await run()).join("\n");
   expect(partial).toContain("FAILED .office/packages/gone");
   expect(partial).toContain("not reconciling any package's tools or machine files");
-  expect(readlinkSync(join(office, ".office/current"))).not.toBe(current);
+  expect(installed()).not.toBe(previousCopy);
   // OpenCode delivery of the packages that read goes on: the deselected plugin is withdrawn.
   expect(partial).toContain("unlinked .opencode/plugins/editor");
   expect(existsSync(plugin)).toBe(false);

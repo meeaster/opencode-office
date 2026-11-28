@@ -1,7 +1,7 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
-import { editorLinks } from "./loader/generation/links.ts";
+import { editorLinks } from "./loader/installed/links.ts";
 import { git } from "./git.ts";
 import { officeEntries } from "./features/opencode/ownership.ts";
 import { atomicWrite } from "./lib/atomic-write.ts";
@@ -132,7 +132,7 @@ function committable(office: Office, path: string): string | undefined {
  * The nearest `.git`, a repository folder or a linked worktree's file, in the folder or one above,
  * found without Git. Walks the real folders, as Git does from its working folder.
  */
-function gitMarkerAbove(dir: string): string | undefined {
+export function gitMarkerAbove(dir: string): string | undefined {
   for (let at = realpathSync(dir); ; at = dirname(at)) {
     const marker = statSync(join(at, ".git"), { throwIfNoEntry: false });
 

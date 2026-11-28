@@ -1,8 +1,7 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { git } from "../../src/git.ts";
-import { lockSections, packageSectionKey, readLockText } from "../../src/versions.ts";
 import { definitionFixture } from "../support/package-definition.fixture.ts";
 import { definitionText, writePackage } from "../support/test-package.ts";
 
@@ -26,8 +25,6 @@ test("consenting host sync and bound check agree on Browser's stable mise fragme
   write(join(home, ".local/bin/browse"), "#!/bin/sh\nexit 1\n", 0o755);
   cli(0, "sync", "--packages");
   const original = read(path);
-  const generation = readlinkSync(join(dir, ".office/current"));
-  const generationPath = `.office/${generation}/packages/browser`;
 
   expect(original).toContain(`${stable}/scripts/install-browse.ts`);
   expect(original).not.toContain(".office/generations/");
@@ -41,55 +38,48 @@ test("consenting host sync and bound check agree on Browser's stable mise fragme
   expect(read(path)).toBe(original);
   expect(browserLine(cli(1, "check"))).toMatch(/^ok\s+package browser:.*mise setup in \.office\/mise\/browser\.toml/);
 
-  // A genuinely wrong delivery path must still fail check, even if the generation still exists.
-  write(path, original.replaceAll(stable, generationPath));
+  write(path, original.replaceAll(stable, ".office/tmp/browser"));
   expect(browserLine(cli(1, "check"))).toMatch(/^FAIL package browser:.*lacks or differs from the package's host install or system setup/);
   cli(0, "sync", "--packages");
   expect(read(path)).toBe(original);
   expect(browserLine(cli(1, "check"))).toMatch(/^ok\s+package browser:.*mise setup in \.office\/mise\/browser\.toml/);
 });
 
-test("recovery checks every discovery destination before rolling the pending journal forward", () => {
-  const { dir, cli } = fixture("bridge-journal");
-  const current = join(dir, ".office/current");
-  const previous = readlinkSync(current).split("/")[1];
-  cli(0, "sync", "--packages");
-  const candidate = readlinkSync(current).split("/")[1];
-  rmSync(current);
-  symlinkSync(`generations/${previous}`, current);
-  const journal = join(dir, ".office/publishing.json");
-  const sha256 = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex");
-  const digest = sha256(read(join(dir, "office.yaml")));
-  const locked = lockSections(readLockText(dir)).packages;
-
-  if (!locked.ok) throw locked.error;
-  const section = sha256(packageSectionKey(locked.value));
-  write(journal, JSON.stringify({ previous, candidate, before: digest, after: digest, lock: { before: section, after: section, packages: Object.fromEntries(locked.value) } }));
+test("sync installs the package layout and refuses a link at the packages folder", () => {
+  const { dir, cli, select } = fixture("installed-layout");
   const packages = join(dir, ".office/packages");
-  rmSync(packages);
-  write(join(packages, "mine"), "keep");
-  expect(cli(1, "sync", "--packages")).toContain(packages);
-  expect(readlinkSync(current)).toBe(`generations/${previous}`);
-  expect(existsSync(journal)).toBe(true);
-  renameSync(packages, `${packages}.saved`);
-  cli(0, "references", "list");
-  expect(readlinkSync(packages)).toBe("current/packages");
+  const links = join(dir, ".office/node_modules/@office");
+
+  select("  - name: sample\n");
+  writePackage(join(dir, "packages/sample/office.ts"), definitionText("{}"));
   cli(0, "sync", "--packages");
-  expect(read(join(current, "previous"))).toBe(candidate);
-  expect(existsSync(journal)).toBe(false);
-  expect(read(join(`${packages}.saved`, "mine"))).toBe("keep");
+  expect(statSync(join(packages, "office")).isDirectory()).toBe(true);
+  expect(readlinkSync(join(links, "office"))).toBe("../../packages/office");
+  expect(readlinkSync(join(links, "sample"))).toBe("../../../packages/sample");
+  expect(readlinkSync(join(dir, "packages/node_modules/@office"))).toBe("../../.office/node_modules/@office");
+  expect(statSync(join(links, "sdk")).isDirectory()).toBe(true);
+
+  for (const file of ["current", "generations", "publishing.json", "generation-ticket"]) {
+    expect(existsSync(join(dir, ".office", file))).toBe(false);
+  }
+
+  renameSync(packages, `${packages}.saved`);
+  symlinkSync("packages.saved", packages);
+  expect(cli(1, "sync", "--packages")).toContain(`cannot use ${packages}: expected a real folder`);
+  expect(readlinkSync(packages)).toBe("packages.saved");
+  rmSync(packages);
+  renameSync(`${packages}.saved`, packages);
+  cli(0, "references", "list");
 });
 
-test("checking out a tracked package tree, a real folder where a discovery link belongs, blocks writers; switching back restores discovery and plugins", () => {
+test("checking out a tracked package tree blocks writers; switching back restores installed copies and plugins", () => {
   const { dir, cli } = fixture("tracked-history");
   const yaml = join(dir, "office.yaml");
   write(yaml, "name: history\npackages: []\n");
   cli(0, "sync", "--packages");
   const packages = join(dir, ".office/packages");
-  const current = join(dir, ".office/current");
-  const before = readlinkSync(current);
   const saved = join(packages, "artifact-share/renderer");
-  rmSync(packages);
+  rmSync(packages, { recursive: true });
   write(saved, "tracked renderer");
   write(join(dir, ".gitignore"), read(join(dir, ".gitignore")) + "\n/.office/\n");
   git(["add", "-f", ".office/packages"], dir);
@@ -97,14 +87,26 @@ test("checking out a tracked package tree, a real folder where a discovery link 
   git(["rm", "-qr", ".office/packages"], dir);
   commit(dir);
   git(["checkout", "-q", legacy], dir);
-  expect(cli(1, "sync", "--packages")).toContain(`expected ${packages} to link to current/packages; move the conflicting entry aside`);
+  expect(cli(1, "sync", "--packages")).toContain(".office/packages/artifact-share/renderer is tracked in Git");
   expect(read(saved)).toBe("tracked renderer");
-  expect(readlinkSync(current)).toBe(before);
+  const index = join(dir, ".git/index");
+  const good = readFileSync(index);
+
+  try {
+    writeFileSync(index, "invalid index");
+    write(saved, "uncommitted change");
+    expect(cli(1, "sync", "--packages")).toContain("cannot inspect Git's index for installed package files");
+    expect(read(saved)).toBe("uncommitted change");
+  } finally {
+    writeFileSync(index, good);
+    write(saved, "tracked renderer");
+  }
+
   git(["checkout", "-q", "-"], dir);
   expect(existsSync(packages)).toBe(false);
   write(yaml, "name: history\npackages: [{name: knowledge}]\n");
   cli(0, "sync", "--packages");
-  expect(readlinkSync(packages)).toBe("current/packages");
+  expect(statSync(packages).isDirectory()).toBe(true);
   expect(read(join(dir, ".opencode/plugins/knowledge/index.ts"))).toBe(read(join(packages, "knowledge/plugin/index.ts")));
 });
 
@@ -291,10 +293,10 @@ test("nothing loads without a published package set: a fresh clone, or a first s
     expect(cli(2, "packages", "bogus"), stage).toBe("Unknown command or options: packages bogus; see office --help\n");
     expect(existsSync(probe), stage).toBe(false);
 
-    // A first sync that refuses its candidate leaves the first, empty generation.
+    // A first sync that refuses its candidate leaves no installed set.
     writePackage(definition, definitionText(`{commands:{"sync extra":{summary:"Show",run(){}}}}`, `${marker}`));
     expect(cli(1, "sync", "--packages")).toContain("command sync extra is reserved");
-    expect(existsSync(join(dir, ".office/current"))).toBe(true);
+    expect(existsSync(join(dir, ".office/selection.json"))).toBe(false);
     rmSync(probe);
   }
 

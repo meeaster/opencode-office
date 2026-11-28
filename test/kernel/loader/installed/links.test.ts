@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { editorLinks, linkForEditors, writePackageLinks } from "../../../../src/loader/generation/links.ts";
+import { editorLinks, linkForEditors, writePackageLinks } from "../../../../src/loader/installed/links.ts";
 import type { ResolvedPackage } from "../../../../src/loader/sources/selection.ts";
 import { packageJsonText } from "../../../support/test-package.ts";
 
@@ -21,14 +21,14 @@ function pkg(name: string, kind: ResolvedPackage["kind"], folder: string): Resol
 }
 
 test("a package set links each package it loads to its folder, relative, and a rejected one not at all", () => {
-  const set = join(dir, ".office/generations/g-1");
+  const set = join(dir, ".office");
   const packages = [pkg("tooling", "built-in", join(set, "packages/tooling")), pkg("shared", "remote", join(set, "packages/shared")), pkg("notes", "local", join(dir, "packages/notes")), pkg("broken", "remote", join(set, "packages/broken"))];
   writePackageLinks(set, packages, ["broken"]);
   const link = (name: string) => join(set, "node_modules/@office", name);
 
   expect(readlinkSync(link("tooling"))).toBe("../../packages/tooling");
   expect(readlinkSync(link("shared"))).toBe("../../packages/shared");
-  expect(readlinkSync(link("notes"))).toBe("../../../../../packages/notes");
+  expect(readlinkSync(link("notes"))).toBe("../../../packages/notes");
   expect(realpathSync(link("notes"))).toBe(join(dir, "packages/notes"));
   expect(existsSync(link("broken"))).toBe(false);
   // Only the links: no generated editor configuration.
@@ -37,7 +37,7 @@ test("a package set links each package it loads to its folder, relative, and a r
 
 test("sync points packages/node_modules/@office at the published set for editors, and leaves the owner's folder", () => {
   const path = join(dir, editorLinks);
-  const target = "../../.office/current/node_modules/@office";
+  const target = "../../.office/node_modules/@office";
   expect(linkForEditors(dir)).toEqual([]);
   mkdirSync(join(dir, "packages"));
 

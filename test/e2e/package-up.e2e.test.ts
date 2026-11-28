@@ -2,7 +2,7 @@
 // package or a throwing `up` stops, the gathering the finishing readers hand to `up`, and the
 // office's name and mode in a command. systemd and Docker are fakes that record their calls.
 import { expect, test } from "bun:test";
-import { existsSync, readdirSync, readlinkSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { definitionFixture, type DefinitionFixture } from "../support/package-definition.fixture.ts";
 import { applyOfficeTools, builtinTools, definitionText, fakeRegistry, writePackage } from "../support/test-package.ts";
@@ -131,7 +131,6 @@ test("the readers that finish setup and refresh, and upgrade-tools --apply, gath
   write(join(f.dir, "office.yaml"), read(join(f.dir, "office.yaml")).replace(/\ntools:\n(?: {2}.*\n)+/, "\n") + "  - name: counted\nstate: ./state\n");
   rmSync(join(f.dir, "mise.toml"), { force: true });
   f.cli(0, "sync", "--packages");
-  const generation = readlinkSync(join(f.dir, ".office/current")).split("/")[1];
   // An Executor that answers health and accepts the saved key.
   const executor = Bun.serve({ port: 0, fetch: request => new URL(request.url).pathname === "/api/context" ? Response.json({ organization: "org" }) : new URL(request.url).pathname === "/health" ? new Response("ok") : new Response("no", { status: 500 }) });
   write(join(f.dir, "state/office-executor.env"), "EXECUTOR_TOKEN=fixture\nEXECUTOR_ORGANIZATION=org\n");
@@ -147,8 +146,8 @@ test("the readers that finish setup and refresh, and upgrade-tools --apply, gath
 
   try {
     // Each finishing reader goes on to deploy apps and check, which this Executor can't answer: only the counts matter.
-    expect(await counts(["--package-reader", f.dir, generation, "--finish-setup", f.dir, "", "", ""])).toEqual({ counter: "setup\n", up: "up\n" });
-    expect(await counts(["--package-reader", f.dir, generation, "--finish-refresh", f.dir, ""])).toEqual({ counter: "setup\n", up: "up\n" });
+    expect(await counts(["--package-reader", f.dir, "--finish-setup", f.dir, "", "", ""])).toEqual({ counter: "setup\n", up: "up\n" });
+    expect(await counts(["--package-reader", f.dir, "--finish-refresh", f.dir, ""])).toEqual({ counter: "setup\n", up: "up\n" });
     expect(await counts(["--office", f.dir, "upgrade-tools", "--apply"])).toEqual({ counter: "setup\n", up: "up\n" });
   } finally {
     await executor.stop(true);

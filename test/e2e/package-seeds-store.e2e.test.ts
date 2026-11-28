@@ -2,7 +2,7 @@
 // first sync, a check that writes nothing, and an office.lock that still holds the old seeds:
 // section.
 import { expect, test } from "bun:test";
-import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { sha256 } from "../../packages/seeds/store.ts";
 import { git } from "../../src/git.ts";
@@ -75,7 +75,7 @@ test("a clone's first sync keeps the committed receipts and store, an edited fil
   git(["add", "-A"], dir);
   git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "office"], dir);
   git(["clone", "-q", dir, clone]);
-  expect(existsSync(join(clone, ".office/current"))).toBe(false);
+  expect(existsSync(join(clone, ".office/selection.json"))).toBe(false);
   const committed = tree(join(clone, ".office/seeds"));
 
   run(exe, 0, "--office", clone, "sync");
@@ -106,7 +106,8 @@ test("an office.lock that still has a seeds: section stops sync before anything 
   const { dir, cli } = fixture("old-lock");
   const lock = join(dir, "office.lock");
   const yaml = join(dir, "office.yaml");
-  const current = readlinkSync(join(dir, ".office/current"));
+  const installed = join(dir, ".office/packages/office");
+  const before = lstatSync(installed).ino;
 
   // Runtime pins and no packages: section, as init leaves it; then the old seeds: section, as before
   // the receipts moved: no receipts file, and knowledge's seeds not yet laid down.
@@ -115,19 +116,17 @@ test("an office.lock that still has a seeds: section stops sync before anything 
   rmSync(join(dir, "knowledge"), { recursive: true });
   write(lock, `${read(lock)}\nseeds:\n  knowledge/AGENTS.md: { package: knowledge, sha256: ${"0".repeat(64)} }\n`);
   const text = read(lock);
-  const bridge = join(dir, ".office/packages");
+  const missing = join(dir, ".office/packages/references");
 
-  // A missing discovery link, which any other command repairs first.
-  expect(lstatSync(bridge).isSymbolicLink()).toBe(true);
-  rmSync(bridge);
+  rmSync(missing, { recursive: true });
 
   for (const args of [["sync"], ["sync", "--packages"], ["pin"]]) {
     expect(cli(1, ...args)).toContain("office.lock has a top-level key office doesn't know: seeds");
     expect(read(lock)).toBe(text);
-    expect(readlinkSync(join(dir, ".office/current"))).toBe(current);
+    expect(lstatSync(installed).ino).toBe(before);
     expect(existsSync(join(dir, ".office/seeds/receipts.json"))).toBe(false);
     expect(existsSync(join(dir, "knowledge"))).toBe(false);
 
-    if (args[0] === "sync") expect(lstatSync(bridge, { throwIfNoEntry: false })).toBeUndefined();
+    expect(lstatSync(missing, { throwIfNoEntry: false })).toBeUndefined();
   }
 }, 60_000);

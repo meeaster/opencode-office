@@ -11,12 +11,12 @@
 //
 // The office package is built into the `office` tool, which bundles this plugin with what it
 // imports into the one index.js delivered to OpenCode; `office sync` restores that copy.
-import { existsSync, readdirSync, readFileSync, watch } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { type AppliedSettings, officeRootOf, watchAppliedSettings } from "@office/sdk/applied-settings";
+import { type AppliedSettings, officeRootOf, watchAppliedSettings, watchPackageFolder } from "@office/sdk/applied-settings";
 import { compactSessionTool } from "./compact-session.ts";
 import { expandFolder, ignoredFolders, inFolders } from "./ignored-skills.ts";
 import { findOffice, officeInstructions } from "./instructions.ts";
@@ -160,10 +160,7 @@ async function register(ctx: Context) {
 
   if (office === undefined) return;
 
-  // Skill text can change when sync switches package sets, even if the plugin and settings don't.
-  const generations = watch(join(settingsOffice, ".office"), (_event, file) => {
-    if (file === "current") reload();
-  });
+  const packageWatcher = watchPackageFolder(settingsOffice, "office", reload, console.error);
 
   // A prompt never starts with one still listed.
   await ctx.session.hook("prompt", removeIgnored);
@@ -193,7 +190,7 @@ async function register(ctx: Context) {
     stopped = true;
     clearTimeout(check);
     watcher?.close();
-    generations.close();
+    packageWatcher.close();
   };
 }
 

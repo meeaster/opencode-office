@@ -2,25 +2,44 @@
 // node_modules/@office, so `@office/<name>/…` resolves by ordinary node_modules lookup with the
 // package's package.json `exports` enforced by Bun.
 import { failure, type Change } from "../../lib/change.ts";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { packageLinks } from "../../bound-paths.ts";
 import { sdkName } from "../sources/manifest.ts";
 import type { ResolvedPackage } from "../sources/selection.ts";
 import { toolFiles, toolPath, writeToolFile } from "../../tool.ts";
+import { installedRoot } from "./paths.ts";
 
 /**
  * Links each package as `<folder>/node_modules/@office/<name>`, relative, so the office can move;
  * a package this sync `rejected` gets none, so nothing imports it.
  */
-export function writePackageLinks(folder: string, packages: ResolvedPackage[], rejected: readonly string[]) {
+export function writePackageLinks(folder: string, packages: readonly ResolvedPackage[], rejected: readonly string[], at = folder) {
   const links = packageLinks(folder);
   mkdirSync(links, { recursive: true });
 
   for (const pkg of packages) {
     if (rejected.includes(pkg.entry.name)) continue;
     const link = join(links, pkg.entry.name);
-    symlinkSync(relative(dirname(link), pkg.dir), link);
+    symlinkSync(relative(packageLinks(at), pkg.dir), link);
+  }
+}
+
+/** Stops Bun's upward lookup from finding a rejected or deselected provider in the installed set. */
+export function blockInstalledFallback(folder: string, installed: string, rejected: readonly string[]) {
+  const published = packageLinks(installed);
+  const blocked = new Set(rejected);
+
+  if (existsSync(published)) {
+    for (const name of readdirSync(published)) blocked.add(name);
+  }
+
+  for (const name of blocked) {
+    const path = join(packageLinks(folder), name);
+
+    if (lstatSync(path, { throwIfNoEntry: false })) continue;
+    mkdirSync(path);
+    writeFileSync(join(path, "package.json"), JSON.stringify({ name: `@office/${name}`, exports: {} }));
   }
 }
 
@@ -55,7 +74,7 @@ export function linkForEditors(dir: string): Change[] {
   if (parent && !parent.isDirectory()) return left(dirname(editorLinks), "folder");
 
   try {
-    const target = relative(dirname(path), join(dir, ".office/current/node_modules/@office"));
+    const target = relative(dirname(path), packageLinks(installedRoot(dir)));
     const entry = lstatSync(path, { throwIfNoEntry: false });
 
     if (entry && !entry.isSymbolicLink()) return left(editorLinks, "link");

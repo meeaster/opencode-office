@@ -9,12 +9,12 @@ export const pulledFolder = ".office/packages";
 
 /** Only an evaluator binds paths. Controllers and external link planners use the
  * stable discovery path. A process never evaluates two source views. */
-let bound: { dir: string; folder: string; unavailable: ReadonlySet<string> } | undefined;
+let bound: { dir: string; folder: string; unavailable: ReadonlySet<string>; stagedLocals: boolean } | undefined;
 
 /** Binds this process to the package set in `folder`, whose sync rejected the `unavailable` packages. */
-export function bindPaths(dir: string, folder: string, unavailable: ReadonlySet<string> = new Set()) {
-  if (bound && (bound.dir !== dir || bound.folder !== folder)) throw new Error("cannot change package generation in an evaluating process");
-  bound = { dir, folder, unavailable };
+export function bindPaths(dir: string, folder: string, unavailable: ReadonlySet<string>, stagedLocals: boolean) {
+  if (bound && (bound.dir !== dir || bound.folder !== folder)) throw new Error("cannot change package set in an evaluating process");
+  bound = { dir, folder, unavailable, stagedLocals };
 }
 
 /** The packages the bound set's sync rejected; none in a process not bound to a set. */
@@ -50,17 +50,20 @@ export function definitionRoot(dir: string, item: PackagePath) {
 
 /** In a process bound to a set, what is wrong with the set's link to `item`; undefined when it is right or the process isn't bound. */
 export function linkProblem(dir: string, item: PackagePath): string | undefined {
-  return bound?.dir === dir ? setLinkProblem(bound.folder, item) : undefined;
+  if (bound?.dir !== dir) return;
+  const source = bound.stagedLocals && item.kind === "local" ? join(bound.folder, "local", item.entry.name) : item.dir;
+
+  return setLinkProblem(bound.folder, item.entry.name, source);
 }
 
 /** What is wrong with the link to `item` in the package set `folder`: missing, or to another folder. */
-function setLinkProblem(folder: string, item: PackagePath): string | undefined {
-  const link = join(packageLinks(folder), item.entry.name);
+function setLinkProblem(folder: string, name: string, source: string): string | undefined {
+  const link = join(packageLinks(folder), name);
 
   if (!lstatSync(link, { throwIfNoEntry: false })) return "selected since the last sync; run office sync";
 
   try {
-    if (realpathSync(link) === realpathSync(item.dir)) return undefined;
+    if (realpathSync(link) === realpathSync(source)) return undefined;
   } catch { /* a dangling link or a missing folder is a wrong link too */ }
 
   return "the package set links it to a different folder; run office sync";

@@ -1,11 +1,8 @@
 // Packages' full-sync work (a definition's `fullSync`): only a full `office sync` runs it, after
-// that same sync admitted and applied the package set whole. It runs in a reader bound to the
-// generation this sync published, never another: a sync whose admission or application failed,
-// or whose set another sync has replaced since, runs none. The reader reports each item as a JSON
+// that same sync admitted and applied the package set whole. The reader reports each item as a JSON
 // line on its result pipe; sync shows each as a part of its stage and turns a failed one into a
 // FAILED line, which makes it exit 1 while every other item, and reference work, still completes.
 import { closeSync, existsSync, readFileSync, writeSync } from "node:fs";
-import { join } from "node:path";
 import * as v from "valibot";
 
 import type { ItemResult, SyncItem } from "../../../sdk/index.ts";
@@ -14,8 +11,8 @@ import { resultDescriptor } from "../../command-stdout.ts";
 import { gatherPackages, problemLines } from "../../gather.ts";
 import { officeInfo } from "../../lifecycle-inputs.ts";
 import type { Office } from "../../office.ts";
-import { managedDirectory, pinActive } from "../generation/storage.ts";
-import { selectionText } from "../generation/reader.ts";
+import { installedSelection, selectionFile } from "../installed/paths.ts";
+import { selectionText } from "../installed/reader.ts";
 import { startReader } from "../worker.ts";
 import type { Stage } from "../../report/index.ts";
 
@@ -44,13 +41,12 @@ const items = v.array(v.object({ item: v.pipe(v.string(), v.nonEmpty()), run: v.
 type Planned = { owner: string; item: string; run: SyncItem["run"] };
 
 /**
- * In a reader bound to `generation`: gathers the packages, asks each `fullSync` for its items and
- * runs them, reporting through `emit`. Refuses, running nothing, when office.yaml's selection is
- * no longer the one the generation was published with or a package doesn't load. `verbose` is
+ * Gathers installed packages, asks each `fullSync` for its items and runs them, reporting through
+ * `emit`. Runs nothing when office.yaml's selection differs from the installed set or a package doesn't load. `verbose` is
  * the sync's own, for items that can show more progress.
  */
-export async function runFullSync(office: Office, generation: string, verbose: boolean, emit: (event: Event) => void) {
-  const recorded = join(managedDirectory(office.dir, generation), "selection.json");
+export async function runFullSync(office: Office, verbose: boolean, emit: (event: Event) => void) {
+  const recorded = selectionFile(office.dir);
 
   if (!existsSync(recorded) || readFileSync(recorded, "utf8") !== selectionText(office)) {
     emit({ type: "problem", text: "office.yaml's packages changed after this sync applied its package set, so no package's full-sync work ran; run office sync again" });
@@ -151,18 +147,16 @@ function readEvent(text: string): Event | undefined {
 }
 
 /**
- * Sync's step for packages' full-sync work: a reader bound to `generation`, the set this sync
- * published and applied, runs it, each item a part of `stage` after the `earlier` parts. Returns
+ * Sync's step for packages' full-sync work: a reader runs it, with each item a part of `stage`
+ * after the `earlier` parts. Returns
  * one line per item that reported a summary and a FAILED line per failure: an item that failed, a
  * line from the reader that isn't an event, an item the reader started but never settled, and a
- * reader that didn't exit 0. Runs nothing when another sync has published since. `verbose` asks
- * the items for full progress.
+ * reader that didn't exit 0. Refuses to start the reader if another sync installed a set in
+ * the meantime. `verbose` asks the items for full progress.
  */
-export async function fullSyncStep(office: Office, generation: string, stage: Stage, earlier: number, verbose = false): Promise<Change[]> {
-  using active = pinActive(office.dir);
-
-  if (active?.name !== generation) return [failure("FAILED packages' full-sync work: another sync replaced this sync's package set before it ran; run office sync again")];
-  const child = startReader(office.dir, active, ["--full-sync", office.dir, generation, ...(verbose ? ["verbose"] : [])]);
+export async function fullSyncStep(office: Office, applied: string, stage: Stage, earlier: number, verbose = false): Promise<Change[]> {
+  if (installedSelection(office.dir) !== applied) return [failure("FAILED packages' full-sync work: another sync replaced this sync's package set before it ran; run office sync again")];
+  const child = startReader(office.dir, ["--full-sync", office.dir, ...(verbose ? ["verbose"] : [])]);
   const exited = child.exited.finally(child[Symbol.dispose]);
   const changes: Change[] = [];
   const parts = new Map<number, { owner: string; item: string; part: ReturnType<Stage["part"]> }>();

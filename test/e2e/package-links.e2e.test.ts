@@ -1,7 +1,7 @@
 // How packages import each other in the compiled office: through the set's node_modules/@office
 // links, with package.json `exports` enforced, on a first sync, across an update and in a command.
 import { expect, test } from "bun:test";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "../../src/git.ts";
 import { definitionFixture } from "../support/package-definition.fixture.ts";
@@ -20,8 +20,15 @@ function consumer(imports: string, value: string) {
 
 const dependencies = ["provider", "references"];
 
-test("a first sync resolves local packages through the new set's links, and exports decide what is public", () => {
-  const { dir, probe, cli, select } = fixture("first-sync");
+for (const launcher of ["compiled", "source"] as const) test(`${launcher}: a first sync resolves local packages through the candidate's links and honors exports`, () => {
+  const { dir, home, probe, run, cli: compiled, select } = fixture(`first-${launcher}`);
+
+  if (launcher === "source") {
+    mkdirSync(join(home, "bin"), { recursive: true });
+    symlinkSync(process.execPath, join(home, "bin/bun"));
+  }
+
+  const cli = launcher === "compiled" ? compiled : (status: number, ...args: string[]) => run(toolPath("bin/office"), status, "--office", dir, ...args);
   const provider = join(dir, "packages/provider");
   rmSync(join(dir, ".office"), { recursive: true });
   rmSync(join(dir, ".opencode/plugins"), { recursive: true });
@@ -76,6 +83,16 @@ test("an update resolves a local consumer against the provider of the set it che
   writePackage(join(dir, "packages/consumer/office.ts"), consumer('import {extra} from "@office/provider/extra";', "extra"), { dependencies });
   cli(0, "packages", "update");
   expect(cli(0, "references", "list")).toContain("three\thttps://example.invalid/r.git\tpackage consumer");
+
+  const lock = join(dir, "office.lock");
+  const before = readFileSync(lock, "utf8");
+
+  // The installed provider still exports `extra`, but admission must not import it.
+  renameSync(repo, `${repo}-offline`);
+  select(`  - {name: provider, repo: ${repo}, path: provider, ref: ${"a".repeat(40)}}\n  - name: consumer\n`);
+  expect(cli(1, "sync", "--packages")).toContain("no package set was published");
+  expect(readFileSync(lock, "utf8")).toBe(before);
+  expect(published(dir)).toContain("three\thttps://example.invalid/r.git\tpackage consumer");
 });
 
 test("a provider's shared module is evaluated once in a run, and a definition reads a file beside it", () => {

@@ -1,21 +1,22 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { parse } from "yaml";
 import * as v from "valibot";
 import { failure, isFailure, type Change } from "../../lib/change.ts";
 import { loadOffice, type Office, OfficeError } from "../../office.ts";
 import { officeSchema } from "../../schema.ts";
 import type { PackageLock } from "../../lock-schema.ts";
-import { lockFile, lockSections, packageLockChanges, readLockSection } from "../../versions.ts";
-import { writePackageLinks, writeSdk } from "../generation/links.ts";
-import { selectionText } from "../generation/reader.ts";
-import { activeGeneration, beginGeneration, managedDirectory } from "../generation/storage.ts";
+import { packageDeliveryDir } from "../../bound-paths.ts";
+import { lockFile, lockSections, packageLockChanges, readLockSection, readLockText } from "../../versions.ts";
+import { blockInstalledFallback, writePackageLinks, writeSdk } from "../installed/links.ts";
+import { selectionText } from "../installed/reader.ts";
+import { installedRoot, installedSelection } from "../installed/paths.ts";
 import { readRecord, sourceDifferences } from "../sources/copies.ts";
 import { importEdges, readPackageJson, sdkName } from "../sources/manifest.ts";
 import { type ResolvedPackage, resolvePackages } from "../sources/selection.ts";
 import { runEvaluator } from "../worker.ts";
 import { candidatePackageLock } from "./candidate-lock.ts";
+import { checkDestinations } from "./install.ts";
 import { type Admission, type Outcome, outcomeSchema } from "./protocol.ts";
 import { prepareSources } from "./stage.ts";
 
@@ -29,49 +30,69 @@ export async function publishPackages(office: Office, exclude: boolean, update?:
   const selection = resolvePackages(office);
 
   if (selection.problems.length) return { published: false, lines: selection.problems.map(p => failure(`FAILED ${p.message}`)) };
-  using reservation = beginGeneration(office.dir);
-  const { transaction } = reservation;
-  const folder = managedDirectory(office.dir, transaction.name);
-  const previous = managedDirectory(office.dir, transaction.previous);
-  const temporary = mkdtempSync(join(tmpdir(), "office-admission-"));
-  const old = selection.packages.map(item => item.kind === "local" ? item : { ...item, dir: join(previous, "packages", item.entry.name) });
+  const previous = installedRoot(office.dir);
+  const old = selection.packages.map(item => ({ ...item }));
   const coupled = (names: string[]) => update && update.names.length > 1 ? coupledFailures(names, update.names, [old, selection.packages]) : names;
+  let folder: string | undefined;
 
   try {
+    checkDestinations(office.dir);
+    const original = readFileSync(join(office.dir, "office.yaml"), "utf8");
+    const lock = readLockText(office.dir);
+    const reserved = lockSections(lock).packages;
+
+    if (!reserved.ok) throw reserved.error;
+    mkdirSync(join(previous, "tmp"), { recursive: true });
+    folder = mkdtempSync(join(previous, "tmp/package-stage-"));
+    const transaction = { dir: office.dir, folder, original, lock, installed: installedSelection(office.dir) };
     const yaml = update ? update.yaml(transaction.original) : transaction.original;
     const desired = loadOffice(office.dir, v.parse(officeSchema, parse(yaml, { stringKeys: true })));
 
     if (!Bun.deepEquals(desired, office)) throw new OfficeError("office.yaml changed while resolving packages; retry");
-    const reserved = lockSections(transaction.lock).packages;
-
-    if (!reserved.ok) throw reserved.error;
     const locked = reserved.value;
     const { validate, rejected } = await prepareSources(office, selection, folder, previous, locked, update?.commits ?? new Map(), lines);
 
     if (update && rejected.length) return { published: false, lines, rejected: coupled(rejected) };
     const packages = candidatePackageLock(selection.packages, join(folder, "packages"), rejected, locked);
-    writePackageLinks(folder, selection.packages, rejected);
+
+    const evaluation = selection.packages.map(item => {
+      if (Bun.isStandaloneExecutable || item.kind !== "local" || !existsSync(item.dir)) return item;
+      const dir = join(transaction.folder, "local", item.entry.name);
+
+      // Source Bun follows symlinks to load pnpm's dependencies. Give local modules a real
+      // path under the candidate so their imports also use the candidate's node_modules.
+      cpSync(item.dir, dir, { recursive: true, verbatimSymlinks: true, filter: path => ![".git", "node_modules"].includes(basename(path)) });
+
+      return { ...item, dir };
+    });
+
+    writePackageLinks(folder, evaluation, rejected);
     writeSdk(folder);
+    blockInstalledFallback(folder, previous, rejected);
+    const delivery = join(folder, "installed-links");
+    const installed = selection.packages.map(item => ({ ...item, dir: packageDeliveryDir(office.dir, item) }));
+
+    writePackageLinks(delivery, installed, rejected, previous);
+    writeSdk(delivery);
     writeFileSync(join(folder, "unavailable.json"), JSON.stringify(rejected));
     writeFileSync(join(folder, "selection.json"), selectionText(office));
     const request: Admission = { office, transaction, yaml, packages: Object.fromEntries(packages), validate, rejected, exclude, tracked: !!update, apply: update?.apply ?? true };
-    writeFileSync(join(temporary, "input"), JSON.stringify(request));
-    const code = await runEvaluator(["--package-admission", temporary], [reservation.fd]);
+    writeFileSync(join(folder, "input"), JSON.stringify(request));
+    const code = await runEvaluator(["--package-admission", folder]);
 
     if (code !== 0) throw new OfficeError(`package evaluator exited ${code}`);
-    const result = v.parse(outcomeSchema, JSON.parse(readFileSync(join(temporary, "output"), "utf8")));
+    const result = v.parse(outcomeSchema, JSON.parse(readFileSync(join(folder, "output"), "utf8")));
     lines.push(...result.lines);
 
     if (result.published) lines.push(...packageLockChanges(locked, packages));
 
     return { ...result, rejected: result.rejected && coupled(result.rejected), lines: result.published ? lines : lines.filter(isFailure) };
   } catch (error) {
-    const published = activeGeneration(office.dir) === transaction.name;
     const reason = error instanceof Error ? error.message : String(error);
 
-    return { published, lines: [failure(`FAILED ${reason}${published ? `; generation ${transaction.name} is active, rerun office sync --packages to reconcile external files` : ""}`)] };
+    return { published: false, lines: [failure(`FAILED ${reason}; run office sync again`)] };
   } finally {
-    rmSync(temporary, { recursive: true, force: true });
+    if (folder !== undefined) rmSync(folder, { recursive: true, force: true });
   }
 }
 

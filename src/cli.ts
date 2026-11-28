@@ -31,8 +31,8 @@ import { bump } from "./commands/bump.ts";
 import { serviceEnvironment } from "./features/machine/record.ts";
 import { currentOffice, findOffice, type Office, OfficeError } from "./office.ts";
 import { type Gathered, gatherPackages } from "./gather.ts";
-import { checkDirectories, ensureDiscovery, hasPublishedSet } from "./loader/generation/storage.ts";
-import { bindReader, runReader } from "./loader/generation/reader.ts";
+import { hasPublishedSet } from "./loader/installed/paths.ts";
+import { bindReader, runReader } from "./loader/installed/reader.ts";
 import { evaluateAdmission } from "./loader/publication/admission.ts";
 import { restoreCallerEnv } from "./loader/worker.ts";
 import { packageSecret } from "./features/compose/package-services.ts";
@@ -45,7 +45,6 @@ import { decrypt } from "./features/secrets/secrets.ts";
 import { onTerminal, reported, type Reporter, type Stage } from "./report/index.ts";
 import { age } from "./schema.ts";
 import { writeContainerWrappers } from "./features/tools/sfw.ts";
-import { requireKnownLockKeys } from "./versions.ts";
 import { version } from "./tool.ts";
 import { AppliedSettingsError, canonicalJson, readAppliedSettings } from "../sdk/applied-settings.ts";
 
@@ -276,14 +275,11 @@ async function main(): Promise<void> {
   if (access) return evaluateAccess(args[1]);
   // Only a reader, bound to a published package set, loads packages for commands and help.
   let bound: Reader | undefined;
-  // The package generation a reader is bound to.
-  let generation: string | undefined;
 
   if (reader) {
-    const [, dir, name] = args.splice(0, 3);
-    bindReader(dir, name);
+    const [, dir] = args.splice(0, 2);
+    bindReader(dir);
     bound = { dir };
-    generation = name;
 
     if (args[0] === "--finish-setup" && args[1] === dir) {
       const office = currentOffice({ office: dir });
@@ -297,9 +293,8 @@ async function main(): Promise<void> {
       return;
     }
 
-    // Full sync's packages' work, only in a reader bound to the generation that sync applied.
-    if (args[0] === "--full-sync" && args[1] === dir && args[2] === name) {
-      await runFullSync(currentOffice({ office: dir }), name, args[3] === "verbose", emitEvent);
+    if (args[0] === "--full-sync" && args[1] === dir) {
+      await runFullSync(currentOffice({ office: dir }), args[2] === "verbose", emitEvent);
 
       return;
     }
@@ -346,7 +341,6 @@ async function main(): Promise<void> {
     try { found = findOffice(route.office ?? process.cwd()); } catch { /* not in an office: no package command can run */ }
 
     if (found) {
-      ensureDiscovery(found);
       const status = await runReader(found, args);
 
       if (status !== undefined) {
@@ -380,15 +374,8 @@ async function main(): Promise<void> {
   if (!reader && !flags.version && command !== "init") {
     try { dir = findOffice(flags.office ?? process.cwd()); } catch { /* bootstrap handles offices not found */ }
 
-    // A sync that publishes refuses a lock it can't read whole before it repairs anything, discovery links too.
-    if (dir && command === "sync" && !flags.references && !flags["release-machine"]) requireKnownLockKeys(dir);
-
     // Down's own shutdown can't depend on the package set: its reader is started on its own.
     const shutdown = command === "down" && !flags.help;
-
-    const guidance = command === "instructions" && !flags.packages && flags.session === undefined;
-
-    if (dir && !shutdown) ensureDiscovery(dir, !(flags.help || command === undefined || guidance || inspectCommand));
 
     // Help and bare `office` list package commands, so they load packages in the reader too.
     if (dir && !shutdown && (flags.help || command === undefined || !["sync", "refresh", "packages", "sfw-wrappers", "env"].includes(command))) {
@@ -453,10 +440,10 @@ async function main(): Promise<void> {
     if (rest.length > 0 || flags.session !== undefined) throw new OfficeError("usage: office instructions --packages");
 
     // Without a published package set (and so outside a reader) no package adds text.
-    if (generation) {
+    if (bound) {
       // Whatever the packages print while they load goes to standard error; only the text is output.
       divertStdout();
-      writeResult(await packageSessionText(currentOffice(flags), generation));
+      writeResult(await packageSessionText(currentOffice(flags)));
     }
   } else if (command === "instructions") {
     if (rest.length > (flags.session === undefined ? 1 : 0)) throw new OfficeError("usage: office instructions [folder] | office instructions --session <id>");
@@ -519,7 +506,7 @@ async function main(): Promise<void> {
       finishSync(stage, await sync(currentOffice(flags), { stage, verbose }));
       const status = await runReader(office.dir, ["--finish-refresh", office.dir, verbose ? "verbose" : ""]);
 
-      if (status !== 0) throw new OfficeError("refresh did not complete with the published package generation");
+      if (status !== 0) throw new OfficeError("refresh did not complete with the installed package set");
     }, { verbose });
   } else if (command === "check") {
     const office = currentOffice(flags);
@@ -624,7 +611,6 @@ async function main(): Promise<void> {
 async function packageShutdown(office: Office): Promise<boolean> {
   try {
     // Down skips discovery so a broken package set can't stop it; still never pin or import through a redirected folder.
-    checkDirectories(office.dir);
     const status = await runReader(office.dir, ["--shutdown", office.dir]);
 
     if (status === undefined) {

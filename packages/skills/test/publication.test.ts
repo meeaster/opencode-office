@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Entries, Settings } from "@office/sdk";
 import { tools } from "@office/tools";
-import { currentLink, generationFolder, inventoryFile, readPublished, sourceFolder } from "../generation.ts";
+import { outputFolder, outputRecord, readPublished, sourceFolder } from "../generated.ts";
 import { skills } from "../handles.ts";
 import { receiptFile } from "../links.ts";
 import { acquire, lockFile, takeoverFile } from "../publication.ts";
@@ -92,10 +92,11 @@ const published = () => {
   return found;
 };
 
-const generations = () => readdirSync(join(office, sourceFolder("openspec"), "generations")).sort();
+const sourceEntries = () => readdirSync(join(office, sourceFolder("openspec"))).sort();
+const stable = () => join(office, outputFolder("openspec"));
 const label = "generated source openspec (package openspec)";
 
-test("up generates once, publishes through current, excludes each copy before it appears, and repeats with no generation", async () => {
+test("up generates once, publishes stable output, and excludes each copy before it appears", async () => {
   applyTool("2.1.1");
   const settings = { sources: [], enabled: ["openspec-propose"] };
 
@@ -106,24 +107,25 @@ test("up generates once, publishes through current, excludes each copy before it
   expect(lstatSync(link("openspec-propose")).isDirectory()).toBe(true);
   expect(readFileSync(join(link("openspec-propose"), "SKILL.md"), "utf8")).toContain("description");
   expect(published().skills).toEqual(["openspec-explore", "openspec-propose"]);
-  expect(readlinkSync(join(office, currentLink("openspec")))).toBe(`generations/${published().generation}`);
+  expect(published().folder).toBe(outputFolder("openspec"));
+  expect(sourceEntries()).toEqual(["output"]);
+  expect(lstatSync(stable()).isDirectory()).toBe(true);
   expect(await up(settings)).toEqual([]);
   expect(await sync(settings)).toEqual([]);
   expect(calls).toBe(1);
   expect(await check(settings)).toEqual([]);
 });
 
-test("a changed key generates once more and switches current alone; only earlier recorded generations are removed, unowned folders stay", async () => {
+test("a changed key replaces stable output and leaves neighboring folders alone", async () => {
   applyTool("2.1.1");
   const settings = { sources: [], enabled: ["openspec-propose"] };
 
   await up(settings);
-  const first = published().generation;
+  const first = published().key;
   const source = join(office, sourceFolder("openspec"));
 
   write(join(source, "notes/keep.md"), "owner's\n");
-  write(join(source, "generations/aaaaaaaaaaaa-00000000/kept.md"), "not recorded\n");
-  write(join(office, sourceFolder("other"), "generations/x/SKILL.md"));
+  write(join(office, sourceFolder("other"), "output/x/SKILL.md"));
   write(join(office, ".office/cache/openspec/conduct/change.patch"), "durable\n");
   offered = ["openspec-propose", "openspec-explore", "openspec-verify-change"];
   applyTool("2.1.2");
@@ -131,12 +133,12 @@ test("a changed key generates once more and switches current alone; only earlier
   const lines = await up(settings);
 
   expect(calls).toBe(2);
-  expect(lines).toEqual([`${label}: generated openspec-explore, openspec-propose, openspec-verify-change with npm:@fission-ai/openspec 2.1.2`, "generated source openspec: removed 1 earlier generation"]);
-  expect(published().generation).not.toBe(first);
-  expect(generations()).toEqual(["aaaaaaaaaaaa-00000000", published().generation].sort());
-  expect(JSON.parse(readFileSync(join(office, inventoryFile("openspec")), "utf8"))).toEqual({ generations: [published().generation] });
+  expect(lines).toEqual([`${label}: generated openspec-explore, openspec-propose, openspec-verify-change with npm:@fission-ai/openspec 2.1.2`]);
+  expect(published().key).not.toBe(first);
+  expect(sourceEntries()).toEqual(["notes", "output"]);
+  expect(JSON.parse(readFileSync(join(stable(), outputRecord), "utf8"))).toEqual({ key: published().key, skills: published().skills });
   expect(readFileSync(join(source, "notes/keep.md"), "utf8")).toBe("owner's\n");
-  expect(existsSync(join(office, sourceFolder("other"), "generations/x/SKILL.md"))).toBe(true);
+  expect(existsSync(join(office, sourceFolder("other"), "output/x/SKILL.md"))).toBe(true);
   expect(readFileSync(join(office, ".office/cache/openspec/conduct/change.patch"), "utf8")).toBe("durable\n");
   // Identical output was not delivered again. The added ID is available but not enabled.
   expect(existsSync(join(link("openspec-propose"), "SKILL.md"))).toBe(true);
@@ -147,14 +149,15 @@ test("a changed key generates once more and switches current alone; only earlier
   ]);
 });
 
-test("a generator failure, a removed enabled ID or a conflict stops up naming it; the published generation, current and links stay, the candidate goes", async () => {
+test("a generator failure, a removed enabled ID or a conflict leaves published output and copies unchanged", async () => {
   applyTool("2.1.1");
   write(join(office, "skills/openspec-explore/SKILL.md"));
   const settings = { sources: [], enabled: ["openspec-propose"] };
 
   await up(settings);
-  const before = { published: published(), current: readlinkSync(join(office, currentLink("openspec"))), receipt: readFileSync(join(office, receiptFile), "utf8"), generations: generations() };
-  const unchanged = () => expect({ published: published(), current: readlinkSync(join(office, currentLink("openspec"))), receipt: readFileSync(join(office, receiptFile), "utf8"), generations: generations() }).toEqual(before);
+  const snapshot = () => ({ published: published(), inode: lstatSync(stable()).ino, receipt: readFileSync(join(office, receiptFile), "utf8"), entries: sourceEntries() });
+  const before = snapshot();
+  const unchanged = () => expect(snapshot()).toEqual(before);
 
   applyTool("2.1.2");
   failing = "openspec init exited 1";
@@ -194,39 +197,49 @@ test("a source never published whose tool can't run fails up for the IDs it defe
   expect(calls).toBe(0);
 });
 
-test("a generation made but not published leaves every reader on the published one, and the next publication removes it", async () => {
+test("readers ignore abandoned staged output", async () => {
   applyTool("2.1.1");
   const settings = { sources: [], enabled: ["openspec-propose"] };
 
   await up(settings);
-  const first = published().generation;
-  const leftover = "bbbbbbbbbbbb-00000001";
+  const first = published();
+  const leftover = join(office, sourceFolder("openspec"), ".stage-interrupted");
 
-  // As an up interrupted after generating, before switching current.
-  write(join(office, generationFolder("openspec", leftover), "openspec-propose/SKILL.md"));
-  write(join(office, generationFolder("openspec", leftover), "generation.json"), JSON.stringify({ key: "sha256:other", skills: ["openspec-propose"] }));
-  writeFileSync(join(office, inventoryFile("openspec")), JSON.stringify({ generations: [first, leftover] }));
+  write(join(leftover, "openspec-propose/SKILL.md"), "never published\n");
+  write(join(leftover, outputRecord), JSON.stringify({ key: "sha256:other", skills: ["openspec-propose"] }));
 
   expect(await sync(settings)).toEqual([]);
   expect(await check(settings)).toEqual([]);
-  expect(published().generation).toBe(first);
-  applyTool("2.1.2");
-  expect(await up(settings)).toContain("generated source openspec: removed 2 earlier generations");
-  expect(generations()).toEqual([published().generation]);
+  expect(published()).toEqual(first);
 });
 
-test("an ordinary file at current stops up before anything is generated or changed", async () => {
+test("sync keeps an enabled copy when an interrupted up left its output missing", async () => {
   applyTool("2.1.1");
-  write(join(office, currentLink("openspec")), "not a link\n");
+  const settings = { sources: [], enabled: ["openspec-propose"] };
+  await up(settings);
+  const path = join(link("openspec-propose"), "SKILL.md");
+  const previous = lstatSync(path).ino;
 
-  await expect(up({ sources: [], enabled: ["openspec-propose"] })).rejects.toThrow(`${currentLink("openspec")} isn't the link office keeps to the published generation; move it aside and run office up`);
+  renameSync(stable(), join(office, sourceFolder("openspec"), ".old-interrupted"));
+  applyTool("2.0.0");
+  expect(await sync(settings)).toContainEqual(expect.stringContaining("openspec-propose are deferred"));
+  expect(lstatSync(path).ino).toBe(previous);
+  await expect(up(settings)).rejects.toThrow("no source offers it");
+  expect(lstatSync(path).ino).toBe(previous);
+});
+
+test("an ordinary file at output stops up before anything is generated or changed", async () => {
+  applyTool("2.1.1");
+  write(stable(), "not a folder\n");
+
+  await expect(up({ sources: [], enabled: ["openspec-propose"] })).rejects.toThrow(`${outputFolder("openspec")} is a link or not a folder`);
   expect(calls).toBe(0);
   expect(exclusions).toEqual([]);
-  expect(existsSync(join(office, sourceFolder("openspec"), "generations"))).toBe(false);
-  expect(readFileSync(join(office, currentLink("openspec")), "utf8")).toBe("not a link\n");
+  expect(sourceEntries()).toEqual(["output"]);
+  expect(readFileSync(stable(), "utf8")).toBe("not a folder\n");
 });
 
-test("a failed exclusion stops up before any link is placed or generation published; the candidate goes", async () => {
+test("a failed exclusion stops up before any copy or output is published; the candidate goes", async () => {
   applyTool("2.1.1");
   onExclude = () => {
     throw new Error("info/exclude has 2 start lines, not one block");
@@ -234,11 +247,10 @@ test("a failed exclusion stops up before any link is placed or generation publis
 
   await expect(up({ sources: [], enabled: ["openspec-propose"] })).rejects.toThrow("info/exclude has 2 start lines, not one block; published generated skills and their deliveries stay as they were");
   expect(existsSync(link("openspec-propose"))).toBe(false);
-  expect(existsSync(join(office, currentLink("openspec")))).toBe(false);
-  expect(generations()).toEqual([]);
+  expect(sourceEntries()).toEqual([]);
 });
 
-test("a source folder or generations folder that is a link is refused before anything is written or removed through it; its target stays", async () => {
+test("a redirected source, output or record is refused before anything is written through it", async () => {
   applyTool("2.1.1");
   const settings = { sources: [], enabled: ["openspec-propose"] };
   const elsewhere = mkdtempSync(join(tmpdir(), "office-skills-elsewhere-"));
@@ -246,10 +258,9 @@ test("a source folder or generations folder that is a link is refused before any
   try {
     write(join(elsewhere, "aaaaaaaaaaaa-00000000/keep.md"), "elsewhere's\n");
     mkdirSync(join(office, sourceFolder("openspec")), { recursive: true });
-    symlinkSync(elsewhere, join(office, sourceFolder("openspec"), "generations"));
-    writeFileSync(join(office, inventoryFile("openspec")), JSON.stringify({ generations: ["aaaaaaaaaaaa-00000000"] }));
+    symlinkSync(elsewhere, stable());
 
-    await expect(up(settings)).rejects.toThrow(`${sourceFolder("openspec")}/generations is a link or not a folder, so office neither writes nor removes generated skills through it`);
+    await expect(up(settings)).rejects.toThrow(`${outputFolder("openspec")} is a link or not a folder, so office neither writes nor removes generated skills through it`);
     expect(readdirSync(elsewhere)).toEqual(["aaaaaaaaaaaa-00000000"]);
     expect(readFileSync(join(elsewhere, "aaaaaaaaaaaa-00000000/keep.md"), "utf8")).toBe("elsewhere's\n");
 
@@ -259,9 +270,9 @@ test("a source folder or generations folder that is a link is refused before any
     expect(readdirSync(elsewhere)).toEqual(["aaaaaaaaaaaa-00000000"]);
 
     rmSync(join(office, sourceFolder("openspec")));
-    mkdirSync(join(office, sourceFolder("openspec")));
-    symlinkSync(join(elsewhere, "aaaaaaaaaaaa-00000000/keep.md"), join(office, inventoryFile("openspec")));
-    await expect(up(settings)).rejects.toThrow(`${inventoryFile("openspec")} isn't a record of generated skill source openspec's generations`);
+    mkdirSync(stable(), { recursive: true });
+    symlinkSync(join(elsewhere, "aaaaaaaaaaaa-00000000/keep.md"), join(stable(), outputRecord));
+    await expect(up(settings)).rejects.toThrow(`${outputFolder("openspec")}/${outputRecord} isn't a record of published skills`);
     expect(calls).toBe(0);
     expect(readFileSync(join(elsewhere, "aaaaaaaaaaaa-00000000/keep.md"), "utf8")).toBe("elsewhere's\n");
   } finally {
@@ -358,7 +369,7 @@ test("a link that appears while up applies stops it after publication; its exclu
     if (change.add?.length) write(join(link("openspec-propose"), "SKILL.md"));
   };
 
-  await expect(up({ sources: [], enabled: ["openspec-propose"] })).rejects.toThrow(".agents/skills/openspec-propose changed during sync; left as it is");
+  await expect(up({ sources: [], enabled: ["openspec-propose"] })).rejects.toThrow(".agents/skills/openspec-propose is already there and isn't a delivery this package recorded");
   expect(exclusions.at(-1)).toEqual({ remove: [".agents/skills/openspec-propose"], present: undefined });
   expect(published().skills).toEqual(["openspec-explore", "openspec-propose"]);
   expect(lstatSync(link("openspec-propose")).isDirectory()).toBe(true);
@@ -373,5 +384,5 @@ test("withdrawn, a source offers nothing: its enabled IDs stop sync until disabl
   expect(await sync({ sources: [], enabled: [] }, entries(false))).toEqual(["removed skill copy .agents/skills/openspec-propose"]);
   expect(existsSync(link("openspec-propose"))).toBe(false);
   expect(existsSync(join(link("manual"), "SKILL.md"))).toBe(true);
-  expect(existsSync(join(office, generationFolder("openspec", published().generation), "openspec-propose/SKILL.md"))).toBe(true);
+  expect(existsSync(join(stable(), "openspec-propose/SKILL.md"))).toBe(true);
 });

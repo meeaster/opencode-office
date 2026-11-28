@@ -58,15 +58,16 @@ packages: [${packages.join(", ")}]
   definition(add("manual"));
   // A switch that can't record its references (a folder where the file goes) exits 1 and clones none.
   mkdirSync(join(applied, "occupied"), { recursive: true });
-  const pointer = readlinkSync(join(dir, ".office/current"));
+  const installed = join(dir, ".office/packages/office");
+  const before = lstatSync(installed).ino;
   expect(cli(1, "sync")).toMatch(/FAILED the references were not recorded \(.*\), so no reference checkout is cloned or updated; run office sync again/);
-  expect(readlinkSync(join(dir, ".office/current"))).not.toBe(pointer);
+  expect(lstatSync(installed).ino).not.toBe(before);
   expect(existsSync(checkout)).toBe(false);
   expect(existsSync(join(dir, "references/floci"))).toBe(false);
   rmSync(applied, { recursive: true });
   cli(0, "sync");
   expect(lstatSync(applied).isFile()).toBe(true);
-  expect(existsSync(join(dir, ".office/current/references.json"))).toBe(false);
+  expect(existsSync(join(dir, ".office/references.json"))).toBe(false);
   // office.yaml's own first, then the packages' in the order they were set up: manual before floci, not alphabetically.
   expect(names(list())).toEqual(["z-owner", "a-owner", "manual", "floci"]);
   expect(cli(0, "references", "list")).toBe(list());
@@ -184,10 +185,11 @@ test("a broken new pin of a Git package publishes nothing; the recorded referenc
   publish(setup);
   cli(0, "sync", "--packages");
   expect(cli(0, "references", "list")).toContain("remote-docs");
-  const current = readlinkSync(join(dir, ".office/current"));
+  const installed = join(dir, ".office/packages/office");
+  const before = lstatSync(installed).ino;
   publish(`${setup} throw Error("bad new pin");`);
   expect(cli(1, "sync", "--packages")).toContain("bad new pin");
-  expect(readlinkSync(join(dir, ".office/current"))).toBe(current);
+  expect(lstatSync(installed).ino).toBe(before);
   expect(cli(0, "instructions", dir)).toContain("references/remote-docs/` (package docs)");
   // The installed copy is still the old pin's: the command doesn't load it under the new pin.
   expect(cli(1, "references", "list")).toContain("package docs: ");

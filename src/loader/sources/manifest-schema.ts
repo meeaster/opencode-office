@@ -258,7 +258,7 @@ const packageCommands = v.pipe(
 );
 
 /** The entries of `.office/` office itself keeps, which no package may declare committed. */
-const officeFolders = new Set(["cache", "claude", "current", "generation-ticket", "generations", "mise", "node_modules", "opencode", "packages", "plugins", "publishing.json", "resolved", "runtime", "tmp"]);
+const officeFolders = new Set(["cache", "claude", "mise", "node_modules", "opencode", "packages", "plugins", "resolved", "runtime", "selection.json", "tmp", "unavailable.json", "withdrawals"]);
 
 /** A committed folder: one plain folder name directly under `.office/`, written `.office/<name>/`, that office doesn't keep itself. */
 const committedFolder = v.pipe(

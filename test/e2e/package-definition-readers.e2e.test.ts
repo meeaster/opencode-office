@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, readlinkSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "../../src/git.ts";
 import { definitionFixture } from "../support/package-definition.fixture.ts";
 import { definitionText, writePackage } from "../support/test-package.ts";
 
-const { root, exe, marker, write, read, commit, fixture } = definitionFixture();
+const { root, marker, write, read, commit, fixture } = definitionFixture();
 
 for (const kind of ["local", "tracked"]) {
   test(`a newly shipped built-in cannot claim the ${kind} source during sync, update or refresh`, () => {
@@ -52,7 +52,7 @@ test("reads return the provider's parsed values, a copy each; sync admits no bat
   const { dir, cli, select } = fixture("collections");
   const path = (name: string) => join(dir, "packages", name, "office.ts");
   const contract = join(dir, "packages/catalog/items.ts");
-  const current = join(dir, ".office/current");
+  const installed = () => lstatSync(join(dir, ".office/packages/office")).ino;
   const author = definitionText('{setup(c){c.add(items,{name:"first",count:1})}}', 'import {items} from "@office/catalog/items";');
   const shares = { exports: { "./items": "./items.ts" } };
   const uses = { dependencies: ["catalog"] };
@@ -68,21 +68,21 @@ test("reads return the provider's parsed values, a copy each; sync admits no bat
   cli(0, "sync", "--packages");
   // Normalized once by the provider, not by the reader's handle; changing one read leaves the next alone.
   expect(cli(0, "items")).toContain('"count":2');
-  const synced = readlinkSync(current);
+  const synced = installed();
 
   writePackage(path("alpha"), 'throw Error("failed author")');
   expect(cli(1, "sync", "--packages")).toContain("FAILED package alpha: packages/alpha/office.ts: failed author");
-  expect(readlinkSync(current)).toBe(synced);
+  expect(installed()).toBe(synced);
   expect(cli(1, "items")).toContain("package alpha: packages/alpha/office.ts: failed author");
   // A provider whose parser now refuses an author's entry stops sync, naming the author.
   writePackage(path("alpha"), author, uses);
   write(contract, 'export const items={id:"catalog.items",parse(i){if(typeof i.count!=="string")throw Error("expected text");return i}}');
   expect(cli(1, "sync", "--packages")).toContain("FAILED package alpha: expected text");
-  expect(readlinkSync(current)).toBe(synced);
+  expect(installed()).toBe(synced);
   writePackage(path("alpha"), author.replace("count:1", 'count:"valid"'), uses);
   writePackage(path("catalog"), provider.replace("c.registry(items);", 'c.registry(items);c.add(items,{name:"bad",count:1});'), shares);
   expect(cli(1, "sync", "--packages")).toContain("FAILED package catalog: expected text");
-  expect(readlinkSync(current)).toBe(synced);
+  expect(installed()).toBe(synced);
   expect(cli(1, "items")).toContain("package catalog: expected text");
 });
 
@@ -155,42 +155,3 @@ for (const order of [["alpha", "catalog"], ["catalog", "alpha"]]) {
     expect(read(snapshot)).toBe(published);
   }, 60_000);
 }
-
-test("a suspended reader retains its generation beyond the previous set", async () => {
-  const { dir, cli, env, select } = fixture("leased-reader");
-  const repo = join(root, "leased-reader-source");
-  git(["init", "-qb", "main", repo]);
-  writePackage(join(repo, "pkg/office.ts"), definitionText(`{commands:{"read edition":{summary:"Edition",async run(){
-      if(process.env.WAIT_FOR_FLIPS){console.log("ready");await Bun.stdin.text()}
-      console.log(readFileSync(new URL("./edition",import.meta.url),"utf8"))
-    }}}}`, `import {readFileSync} from "node:fs";`), { name: "leased" });
-
-  const pin = (value: string) => {
-    write(join(repo, "pkg/edition"), value);
-    select(`  - {name: leased, path: pkg, repo: ${repo}, ref: ${commit(repo)}}\n`);
-    cli(0, "sync", "--packages");
-  };
-
-  pin("old");
-  const active = join(dir, ".office/current");
-  const old = join(dir, ".office", readlinkSync(active));
-  const process = Bun.spawn([exe, "--office", dir, "read", "edition"], { env: { ...env, WAIT_FOR_FLIPS: "1" }, stdin: "pipe", stdout: "pipe", stderr: "inherit" });
-
-  try {
-    const output = process.stdout.getReader();
-    expect(new TextDecoder().decode((await output.read()).value)).toContain("ready");
-
-    for (const value of ["two", "three", "four"]) pin(value);
-    expect(existsSync(old)).toBe(true);
-    expect(cli(0, "read", "edition").trim()).toBe("four");
-    process.stdin.end();
-    let resumed = "";
-
-    for (let next = await output.read(); !next.done; next = await output.read()) resumed += new TextDecoder().decode(next.value);
-    expect(resumed.trim()).toBe("old");
-    expect(await process.exited).toBe(0);
-    cli(0, "sync", "--packages");
-    expect(existsSync(old)).toBe(false);
-    expect(readdirSync(join(dir, ".office/generations"))).toHaveLength(2);
-  } finally { process.kill(); }
-}, 60_000);

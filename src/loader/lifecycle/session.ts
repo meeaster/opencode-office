@@ -6,14 +6,13 @@
 // nothing (and blocks no other's text), and a deselected one's text is gone after the sync that
 // withdraws it. What a package says of files is read as the session starts.
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import * as v from "valibot";
 
 import { readAppliedSnapshot } from "../../../sdk/applied-settings.ts";
 import { installedPackages, problemLine } from "../definitions/inventory.ts";
 import { officeInfo } from "../../lifecycle-inputs.ts";
 import type { Office } from "../../office.ts";
-import { managedDirectory } from "../generation/storage.ts";
+import { selectionFile } from "../installed/paths.ts";
 import { importEdges, readPackageJson } from "../sources/manifest.ts";
 import { type PackageProblem, type ResolvedPackage, resolvePackages } from "../sources/selection.ts";
 import { packageEntries } from "../../schema.ts";
@@ -56,8 +55,8 @@ function withImporters(blocked: readonly PackageProblem[], packages: readonly Re
  * rejected copy, say) is left unloaded with the packages that import it, as sync's admission
  * leaves a package it couldn't fetch, and the rest load past the same gate.
  */
-export async function packageSessionText(office: Office, generation: string): Promise<string> {
-  const selection = v.parse(packageEntries, JSON.parse(readFileSync(join(managedDirectory(office.dir, generation), "selection.json"), "utf8")));
+export async function packageSessionText(office: Office): Promise<string> {
+  const selection = v.parse(packageEntries, JSON.parse(readFileSync(selectionFile(office.dir), "utf8")));
   const view = { ...office, packages: selection };
   let installed = installedPackages(view);
 

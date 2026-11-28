@@ -152,6 +152,31 @@ function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+/** Watches the parent so the watch survives replacement of the package folder. */
+export function watchPackageFolder(officeRoot: string, packageName: string, onReplace: () => void, onError: (error: Error) => void): FSWatcher {
+  const parent = join(officeRoot, ".office/packages");
+  const path = join(parent, packageName);
+
+  const identity = () => {
+    const entry = lstatSync(path, { throwIfNoEntry: false });
+
+    return entry?.isDirectory() ? entry.ino : undefined;
+  };
+
+  let last = identity();
+
+  const watcher = watch(parent, (event, name) => {
+    if (event !== "rename" || (name !== null && name !== packageName)) return;
+    const next = identity();
+
+    if (next === undefined || next === last) return;
+    last = next;
+    onReplace();
+  });
+
+  return watcher.on("error", onError);
+}
+
 /**
  * Watches one package's applied settings: the snapshot's folder, `.office/runtime/`, which sync
  * makes before it links any plugin, so a replacement by rename is seen. It starts watching before

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import * as v from "valibot";
@@ -90,7 +90,7 @@ function snapshot({ lock = true } = {}) {
   const conf = globalConfD();
 
   return {
-    current: readlinkSync(join(office, ".office/current")),
+    installed: lstatSync(join(office, ".office/packages/office")).ino,
     settings: readIf(join(office, appliedSettingsPath)),
     lock: lock ? readIf(join(office, "office.lock")) : undefined,
     packages: readIf(join(office, "machine.packages.toml")),
@@ -422,4 +422,3 @@ test("machine.toml's exact pin is held outside the batch once mise lists it; a s
     expect(readFileSync(join(office, "office.lock"), "utf8")).toBe(recorded);
   }
 });
-

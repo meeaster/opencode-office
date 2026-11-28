@@ -27,7 +27,7 @@ test("a committed folder shows in git status, office's own folders and paths out
   expect(untracked(dir)).toEqual(["?? .office/notes/x.md"]);
   const block = read(exclude);
 
-  for (const path of [".office/generations/", ".office/runtime/", "notes/"]) {
+  for (const path of [".office/withdrawals/", ".office/runtime/", "notes/"]) {
     writePackage(definition, keeper([path]));
     const output = cli(1, "sync");
 
