@@ -15,7 +15,7 @@ import { requiredPackages } from "../../../loader/sources/selection.ts";
 import { project } from "../projection.ts";
 import { recipes } from "../../../../packages/mise-integration/claims.ts";
 import { fragmentNotes } from "../delivery.ts";
-import { parseManifest } from "../../../schema.ts";
+import { parseManifest } from "../../../loader/sources/manifest-schema.ts";
 import { definitionText, writePackage } from "../../../../test/support/test-package.ts";
 import { readAppliedSettings } from "../../../../sdk/applied-settings.ts";
 

@@ -9,7 +9,8 @@ import { dirname, join, resolve } from "node:path";
 import * as v from "valibot";
 import { isMap, isNode, isScalar, isSeq, parse, parseDocument, stringify } from "yaml";
 
-import { check, type OfficeConfig, officeSchema, type Parsed, type ResolvedTools, resolveTools, scalarSetting, type SettingValue } from "./schema.ts";
+import { check, type Parsed } from "./parse.ts";
+import { type OfficeConfig, officeSchema, type ResolvedTools, resolveTools, scalarSetting, type SettingValue } from "./schema.ts";
 
 /** Where the office is mounted in the `opencode` container, and so the folder sessions start in. */
 export const containerOfficeDir = "/home/office/workspace";

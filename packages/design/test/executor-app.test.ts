@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { SettingValue } from "@office/sdk";
-import { defaultOffSetting, settingProperties } from "../../../src/schema.ts";
+import { defaultOffSetting, settingProperties } from "../../../src/loader/sources/manifest-schema.ts";
 import { settings } from "../executor-app/package.ts";
 import manifest from "../office.ts";
 

@@ -1,7 +1,7 @@
 import * as v from "valibot";
 import { changeSchema } from "../../lib/change.ts";
 import type { Office } from "../../office.ts";
-import type { LockedPackage } from "../../schema.ts";
+import type { LockedPackage } from "../../lock-schema.ts";
 import type { Candidate } from "../generation/storage.ts";
 
 export type Admission = {

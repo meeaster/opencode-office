@@ -6,7 +6,7 @@ import { machineFixture, makeEnvironmentOffice as makeOffice, write } from "../.
 import { syncLines as sync } from "../../../../test/support/sync.fixture.ts";
 import { writePackage } from "../../../../test/support/test-package.ts";
 import { loadOffice } from "../../../office.ts";
-import { parseManifest } from "../../../schema.ts";
+import { parseManifest } from "../../../loader/sources/manifest-schema.ts";
 import { globalConfD } from "../../mise-integration/machine-files.ts";
 import { projectionPath } from "../../tools/applied.ts";
 import { hostWrappers } from "../../tools/sfw.ts";

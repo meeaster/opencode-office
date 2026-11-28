@@ -8,7 +8,7 @@ import { git } from "../../../../src/git.ts";
 import { changeText, isFailure } from "../../../../src/lib/change.ts";
 import { packageLockProblems, publishPackages } from "../../../../src/loader/publication/publish.ts";
 import { loadOffice } from "../../../../src/office.ts";
-import type { LockedPackage } from "../../../../src/schema.ts";
+import type { LockedPackage } from "../../../../src/lock-schema.ts";
 import { editLock, readLockSection } from "../../../../src/versions.ts";
 import { definitionText, writePackage } from "../../../support/test-package.ts";
 import { syncLines as sync } from "../../../support/sync.fixture.ts";

@@ -6,7 +6,7 @@ import { type Change, isFailure } from "../../lib/change.ts";
 import { fetchBytes } from "../../lib/download.ts";
 import { sha256 } from "../../lib/hash.ts";
 import { type Office, OfficeError } from "../../office.ts";
-import type { Lock } from "../../schema.ts";
+import type { Lock } from "../../lock-schema.ts";
 import { defaultPins, hostPlatform, readApplied, wantedPins } from "../../versions.ts";
 import { fileState, type MachineLine, occupied, type WantedFile, type WantedFiles } from "../machine/owned-files.ts";
 import { machineRecordPath, miseShims } from "../machine/paths.ts";

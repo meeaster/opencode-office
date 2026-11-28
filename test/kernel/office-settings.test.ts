@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { settingsSchema } from "../../packages/skills/settings.ts";
 import { loadOffice, type PackageEntry, replacePackageSetting } from "../../src/office.ts";
 import { schemaSettings } from "../../src/loader/definitions/settings.ts";
-import { parseManifest } from "../../src/schema.ts";
+import { parseManifest } from "../../src/loader/sources/manifest-schema.ts";
 
 let dir: string;
 

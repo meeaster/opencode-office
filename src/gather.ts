@@ -18,7 +18,7 @@ import type { Office } from "./office.ts";
 import { type InstalledPackage, installedPackages, type InstalledPackages, problemLine } from "./loader/definitions/inventory.ts";
 import { jsonObject, registerPackages } from "./loader/definitions/registration.ts";
 import type { PackageProblem } from "./loader/sources/selection.ts";
-import type { PackageManifest } from "./schema.ts";
+import type { PackageManifest } from "./loader/sources/manifest-schema.ts";
 
 /** A package whose setup ran in this run: what it read as, with the claims its entries made and its effective system block. */
 export type GatheredPackage = InstalledPackage & Projection;

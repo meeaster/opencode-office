@@ -10,7 +10,7 @@ import * as v from "valibot";
 import type { ReferenceGit } from "../packages/references/tasks/refresh.ts";
 import { RenameError, renameNoReplace } from "./lib/no-replace.ts";
 import { streamChecked } from "./report/index.ts";
-import { check } from "./schema.ts";
+import { check } from "./parse.ts";
 
 function gitOutput(args: string[], cwd?: string, checkoutFd?: number): string {
   // Explicit POSIX stdio mapping: child fd 3 duplicates the ALREADY locked

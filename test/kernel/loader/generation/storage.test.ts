@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { beginGeneration, publishGeneration } from "../../../../src/loader/generation/storage.ts";
-import type { PackageLock } from "../../../../src/schema.ts";
+import type { PackageLock } from "../../../../src/lock-schema.ts";
 import { defaultPins, editLock, packageSectionKey, readLock, readLockSection, readLockText, writeLock } from "../../../../src/versions.ts";
 
 let dir: string;

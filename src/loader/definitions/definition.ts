@@ -5,7 +5,8 @@ import type { OptionalIntegration } from "./integrations.ts";
 import { readPackageJson } from "../sources/manifest.ts";
 import { marked as madeWithSdk } from "../../../sdk/mark.ts";
 import { registerSdk } from "./sdk.ts";
-import { type PackageManifest, parseManifest, type Parsed } from "../../schema.ts";
+import { type PackageManifest, parseManifest } from "../sources/manifest-schema.ts";
+import type { Parsed } from "../../parse.ts";
 
 /**
  * Read one definition: the file the package's package.json names in `office.definition`, loaded

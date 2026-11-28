@@ -27,7 +27,7 @@ import { packagesFile, packagesPath } from "../mise-integration/delivery.ts";
 import { newestRelease, type Candidate } from "./releases.ts";
 import { hostToolsRoot, installMise, type InstalledTool, reported, requireHostPlatform } from "./mise-bootstrap.ts";
 import { appliedExecutable } from "./applied.ts";
-import { check } from "../../schema.ts";
+import { check } from "../../parse.ts";
 import { compareVersions } from "../../versions.ts";
 import { currentReporter, progress, say, stream, warn } from "../../report/index.ts";
 import { displayLines } from "../../report/reporter.ts";

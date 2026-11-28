@@ -1,5 +1,5 @@
 import { OfficeError } from "./office.ts";
-import type { PackageManifest } from "./schema.ts";
+import type { PackageManifest } from "./loader/sources/manifest-schema.ts";
 
 // The core CLI owns these command families, including its non-public entrypoints. It matches its
 // own commands by exact shape, so a package name under one of these words would otherwise run.

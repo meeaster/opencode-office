@@ -5,7 +5,7 @@ import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";
 import { OfficeError, type Office } from "../../office.ts";
-import { check } from "../../schema.ts";
+import { check } from "../../parse.ts";
 import { atomicWrite } from "../../lib/atomic-write.ts";
 import { assetPaths } from "./assets.ts";
 

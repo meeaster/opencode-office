@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as v from "valibot";
 import { OfficeError } from "../../office.ts";
-import { check } from "../../schema.ts";
+import { check } from "../../parse.ts";
 
 export const pluginSource = v.union([
   v.string(),

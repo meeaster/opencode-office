@@ -1,5 +1,7 @@
 import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
-import { MalformedSettings, type PackageManifest, type Parsed, type SettingValue } from "../../schema.ts";
+import { MalformedSettings, type PackageManifest } from "../sources/manifest-schema.ts";
+import type { SettingValue } from "../../schema.ts";
+import type { Parsed } from "../../parse.ts";
 import type { ResolvedPackage } from "../sources/selection.ts";
 
 /**

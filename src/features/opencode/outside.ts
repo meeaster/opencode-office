@@ -8,7 +8,7 @@ import { dirname, join, relative, sep } from "node:path";
 import * as v from "valibot";
 
 import { containerOfficeDir, type Office } from "../../office.ts";
-import { check } from "../../schema.ts";
+import { check } from "../../parse.ts";
 import { pluginSource } from "./native.ts";
 
 type OutsideKind = "config" | "instructions" | "skill" | "plugin" | "agent" | "command" | "MCP server";

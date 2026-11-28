@@ -2,7 +2,8 @@ import * as v from "valibot";
 import type { Integration, Registry, RegistryEntry, SettingValue, SetupContext } from "../../../sdk/index.ts";
 import { definitionRoot, packageDeliveryDir } from "../../bound-paths.ts";
 import type { Office } from "../../office.ts";
-import { type PackageManifest, settingValue } from "../../schema.ts";
+import type { PackageManifest } from "../sources/manifest-schema.ts";
+import { settingValue } from "../../schema.ts";
 import { loadIntegrations, selectedIntegrations } from "./integrations.ts";
 import type { InstalledPackages } from "./inventory.ts";
 

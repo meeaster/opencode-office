@@ -17,7 +17,7 @@ import { type InstalledTool } from "./features/tools/mise-bootstrap.ts";
 import { clones } from "./layout.ts";
 import type { DeclaredAccess } from "./loader/access.ts";
 import { type Office, OfficeError, type Repository, updateConfig } from "./office.ts";
-import { check } from "./schema.ts";
+import { check } from "./parse.ts";
 import { compareVersions } from "./versions.ts";
 import { inherit, progress, say, stream, warn } from "./report/index.ts";
 

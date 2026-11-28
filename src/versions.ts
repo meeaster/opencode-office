@@ -8,9 +8,11 @@ import * as v from "valibot";
 import { parse, stringify } from "yaml";
 
 import { openCheckoutLease, publicationLease } from "./checkout-lease.ts";
-import { type Office, OfficeError } from "./office.ts";
-import { check, type HostPlatform, type Lock, type LockedPackage, type PackageLock, parsePackageLock, parseToolLock, type PinnedTool, pinnedTools, lockSchema, type ToolLock, version } from "./schema.ts";
 import { atomicWrite } from "./lib/atomic-write.ts";
+import { type HostPlatform, type Lock, type LockedPackage, lockSchema, type PackageLock, parsePackageLock, parseToolLock, type ToolLock } from "./lock-schema.ts";
+import { type Office, OfficeError } from "./office.ts";
+import { check } from "./parse.ts";
+import { type PinnedTool, pinnedTools, version } from "./schema.ts";
 
 export type Pin = Lock[PinnedTool];
 

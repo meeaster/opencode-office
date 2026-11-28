@@ -2,7 +2,7 @@ import * as v from "valibot";
 
 import { type Office, OfficeError } from "../office.ts";
 import { requestOpenCode } from "../features/opencode/opencode-request.ts";
-import { check } from "../schema.ts";
+import { check } from "../parse.ts";
 
 const entries = v.object({ data: v.array(v.object({ key: v.string(), value: v.string() })) });
 

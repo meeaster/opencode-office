@@ -10,7 +10,7 @@ import * as v from "valibot";
 
 import { type Office, OfficeError } from "../office.ts";
 import { requestOpenCode } from "../features/opencode/opencode-request.ts";
-import { check, modelReference, type Parsed } from "../schema.ts";
+import { check, type Parsed } from "../parse.ts";
 
 /** Every probe session's title. A run first deletes sessions with exactly this title, left by a crashed run. */
 export const probeTitle = "office context probe";
@@ -21,6 +21,11 @@ const prompt = "Reply with exactly: OK";
 const answerTimeoutMs = 300_000;
 
 export type Model = { providerID: string; id: string; variant?: string };
+
+const modelReference = v.pipe(
+  v.string("must be a model such as openai/gpt-6-luna#low"),
+  v.regex(/^[^/#\s]+\/[^#\s]+(?:#[^#\s]+)?$/, "must be a model such as openai/gpt-6-luna#low: provider/model, with an optional #variant"),
+);
 
 /** `provider/model#variant`, as OpenCode writes a model, split into what its API takes. */
 export function parseModel(text: string): Model {

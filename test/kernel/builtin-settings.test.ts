@@ -9,7 +9,8 @@ import { loadOffice } from "../../src/office.ts";
 import { installedDefinition, type InstalledPackage, type InstalledPackages } from "../../src/loader/definitions/inventory.ts";
 import { registerPackages } from "../../src/loader/definitions/registration.ts";
 import { schemaSettings } from "../../src/loader/definitions/settings.ts";
-import { defaultOffSetting, type SettingValue } from "../../src/schema.ts";
+import { defaultOffSetting } from "../../src/loader/sources/manifest-schema.ts";
+import type { SettingValue } from "../../src/schema.ts";
 import { toolPath } from "../../src/tool.ts";
 
 const office = mkdtempSync(join(tmpdir(), "office-builtin-settings-"));

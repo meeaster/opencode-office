@@ -7,7 +7,7 @@ import { declaredCommands, nameProblems, packageRoute } from "../../src/command-
 import { OfficeError } from "../../src/office.ts";
 import { git } from "../../src/git.ts";
 import { loadOffice } from "../../src/office.ts";
-import { parseManifest } from "../../src/schema.ts";
+import { parseManifest } from "../../src/loader/sources/manifest-schema.ts";
 import { definitionText, writePackage } from "../support/test-package.ts";
 
 const run = () => {};

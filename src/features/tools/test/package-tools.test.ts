@@ -15,7 +15,7 @@ import { toolPins } from "../../mise-integration/mise-toml.ts";
 import { loadOffice } from "../../../office.ts";
 import { verifyCopy } from "../../../loader/sources/copies.ts";
 import { resolvePackages } from "../../../loader/sources/selection.ts";
-import { parseManifest } from "../../../schema.ts";
+import { parseManifest } from "../../../loader/sources/manifest-schema.ts";
 import { fragmentNotes, machineBelowFloors, machineFiles, orphanFragments, packageLines, packagesFileProblems, strayFragments } from "../../mise-integration/delivery.ts";
 import { compareToolVersions } from "../../tooling/requirements.ts";
 import { definitionText, pluginDefinition, sharedToolsLock, writePackage } from "../../../../test/support/test-package.ts";

@@ -15,7 +15,7 @@ import { OfficeError, type Office } from "../office.ts";
 import { readPackageJson } from "./sources/manifest.ts";
 import { runEvaluator } from "./worker.ts";
 import { resolvePackages } from "./sources/selection.ts";
-import { check } from "../schema.ts";
+import { check } from "../parse.ts";
 import { accessWithSdk, registerSdk } from "./definitions/sdk.ts";
 import { builtinFiles, toolPath } from "../tool.ts";
 

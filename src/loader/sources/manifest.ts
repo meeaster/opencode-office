@@ -4,7 +4,8 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, normalize, relative, sep } from "node:path";
 import * as v from "valibot";
-import { check, ownEntries, type Parsed } from "../../schema.ts";
+import { check, type Parsed } from "../../parse.ts";
+import { ownEntries } from "./manifest-schema.ts";
 
 export const scope = "@office/";
 

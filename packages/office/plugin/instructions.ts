@@ -7,7 +7,8 @@ import { dirname, join } from "node:path";
 
 import * as v from "valibot";
 
-import { check, officeSchema, type Parsed, resolveTools } from "../../../src/schema.ts";
+import { check, type Parsed } from "../../../src/parse.ts";
+import { officeSchema, resolveTools } from "../../../src/schema.ts";
 import { type AppliedReference, appliedReferences } from "../../../src/features/references/applied-references.ts";
 import sessionScope from "../claude/session-scope.txt" with { type: "text" };
 

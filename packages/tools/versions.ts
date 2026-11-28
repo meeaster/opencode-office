@@ -3,7 +3,7 @@
 
 // A version office can order: dotted numbers, optionally a `v` before them, a prerelease after a
 // `-`, and build metadata after a `+`, which doesn't count. Every package's version is one
-// (src/schema.ts); the office's line may be anything mise takes, such as "2" or "latest".
+// (src/loader/sources/manifest-schema.ts); the office's line may be anything mise takes, such as "2" or "latest".
 const orderable = /^v?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
 
 /** Compares dotted identifiers, numerically where both are numbers, a missing one first. */

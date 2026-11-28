@@ -6,7 +6,7 @@ import * as v from "valibot";
 
 import { type Office, OfficeError } from "../office.ts";
 import { requestOpenCode } from "../features/opencode/opencode-request.ts";
-import { check } from "../schema.ts";
+import { check } from "../parse.ts";
 
 const pairingSchema = v.object({ code: v.string(), expires_in: v.number() });
 

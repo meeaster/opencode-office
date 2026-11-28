@@ -14,9 +14,12 @@ import { join } from "node:path";
 import * as v from "valibot";
 import { parse, stringify } from "yaml";
 
+import { settingVariable, spawnsOfficeName } from "../../loader/sources/manifest-schema.ts";
 import { OfficeError, readEnvFile } from "../../office.ts";
-import { check, type ComposeFile, composeFileSchema, type Parsed, scalarSetting, type SettingValue, settingVariable, spawnsOfficeName } from "../../schema.ts";
+import { check, type Parsed } from "../../parse.ts";
 import { say } from "../../report/index.ts";
+import { scalarSetting, type SettingValue } from "../../schema.ts";
+import { type ComposeFile, composeFileSchema } from "./compose-schema.ts";
 
 type Project = { name: string; state: string };
 

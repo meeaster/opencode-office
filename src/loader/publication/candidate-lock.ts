@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { PackageLock } from "../../schema.ts";
+import type { PackageLock } from "../../lock-schema.ts";
 import { readRecord, sourceDifferences, verifiedCommit } from "../sources/copies.ts";
 import type { ResolvedPackage } from "../sources/selection.ts";
 

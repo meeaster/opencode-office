@@ -4,7 +4,9 @@ import { boundUnavailable, definitionRoot, linkProblem } from "../../bound-paths
 import { composeProblems, packageComposeFile, settingsEnv } from "../../features/compose/services.ts";
 import { gateDefaultProblem, systemSection } from "../../features/mise-integration/system.ts";
 import type { Office } from "../../office.ts";
-import { type PackageManifest, type Parsed, type SettingValue, settingVariable } from "../../schema.ts";
+import { type PackageManifest, settingVariable } from "../sources/manifest-schema.ts";
+import type { SettingValue } from "../../schema.ts";
+import type { Parsed } from "../../parse.ts";
 import { verifyCopy } from "../sources/copies.ts";
 import { importEdges, readPackageJson, scope, sdkName } from "../sources/manifest.ts";
 import { type PackageProblem, type ResolvedPackage, resolvePackages, selectedNames } from "../sources/selection.ts";

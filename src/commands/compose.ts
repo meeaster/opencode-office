@@ -40,7 +40,7 @@ import { preparePackageServices } from "../features/compose/package-services.ts"
 import { sweepSpawned } from "../features/compose/package-spawns.ts";
 import { reconcileHostServices } from "../features/systemd/package-host-services.ts";
 import { precheckUnits, reconcileUnits, removeUnits } from "../features/systemd/units.ts";
-import type { Lock } from "../schema.ts";
+import type { Lock } from "../lock-schema.ts";
 import { prepareSecrets } from "../features/secrets/secrets.ts";
 import { placeExecutable, toolPath, unpackedImage } from "../tool.ts";
 import { baseImage, changes, compareVersions, defaultPins, describeMove, executorImage, readApplied, wantedPins, writeApplied } from "../versions.ts";

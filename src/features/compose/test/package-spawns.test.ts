@@ -9,7 +9,7 @@ import { loadOffice } from "../../../office.ts";
 import { appliedSpawns, spawnsLabel } from "../services.ts";
 import { preparePackageServices } from "../package-services.ts";
 import { planSweep, type Spawned } from "../package-spawns.ts";
-import { parseManifest } from "../../../schema.ts";
+import { parseManifest } from "../../../loader/sources/manifest-schema.ts";
 import { recordRequiredBuiltins } from "../../../../test/support/test-builtin-record.ts";
 import { writePackage } from "../../../../test/support/test-package.ts";
 

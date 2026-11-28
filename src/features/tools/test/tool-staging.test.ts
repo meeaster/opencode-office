@@ -13,7 +13,7 @@ import type { Run } from "../selection.ts";
 import { gatherPackages } from "../../../gather.ts";
 import { grantConsent } from "../../machine/record.ts";
 import { loadOffice } from "../../../office.ts";
-import type { LockedTool } from "../../../schema.ts";
+import type { LockedTool } from "../../../lock-schema.ts";
 import { syncLines as sync } from "../../../../test/support/sync.fixture.ts";
 import { applyOfficeTools, definitionText, isOfficeTool, officeTools, sharedToolsLock, writePackage } from "../../../../test/support/test-package.ts";
 import { defaultPins, editLock } from "../../../versions.ts";

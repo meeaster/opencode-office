@@ -252,7 +252,7 @@ function isFeature(folder: Location): folder is Feature {
 }
 
 const loaderEntries = new Map<string, readonly string[]>([
-  ["sources", ["sources/selection.ts", "sources/manifest.ts", "sources/copies.ts", "sources/drift.ts"]],
+  ["sources", ["sources/selection.ts", "sources/manifest.ts", "sources/manifest-schema.ts", "sources/copies.ts", "sources/drift.ts"]],
   ["definitions", ["definitions/inventory.ts", "definitions/settings.ts", "definitions/registration.ts", "definitions/sdk.ts"]],
   ["access", ["access.ts"]],
   ["worker", ["worker.ts"]],

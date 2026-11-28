@@ -5,7 +5,8 @@
 import { lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as v from "valibot";
-import { check, type OfficeConfig, type Parsed, repository } from "../../schema.ts";
+import { check, type Parsed } from "../../parse.ts";
+import { type OfficeConfig, repository } from "../../schema.ts";
 
 const referenceFile = ".office/resolved/references.json";
 

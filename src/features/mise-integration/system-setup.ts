@@ -38,7 +38,7 @@ import { systemApplies } from "./system.ts";
 import { destinationProblems } from "./projection.ts";
 import { machineFiles } from "./delivery.ts";
 import type { GatheredPackage } from "../../gather.ts";
-import { check } from "../../schema.ts";
+import { check } from "../../parse.ts";
 import { inherit, progress, say, warn } from "../../report/index.ts";
 
 /** A command's outcome: its exit status and what it printed, when it didn't print to the terminal. */

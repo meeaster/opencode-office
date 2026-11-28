@@ -6,7 +6,7 @@ import { openCheckoutLease, publicationLease } from "../../checkout-lease.ts";
 import { tryFileLock } from "../../lib/file-lock.ts";
 import { atomicWrite } from "../../lib/atomic-write.ts";
 import { OfficeError, readConfig } from "../../office.ts";
-import { type PackageLock, parsePackageLock } from "../../schema.ts";
+import { type PackageLock, parsePackageLock } from "../../lock-schema.ts";
 import { editLock, lockFile, lockSections, packageSectionKey, publicationBusy, readLockText, requireKnownLockKeys } from "../../versions.ts";
 
 const id = v.pipe(v.string(), v.regex(/^g-[a-f0-9-]{36}$/));

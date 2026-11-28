@@ -4,7 +4,8 @@ import * as v from "valibot";
 import { atomicWrite } from "../../lib/atomic-write.ts";
 import { sha256 } from "../../lib/hash.ts";
 import { type Office, OfficeError, readConfig } from "../../office.ts";
-import { check, hostVariable } from "../../schema.ts";
+import { check } from "../../parse.ts";
+import { hostVariable } from "../../loader/sources/manifest-schema.ts";
 import { envFilePath, machineRecordPath } from "./paths.ts";
 
 const absolute = v.pipe(v.string(), v.check((path) => path.startsWith("/"), "must be an absolute path"));

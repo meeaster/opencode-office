@@ -7,7 +7,7 @@ import { recordUnmet } from "../../features/tools/host.ts";
 import { publishedView, type GatheredPackage, type GatherProblem, gatherPackages, problemLines } from "../../gather.ts";
 import { failure, isFailure, type Change } from "../../lib/change.ts";
 import { type Office, OfficeError } from "../../office.ts";
-import { parsePackageLock } from "../../schema.ts";
+import { parsePackageLock } from "../../lock-schema.ts";
 import { lockFile } from "../../versions.ts";
 import { validateReplacement } from "../definitions/inventory.ts";
 import { bindReader } from "../generation/reader.ts";

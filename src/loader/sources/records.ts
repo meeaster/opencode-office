@@ -3,7 +3,7 @@ import { basename, dirname, join, relative } from "node:path";
 import * as v from "valibot";
 import type { Office } from "../../office.ts";
 import { sha256 } from "../../lib/hash.ts";
-import { check, type Parsed } from "../../schema.ts";
+import { check, type Parsed } from "../../parse.ts";
 import { builtinFiles } from "../../tool.ts";
 
 /** Where a pulled-in package records where it came from and the hash of each of its files. */

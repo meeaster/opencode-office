@@ -10,7 +10,8 @@ import type { Office } from "../../office.ts";
 import type { GatheredPackage } from "../../gather.ts";
 import type { InstalledPackage } from "../../loader/definitions/inventory.ts";
 import { gateDefaultProblem, systemApplies, systemSection } from "./system.ts";
-import { defaultOffSetting, settingValue, type SettingValue, systemBlock, type SystemBlock } from "../../schema.ts";
+import { defaultOffSetting, systemBlock, type SystemBlock } from "../../loader/sources/manifest-schema.ts";
+import { settingValue, type SettingValue } from "../../schema.ts";
 
 /** Whether a registry holds machine claims: tools, tasks, host installs or system recipes. */
 export function machineCollection(id: string) {

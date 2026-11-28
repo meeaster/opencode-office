@@ -12,7 +12,7 @@ import { definitionGate, installedDefinition } from "../definitions/inventory.ts
 import { schemaSettings } from "../definitions/settings.ts";
 import { importEdges, readPackageJson } from "../sources/manifest.ts";
 import { type ResolvedPackage, resolvePackages, selectedNames } from "../sources/selection.ts";
-import type { PackageManifest } from "../../schema.ts";
+import type { PackageManifest } from "../sources/manifest-schema.ts";
 import { say } from "../../report/index.ts";
 
 /**

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { failure, isFailure, type Change } from "../../lib/change.ts";
 import { renameNoReplace } from "../../lib/no-replace.ts";
 import { type Office, OfficeError, type PackageEntry } from "../../office.ts";
-import type { PackageLock } from "../../schema.ts";
+import type { PackageLock } from "../../lock-schema.ts";
 import { materializePackage, readRecord, sourceDifferences, verifiedCommit } from "../sources/copies.ts";
 import type { resolvePackages } from "../sources/selection.ts";
 import { applicationLease } from "./lease.ts";

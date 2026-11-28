@@ -6,7 +6,8 @@ import { join } from "node:path";
 import * as v from "valibot";
 import { parse } from "yaml";
 
-import { check, officeSchema, resolveTools } from "../../../src/schema.ts";
+import { check } from "../../../src/parse.ts";
+import { officeSchema, resolveTools } from "../../../src/schema.ts";
 import { setVersions } from "../../../src/commands/upgrade.ts";
 import { toolPath } from "../../../src/tool.ts";
 

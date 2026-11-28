@@ -18,7 +18,7 @@ import { pathToFileURL } from "node:url";
 
 import * as v from "valibot";
 
-import { check } from "../../schema.ts";
+import { check } from "../../parse.ts";
 import { pluginSource as nativePluginSource } from "./native.ts";
 
 /** The app machine's folders, overridable so tests and scratch runs never touch the real config. */

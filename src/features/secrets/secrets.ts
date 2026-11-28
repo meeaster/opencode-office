@@ -9,7 +9,8 @@ import * as v from "valibot";
 import { atomicWrite } from "../../lib/atomic-write.ts";
 import { requireOfficeTool } from "../tools/host-tools.ts";
 import { type Office, OfficeError } from "../../office.ts";
-import { check, serverVariable } from "../../schema.ts";
+import { check } from "../../parse.ts";
+import { serverVariable } from "../../schema.ts";
 import { say } from "../../report/index.ts";
 
 function identityFile(): string {

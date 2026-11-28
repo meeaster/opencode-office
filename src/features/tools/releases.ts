@@ -7,7 +7,9 @@ import { join } from "node:path";
 import * as v from "valibot";
 
 import { OfficeError } from "../../office.ts";
-import { check, type HostPlatform, type PinnedTool } from "../../schema.ts";
+import { check } from "../../parse.ts";
+import type { HostPlatform } from "../../lock-schema.ts";
+import type { PinnedTool } from "../../schema.ts";
 import { atomicWrite } from "../../lib/atomic-write.ts";
 import { compareVersions, type Pin } from "../../versions.ts";
 

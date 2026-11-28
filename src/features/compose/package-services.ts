@@ -8,7 +8,7 @@ import * as compose from "./services.ts";
 import { type InstalledPackage, installedPackages, type InstalledPackages } from "../../loader/definitions/inventory.ts";
 import { type Office, OfficeError, readEnvFile } from "../../office.ts";
 import { say } from "../../report/index.ts";
-import type { PackageManifest } from "../../schema.ts";
+import type { PackageManifest } from "../../loader/sources/manifest-schema.ts";
 
 export function secretsPath(office: Office, name: string): string {
   return join(office.state, "packages", `${name}.env`);

@@ -36,7 +36,7 @@ import { shellQuote } from "../tools/sfw.ts";
 import { projectionPath } from "../tools/applied.ts";
 import { fragmentOfficeRoot, systemApplyCommand, systemMarker, systemNotes, systemSection, systemState } from "./system.ts";
 import type { GatheredPackage } from "../../gather.ts";
-import type { Parsed } from "../../schema.ts";
+import type { Parsed } from "../../parse.ts";
 
 /** Where sync writes packages' fragments: in the tool's `.office/`, where mise loads nothing by itself. */
 const fragmentsFolder = ".office/mise";

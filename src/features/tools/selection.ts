@@ -26,7 +26,7 @@ import { join } from "node:path";
 import type { GatheredPackage } from "../../gather.ts";
 import { miseShims } from "../machine/paths.ts";
 import type { Office } from "../../office.ts";
-import type { LockedTool, ToolLock } from "../../schema.ts";
+import type { LockedTool, ToolLock } from "../../lock-schema.ts";
 import { ageHours } from "./sfw.ts";
 import { editLock, lockFile, lockSections, readLockText } from "../../versions.ts";
 import { machineFile } from "../mise-integration/delivery.ts";

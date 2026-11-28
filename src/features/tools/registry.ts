@@ -11,7 +11,7 @@ import { hostWrappers } from "./sfw.ts";
 import { miseShims } from "../machine/paths.ts";
 import { hostToolsRoot } from "./mise-bootstrap.ts";
 import type { Office } from "../../office.ts";
-import { check } from "../../schema.ts";
+import { check } from "../../parse.ts";
 import { defaultPins } from "../../versions.ts";
 
 /** Each registry short name and alias, with the backend it stands for. */
