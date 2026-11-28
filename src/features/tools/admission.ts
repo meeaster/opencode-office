@@ -12,9 +12,10 @@ import { join } from "node:path";
 import * as v from "valibot";
 
 import type { SettingValue } from "../../../sdk/index.ts";
-import type { GatheredPackage, GatherProblem } from "../../gather.ts";
+import type { PackageProblem } from "../../loader/sources/selection.ts";
 import type { Office } from "../../office.ts";
 import { machineFile, withoutTools } from "../mise-integration/delivery.ts";
+import type { ProjectedPackage } from "../mise-integration/projection.ts";
 import { compareToolVersions, wantedTools } from "../tooling/requirements.ts";
 import { canonicalTool, officeRegistry, type ToolRegistry } from "./registry.ts";
 
@@ -27,11 +28,13 @@ export type Demand = { name: string; floor: string; consumers: Consumer[]; bin: 
 /** The owner's exact choice of a required tool in machine.toml, under the key it is written with. */
 type Hold = { key: string; version: string };
 
+type ToolProblem = PackageProblem & { named: true };
+
 /**
  * What admission establishes: the demands by tool, those mise installs (`managed`: the ones no
  * package provides), the owner's holds by tool, and every problem.
  */
-export type Admission = { demands: Map<string, Demand>; managed: Demand[]; holds: Map<string, Hold>; problems: GatherProblem[] };
+export type Admission = { demands: Map<string, Demand>; managed: Demand[]; holds: Map<string, Hold>; problems: ToolProblem[] };
 
 /** A tool one package installs itself, at the exact version its setting holds. */
 type Provided = { name: string; package: string; version: SettingValue | undefined; setting: string; bin: string[] };
@@ -39,7 +42,7 @@ type Provided = { name: string; package: string; version: SettingValue | undefin
 // One exact version as mise writes one: no range, prefix (`prefix:`), `latest`, `lts` or ref.
 const exactVersion = /^v?\d[0-9A-Za-z._+-]*$/;
 
-function byName(packages: readonly GatheredPackage[]): GatheredPackage[] {
+function byName(packages: readonly ProjectedPackage[]): ProjectedPackage[] {
   return packages.toSorted((a, b) => a.entry.name.localeCompare(b.entry.name));
 }
 
@@ -94,8 +97,8 @@ function parts(version: string): number {
  * Everything admission establishes about the packages' `@office/tools` claims. `registry` reads
  * mise's registry; it is called only when a short name must be resolved.
  */
-export function admitTools(office: Office, packages: readonly GatheredPackage[], registry: () => ToolRegistry = () => officeRegistry(office)): Admission {
-  const problems: GatherProblem[] = [];
+export function admitTools(office: Office, packages: readonly ProjectedPackage[], registry: () => ToolRegistry = () => officeRegistry(office)): Admission {
+  const problems: ToolProblem[] = [];
   const provided: Provided[] = byName(packages).flatMap(item => item.claims.provided.map(provision => ({ name: provision.name, package: item.entry.name, version: item.settings[provision.versionSetting], setting: provision.versionSetting, bin: provision.bin })));
   const providedNames = new Set(provided.map(provider => provider.name));
   const demands = new Map<string, Demand>();
@@ -256,7 +259,7 @@ export function admitTools(office: Office, packages: readonly GatheredPackage[],
 }
 
 /** The keys of the owner's machine.toml entries that hold shared tools the packages require. */
-export function heldKeys(office: Office, packages: readonly GatheredPackage[]): Set<string> {
+export function heldKeys(office: Office, packages: readonly ProjectedPackage[]): Set<string> {
   return new Set([...admitTools(office, packages).holds.values()].map(hold => hold.key));
 }
 
@@ -265,7 +268,7 @@ export function heldKeys(office: Office, packages: readonly GatheredPackage[]): 
  * a container-mode office, whose container keeps them in machine.packages.toml as it does every
  * package tool (src/features/tooling/requirements.ts).
  */
-export function toolProblems(office: Office, packages: readonly GatheredPackage[], registry: () => ToolRegistry = () => officeRegistry(office)): GatherProblem[] {
+export function toolProblems(office: Office, packages: readonly ProjectedPackage[], registry: () => ToolRegistry = () => officeRegistry(office)): ToolProblem[] {
   if (office.opencode.mode !== "host") return [];
 
   return admitTools(office, packages, registry).problems;

@@ -1,6 +1,9 @@
 import { lstatSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import type { ResolvedPackage } from "./loader/sources/selection.ts";
+
+export type PackageKind = "built-in" | "remote" | "local";
+
+type PackagePath = { dir: string; entry: { name: string }; kind: PackageKind };
 
 export const pulledFolder = ".office/packages";
 
@@ -25,7 +28,7 @@ export function packageRoot(dir: string) {
 
 /** Paths that outlive evaluation (e.g. mise hooks) must follow the published package.
  * Keep using item.dir to read and validate the bound or staged source. */
-export function packageDeliveryDir(dir: string, item: ResolvedPackage) {
+export function packageDeliveryDir(dir: string, item: PackagePath) {
   return item.kind === "local" ? item.dir : join(dir, pulledFolder, item.entry.name);
 }
 
@@ -41,17 +44,17 @@ export function packageLinks(folder: string) {
  * process loads a package only one way, so no module is evaluated twice; `linkProblem` is checked
  * before the first import, so a bound process never meets a missing link here.
  */
-export function definitionRoot(dir: string, item: ResolvedPackage) {
+export function definitionRoot(dir: string, item: PackagePath) {
   return bound?.dir === dir ? join(packageLinks(bound.folder), item.entry.name) : item.dir;
 }
 
 /** In a process bound to a set, what is wrong with the set's link to `item`; undefined when it is right or the process isn't bound. */
-export function linkProblem(dir: string, item: ResolvedPackage): string | undefined {
+export function linkProblem(dir: string, item: PackagePath): string | undefined {
   return bound?.dir === dir ? setLinkProblem(bound.folder, item) : undefined;
 }
 
 /** What is wrong with the link to `item` in the package set `folder`: missing, or to another folder. */
-function setLinkProblem(folder: string, item: ResolvedPackage): string | undefined {
+function setLinkProblem(folder: string, item: PackagePath): string | undefined {
   const link = join(packageLinks(folder), item.entry.name);
 
   if (!lstatSync(link, { throwIfNoEntry: false })) return "selected since the last sync; run office sync";

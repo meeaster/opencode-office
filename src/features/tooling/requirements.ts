@@ -1,5 +1,5 @@
 import type { Office } from "../../office.ts";
-import type { GatheredPackage } from "../../gather.ts";
+import type { ProjectedPackage } from "../mise-integration/projection.ts";
 import type { InstalledPackage } from "../../loader/definitions/inventory.ts";
 import { compareToolVersions } from "../../../packages/tools/versions.ts";
 
@@ -25,7 +25,7 @@ export function hostApplies(office: Office, item: InstalledPackage): boolean {
  * keeps its tools here, so there the package's `@office/tools` requirements count as declared too;
  * a host-mode office installs those itself (src/features/tools/).
  */
-export function wantedTools(office: Office, item: GatheredPackage): Record<string, string> {
+export function wantedTools(office: Office, item: ProjectedPackage): Record<string, string> {
   const tools = hostApplies(office, item) ? { ...item.manifest.tools, ...item.manifest.host?.tools } : { ...item.manifest.tools };
   const shared = office.opencode.mode === "host" ? [] : item.claims.required.map(({ name, minimum, hostOnly }) => ({ name, minimumVersion: minimum, hostOnly }));
 
@@ -53,7 +53,7 @@ type Declared = { floor: string; packages: { name: string; version: string }[] }
  * package and in each package's order. Its floor is the highest version a package declares; among
  * versions office can't order, the first package's stands.
  */
-export function declaredTools(office: Office, installed: GatheredPackage[]): Map<string, Declared> {
+export function declaredTools(office: Office, installed: ProjectedPackage[]): Map<string, Declared> {
   const ordered = installed.toSorted((a, b) => a.entry.name === b.entry.name ? 0 : a.entry.name === cliToolsPackage ? -1 : b.entry.name === cliToolsPackage ? 1 : a.entry.name.localeCompare(b.entry.name));
   const tools = new Map<string, Declared>();
 

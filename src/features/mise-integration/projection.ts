@@ -7,7 +7,6 @@ import type { RegistryEntry } from "../../../sdk/index.ts";
 import { requirements, type Requirement } from "../../../packages/tooling/requirements.ts";
 import { tools, type Provision, type Requirement as ToolRequirement } from "../../../packages/tools/handles.ts";
 import type { Office } from "../../office.ts";
-import type { GatheredPackage } from "../../gather.ts";
 import type { InstalledPackage } from "../../loader/definitions/inventory.ts";
 import { gateDefaultProblem, systemApplies, systemSection } from "./system.ts";
 import { defaultOffSetting, systemBlock, type SystemBlock } from "../../loader/sources/manifest-schema.ts";
@@ -27,6 +26,9 @@ export type MachineClaims = { tools: Requirement[]; required: ToolRequirement[];
 
 /** A package's claims and its effective system block: its own, or the recipe it contributed. */
 export type Projection = { claims: MachineClaims; system: SystemBlock | undefined };
+
+/** An installed package with the machine claims from its parsed entries. */
+export type ProjectedPackage = InstalledPackage & Projection;
 
 function asset(item: InstalledPackage, file: string) {
   const path = join(item.dir, file);
@@ -99,7 +101,7 @@ export function recipeSystem(item: InstalledPackage, { name, ...block }: Recipe)
 }
 
 /** Sync's check of the files a package's claims name: each task's script and its recipe's scripts are files inside it. */
-export function claimAssetProblems(item: GatheredPackage): string[] {
+export function claimAssetProblems(item: ProjectedPackage): string[] {
   const files = [...item.claims.tasks, ...(item.claims.install ? [item.claims.install] : [])].map(task => task.script);
 
   if (item.claims.recipe) files.push(...[item.claims.recipe.prepare, item.claims.recipe.verify].filter(file => file !== undefined));
@@ -144,7 +146,7 @@ function allowsChild(parent: PathClaim, child: PathClaim) {
 }
 
 /** Install roots own their subtree; native directories manage the directory itself. */
-export function destinationProblems(office: Office, items: GatheredPackage[], conflict?: (...owners: string[]) => void): string[] {
+export function destinationProblems(office: Office, items: ProjectedPackage[], conflict?: (...owners: string[]) => void): string[] {
   const owners = new Map<string, PathClaim>();
   const packages = new Map<string, { owner: string; spec: SettingValue }>();
   const problems: string[] = [];

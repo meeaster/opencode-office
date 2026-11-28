@@ -1,5 +1,6 @@
 # Office CLI
 
+- Keep production imports within `src/` acyclic, including type-only imports. `test/repo/imports.test.ts` exempts the awaited `build.ts` import inside `tool.ts`'s `placeExecutable`.
 - Import across loader modules only through their named entry files, listed in `test/repo/imports.test.ts`. Keep new loader files under 400 lines. `loader/worker.ts` owns transport; `cli.ts` dispatches worker flags to their handlers.
 - Terminal progress: use `src/report/` for live output and Clack for prompts and permanent messages. Keep unchanged labels and headings on screen; animate only the glyph and clock. Batch log bursts and repo updates into frames, retain recent output for failures, and fit live rows by terminal columns. When changing the renderer or upgrading Clack, run `./bin/test ./test/kernel/report/clack.test.ts` from the repo root and capture the affected path in a pseudo-terminal: an idle label should be written once and a log burst should leave its heading untouched.
 - The installed executable has no adjacent checkout, Node or npm. Access bundled files through `tool.ts`; keep the installed and checkout forms of a built-in package equivalent.

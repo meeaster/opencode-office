@@ -5,14 +5,12 @@ import { cloneTarget } from "../../features/opencode/delivery.ts";
 import { cloneFolder, entry as entryAt } from "../../features/opencode/ownership.ts";
 import { executorEnvFile, type Office } from "../../office.ts";
 import type { Stage } from "../../report/index.ts";
-import type { Context, Report, RootAnswer } from "./context.ts";
+import type { Context, LoadedPlugin, Report, RootAnswer } from "./context.ts";
 
 // OpenCode's list responses, with only the fields the check reads.
 type Listing<Item> = { data: Item[] };
 
 type McpServer = { name: string; status: { status: string; error?: string } };
-
-export type LoadedPlugin = { id: string; source: { type: string; path?: string }; state: { status: string; error?: string } };
 
 /**
  * What the OpenCode server loads at the office root: agents, plugins and the office-executor MCP.

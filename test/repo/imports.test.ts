@@ -147,9 +147,37 @@ function quoted(text: string | undefined, dynamic = false): string | undefined {
   });
 }
 
-function importSpecifiers(source: string): string[] {
+type ImportKind = "static" | "type-only" | "import-call" | "deferred-build-import";
+
+type Specifier = { specifier: string; kind: ImportKind };
+
+function inPlaceExecutable(code: readonly string[], index: number): boolean {
+  const declaration = code.findIndex((token, at) =>
+    token === "function" && code[at - 2] === "export" && code[at - 1] === "async" &&
+    code[at + 1] === "placeExecutable" && code[at + 2] === "(");
+
+  if (declaration === -1) return false;
+
+  const body = code.indexOf("{", declaration + 3);
+
+  if (body === -1 || body >= index) return false;
+
+  let depth = 1;
+
+  for (let at = body + 1; at < index; at++) {
+    if (code[at] === "{") depth++;
+
+    if (code[at] === "}") depth--;
+
+    if (depth === 0) return false;
+  }
+
+  return true;
+}
+
+function importSpecifiers(source: string): Specifier[] {
   const code = tokens(source);
-  const specifiers: string[] = [];
+  const specifiers: Specifier[] = [];
 
   for (const [index, keyword] of code.entries()) {
     if (keyword !== "import" && keyword !== "export") continue;
@@ -161,7 +189,7 @@ function importSpecifiers(source: string): string[] {
     const sideEffect = keyword === "import" ? quoted(first) : undefined;
 
     if (sideEffect !== undefined) {
-      specifiers.push(sideEffect);
+      specifiers.push({ specifier: sideEffect, kind: "static" });
       continue;
     }
 
@@ -169,11 +197,23 @@ function importSpecifiers(source: string): string[] {
       const dynamic = quoted(code[next + 1], true);
       const after = code[next + 2];
 
-      if (dynamic !== undefined && (after === ")" || after === ",")) specifiers.push(dynamic);
+      // An import call can also be a type query. Only the exception needs proof it runs.
+      if (dynamic !== undefined && (after === ")" || after === ",")) {
+        const beforeAwait = code[index - 2];
+
+        const deferred = dynamic === "./build.ts" && code[index - 1] === "await" &&
+          beforeAwait !== "." && beforeAwait !== "?." && inPlaceExecutable(code, index);
+
+        specifiers.push({ specifier: dynamic, kind: deferred ? "deferred-build-import" : "import-call" });
+      }
+
       continue;
     }
 
-    if (first === "type" && code[next + 1] !== "from" && code[next + 1] !== ",") next++;
+    const typeOnly = first === "type" && code[next + 1] !== "from" && code[next + 1] !== ",";
+    const kind = typeOnly ? "type-only" : "static";
+
+    if (typeOnly) next++;
 
     if (keyword === "import" && /^[\p{ID_Start}$_]/u.test(code[next] ?? "")) {
       next++;
@@ -181,7 +221,7 @@ function importSpecifiers(source: string): string[] {
       if (code[next] === "=" && code[next + 1] === "require" && code[next + 2] === "(" && code[next + 4] === ")") {
         const imported = quoted(code[next + 3]);
 
-        if (imported !== undefined) specifiers.push(imported);
+        if (imported !== undefined) specifiers.push({ specifier: imported, kind });
         continue;
       }
 
@@ -201,7 +241,7 @@ function importSpecifiers(source: string): string[] {
 
     const specifier = code[next] === "from" ? quoted(code[next + 1]) : undefined;
 
-    if (specifier !== undefined) specifiers.push(specifier);
+    if (specifier !== undefined) specifiers.push({ specifier, kind });
   }
 
   return specifiers;
@@ -223,6 +263,84 @@ function targetPath(from: string, specifier: string, requireAlias = true): strin
   }
 
   return posix.normalize(path);
+}
+
+type ResolvedImport = { to: string; kind: ImportKind };
+
+function resolvedImports(from: string, source: string, files: ReadonlySet<string>, requireAlias: boolean): ResolvedImport[] {
+  const imports: ResolvedImport[] = [];
+
+  for (const { specifier, kind } of importSpecifiers(source)) {
+    const path = targetPath(from, specifier, requireAlias);
+
+    if (path === undefined || path.startsWith("sdk/")) continue;
+
+    const typescriptPath = path.replace(/\.js$/, ".ts");
+    const to = [path, typescriptPath, `${path}.ts`, posix.join(path, "index.ts")].find(candidate => files.has(candidate)) ?? path;
+
+    imports.push({ to, kind });
+  }
+
+  return imports;
+}
+
+function cycleTargets(from: string, imports: readonly ResolvedImport[], production: ReadonlySet<string>): Set<string> {
+  const targets = new Set<string>();
+  let exempted = false;
+
+  for (const { to, kind } of imports) {
+    if (!to.startsWith("src/") || !production.has(to)) continue;
+
+    if (!exempted && from === "src/tool.ts" && to === "src/build.ts" && kind === "deferred-build-import") {
+      exempted = true;
+      continue;
+    }
+
+    targets.add(to);
+  }
+
+  return targets;
+}
+
+function cycleProblems(graph: ReadonlyMap<string, ReadonlySet<string>>): string[] {
+  const visited = new Set<string>();
+  const active = new Map<string, number>();
+  const stack: string[] = [];
+  const problems: string[] = [];
+
+  // Tarjan's algorithm: the earliest reachable active vertex is the root of a component.
+  function visit(from: string): number {
+    const index = visited.size;
+    let low = index;
+
+    visited.add(from);
+    active.set(from, index);
+    stack.push(from);
+
+    for (const to of graph.get(from) ?? []) {
+      const reachable = visited.has(to) ? active.get(to) : visit(to);
+
+      if (reachable !== undefined) low = Math.min(low, reachable);
+    }
+
+    if (low === index) {
+      const component = stack.splice(stack.lastIndexOf(from));
+
+      for (const file of component) active.delete(file);
+
+      if (component.length > 1 || graph.get(from)?.has(from)) {
+        problems.push(`source import cycle: ${component.sort().join(", ")}`);
+      }
+    }
+
+    return low;
+  }
+
+  for (const file of graph.keys()) {
+    if (!visited.has(file)) visit(file);
+  }
+
+  return problems.sort();
 }
 
 const root = toolPath(".");
@@ -305,12 +423,13 @@ function violation(from: string, origin: Location, destination: Location, pkg: P
   return undefined;
 }
 
-test("imports follow loader entry points and production imports follow the source layout", () => {
+test("imports follow loader entry points, and production imports follow the layout and have no src/ cycles", () => {
   const files = [...typescript.scanSync({ cwd: root, dot: true })].filter(path => !path.split("/").includes("node_modules")).sort();
   const production = new Set(files.filter(path => /^(src|packages)\//.test(path) && !testFolders.test(path) && !/\.(test|fixture)\.ts$/.test(path)));
 
   const seen = new Set(files);
   const problems: string[] = [];
+  const graph = new Map<string, ReadonlySet<string>>();
   const key = (from: string, to: string) => `${from} → ${to}`;
   const exceptions = new Set(allowed.map(entry => key(entry.from, entry.to)));
   const matched = new Set<string>();
@@ -326,18 +445,10 @@ test("imports follow loader entry points and production imports follow the sourc
   for (const from of files) {
     const origin = fileFolder(from);
     const productionFile = production.has(from);
+    const imports = resolvedImports(from, readFileSync(join(root, from), "utf8"), seen, productionFile);
+    const targets = new Set(imports.map(({ to }) => to));
 
-    const targets = new Set<string>();
-
-    for (const specifier of importSpecifiers(readFileSync(join(root, from), "utf8"))) {
-      const path = targetPath(from, specifier, productionFile);
-
-      if (path !== undefined && !path.startsWith("sdk/")) {
-        const typescriptPath = path.replace(/\.js$/, ".ts");
-
-        targets.add([path, typescriptPath, `${path}.ts`, posix.join(path, "index.ts")].find(candidate => seen.has(candidate)) ?? path);
-      }
-    }
+    if (productionFile && from.startsWith("src/")) graph.set(from, cycleTargets(from, imports, production));
 
     for (const to of targets) {
       if (privateLoaderImport(from, to)) problems.push(`private loader import: ${key(from, to)}`);
@@ -380,6 +491,8 @@ test("imports follow loader entry points and production imports follow the sourc
 
   if (exceptions.size !== allowed.length) problems.push("duplicate allowlist entries");
 
+  problems.push(...cycleProblems(graph));
+
   console.log("Package imports into the CLI:\n" + [...packageImports].sort().join("\n"));
   console.log("Feature import distance:");
 
@@ -388,6 +501,67 @@ test("imports follow loader entry points and production imports follow the sourc
   }
 
   if (problems.length) throw new Error(problems.sort().join("\n"));
+});
+
+function fixtureCycleProblems(sources: Record<string, string>): string[] {
+  const files = new Set(Object.keys(sources));
+  const graph = new Map<string, ReadonlySet<string>>();
+
+  for (const [from, source] of Object.entries(sources)) {
+    graph.set(from, cycleTargets(from, resolvedImports(from, source, files, true), files));
+  }
+
+  return cycleProblems(graph);
+}
+
+test("finds a transitive cycle closed by a type re-export", () => {
+  expect(fixtureCycleProblems({
+    "src/c.ts": 'export type { A } from "./a.js";',
+    "src/b.ts": 'import "./c.ts";',
+    "src/a.ts": 'import "./b";',
+  })).toEqual(["source import cycle: src/a.ts, src/b.ts, src/c.ts"]);
+});
+
+test("finds a file importing itself", () => {
+  expect(fixtureCycleProblems({
+    "src/self.ts": 'import "./self.ts";',
+  })).toEqual(["source import cycle: src/self.ts"]);
+});
+
+test("allows a diamond with a shared dependency", () => {
+  expect(fixtureCycleProblems({
+    "src/a.ts": 'import "./b.ts"; import "./c.ts";',
+    "src/b.ts": 'import "./d.ts";',
+    "src/c.ts": 'import "./d.ts";',
+    "src/d.ts": "",
+  })).toEqual([]);
+});
+
+test("exempts only the deferred import from tool.ts to build.ts", () => {
+  const build = 'import "./tool.ts";';
+  const call = 'const { compile } = await import("./build.ts");';
+  const place = (body: string) => `export async function placeExecutable(): Promise<void> { ${body} }`;
+  const lazy = place(call);
+  const cycle = ["source import cycle: src/build.ts, src/tool.ts"];
+
+  expect(fixtureCycleProblems({ "src/tool.ts": lazy, "src/build.ts": build })).toEqual([]);
+  expect(fixtureCycleProblems({ "src/tool.ts": call, "src/build.ts": build })).toEqual(cycle);
+  expect(fixtureCycleProblems({
+    "src/tool.ts": place('obj.await\nimport("./build.ts");'),
+    "src/build.ts": build,
+  })).toEqual(cycle);
+  expect(fixtureCycleProblems({
+    "src/tool.ts": place(`${call} const second = await import("./build.ts");`),
+    "src/build.ts": build,
+  })).toEqual(cycle);
+
+  for (const other of [
+    'import { compile as eager } from "./build.ts";',
+    'type Compile = typeof import("./build.ts").compile;',
+    call,
+  ]) {
+    expect(fixtureCycleProblems({ "src/tool.ts": `${lazy}\n${other}`, "src/build.ts": build })).toEqual(cycle);
+  }
 });
 
 test("only loader entry files can be imported from outside their module", () => {
@@ -400,7 +574,7 @@ test("only loader entry files can be imported from outside their module", () => 
     export { readDefinition } from "./definition.ts";
   `;
 
-  const forbidden = importSpecifiers(source).map(specifier => targetPath(from, specifier))
+  const forbidden = importSpecifiers(source).map(({ specifier }) => targetPath(from, specifier))
     .filter(path => path !== undefined && privateLoaderImport(from, path));
 
   expect(forbidden).toEqual(["src/loader/sources/records.ts", "src/loader/sources/records.ts"]);
@@ -444,7 +618,19 @@ test("reads multiline, type-only, re-export, side-effect, import-equals and lite
     type FromQuery = import("./query.ts").Query
     const escaped = import("./\\u0065scaped.ts")
     const template = import(\`./literal.ts\`)
-  `)).toEqual(["./a.ts", "./b.ts", "./x.ts", "./y.ts", "./side-effect.ts", "./legacy.ts", "./legacy-type.ts", "./lazy.ts", "./query.ts", "./escaped.ts", "./literal.ts"]);
+  `)).toEqual([
+    { specifier: "./a.ts", kind: "type-only" },
+    { specifier: "./b.ts", kind: "static" },
+    { specifier: "./x.ts", kind: "type-only" },
+    { specifier: "./y.ts", kind: "static" },
+    { specifier: "./side-effect.ts", kind: "static" },
+    { specifier: "./legacy.ts", kind: "static" },
+    { specifier: "./legacy-type.ts", kind: "type-only" },
+    { specifier: "./lazy.ts", kind: "import-call" },
+    { specifier: "./query.ts", kind: "import-call" },
+    { specifier: "./escaped.ts", kind: "import-call" },
+    { specifier: "./literal.ts", kind: "import-call" },
+  ]);
 });
 
 test("ignores comments, code inside literals, computed imports, require and member calls", () => {
@@ -464,5 +650,5 @@ test("ignores comments, code inside literals, computed imports, require and memb
     `const required = require("./require.ts")`,
     `obj?.import("./member.ts")`,
     `export { value }; const from = "./no-edge.ts"`,
-  ].join("\n"))).toEqual(["./real.ts", "./after-regex.ts", "./divisor.ts", "./asserted-divisor.ts"]);
+  ].join("\n")).map(({ specifier }) => specifier)).toEqual(["./real.ts", "./after-regex.ts", "./divisor.ts", "./asserted-divisor.ts"]);
 });

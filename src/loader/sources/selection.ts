@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
-import { packageRoot, pulledFolder } from "../../bound-paths.ts";
+import { type PackageKind, packageRoot, pulledFolder } from "../../bound-paths.ts";
 import { type Office, OfficeError, type PackageEntry } from "../../office.ts";
 import { builtinPackages } from "../../tool.ts";
 import { scope, sdkName } from "./manifest.ts";
@@ -15,8 +15,6 @@ export const requiredPackages = ["tooling", "tools", "mise-integration", "openco
 export function selectedNames(office: Pick<Office, "packages">): Set<string> {
   return new Set([...requiredPackages, ...office.packages.map(entry => entry.name)]);
 }
-
-type PackageKind = "built-in" | "remote" | "local";
 
 /** A package the office has, with the source folder to read (possibly bound or staged). */
 export type ResolvedPackage = { entry: PackageEntry; kind: PackageKind; dir: string };

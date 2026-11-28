@@ -9,7 +9,7 @@ import * as v from "valibot";
 import type { Entries, Registry, RegistryEntry, SettingValue } from "../sdk/index.ts";
 import { isRepository, repositories } from "../packages/references/repositories.ts";
 import { type AssetPaths, contributedAssets } from "./features/opencode/assets.ts";
-import { machineCollection, project, type Projection, recipeSystem } from "./features/mise-integration/projection.ts";
+import { machineCollection, project, type ProjectedPackage, recipeSystem } from "./features/mise-integration/projection.ts";
 import { toolProblems } from "./features/tools/admission.ts";
 import type { AppliedReference } from "./features/references/applied-references.ts";
 import { packageDeliveryDir } from "./bound-paths.ts";
@@ -21,7 +21,7 @@ import type { PackageProblem } from "./loader/sources/selection.ts";
 import type { PackageManifest } from "./loader/sources/manifest-schema.ts";
 
 /** A package whose setup ran in this run: what it read as, with the claims its entries made and its effective system block. */
-export type GatheredPackage = InstalledPackage & Projection;
+export type GatheredPackage = ProjectedPackage;
 
 /** A command a definition declares, with its package and that package's settings in this run (undefined when they are invalid). */
 export type DeclaredCommand = { owner: string; command: RegisteredCommand; settings?: Record<string, SettingValue> };

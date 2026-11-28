@@ -15,13 +15,13 @@ import { join, relative } from "node:path";
 
 import { packageDeliveryDir } from "../../bound-paths.ts";
 import type { Office, PackageEntry } from "../../office.ts";
-import type { InstalledPackage } from "../../loader/definitions/inventory.ts";
+import type { ResolvedPackage } from "../../loader/sources/selection.ts";
 import type { Parsed } from "../../parse.ts";
 import type { SettingValue } from "../../schema.ts";
 import type { SystemBlock } from "../../loader/sources/manifest-schema.ts";
 
 /** A package with its effective system block: its own, or a recipe it contributed in this run (src/gather.ts). */
-export type WithSystem = InstalledPackage & { readonly system: SystemBlock | undefined };
+export type WithSystem = ResolvedPackage & { readonly system: SystemBlock | undefined };
 
 /** Overrides the machine's platform, for tests and scratch offices; empty for a machine no block supports. */
 export const systemPlatformVariable = "OFFICE_SYSTEM_PLATFORM";
@@ -115,7 +115,7 @@ export function systemApplies(office: Office, item: WithSystem): boolean {
 }
 
 /** The first line of a system section in a fragment, which tells sync's messages it is there. */
-export function systemMarker(item: InstalledPackage): string {
+export function systemMarker(item: { entry: Pick<PackageEntry, "name"> }): string {
   return `# The system setup of package ${item.entry.name}`;
 }
 
@@ -123,7 +123,7 @@ export function systemMarker(item: InstalledPackage): string {
  * The package's bootstrap file: only `[bootstrap.…]` tables, and no hooks, which are sync's to
  * write. Read as text, as office reads every mise file, so its comments reach the fragment.
  */
-function bootstrapText(item: InstalledPackage, file: string): Parsed<string> {
+function bootstrapText(item: Pick<ResolvedPackage, "dir">, file: string): Parsed<string> {
   const path = join(item.dir, file);
 
   if (!existsSync(path)) return { ok: false, errors: [`${file}, the system block's bootstrap file, is missing from the package`] };

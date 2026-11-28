@@ -3,7 +3,6 @@ import { contributedAssets } from "../../features/opencode/assets.ts";
 import { withPluginPlan } from "../../features/opencode/delivery.ts";
 import type { Gathered } from "../../gather.ts";
 import type { Office, Repository } from "../../office.ts";
-import type { LoadedPlugin } from "./server.ts";
 
 /** Prints one check; "warn" is shown but doesn't fail `office check`. */
 export type Report = (ok: boolean | "warn", name: string, detail: string) => void;
@@ -25,6 +24,8 @@ export function context(office: Office, gathered: Gathered): Context {
     applied: appliedState(office),
   };
 }
+
+export type LoadedPlugin = { id: string; source: { type: string; path?: string }; state: { status: string; error?: string } };
 
 /** The root session's skills and plugins as the server listed them. */
 export type RootAnswer = { skills: { id: string; path: string }[]; plugins: LoadedPlugin[] };
