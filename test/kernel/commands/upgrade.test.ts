@@ -8,7 +8,8 @@ import { parse } from "yaml";
 
 import { check } from "../../../src/parse.ts";
 import { officeSchema, resolveTools } from "../../../src/schema.ts";
-import { setVersions } from "../../../src/commands/upgrade.ts";
+import { ageFor, setVersions } from "../../../src/commands/upgrade.ts";
+import { loadOffice } from "../../../src/office.ts";
 import { toolPath } from "../../../src/tool.ts";
 
 /** The runtimes' versions an office.yaml asks for, read back through the schema. */
@@ -114,6 +115,28 @@ esac
     ]);
     expect(readFileSync(join(dir, "mise.toml"), "utf8")).toBe(project.replace("1.7.1", "1.8.0"));
     expect(readFileSync(join(dir, "machine.toml"), "utf8")).toBe(machine.replace("18.0.0", "24.0.0"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("upgrade-tools waits a runtime's own age, else the office's, and the office's for every mise tool", () => {
+  const dir = mkdtempSync(join(tmpdir(), "office-upgrade-ages-"));
+
+  try {
+    writeFileSync(join(dir, "office.yaml"), "name: ages\n");
+    expect(ageFor(loadOffice(dir))).toBe("3d");
+    expect(ageFor(loadOffice(dir), "sfw")).toBe("3d");
+
+    writeFileSync(join(dir, "office.yaml"), "name: ages\nminimum_release_age: 1d\ntools:\n  opencode: { version: 2.3.2, minimum_release_age: 0d }\n  executor:\n    version: 2.0.0-beta.49\n    minimum_release_age: 7d\n  claude: 2.1.327\n");
+
+    const office = loadOffice(dir);
+
+    expect(ageFor(office)).toBe("1d");
+    expect(ageFor(office, "opencode")).toBe("0d");
+    expect(ageFor(office, "executor")).toBe("7d");
+    expect(ageFor(office, "claude")).toBe("1d");
+    expect(ageFor(office, "sfw")).toBe("1d");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

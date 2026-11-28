@@ -3,9 +3,10 @@
 // the registry, which also confirms it exists.
 import type { Office } from "../office.ts";
 import { pinFor } from "../features/tools/releases.ts";
+import { wantedVersion } from "../features/tools/runtime-pins.ts";
 import type { Lock } from "../lock-schema.ts";
 import { pinnedTools } from "../schema.ts";
-import { defaultPins, lockFile, readLock, wantedVersion, writeLock } from "../versions.ts";
+import { defaultPins, lockFile, readLock, writeLock } from "../versions.ts";
 
 export async function pin(office: Office): Promise<string[]> {
   const before = readLock(office.dir);

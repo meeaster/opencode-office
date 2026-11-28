@@ -43,7 +43,8 @@ import { precheckUnits, reconcileUnits, removeUnits } from "../features/systemd/
 import type { Lock } from "../lock-schema.ts";
 import { prepareSecrets } from "../features/secrets/secrets.ts";
 import { placeExecutable, toolPath, unpackedImage } from "../tool.ts";
-import { baseImage, changes, compareVersions, defaultPins, describeMove, executorImage, readApplied, wantedPins, writeApplied } from "../versions.ts";
+import { baseImage, changes, describeMove, executorImage, readApplied, wantedPins, writeApplied } from "../features/tools/runtime-pins.ts";
+import { compareVersions, defaultPins } from "../versions.ts";
 import { connection } from "../features/executor/executor.ts";
 import { precheckTools, reconcileTools } from "../features/tools/host.ts";
 import { ports } from "../lib/ports.ts";

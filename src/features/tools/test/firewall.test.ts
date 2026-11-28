@@ -8,7 +8,8 @@ import { definitionText, writePackage } from "../../../../test/support/test-pack
 import { gatherPackages } from "../../../gather.ts";
 import { sha256 } from "../../../lib/hash.ts";
 import { loadOffice } from "../../../office.ts";
-import { defaultPins, hostPlatform } from "../../../versions.ts";
+import { defaultPins } from "../../../versions.ts";
+import { hostPlatform } from "../runtime-pins.ts";
 import { machineReport, releaseMachine } from "../../machine/owned-files.ts";
 import { envFilePath } from "../../machine/paths.ts";
 import { machineReconciliation } from "../../machine/plan.ts";

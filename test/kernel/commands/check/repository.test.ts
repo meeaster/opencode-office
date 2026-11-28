@@ -6,7 +6,8 @@ import { join } from "node:path";
 import type { Report } from "../../../../src/commands/check/context.ts";
 import { versionChecks } from "../../../../src/commands/check/repository.ts";
 import { loadOffice } from "../../../../src/office.ts";
-import { defaultPins, writeApplied, writeLock } from "../../../../src/versions.ts";
+import { defaultPins, writeLock } from "../../../../src/versions.ts";
+import { writeApplied } from "../../../../src/features/tools/runtime-pins.ts";
 
 let dir: string;
 

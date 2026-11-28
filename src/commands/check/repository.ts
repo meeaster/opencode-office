@@ -4,12 +4,13 @@ import { join } from "node:path";
 import { describeIgnoredSkills, ignoredFolders, ignoredSkills } from "../../../packages/office/plugin/ignored-skills.ts";
 import { hookNote, hookState } from "../../features/machine/hook.ts";
 import { officePins, officeTool, type OfficeTool } from "../../features/tools/host-tools.ts";
+import { changes, describeMove, readApplied, toolsFor, wantedPins } from "../../features/tools/runtime-pins.ts";
 import { packagesFile } from "../../features/mise-integration/delivery.ts";
 import { describeOutside, type Loaded, type Provided, scanOutside, sessionPlaces, shadowing, withLoaded } from "../../features/opencode/outside.ts";
 import { ghConfigDir, ghLogin, githubHosts, gitHelper, isGhHelper, loginProblem, unshareable } from "../../github.ts";
 import { declaredAccess, type DeclaredAccess } from "../../loader/access.ts";
 import { type Office, OfficeError, type Repository } from "../../office.ts";
-import { changes, defaultPins, describeMove, isTested, readApplied, tested, toolsFor, wantedPins } from "../../versions.ts";
+import { defaultPins, isTested, tested } from "../../versions.ts";
 import { compose } from "../compose.ts";
 import type { Context, Report, RootAnswer } from "./context.ts";
 

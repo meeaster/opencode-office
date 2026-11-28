@@ -1,11 +1,12 @@
 import { join } from "node:path";
 
 import { hostServiceStatus } from "../../features/systemd/package-host-services.ts";
+import { executorImage, toolsFor } from "../../features/tools/runtime-pins.ts";
 import { ports } from "../../lib/ports.ts";
 import { executorEnvFile, type Office, readEnvFile } from "../../office.ts";
 import type { Stage } from "../../report/index.ts";
 import { version } from "../../tool.ts";
-import { executorImage, isTested, tested, toolsFor } from "../../versions.ts";
+import { isTested, tested } from "../../versions.ts";
 import { compose, officeImage, runningPins } from "../compose.ts";
 import { keyOrganization } from "../executor.ts";
 import type { Context, Report, RootAnswer } from "./context.ts";

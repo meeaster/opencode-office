@@ -183,3 +183,17 @@ packages:
     expect(file()).toBe(shared);
   }
 });
+
+test("Socket Firewall is on unless sfw's enabled turns it off", () => {
+  writeFileSync(join(dir, "office.yaml"), "name: firewall\n");
+  expect(loadOffice(dir).socketFirewall).toBe(true);
+
+  writeFileSync(join(dir, "office.yaml"), "name: firewall\ntools:\n  sfw: { version: 1.16.0, enabled: false }\n");
+  expect(loadOffice(dir).socketFirewall).toBe(false);
+
+  writeFileSync(join(dir, "office.yaml"), "name: firewall\ntools:\n  sfw:\n    enabled: true\n");
+  expect(loadOffice(dir).socketFirewall).toBe(true);
+
+  writeFileSync(join(dir, "office.yaml"), "name: firewall\ntools:\n  sfw: { enabled: off-ish }\n");
+  expect(() => loadOffice(dir)).toThrow("tools.sfw.enabled: must be true or false");
+});
