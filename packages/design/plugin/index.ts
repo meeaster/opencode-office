@@ -124,7 +124,7 @@ export default {
     const settingsWatcher = {
       close() {
         appliedWatcher.close();
-      generations.close();
+        generations.close();
       },
     };
 
