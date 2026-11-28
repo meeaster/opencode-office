@@ -14,7 +14,7 @@ type Allowed = { from: string; to: Feature | Package | "kernel/commands"; needsA
 
 const allowed: readonly Allowed[] = [
   { from: "src/cli.ts", to: "packages/office", needsApi: true },
-  { from: "src/commands/check.ts", to: "packages/office", needsApi: true },
+  { from: "src/commands/check/repository.ts", to: "packages/office", needsApi: true },
   { from: "src/commands/sync.ts", to: "packages/references", needsApi: true },
   { from: "src/direct-commands.ts", to: "features/executor", needsApi: true },
   { from: "src/exclude-plumbing.ts", to: "features/opencode", needsApi: true },

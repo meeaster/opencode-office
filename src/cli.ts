@@ -11,7 +11,7 @@ import * as v from "valibot";
 import { officeInstructions } from "../packages/office/plugin/instructions.ts";
 import { inspect } from "./features/opencode/inspect.ts";
 import { agentUpdateJob, updateAgentClis } from "./commands/agent-cli-update.ts";
-import { check } from "./commands/check.ts";
+import { check } from "./commands/check/run.ts";
 import { down, up } from "./commands/compose.ts";
 import { contextReport } from "./commands/context.ts";
 import { containerEnvText } from "./commands/env.ts";

@@ -17,7 +17,7 @@ import { last, type NextStep, type Reporter, say, terminalAsk } from "../report/
 import { decrypt, encrypt, initializeIdentity, prepareSecrets, requireTool } from "../features/secrets/secrets.ts";
 import { configureStartup, interactiveShell } from "../features/host/shell-startup.ts";
 import { offerRestart, systemStep, verifySystems } from "../features/host/system-setup.ts";
-import { check } from "./check.ts";
+import { check } from "./check/run.ts";
 import { installingMise, startExecutor, up } from "./compose.ts";
 import { ports } from "../lib/ports.ts";
 import { bootstrapExecutor } from "./executor.ts";
